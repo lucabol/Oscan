@@ -1,0 +1,6 @@
+empty
+text: hello world
+text: dynamic string
+numbers: 42, 99
+extracted: dynamic string
+extracted len: 14

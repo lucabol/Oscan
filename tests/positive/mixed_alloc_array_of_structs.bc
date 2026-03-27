@@ -1,0 +1,76 @@
+// Test: Arrays of structs, including structs with dynamic fields
+// Exercises: [MyStruct] dynamic array, push structs with array/string fields,
+//            read back struct fields from array, iterate over array of structs
+// NOTE: Uses array literals with initial elements to avoid empty-array elem_size bug
+
+struct Item {
+    name: str,
+    value: i32,
+}
+
+struct TaggedList {
+    tag: str,
+    nums: [i32],
+}
+
+fn! main() {
+    // Array of simple structs — initialized with elements
+    let items: [Item] = [
+        Item { name: "alpha", value: 10 },
+        Item { name: "beta", value: 20 },
+        Item { name: "gamma", value: 30 },
+    ];
+
+    print("items len: ");
+    print_i32(len(items));
+    println("");
+
+    // Read back all structs
+    for i in 0..len(items) {
+        print(items[i].name);
+        print(" = ");
+        print_i32(items[i].value);
+        println("");
+    };
+
+    // Sum of all values
+    let mut total: i32 = 0;
+    for i in 0..len(items) {
+        total = total + items[i].value;
+    };
+    print("total: ");
+    print_i32(total);
+    println("");
+
+    // Push additional struct into existing array
+    let mut items2: [Item] = [Item { name: "first", value: 1 }];
+    push(items2, Item { name: "second", value: 2 });
+    push(items2, Item { name: "third", value: 3 });
+    print("items2 len: ");
+    print_i32(len(items2));
+    println("");
+    print("items2[2].name: ");
+    println(items2[2].name);
+    print("items2[2].value: ");
+    print_i32(items2[2].value);
+    println("");
+
+    // Array of structs that themselves contain arrays
+    let lists: [TaggedList] = [
+        TaggedList { tag: "first", nums: [1, 2] },
+        TaggedList { tag: "second", nums: [10, 20, 30] },
+    ];
+
+    // Read back and verify the inner arrays
+    for i in 0..len(lists) {
+        print(lists[i].tag);
+        print(": len=");
+        print_i32(len(lists[i].nums));
+        println("");
+    };
+
+    // Access specific inner array element
+    print("lists[1].nums[2]: ");
+    print_i32(lists[1].nums[2]);
+    println("");
+}

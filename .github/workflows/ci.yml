@@ -381,57 +381,53 @@ jobs:
           [ $FAIL -eq 0 ]
 
   # ─────────────────────────────────────────────
-  # ARM Cross-Compilation (QEMU) — Optional
+  # ARM Cross-Compilation (QEMU)
   # ─────────────────────────────────────────────
-  # Uncomment this job to enable ARM cross-compilation testing via QEMU on Linux.
-  # This installs gcc-aarch64-linux-gnu and qemu-user to cross-compile and run
-  # ARM64 binaries from the generated C code.
-  #
-  # arm-qemu:
-  #   name: Linux ARM64 (QEMU cross-compile)
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Install Rust toolchain
-  #       uses: dtolnay/rust-toolchain@stable
-  #
-  #     - name: Install ARM64 cross-compiler and QEMU
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
-  #
-  #     - name: Build babelc (host x86_64)
-  #       run: cargo build --release
-  #
-  #     - name: Integration tests — positive (ARM64 via QEMU)
-  #       shell: bash
-  #       run: |
-  #         set -euo pipefail
-  #         BABELC="./target/release/babelc"
-  #         CC="aarch64-linux-gnu-gcc"
-  #         PASS=0; FAIL=0; TOTAL=0
-  #         mkdir -p tests/build
-  #
-  #         for bc_file in tests/positive/*.bc; do
-  #           name=$(basename "$bc_file" .bc)
-  #           expected="tests/expected/${name}.expected"
-  #           TOTAL=$((TOTAL + 1))
-  #           [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
-  #
-  #           "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-  #           $CC -std=c99 -static "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
-  #
-  #           actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
-  #           expected_content=$(cat "$expected")
-  #           if [ "$actual" = "$expected_content" ]; then
-  #             echo "PASS: $name (ARM64)"
-  #             PASS=$((PASS + 1))
-  #           else
-  #             echo "FAIL: $name — output mismatch (ARM64)"
-  #             FAIL=$((FAIL + 1))
-  #           fi
-  #         done
-  #
-  #         echo "ARM64 Positive: $PASS passed, $FAIL failed out of $TOTAL"
-  #         [ $FAIL -eq 0 ]
+  arm-qemu:
+    name: Linux ARM64 (QEMU cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install ARM64 cross-compiler and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
+
+      - name: Build babelc (host x86_64)
+        run: cargo build --release
+
+      - name: Integration tests — positive (ARM64 via QEMU)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BABELC="./target/release/babelc"
+          CC="aarch64-linux-gnu-gcc"
+          PASS=0; FAIL=0; TOTAL=0
+          mkdir -p tests/build
+
+          for bc_file in tests/positive/*.bc; do
+            name=$(basename "$bc_file" .bc)
+            expected="tests/expected/${name}.expected"
+            TOTAL=$((TOTAL + 1))
+            [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
+
+            "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+            $CC -std=c99 -static "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+
+            actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
+            expected_content=$(cat "$expected")
+            if [ "$actual" = "$expected_content" ]; then
+              echo "PASS: $name (ARM64)"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL: $name — output mismatch (ARM64)"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo "ARM64 Positive: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]

@@ -19,6 +19,7 @@ pub struct CodeGenerator {
     mut_vars: HashSet<String>,
     current_fn_return_type: Option<BcType>,
     result_types: Vec<(BcType, BcType)>,
+    expected_array_elem_type: Option<BcType>,
 }
 
 impl CodeGenerator {
@@ -35,6 +36,7 @@ impl CodeGenerator {
             mut_vars: HashSet::new(),
             current_fn_return_type: None,
             result_types: Vec::new(),
+            expected_array_elem_type: None,
         };
 
         // Collect all unique Result types used in the program
@@ -470,7 +472,12 @@ impl CodeGenerator {
             Stmt::Let(ls) => {
                 let ty = self.resolve_ast_type(&ls.ty);
                 let c_ty = self.type_to_c(&ty);
+                // Propagate element type for empty array literals
+                if let BcType::Array(ref elem_ty) = ty {
+                    self.expected_array_elem_type = Some((**elem_ty).clone());
+                }
                 let val = self.emit_expr(&ls.value);
+                self.expected_array_elem_type = None;
                 if ls.is_mut {
                     self.line(&format!("{} {} = {};", c_ty, ls.name, val));
                     self.mut_vars.insert(ls.name.clone());
@@ -1450,7 +1457,13 @@ impl CodeGenerator {
 
     fn emit_array_lit(&mut self, elements: &[Expr]) -> String {
         if elements.is_empty() {
-            return "bc_array_new(_arena, 1, 0)".to_string();
+            let size_expr = if let Some(ref elem_ty) = self.expected_array_elem_type {
+                self.c_sizeof(elem_ty)
+            } else {
+                // Fallback: should not happen with correct type annotations
+                "1".to_string()
+            };
+            return format!("bc_array_new(_arena, {}, 0)", size_expr);
         }
 
         let elem_ty = self.type_of(&elements[0]);

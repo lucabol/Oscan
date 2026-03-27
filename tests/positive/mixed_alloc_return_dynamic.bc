@@ -1,0 +1,70 @@
+// Test: Returning dynamic data from functions (arrays, strings, structs with dynamic fields)
+// Exercises: function returning [i32], function returning runtime str,
+//            function returning struct with array field, chained function calls
+// NOTE: Uses array literals with initial elements to avoid empty-array elem_size bug
+
+struct Bundle {
+    data: [i32],
+    label: str,
+}
+
+fn! make_squares(n: i32) -> [i32] {
+    // Start with first element to get correct elem_size
+    let mut arr: [i32] = [0];
+    for i in 1..n {
+        push(arr, i * i);
+    };
+    arr
+}
+
+fn! make_label(prefix: str, n: i32) -> str {
+    str_concat(prefix, i32_to_str(n))
+}
+
+fn! make_bundle(n: i32) -> Bundle {
+    let arr: [i32] = make_squares(n);
+    let lbl: str = make_label("bundle-", n);
+    Bundle { data: arr, label: lbl }
+}
+
+fn! main() {
+    // Return array from function
+    let arr: [i32] = make_squares(5);
+    print("arr len: ");
+    print_i32(len(arr));
+    println("");
+    for i in 0..len(arr) {
+        print_i32(arr[i]);
+        print(" ");
+    };
+    println("");
+
+    // Return runtime string from function
+    let lbl: str = make_label("test-", 42);
+    println(lbl);
+
+    // Return struct with dynamic fields from function
+    let b: Bundle = make_bundle(4);
+    println(b.label);
+    print("bundle data len: ");
+    print_i32(len(b.data));
+    println("");
+    for i in 0..len(b.data) {
+        print_i32(b.data[i]);
+        print(" ");
+    };
+    println("");
+
+    // Chained: use returned struct's fields
+    let b2: Bundle = make_bundle(3);
+    let total: i32 = {
+        let mut sum: i32 = 0;
+        for i in 0..len(b2.data) {
+            sum = sum + b2.data[i];
+        };
+        sum
+    };
+    print("b2 total: ");
+    print_i32(total);
+    println("");
+}

@@ -1,0 +1,70 @@
+// Test: Nested structs with dynamic fields (struct containing struct with array)
+// Exercises: nested struct with [i32] field, accessing inner array through outer struct,
+//            function taking nested struct, multiple levels of indirection
+// NOTE: Uses pre-initialized arrays to avoid known empty-array elem_size bug
+
+struct Inner {
+    values: [i32],
+    label: str,
+}
+
+struct Outer {
+    inner: Inner,
+    id: i32,
+}
+
+fn! inner_sum(inn: Inner) -> i32 {
+    let mut total: i32 = 0;
+    for i in 0..len(inn.values) {
+        total = total + inn.values[i];
+    };
+    total
+}
+
+fn! outer_sum(out: Outer) -> i32 {
+    inner_sum(out.inner)
+}
+
+fn! main() {
+    // Construction of nested struct with dynamic array
+    let inn: Inner = Inner { values: [1, 2, 3], label: "test" };
+    let out: Outer = Outer { inner: inn, id: 42 };
+
+    // Access inner array through outer struct
+    print("inner[0]: ");
+    print_i32(out.inner.values[0]);
+    println("");
+    print("inner[1]: ");
+    print_i32(out.inner.values[1]);
+    println("");
+    print("inner[2]: ");
+    print_i32(out.inner.values[2]);
+    println("");
+    print("inner label: ");
+    println(out.inner.label);
+    print("outer id: ");
+    print_i32(out.id);
+    println("");
+
+    // Pass nested struct to function
+    print("inner sum: ");
+    print_i32(inner_sum(out.inner));
+    println("");
+    print("outer sum: ");
+    print_i32(outer_sum(out));
+    println("");
+
+    // Deeper nesting: push to inner array via outer struct
+    let mut out2: Outer = Outer {
+        inner: Inner { values: [10, 20], label: "mutable" },
+        id: 99,
+    };
+    push(out2.inner.values, 30);
+    print("out2 inner len: ");
+    print_i32(len(out2.inner.values));
+    println("");
+    print("out2 inner sum: ");
+    print_i32(outer_sum(out2));
+    println("");
+    println(out2.inner.label);
+}

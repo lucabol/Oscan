@@ -1,0 +1,13 @@
+tag: first
+len: 3
+values: 10 11 12 
+tag: second
+len: 4
+values: 100 101 102 103 
+after push len: 5
+last: 999
+third-updated
+new len: 1
+new val: 42
+pushed len: 2
+pushed val: 43

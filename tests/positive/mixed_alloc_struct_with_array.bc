@@ -1,0 +1,73 @@
+// Test: Structs containing dynamic array fields (mixed stack/arena allocation)
+// Exercises: struct with [i32] field, push to inner array, read back,
+//            pass struct to function, return struct from function
+// NOTE: Uses pre-initialized arrays to avoid known empty-array elem_size bug
+
+struct Inventory {
+    name: str,
+    items: [i32],
+    count: i32,
+}
+
+fn! get_total(inv: Inventory) -> i32 {
+    let mut total: i32 = 0;
+    for i in 0..len(inv.items) {
+        total = total + inv.items[i];
+    };
+    total
+}
+
+fn! make_inventory(label: str) -> Inventory {
+    let mut items: [i32] = [10, 20, 30];
+    Inventory { name: label, items: items, count: 3 }
+}
+
+fn! main() {
+    // Create struct with pre-initialized array field
+    let inv: Inventory = Inventory {
+        name: "warehouse",
+        items: [100, 200, 300],
+        count: 3,
+    };
+
+    // Read back values from struct's array field
+    print("item 0: ");
+    print_i32(inv.items[0]);
+    println("");
+    print("item 1: ");
+    print_i32(inv.items[1]);
+    println("");
+    print("item 2: ");
+    print_i32(inv.items[2]);
+    println("");
+    print("count: ");
+    print_i32(inv.count);
+    println("");
+
+    // Pass struct to function
+    print("total: ");
+    print_i32(get_total(inv));
+    println("");
+
+    // Return struct with array from function
+    let inv2: Inventory = make_inventory("factory");
+    println(inv2.name);
+    print("inv2 total: ");
+    print_i32(get_total(inv2));
+    println("");
+    print("inv2 len: ");
+    print_i32(len(inv2.items));
+    println("");
+
+    // Push to struct's array and verify
+    let mut inv3: Inventory = Inventory {
+        name: "dock",
+        items: [1, 2],
+        count: 2,
+    };
+    push(inv3.items, 3);
+    inv3.count = 3;
+    print("inv3 total: ");
+    print_i32(get_total(inv3));
+    println("");
+}

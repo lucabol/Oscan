@@ -1,0 +1,9 @@
+item 0: 100
+item 1: 200
+item 2: 300
+count: 3
+total: 600
+factory
+inv2 total: 60
+inv2 len: 3
+inv3 total: 6

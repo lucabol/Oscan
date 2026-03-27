@@ -1,0 +1,68 @@
+// Test: Mutable structs with dynamic fields — reassignment
+// Exercises: let mut struct with array field, reassign struct,
+//            verify array pointers update after reassignment
+// NOTE: Uses array literals with initial elements to avoid empty-array elem_size bug
+
+struct Container {
+    values: [i32],
+    tag: str,
+}
+
+fn! main() {
+    // Create mutable struct with array field
+    let mut c: Container = Container { values: [10, 11, 12], tag: "first" };
+    print("tag: ");
+    println(c.tag);
+    print("len: ");
+    print_i32(len(c.values));
+    println("");
+    print("values: ");
+    for i in 0..len(c.values) {
+        print_i32(c.values[i]);
+        print(" ");
+    };
+    println("");
+
+    // Reassign the entire struct — array pointer should update
+    c = Container { values: [100, 101, 102, 103], tag: "second" };
+    print("tag: ");
+    println(c.tag);
+    print("len: ");
+    print_i32(len(c.values));
+    println("");
+    print("values: ");
+    for i in 0..len(c.values) {
+        print_i32(c.values[i]);
+        print(" ");
+    };
+    println("");
+
+    // Mutate via push on the new array
+    push(c.values, 999);
+    print("after push len: ");
+    print_i32(len(c.values));
+    println("");
+    print("last: ");
+    print_i32(c.values[4]);
+    println("");
+
+    // Reassign with runtime string (arena-allocated)
+    let new_tag: str = str_concat("third", "-updated");
+    c = Container { values: [42], tag: new_tag };
+    println(c.tag);
+    print("new len: ");
+    print_i32(len(c.values));
+    println("");
+    print("new val: ");
+    print_i32(c.values[0]);
+    println("");
+
+    // Push onto reassigned struct's array
+    push(c.values, 43);
+    print("pushed len: ");
+    print_i32(len(c.values));
+    println("");
+    print("pushed val: ");
+    print_i32(c.values[1]);
+    println("");
+}

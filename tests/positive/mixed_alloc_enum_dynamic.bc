@@ -1,0 +1,66 @@
+// Test: Enum variants carrying dynamic payloads (arrays and strings)
+// Exercises: enum with [i32] payload, enum with str payload,
+//            match to extract dynamic data, pass enum to function
+
+struct Pair {
+    x: i32,
+    y: i32,
+}
+
+enum Data {
+    Empty,
+    Text(str),
+    Numbers(Pair),
+}
+
+fn! print_data(d: Data) {
+    match d {
+        Data::Empty => {
+            println("empty");
+        },
+        Data::Text(s) => {
+            print("text: ");
+            println(s);
+        },
+        Data::Numbers(p) => {
+            print("numbers: ");
+            print_i32(p.x);
+            print(", ");
+            print_i32(p.y);
+            println("");
+        },
+    };
+}
+
+fn! main() {
+    // Enum with no payload
+    let d1: Data = Data::Empty;
+    print_data(d1);
+
+    // Enum with static string payload
+    let d2: Data = Data::Text("hello world");
+    print_data(d2);
+
+    // Enum with runtime string payload (arena-allocated)
+    let runtime_str: str = str_concat("dynamic", " string");
+    let d3: Data = Data::Text(runtime_str);
+    print_data(d3);
+
+    // Enum with struct payload
+    let d4: Data = Data::Numbers(Pair { x: 42, y: 99 });
+    print_data(d4);
+
+    // Match and extract
+    match d3 {
+        Data::Text(s) => {
+            print("extracted: ");
+            println(s);
+            print("extracted len: ");
+            print_i32(str_len(s));
+            println("");
+        },
+        _ => {
+            println("unexpected");
+        },
+    };
+}

@@ -1,0 +1,47 @@
+// Test: Arena stress — many allocations to verify arena grows correctly
+// Exercises: large number of array pushes, many string concats, arena capacity growth
+// NOTE: Initializes arrays with first element to avoid empty-array elem_size bug
+
+fn! main() {
+    // Stress test 1: Single large array with many pushes
+    let mut big: [i32] = [0];
+    for i in 1..500 {
+        push(big, i);
+    };
+    print("big len: ");
+    print_i32(len(big));
+    println("");
+    print("big[0]: ");
+    print_i32(big[0]);
+    println("");
+    print("big[499]: ");
+    print_i32(big[499]);
+    println("");
+
+    // Verify sum to catch corruption: 0+1+2+...+499 = 124750
+    let mut sum: i32 = 0;
+    for i in 0..500 {
+        sum = sum + big[i];
+    };
+    print("big sum: ");
+    print_i32(sum);
+    println("");
+
+    // Stress test 2: Many string concatenations (each allocates from arena)
+    let mut s: str = "";
+    for i in 0..50 {
+        s = str_concat(s, "x");
+    };
+    print("str len: ");
+    print_i32(str_len(s));
+    println("");
+
+    // Stress test 3: Many i32_to_str calls (arena string allocations)
+    let mut last: str = "";
+    for i in 0..100 {
+        last = i32_to_str(i);
+    };
+    println(last);
+
+    println("arena stress OK");
+}

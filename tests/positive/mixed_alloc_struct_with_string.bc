@@ -1,0 +1,47 @@
+// Test: Structs with runtime-created string fields (arena-allocated strings)
+// Exercises: struct with str field, str_concat inside struct, string persistence,
+//            pass struct with runtime strings to functions
+
+struct Person {
+    first: str,
+    last: str,
+    age: i32,
+}
+
+fn! full_name(p: Person) -> str {
+    str_concat(str_concat(p.first, " "), p.last)
+}
+
+fn! describe(p: Person) {
+    print("Name: ");
+    println(full_name(p));
+    print("Age: ");
+    print_i32(p.age);
+    println("");
+}
+
+fn! main() {
+    // Static string fields
+    let p1: Person = Person { first: "Alice", last: "Smith", age: 30 };
+    describe(p1);
+
+    // Runtime-created string fields via concat
+    let prefix: str = "Bob";
+    let suffix: str = "by";
+    let runtime_name: str = str_concat(prefix, suffix);
+    let p2: Person = Person { first: runtime_name, last: "Jones", age: 25 };
+    describe(p2);
+
+    // Verify the runtime string survived being put into the struct
+    println(p2.first);
+    print("first len: ");
+    print_i32(str_len(p2.first));
+    println("");
+
+    // String built from i32_to_str (arena-allocated)
+    let age_str: str = i32_to_str(42);
+    let label: str = str_concat("Age is: ", age_str);
+    let p3: Person = Person { first: "Charlie", last: label, age: 42 };
+    print("p3 last: ");
+    println(p3.last);
+}

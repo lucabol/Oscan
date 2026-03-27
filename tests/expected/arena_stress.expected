@@ -1,0 +1,7 @@
+big len: 500
+big[0]: 0
+big[499]: 499
+big sum: 124750
+str len: 50
+99
+arena stress OK

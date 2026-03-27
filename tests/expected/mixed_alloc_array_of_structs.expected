@@ -1,0 +1,11 @@
+items len: 3
+alpha = 10
+beta = 20
+gamma = 30
+total: 60
+items2 len: 3
+items2[2].name: third
+items2[2].value: 3
+first: len=2
+second: len=3
+lists[1].nums[2]: 30

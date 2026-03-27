@@ -1,27 +1,29 @@
 # Babel-C
 
-**A minimalist, LLM-optimized programming language that transpiles to C99**
+A minimalist programming language designed for LLM code generation, transpiling to C.
 
-Babel-C is designed to be the ideal target language for Large Language Models generating systems code. It combines modern language features (algebraic data types, pattern matching, explicit error handling) with the simplicity and portability of C.
+## Why Babel-C?
 
-## Features
+LLMs hallucinate less when the target language is small and unambiguous. Babel-C gives them:
 
-- **LLM-Friendly Syntax**: Clear, unambiguous grammar that's easy for AI to generate correctly
-- **Modern Type System**: Sum types (enums), product types (structs), Result<T,E> for errors
-- **Memory Safety Hints**: Explicit mutability (`let mut`), pure vs side-effecting functions (`fn` vs `fn!`)
-- **Zero Dependencies**: Compiles to pure C99 with a minimal runtime library
-- **Full Toolchain**: Lexer, parser, semantic analyzer, and C code generator
+- **21 reserved words.** One way to do everything — no syntax to argue about.
+- **`fn` / `fn!` purity split.** Side effects are visible in the signature.
+- **`Result<T, E>` errors as values.** No exceptions, no hidden control flow.
+- **Immutable by default.** `let` is immutable; `let mut` opts in to mutation.
+- **Anti-shadowing.** Re-declaring a name in a nested scope is a compile error.
+- **Arena memory.** One allocation model, no manual alloc/free, zero UB.
+- **Explicit everything.** No type inference, no implicit coercions, no operator overloading.
+
+The output is readable C99 that compiles on any platform with a C compiler.
 
 ## Quick Start
 
 ### Prerequisites
 
-- Rust toolchain (for building the compiler)
-- GCC (for compiling the generated C code)
-  - On Windows: Use WSL or install MinGW/TDM-GCC
-  - On Linux/macOS: Usually pre-installed
+- **Rust** toolchain (to build the compiler)
+- **A C compiler** — GCC, Clang, or MSVC (the compiler auto-detects one)
 
-### Building the Compiler
+### Build
 
 ```bash
 git clone <repository-url>
@@ -29,340 +31,118 @@ cd Squad
 cargo build --release
 ```
 
-The compiler binary will be at `target/release/babelc` (or `babelc.exe` on Windows).
+The binary is `target/release/babelc` (or `babelc.exe` on Windows).
 
-### Your First Program
+### Hello World
 
 Create `hello.bc`:
 
-```babel-c
+```
 fn! main() {
     println("Hello, Babel-C!");
 }
 ```
 
-Compile and run:
-
 ```bash
-# Single-step compile and run
-babelc hello.bc --run
-
-# Or transpile to C and compile manually
-babelc hello.bc -o hello.c
-gcc hello.c runtime/bc_runtime.c -Iruntime -o hello
-./hello
+babelc hello.bc --run        # compile and execute immediately
+babelc hello.bc              # compile to hello.exe (Windows) / hello (Linux/macOS)
+babelc hello.bc -o out       # compile to out.exe / out
+babelc hello.bc -o out.c     # transpile to C only (no compilation)
+babelc hello.bc --emit-c     # emit generated C to stdout
 ```
 
-## Language Overview
-
-### Functions
-
-Babel-C distinguishes between pure and side-effecting functions:
-
-```babel-c
-// Pure function - no I/O, no mutation of globals
-fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-
-// Side-effecting function - can perform I/O
-fn! greet(name: str) {
-    print("Hello, ");
-    println(name);
-}
-```
-
-### Variables
-
-```babel-c
-let x: i32 = 42;           // Immutable binding
-let mut count: i32 = 0;    // Mutable binding
-count = count + 1;
-```
-
-### Types
-
-**Primitive Types:**
-- `i32`, `i64` - Signed integers
-- `f64` - Double precision float
-- `bool` - Boolean (`true` or `false`)
-- `str` - String (immutable, heap-allocated)
-
-**Compound Types:**
-```babel-c
-// Struct (product type)
-struct Point {
-    x: i32,
-    y: i32
-}
-
-// Enum (sum type / tagged union)
-enum Option {
-    Some(i32),
-    None
-}
-
-// Array
-let numbers: [i32; 5] = [1, 2, 3, 4, 5];
-```
-
-### Error Handling
-
-Babel-C uses `Result<T, E>` instead of exceptions:
-
-```babel-c
-fn divide(a: i32, b: i32) -> Result<i32, str> {
-    if b == 0 {
-        Result::Err("division by zero")
-    } else {
-        Result::Ok(a / b)
-    }
-}
-
-fn! main() {
-    match divide(10, 2) {
-        Result::Ok(val) => print_i32(val),
-        Result::Err(msg) => println(msg)
-    }
-}
-```
-
-The `try` operator propagates errors automatically:
-
-```babel-c
-fn compute() -> Result<i32, str> {
-    let x: i32 = try divide(10, 2);  // Auto-propagates errors
-    Result::Ok(x * 2)
-}
-```
-
-### Pattern Matching
-
-```babel-c
-match value {
-    Result::Ok(x) => {
-        print_i32(x);
-    },
-    Result::Err(msg) => {
-        println(msg);
-    }
-}
-```
-
-### Control Flow
-
-```babel-c
-// If-else (expression form)
-let max: i32 = if a > b { a } else { b };
-
-// While loop
-while count < 10 {
-    count = count + 1;
-}
-
-// For-in loop (range iteration)
-for i in 0..10 {
-    print_i32(i);
-}
-```
-
-### Built-in Functions
-
-**I/O:**
-- `print(s: str)`, `println(s: str)`
-- `print_i32(n: i32)`, `print_i64(n: i64)`, `print_f64(n: f64)`, `print_bool(b: bool)`
-- `read_line() -> Result<str, str>`
-
-**String:**
-- `str_len(s: str) -> i32`
-- `str_eq(a: str, b: str) -> bool`
-- `str_concat(a: str, b: str) -> str`
-
-**Math:**
-- `abs_i32(n: i32) -> i32`, `abs_f64(n: f64) -> f64`
-- `mod_i32(a: i32, b: i32) -> i32`
-
-**Conversion:**
-- `i32_to_str(n: i32) -> str`, `i64_to_str(n: i64) -> str`, `f64_to_str(n: f64) -> str`
-- `str_to_i32(s: str) -> Result<i32, str>`
-
-## Examples
-
-See the `examples/` directory for complete programs:
-
-- **`hello.bc`** - Classic hello world
-- **`fibonacci.bc`** - Recursive Fibonacci sequence
-- **`error_handling.bc`** - Result types and error propagation
-
-## Compiler CLI
+## CLI Reference
 
 ```
-Usage: babelc [OPTIONS] <file.bc>
+babelc [OPTIONS] <file.bc>
 
 Options:
-  --run              Transpile, compile with gcc, and run immediately
-  -o <output.c>      Transpile to C and write to file
-  --dump-tokens      Print lexer tokens (debug)
-  --dump-ast         Print AST (debug)
+  -o <path>        Output path. If extension is .c, transpile only.
+                   Otherwise compile to executable (adds .exe on Windows).
+  --run            Compile and immediately execute.
+  --emit-c         Emit generated C code to stdout.
+  --dump-tokens    Print lexer tokens (debug).
+  --dump-ast       Print AST (debug).
 ```
 
-## Building from Source
+**Compiler discovery order:** gcc → clang → cl.exe (PATH) → cl.exe (Visual Studio installation via vswhere).
 
-### Development Build
+## Language at a Glance
 
-```bash
-cargo build
-./target/debug/babelc examples/hello.bc --run
+```
+// Pure function — no I/O, no side effects
+fn fib(n: i32) -> i32 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+// Side-effecting function — can do I/O
+fn! main() {
+    for i in 0..10 {
+        print_i32(fib(i));
+        print(" ");
+    };
+    println("");
+}
 ```
 
-### Release Build (Optimized)
+For a complete walkthrough, see the **[Language Guide](docs/guide.md)**.
+For the full formal specification, see **[docs/spec/babel-c-spec.md](docs/spec/babel-c-spec.md)**.
+
+## Building & Testing
 
 ```bash
-cargo build --release
-./target/release/babelc examples/hello.bc --run
+cargo build                     # debug build
+cargo build --release           # optimized build
+cargo test                      # 53 unit tests + 38 integration tests
+cargo test --lib                # unit tests only
+cargo test --test '*'           # integration tests only
 ```
 
-### Running Tests
+Tests run on Windows (MSVC), Linux (GCC), macOS (Clang), and ARM64 (QEMU) via CI.
 
-The test suite includes comprehensive unit tests for all compiler phases and integration tests for end-to-end compilation:
-
-```bash
-# Run all tests (53 unit + 34 integration = 87 tests)
-cargo test
-
-# Run only unit tests
-cargo test --lib
-
-# Run only integration tests
-cargo test --test '*'
-
-# Run tests with output
-cargo test -- --nocapture
-```
-
-#### Runtime Tests
-
-The C runtime library has its own test suite:
+The C runtime has its own test suite:
 
 ```bash
-cd runtime
-make test
-
-# Or compile and run manually
-gcc test_runtime.c bc_runtime.c -Iruntime -o test_runtime
-./test_runtime
+cd runtime && make test
 ```
 
 ## Project Structure
 
 ```
-Squad/
 ├── src/
-│   ├── main.rs          # CLI driver
+│   ├── main.rs          # CLI entry point & compiler discovery
 │   ├── lexer.rs         # Tokenizer
-│   ├── parser.rs        # Parser (tokens → AST)
+│   ├── parser.rs        # Recursive-descent parser → AST
 │   ├── semantic.rs      # Type checker & semantic analysis
-│   ├── codegen.rs       # Code generator (AST → C)
-│   ├── ast.rs           # Abstract Syntax Tree definitions
-│   ├── token.rs         # Token types and span info
+│   ├── codegen.rs       # AST → C code generator
+│   ├── ast.rs           # AST node definitions
+│   ├── token.rs         # Token types
 │   ├── types.rs         # Type system definitions
-│   └── error.rs         # Error types
+│   └── error.rs         # Compiler error types
 ├── runtime/
-│   ├── bc_runtime.c     # Runtime library implementation
-│   ├── bc_runtime.h     # Runtime library header
-│   └── test_runtime.c   # Runtime tests
+│   ├── bc_runtime.c     # Arena allocator + standard library (C)
+│   ├── bc_runtime.h     # Runtime header
+│   └── test_runtime.c   # Runtime unit tests
 ├── tests/
-│   └── integration.rs   # End-to-end compiler tests
-├── examples/
-│   ├── hello.bc         # Hello world
-│   ├── fibonacci.bc     # Recursive fibonacci
-│   └── error_handling.bc # Result type demo
+│   ├── positive/        # 22 programs that must compile & produce expected output
+│   ├── negative/        # 16 programs that must be rejected by the compiler
+│   └── integration.rs   # Test harness
+├── examples/            # hello.bc, fibonacci.bc, error_handling.bc
 ├── docs/
+│   ├── guide.md         # Concise language guide
 │   └── spec/
-│       └── babel-c-spec.md  # Complete language specification
-└── Cargo.toml           # Rust project metadata
+│       └── babel-c-spec.md  # Full language specification
+└── Cargo.toml
 ```
 
-## Language Specification
+## Status
 
-For the complete, definitive language specification including:
-- Full grammar in EBNF
-- Type system rules
-- Memory model
-- C-FFI interface
-- All standard library functions
-
-See: [`docs/spec/babel-c-spec.md`](docs/spec/babel-c-spec.md)
-
-## Design Philosophy
-
-Babel-C is built on three core principles:
-
-1. **LLM-First Design**: Every syntax decision optimized for correctness when generated by AI
-   - No ambiguous constructs
-   - Explicit over implicit
-   - Consistent patterns
-
-2. **Minimalism**: Only essential features
-   - 21 keywords total
-   - No macros, no metaprogramming
-   - Small, auditable codebase
-
-3. **C Interop**: First-class C integration
-   - Compiles to readable, portable C99
-   - Direct C-FFI support
-   - Can call any C library
-
-## Why Babel-C?
-
-**For LLM Code Generation:**
-- Unambiguous syntax reduces hallucination
-- Explicit error handling catches mistakes at compile time
-- Type system prevents common errors
-
-**For Systems Programming:**
-- Compiles to fast, portable C code
-- Zero runtime overhead
-- Works anywhere C works
-
-**For Learning:**
-- Small, understandable compiler (< 5000 LOC)
-- Clear separation of concerns
-- Well-documented codebase
-
-## Roadmap
-
-Current status: **Phase 8 - Integration & Developer Experience** ✅
-
-Completed phases:
-- ✅ Phase 1: Core type system & IR
-- ✅ Phase 2: Lexer & parser
-- ✅ Phase 3: Semantic analyzer
-- ✅ Phase 4: Code generator
-- ✅ Phase 5: Runtime library (76 C tests)
-- ✅ Phase 6: Standard library integration
-- ✅ Phase 7: Testing & validation (87 tests)
-- ✅ Phase 8: Integration & developer experience
-
-Future possibilities:
-- LSP server for editor support
-- Debugger integration
-- Optimization passes
-- Additional backends (WASM, LLVM)
+Babel-C v0.1 is feature-complete for its initial scope: the full language compiles to C, all 91 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies.
 
 ## Contributing
 
-This is a research/educational project. The codebase is intentionally kept small and focused.
+This is a research project. The codebase is intentionally small and focused — contributions that align with the minimalist philosophy are welcome.
 
 ## License
 
 [Specify your license here]
-
-## Credits
-
-**Lead Architect**: Neo  
-**Design Philosophy**: LLM-optimized systems programming
-
----
-
-**"What is real? How do you define 'real'? If you're talking about what you can compile, what you can execute, what you can run — then 'real' is simply C code that your processor can understand."** — Morpheus (probably)
