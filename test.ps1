@@ -67,7 +67,7 @@ exit /b %ERRORLEVEL%
 # ── Build ──────────────────────────────────────────────
 if (-not $SkipBuild) {
     Write-Host "`n━━━ Building ━━━" -ForegroundColor Cyan
-    cargo build --release 2>&1
+    cargo build --release 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "BUILD FAILED" -ForegroundColor Red
         exit 1
@@ -84,7 +84,7 @@ if (-not (Test-Path $BABELC)) {
 # ── Unit tests ─────────────────────────────────────────
 if (-not $SkipUnit) {
     Write-Host "`n━━━ Unit Tests (cargo test) ━━━" -ForegroundColor Cyan
-    cargo test 2>&1
+    cargo test 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "UNIT TESTS FAILED" -ForegroundColor Red
         exit 1
