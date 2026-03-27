@@ -10,7 +10,7 @@ mod types;
 use std::env;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
 fn main() {
@@ -21,6 +21,7 @@ fn main() {
     let mut output_path = None;
     let mut file_path = None;
     let mut run_mode = false;
+    let mut emit_c = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -28,6 +29,7 @@ fn main() {
             "--dump-tokens" => dump_tokens = true,
             "--dump-ast" => dump_ast = true,
             "--run" => run_mode = true,
+            "--emit-c" => emit_c = true,
             "-o" => {
                 i += 1;
                 if i < args.len() {
@@ -49,7 +51,7 @@ fn main() {
     let path = match file_path {
         Some(p) => p,
         None => {
-            eprintln!("usage: babelc [--dump-tokens] [--dump-ast] [--run] [-o output.c] <file.bc>");
+            eprintln!("usage: babelc [--dump-tokens] [--dump-ast] [--run] [--emit-c] [-o output] <file.bc>");
             process::exit(1);
         }
     };
@@ -94,7 +96,7 @@ fn main() {
 
     // If just dumping, stop here
     if dump_tokens || dump_ast {
-        if output_path.is_none() && !run_mode {
+        if output_path.is_none() && !run_mode && !emit_c {
             return;
         }
     }
@@ -111,21 +113,55 @@ fn main() {
     // Code generation
     let c_code = codegen::CodeGenerator::generate(&program, &info);
 
+    // Determine the output mode:
+    //   --run           → compile and execute
+    //   --emit-c        → output C code (to stdout or -o file)
+    //   -o foo.c        → output C code to foo.c (extension-based detection)
+    //   otherwise       → compile to executable
+    let output_ends_in_c = output_path
+        .as_ref()
+        .map(|p| p.ends_with(".c"))
+        .unwrap_or(false);
+
     if run_mode {
-        // Run mode: compile and execute
         run_program(&path, &c_code);
-    } else if let Some(out_path) = output_path {
-        match fs::write(&out_path, &c_code) {
-            Ok(_) => {
-                eprintln!("Wrote {}", out_path);
+    } else if emit_c || output_ends_in_c {
+        // Emit C mode
+        if let Some(out_path) = output_path {
+            match fs::write(&out_path, &c_code) {
+                Ok(_) => eprintln!("Wrote {}", out_path),
+                Err(e) => {
+                    eprintln!("error writing {out_path}: {e}");
+                    process::exit(1);
+                }
             }
-            Err(e) => {
-                eprintln!("error writing {out_path}: {e}");
-                process::exit(1);
-            }
+        } else {
+            println!("{}", c_code);
         }
     } else {
-        println!("{}", c_code);
+        // Default: compile to executable
+        let exe_path = match output_path {
+            Some(ref p) => {
+                let pb = PathBuf::from(p);
+                if cfg!(windows) && pb.extension().is_none() {
+                    pb.with_extension("exe")
+                } else {
+                    pb
+                }
+            }
+            None => {
+                let stem = Path::new(&path)
+                    .file_stem()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                    .to_os_string();
+                let mut pb = PathBuf::from(stem);
+                if cfg!(windows) {
+                    pb.set_extension("exe");
+                }
+                pb
+            }
+        };
+        compile_to_executable(&c_code, &exe_path);
     }
 }
 
@@ -239,8 +275,64 @@ fn find_c_compiler() -> Option<CCompiler> {
     None
 }
 
+/// Find the runtime directory, trying the exe's sibling `runtime/` first,
+/// then falling back to a `runtime/` in the current working directory.
+fn find_runtime_dir() -> PathBuf {
+    // Try next to the executable first (for installed usage)
+    if let Ok(exe) = env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("runtime");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    // Fallback: cwd-relative (dev / project-root usage)
+    let cwd = PathBuf::from("runtime");
+    if cwd.exists() {
+        return cwd;
+    }
+    eprintln!("error: runtime directory not found");
+    eprintln!("make sure you're running from the project root or that runtime/ is next to the binary");
+    process::exit(1);
+}
+
+/// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
+fn compile_to_executable(c_code: &str, exe_path: &Path) {
+    let temp_dir = env::temp_dir().join("babelc_temp");
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        eprintln!("error creating temp directory: {e}");
+        process::exit(1);
+    }
+
+    let c_file = temp_dir.join("program.c");
+    if let Err(e) = fs::write(&c_file, c_code) {
+        eprintln!("error writing temporary C file: {e}");
+        process::exit(1);
+    }
+
+    let runtime_dir = find_runtime_dir();
+    let runtime_c = runtime_dir.join("bc_runtime.c");
+    let runtime_h = runtime_dir.join("bc_runtime.h");
+    if !runtime_c.exists() || !runtime_h.exists() {
+        eprintln!("error: runtime files not found in {}", runtime_dir.display());
+        process::exit(1);
+    }
+
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir);
+    // Clean up temp C file
+    let _ = fs::remove_file(&c_file);
+
+    if !compiled {
+        eprintln!("\nerror: compilation failed");
+        process::exit(1);
+    }
+
+    eprintln!("Compiled {}", exe_path.display());
+}
+
 fn run_program(source_path: &str, c_code: &str) {
-    let temp_dir = Path::new("target").join("babelc_temp");
+    let temp_dir = env::temp_dir().join("babelc_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -258,48 +350,15 @@ fn run_program(source_path: &str, c_code: &str) {
         temp_dir.join("program")
     };
 
-    let runtime_dir = Path::new("runtime");
-    if !runtime_dir.exists() {
-        eprintln!("error: runtime directory not found");
-        eprintln!("make sure you're running from the project root");
-        process::exit(1);
-    }
-
+    let runtime_dir = find_runtime_dir();
     let runtime_c = runtime_dir.join("bc_runtime.c");
     let runtime_h = runtime_dir.join("bc_runtime.h");
     if !runtime_c.exists() || !runtime_h.exists() {
-        eprintln!("error: runtime files not found in runtime/");
+        eprintln!("error: runtime files not found in {}", runtime_dir.display());
         process::exit(1);
     }
 
-    let compiler = match find_c_compiler() {
-        Some(c) => c,
-        None => {
-            eprintln!("error: no C compiler found");
-            eprintln!("please install one of the following:");
-            eprintln!("  - GCC:   https://gcc.gnu.org/");
-            eprintln!("  - Clang: https://releases.llvm.org/");
-            if cfg!(windows) {
-                eprintln!("  - Visual Studio Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/");
-            }
-            process::exit(1);
-        }
-    };
-
-    let compiled = match &compiler {
-        CCompiler::Gcc(cmd) => {
-            eprintln!("Compiling with gcc...");
-            compile_with_gcc_or_clang(cmd, &c_file, &exe_file, &runtime_c, runtime_dir)
-        }
-        CCompiler::Clang(cmd) => {
-            eprintln!("Compiling with clang...");
-            compile_with_gcc_or_clang(cmd, &c_file, &exe_file, &runtime_c, runtime_dir)
-        }
-        CCompiler::Msvc { cl_path, vcvars } => {
-            eprintln!("Compiling with MSVC cl.exe...");
-            compile_with_msvc(cl_path, vcvars.as_deref(), &c_file, &exe_file, &runtime_c, runtime_dir)
-        }
-    };
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -318,6 +377,38 @@ fn run_program(source_path: &str, c_code: &str) {
         Err(e) => {
             eprintln!("error running program: {e}");
             process::exit(1);
+        }
+    }
+}
+
+/// Detect a C compiler and invoke it. Returns true on success.
+fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path) -> bool {
+    let compiler = match find_c_compiler() {
+        Some(c) => c,
+        None => {
+            eprintln!("error: no C compiler found");
+            eprintln!("please install one of the following:");
+            eprintln!("  - GCC:   https://gcc.gnu.org/");
+            eprintln!("  - Clang: https://releases.llvm.org/");
+            if cfg!(windows) {
+                eprintln!("  - Visual Studio Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/");
+            }
+            process::exit(1);
+        }
+    };
+
+    match &compiler {
+        CCompiler::Gcc(cmd) => {
+            eprintln!("Compiling with gcc...");
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir)
+        }
+        CCompiler::Clang(cmd) => {
+            eprintln!("Compiling with clang...");
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir)
+        }
+        CCompiler::Msvc { cl_path, vcvars } => {
+            eprintln!("Compiling with MSVC cl.exe...");
+            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir)
         }
     }
 }

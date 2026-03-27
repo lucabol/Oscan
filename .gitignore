@@ -2,3 +2,5 @@
 tests/build/
 *.exe
 *.o
+
+*.obj
