@@ -1,0 +1,6 @@
+// EXPECT ERROR: Missing type annotation — binding declared without type
+// All bindings must have explicit type annotations in Babel-C.
+
+fn! main() {
+    let x = 42;
+}

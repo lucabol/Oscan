@@ -1,0 +1,58 @@
+// Test: Result type, try, match on Result
+// Exercises: Result::Ok, Result::Err, try propagation, match on Result,
+//            function returning Result, error chaining
+
+fn divide(a: i32, b: i32) -> Result<i32, str> {
+    if b == 0 {
+        Result::Err("division by zero")
+    } else {
+        Result::Ok(a / b)
+    }
+}
+
+fn compute(x: i32, y: i32, z: i32) -> Result<i32, str> {
+    let first: i32 = try divide(x, y);
+    let second: i32 = try divide(first, z);
+    Result::Ok(second + 1)
+}
+
+fn! print_result(r: Result<i32, str>) {
+    match r {
+        Result::Ok(val) => {
+            print("Success: ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            print("Error: ");
+            println(msg);
+        },
+    };
+}
+
+fn! main() {
+    // Successful computation: 100 / 5 = 20, 20 / 2 = 10, 10 + 1 = 11
+    let r1: Result<i32, str> = compute(100, 5, 2);
+    print_result(r1);
+
+    // Error: division by zero in first step
+    let r2: Result<i32, str> = compute(100, 0, 2);
+    print_result(r2);
+
+    // Error: division by zero in second step
+    let r3: Result<i32, str> = compute(100, 5, 0);
+    print_result(r3);
+
+    // Direct match on divide result
+    let r4: Result<i32, str> = divide(42, 6);
+    match r4 {
+        Result::Ok(val) => {
+            print("42 / 6 = ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            println(msg);
+        },
+    };
+}

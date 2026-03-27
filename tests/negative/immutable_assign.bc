@@ -1,0 +1,7 @@
+// EXPECT ERROR: Assigning to immutable binding
+// Only 'let mut' bindings can be reassigned.
+
+fn! main() {
+    let x: i32 = 10;
+    x = 20;
+}

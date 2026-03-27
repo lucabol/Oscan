@@ -1,0 +1,6 @@
+// Test: Basic hello world program
+// Exercises: fn! main, println, string literals
+
+fn! main() {
+    println("Hello, World!");
+}

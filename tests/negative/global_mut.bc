@@ -1,0 +1,8 @@
+// EXPECT ERROR: Global mutable state — let mut at top level is forbidden
+// All top-level let bindings must be immutable.
+
+let mut COUNTER: i32 = 0;
+
+fn! main() {
+    COUNTER = 1;
+}

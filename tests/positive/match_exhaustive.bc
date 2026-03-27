@@ -1,0 +1,48 @@
+// Test: Match expressions with exhaustive patterns
+// Exercises: match on enum (all variants), match on i32 with wildcard,
+//            match on bool, match on str, pattern bindings
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+    Custom(i32, i32, i32),
+}
+
+fn color_name(c: Color) -> str {
+    match c {
+        Color::Red => "red",
+        Color::Green => "green",
+        Color::Blue => "blue",
+        Color::Custom(r, g, b) => "custom",
+    }
+}
+
+fn classify_number(n: i32) -> str {
+    match n {
+        0 => "zero",
+        1 => "one",
+        _ => "other",
+    }
+}
+
+fn bool_to_str(b: bool) -> str {
+    match b {
+        true => "yes",
+        false => "no",
+    }
+}
+
+fn! main() {
+    println(color_name(Color::Red));
+    println(color_name(Color::Green));
+    println(color_name(Color::Blue));
+    println(color_name(Color::Custom(255, 128, 0)));
+
+    println(classify_number(0));
+    println(classify_number(1));
+    println(classify_number(42));
+
+    println(bool_to_str(true));
+    println(bool_to_str(false));
+}

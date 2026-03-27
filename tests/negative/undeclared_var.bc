@@ -1,0 +1,7 @@
+// EXPECT ERROR: Using undeclared variable
+// Variable 'y' is never declared.
+
+fn! main() {
+    let x: i32 = 10;
+    print_i32(y);
+}

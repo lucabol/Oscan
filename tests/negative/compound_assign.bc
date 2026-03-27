@@ -1,0 +1,7 @@
+// EXPECT ERROR: Compound assignment — += operator does not exist
+// There is no compound assignment in Babel-C. Write 'x = x + 1' instead.
+
+fn! main() {
+    let mut x: i32 = 5;
+    x += 1;
+}

@@ -1,0 +1,46 @@
+// Test: Fixed and dynamic arrays, indexing, push, len
+// Exercises: fixed-size array, dynamic array, array literal, indexing,
+//            len() function, push() function, for loop over array indices
+
+fn! main() {
+    // Fixed-size array
+    let fixed: [i32; 5] = [10, 20, 30, 40, 50];
+    print("fixed[0] = ");
+    print_i32(fixed[0]);
+    println("");
+    print("fixed[4] = ");
+    print_i32(fixed[4]);
+    println("");
+    print("len = ");
+    print_i32(len(fixed));
+    println("");
+
+    // Dynamic array
+    let mut dyn_arr: [i32] = [1, 2, 3];
+    print("len before push = ");
+    print_i32(len(dyn_arr));
+    println("");
+
+    push(dyn_arr, 4);
+    push(dyn_arr, 5);
+    print("len after push = ");
+    print_i32(len(dyn_arr));
+    println("");
+
+    // Iterate over array via index
+    for i in 0..len(dyn_arr) {
+        print_i32(dyn_arr[i]);
+        print(" ");
+    };
+    println("");
+
+    // Empty dynamic array
+    let mut empty: [i32] = [];
+    print("empty len = ");
+    print_i32(len(empty));
+    println("");
+    push(empty, 99);
+    print("after push: ");
+    print_i32(empty[0]);
+    println("");
+}

@@ -1,0 +1,44 @@
+// Test: All comparison operators
+// Exercises: ==, !=, <, >, <=, >= on i32, i64, f64, bool equality
+
+fn! main() {
+    // i32 comparisons
+    let a: i32 = 5;
+    let b: i32 = 10;
+    let c: i32 = 5;
+
+    print_bool(a == c);
+    println("");
+    print_bool(a != b);
+    println("");
+    print_bool(a < b);
+    println("");
+    print_bool(a > b);
+    println("");
+    print_bool(a <= c);
+    println("");
+    print_bool(b >= a);
+    println("");
+
+    // f64 comparisons
+    let x: f64 = 3.14;
+    let y: f64 = 2.71;
+    print_bool(x > y);
+    println("");
+    print_bool(x == y);
+    println("");
+    print_bool(x != y);
+    println("");
+
+    // i64 comparisons
+    let big1: i64 = 1000000000 as i64;
+    let big2: i64 = 2000000000 as i64;
+    print_bool(big1 < big2);
+    println("");
+
+    // bool equality
+    print_bool(true == true);
+    println("");
+    print_bool(true != false);
+    println("");
+}

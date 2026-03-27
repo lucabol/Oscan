@@ -1,0 +1,72 @@
+// Test: All arithmetic operators and precedence
+// Exercises: +, -, *, /, %, unary -, operator precedence, parenthesized grouping
+
+fn! main() {
+    // Basic operations on i32
+    let a: i32 = 10;
+    let b: i32 = 3;
+
+    print("10 + 3 = ");
+    print_i32(a + b);
+    println("");
+
+    print("10 - 3 = ");
+    print_i32(a - b);
+    println("");
+
+    print("10 * 3 = ");
+    print_i32(a * b);
+    println("");
+
+    print("10 / 3 = ");
+    print_i32(a / b);
+    println("");
+
+    print("10 % 3 = ");
+    print_i32(a % b);
+    println("");
+
+    // Unary negation
+    print("-10 = ");
+    print_i32(-a);
+    println("");
+
+    // Precedence: * before +
+    print("2 + 3 * 4 = ");
+    print_i32(2 + 3 * 4);
+    println("");
+
+    // Parenthesized grouping
+    print("(2 + 3) * 4 = ");
+    print_i32((2 + 3) * 4);
+    println("");
+
+    // f64 arithmetic
+    let x: f64 = 10.0;
+    let y: f64 = 3.0;
+
+    print("10.0 / 3.0 = ");
+    print_f64(x / y);
+    println("");
+
+    // i64 arithmetic
+    let big: i64 = 1000000000 as i64;
+    let big2: i64 = 2 as i64;
+    print("1000000000 * 2 = ");
+    print_i64(big * big2);
+    println("");
+
+    // Complex precedence: unary minus vs multiplication
+    print("-(3 * 4) = ");
+    print_i32(-(3 * 4));
+    println("");
+
+    // Division truncation
+    print("7 / 2 = ");
+    print_i32(7 / 2);
+    println("");
+
+    print("-7 / 2 = ");
+    print_i32(-7 / 2);
+    println("");
+}

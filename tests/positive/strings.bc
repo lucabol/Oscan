@@ -1,0 +1,43 @@
+// Test: String literals and string functions
+// Exercises: str type, string literals, escape sequences, str_len, str_eq,
+//            str_concat, println, print
+
+fn! main() {
+    // Basic string printing
+    let greeting: str = "Hello";
+    println(greeting);
+
+    // String with escape sequences
+    let escaped: str = "tab:\there\nnewline above";
+    print(escaped);
+    println("");
+
+    // str_len
+    let word: str = "hello";
+    print("len of 'hello' = ");
+    print_i32(str_len(word));
+    println("");
+
+    // str_eq
+    let a: str = "abc";
+    let b: str = "abc";
+    let c: str = "xyz";
+    print("abc == abc: ");
+    print_bool(str_eq(a, b));
+    println("");
+    print("abc == xyz: ");
+    print_bool(str_eq(a, c));
+    println("");
+
+    // str_concat
+    let first: str = "Hello, ";
+    let second: str = "World!";
+    let combined: str = str_concat(first, second);
+    println(combined);
+
+    // Empty string
+    let empty: str = "";
+    print("empty len = ");
+    print_i32(str_len(empty));
+    println("");
+}

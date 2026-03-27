@@ -1,0 +1,8 @@
+Hello
+tab:	here
+newline above
+len of 'hello' = 5
+abc == abc: true
+abc == xyz: false
+Hello, World!
+empty len = 0

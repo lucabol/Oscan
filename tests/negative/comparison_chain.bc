@@ -1,0 +1,9 @@
+// EXPECT ERROR: Comparison chaining — a < b < c is forbidden
+// Comparison chaining is a compile error. Write 'a < b and b < c' instead.
+
+fn! main() {
+    let a: i32 = 1;
+    let b: i32 = 2;
+    let c: i32 = 3;
+    let result: bool = a < b < c;
+}

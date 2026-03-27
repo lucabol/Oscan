@@ -1,0 +1,9 @@
+// EXPECT ERROR: Non-bool condition — using i32 in if condition
+// The condition of if/while must be type bool. No truthy/falsy conversions.
+
+fn! main() {
+    let x: i32 = 1;
+    if x {
+        println("truthy");
+    };
+}

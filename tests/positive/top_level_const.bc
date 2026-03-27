@@ -1,0 +1,44 @@
+// Test: Top-level let bindings (constants)
+// Exercises: top-level let with i32, f64, str, bool; usage in functions
+
+let MAX_VALUE: i32 = 100;
+let PI: f64 = 3.14159265358979;
+let GREETING: str = "Hello from constant";
+let IS_ENABLED: bool = true;
+let COMPUTED: i32 = 6 * 7;
+
+fn get_max() -> i32 {
+    MAX_VALUE
+}
+
+fn circle_area(r: f64) -> f64 {
+    PI * r * r
+}
+
+fn! main() {
+    print("MAX_VALUE = ");
+    print_i32(MAX_VALUE);
+    println("");
+
+    print("PI = ");
+    print_f64(PI);
+    println("");
+
+    println(GREETING);
+
+    print("IS_ENABLED = ");
+    print_bool(IS_ENABLED);
+    println("");
+
+    print("COMPUTED = ");
+    print_i32(COMPUTED);
+    println("");
+
+    print("get_max() = ");
+    print_i32(get_max());
+    println("");
+
+    print("circle_area(1.0) = ");
+    print_f64(circle_area(1.0));
+    println("");
+}

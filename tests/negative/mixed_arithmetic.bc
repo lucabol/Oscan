@@ -1,0 +1,8 @@
+// EXPECT ERROR: Mixed arithmetic — i32 + f64 without explicit cast
+// Mixed-type arithmetic is a compile error.
+
+fn! main() {
+    let a: i32 = 1;
+    let b: f64 = 1.0;
+    let c: f64 = a + b;
+}

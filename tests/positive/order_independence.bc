@@ -1,0 +1,53 @@
+// Test: Order independence — functions/types used before declaration
+// Exercises: calling function defined later, using struct defined later,
+//            using enum defined later, forward references
+
+fn! main() {
+    // Call function defined after main
+    let val: i32 = compute(3, 4);
+    print("compute(3, 4) = ");
+    print_i32(val);
+    println("");
+
+    // Use struct defined after main
+    let p: Point = Point { x: 1.0, y: 2.0 };
+    print("point.x = ");
+    print_f64(p.x);
+    println("");
+
+    // Use enum defined after main
+    let d: Direction = Direction::North;
+    println(dir_name(d));
+
+    // Use constant defined after main
+    print("MAGIC = ");
+    print_i32(MAGIC);
+    println("");
+}
+
+fn compute(a: i32, b: i32) -> i32 {
+    a * b + a
+}
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+enum Direction {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn dir_name(d: Direction) -> str {
+    match d {
+        Direction::North => "north",
+        Direction::South => "south",
+        Direction::East => "east",
+        Direction::West => "west",
+    }
+}
+
+let MAGIC: i32 = 42;

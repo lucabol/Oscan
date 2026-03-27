@@ -1,0 +1,15 @@
+// EXPECT ERROR: Purity violation — pure fn calling fn!
+// A pure function (fn) cannot call a side-effecting function (fn!).
+
+fn! do_print(n: i32) {
+    print_i32(n);
+}
+
+fn compute(n: i32) -> i32 {
+    do_print(n);
+    n + 1
+}
+
+fn! main() {
+    print_i32(compute(5));
+}

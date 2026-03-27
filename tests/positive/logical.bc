@@ -1,0 +1,52 @@
+// Test: Logical operators — and, or, not
+// Exercises: and (short-circuit), or (short-circuit), not, operator precedence,
+//            logical expressions in conditions
+
+fn! main() {
+    // Basic and
+    print_bool(true and true);
+    println("");
+    print_bool(true and false);
+    println("");
+    print_bool(false and true);
+    println("");
+    print_bool(false and false);
+    println("");
+
+    // Basic or
+    print_bool(true or true);
+    println("");
+    print_bool(true or false);
+    println("");
+    print_bool(false or true);
+    println("");
+    print_bool(false or false);
+    println("");
+
+    // Not
+    print_bool(not true);
+    println("");
+    print_bool(not false);
+    println("");
+
+    // Precedence: not > and > or
+    // not false and true => (not false) and true => true and true => true
+    print_bool(not false and true);
+    println("");
+
+    // true or false and false => true or (false and false) => true or false => true
+    print_bool(true or false and false);
+    println("");
+
+    // Combined in if condition
+    let x: i32 = 5;
+    if x > 0 and x < 10 {
+        println("in range");
+    };
+
+    if x < 0 or x > 100 {
+        println("out of range");
+    } else {
+        println("ok");
+    };
+}

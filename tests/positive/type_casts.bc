@@ -1,0 +1,52 @@
+// Test: Explicit type casts with the 'as' keyword
+// Exercises: i32->i64, i64->i32, i32->f64, f64->i32, i64->f64, f64->i64
+
+fn! main() {
+    // i32 to i64 (widening)
+    let a: i32 = 42;
+    let b: i64 = a as i64;
+    print("i32->i64: ");
+    print_i64(b);
+    println("");
+
+    // i64 to i32 (narrowing, in range)
+    let c: i64 = 100 as i64;
+    let d: i32 = c as i32;
+    print("i64->i32: ");
+    print_i32(d);
+    println("");
+
+    // i32 to f64
+    let e: i32 = 7;
+    let f: f64 = e as f64;
+    print("i32->f64: ");
+    print_f64(f);
+    println("");
+
+    // f64 to i32 (truncation)
+    let g: f64 = 9.7;
+    let h: i32 = g as i32;
+    print("f64->i32: ");
+    print_i32(h);
+    println("");
+
+    // f64 to i64 (truncation)
+    let m: f64 = 123.9;
+    let n: i64 = m as i64;
+    print("f64->i64: ");
+    print_i64(n);
+    println("");
+
+    // i64 to f64
+    let p: i64 = 999 as i64;
+    let q: f64 = p as f64;
+    print("i64->f64: ");
+    print_f64(q);
+    println("");
+
+    // Cast in expression
+    let mixed: f64 = (10 as f64) + 5.5;
+    print("(10 as f64) + 5.5 = ");
+    print_f64(mixed);
+    println("");
+}

@@ -1,0 +1,48 @@
+// Test: Block expressions returning values
+// Exercises: block as expression, block with tail expression, block with unit return,
+//            nested blocks, let initialized from block
+
+fn! main() {
+    // Block expression returning a value
+    let result: i32 = {
+        let a: i32 = 10;
+        let b: i32 = 20;
+        a + b
+    };
+    print("10 + 20 = ");
+    print_i32(result);
+    println("");
+
+    // Nested block expressions
+    let nested: i32 = {
+        let x: i32 = {
+            let y: i32 = 5;
+            y * 2
+        };
+        x + 3
+    };
+    print("5 * 2 + 3 = ");
+    print_i32(nested);
+    println("");
+
+    // Block in if expression
+    let val: i32 = 7;
+    let category: str = if val > 5 {
+        let msg: str = "greater";
+        msg
+    } else {
+        let msg: str = "not greater";
+        msg
+    };
+    println(category);
+
+    // Block returning unit (ends with semicolon)
+    let mut counter: i32 = 0;
+    {
+        counter = counter + 1;
+        counter = counter + 1;
+    };
+    print("counter = ");
+    print_i32(counter);
+    println("");
+}

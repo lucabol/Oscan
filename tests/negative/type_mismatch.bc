@@ -1,0 +1,8 @@
+// EXPECT ERROR: Type mismatch — adding i32 and str
+// Binary operators require operands of the same numeric type.
+
+fn! main() {
+    let x: i32 = 5;
+    let y: str = "hello";
+    let z: i32 = x + y;
+}

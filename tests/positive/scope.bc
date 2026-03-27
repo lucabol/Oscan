@@ -1,0 +1,61 @@
+// Test: Lexical scoping and variable lifetime
+// Exercises: block scoping, variable lifetime, for loop variable scoping,
+//            match arm scoping, separate functions can reuse names
+
+enum Option {
+    Some(i32),
+    None,
+}
+
+fn double(x: i32) -> i32 {
+    x * 2
+}
+
+fn triple(x: i32) -> i32 {
+    x * 3
+}
+
+fn! main() {
+    // Block scoping: inner block variable not visible outside
+    let a: i32 = 1;
+    {
+        let b: i32 = 2;
+        print("inner a = ");
+        print_i32(a);
+        println("");
+        print("inner b = ");
+        print_i32(b);
+        println("");
+    };
+    // b is no longer visible here
+    print("outer a = ");
+    print_i32(a);
+    println("");
+
+    // For loop variable scoped to loop body
+    for i in 0..3 {
+        print_i32(i);
+        print(" ");
+    };
+    println("");
+    // i is no longer visible here
+
+    // Different functions can reuse variable names (x is used in both double and triple)
+    print("double(5) = ");
+    print_i32(double(5));
+    println("");
+    print("triple(5) = ");
+    print_i32(triple(5));
+    println("");
+
+    // Match arm scoping
+    let opt: Option = Option::Some(42);
+    let val: i32 = match opt {
+        Option::Some(v) => v,
+        Option::None => 0,
+    };
+    print("matched = ");
+    print_i32(val);
+    println("");
+    // v is not visible here
+}

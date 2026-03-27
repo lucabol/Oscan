@@ -1,0 +1,19 @@
+// EXPECT ERROR: Non-exhaustive match — missing enum variant 'Green'
+// Every match on an enum must cover all variants or include a _ wildcard.
+
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn name(c: Color) -> str {
+    match c {
+        Color::Red => "red",
+        Color::Blue => "blue",
+    }
+}
+
+fn! main() {
+    println(name(Color::Red));
+}

@@ -1,0 +1,15 @@
+// EXPECT ERROR: Unhandled Result — using Result value without match or try
+// You cannot assign a Result directly to a non-Result type.
+
+fn divide(a: i32, b: i32) -> Result<i32, str> {
+    if b == 0 {
+        Result::Err("division by zero")
+    } else {
+        Result::Ok(a / b)
+    }
+}
+
+fn! main() {
+    let r: Result<i32, str> = divide(10, 2);
+    let val: i32 = r;
+}

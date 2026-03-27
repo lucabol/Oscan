@@ -1,0 +1,7 @@
+inner a = 1
+inner b = 2
+outer a = 1
+0 1 2 
+double(5) = 10
+triple(5) = 15
+matched = 42

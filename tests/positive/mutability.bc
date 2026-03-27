@@ -1,0 +1,41 @@
+// Test: let vs let mut, assignment
+// Exercises: immutable binding, mutable binding, reassignment, struct field mutation
+
+struct Counter {
+    value: i32,
+}
+
+fn! main() {
+    // Immutable binding
+    let x: i32 = 10;
+    print("x = ");
+    print_i32(x);
+    println("");
+
+    // Mutable binding and reassignment
+    let mut y: i32 = 0;
+    print("y = ");
+    print_i32(y);
+    println("");
+
+    y = 5;
+    print("y = ");
+    print_i32(y);
+    println("");
+
+    y = y + 10;
+    print("y = ");
+    print_i32(y);
+    println("");
+
+    // Mutable struct binding allows field mutation
+    let mut c: Counter = Counter { value: 0 };
+    print("counter = ");
+    print_i32(c.value);
+    println("");
+
+    c.value = 42;
+    print("counter = ");
+    print_i32(c.value);
+    println("");
+}

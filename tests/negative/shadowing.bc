@@ -1,0 +1,10 @@
+// EXPECT ERROR: Variable shadowing — redeclaring 'x' in inner scope is forbidden
+// The anti-shadowing rule forbids declaring a variable with the same name
+// as any variable visible in an enclosing scope.
+
+fn! main() {
+    let x: i32 = 1;
+    {
+        let x: i32 = 2;
+    };
+}

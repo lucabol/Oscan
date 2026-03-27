@@ -1,0 +1,44 @@
+// Test: Control flow — if/else, while, for loops
+// Exercises: if/else chains, while loop with mut counter, for-in range loop,
+//            nested control flow, if as expression
+
+fn! main() {
+    // if/else chain
+    let val: i32 = 15;
+    if val < 10 {
+        println("small");
+    } else if val < 20 {
+        println("medium");
+    } else {
+        println("large");
+    };
+
+    // if as expression
+    let label: str = if val > 10 { "big" } else { "small" };
+    println(label);
+
+    // while loop
+    let mut i: i32 = 0;
+    while i < 5 {
+        print_i32(i);
+        print(" ");
+        i = i + 1;
+    };
+    println("");
+
+    // for-in loop
+    for j in 0..5 {
+        print_i32(j);
+        print(" ");
+    };
+    println("");
+
+    // for loop with computation
+    let mut sum: i32 = 0;
+    for k in 1..11 {
+        sum = sum + k;
+    };
+    print("sum(1..10) = ");
+    print_i32(sum);
+    println("");
+}

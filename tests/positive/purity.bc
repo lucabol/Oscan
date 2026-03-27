@@ -1,0 +1,34 @@
+// Test: fn vs fn! purity enforcement
+// Exercises: pure fn calling other pure fn, fn! calling both fn and fn!,
+//            pure function with no side effects
+
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
+
+// Pure function calling other pure functions
+fn compute(x: i32, y: i32) -> i32 {
+    let sum: i32 = add(x, y);
+    let prod: i32 = multiply(x, y);
+    sum + prod
+}
+
+// fn! can call pure functions
+fn! display_result(label: str, val: i32) {
+    print(label);
+    print_i32(val);
+    println("");
+}
+
+fn! main() {
+    let result: i32 = compute(3, 4);
+    display_result("3+4 + 3*4 = ", result);
+
+    // fn! calling fn
+    let sum: i32 = add(10, 20);
+    display_result("10 + 20 = ", sum);
+}

@@ -1,0 +1,58 @@
+// Test: Nested control flow — nested if/while/for/match
+// Exercises: nested for loops, for inside while, if inside for,
+//            match inside if, nested if/else chains
+
+enum Token {
+    Number(i32),
+    Word(str),
+    Empty,
+}
+
+fn classify(t: Token) -> str {
+    match t {
+        Token::Number(n) => if n > 0 { "positive number" } else { "non-positive number" },
+        Token::Word(s) => "word",
+        Token::Empty => "empty",
+    }
+}
+
+fn! main() {
+    // Nested for loops (multiplication table fragment)
+    for i in 1..4 {
+        for j in 1..4 {
+            print_i32(i * j);
+            print(" ");
+        };
+        println("");
+    };
+
+    // For with inner if
+    for k in 0..6 {
+        if k % 2 == 0 {
+            print_i32(k);
+            print(" ");
+        };
+    };
+    println("");
+
+    // While with nested if
+    let mut n: i32 = 10;
+    while n > 0 {
+        if n % 3 == 0 {
+            print_i32(n);
+            print(" ");
+        };
+        n = n - 1;
+    };
+    println("");
+
+    // Match inside conditional
+    let tok: Token = Token::Number(5);
+    println(classify(tok));
+
+    let tok2: Token = Token::Number(-1);
+    println(classify(tok2));
+
+    let tok3: Token = Token::Empty;
+    println(classify(tok3));
+}

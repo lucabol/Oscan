@@ -1,0 +1,25 @@
+// Test: Recursion and if/else expressions
+// Exercises: fn (pure), recursion, if/else as expression, comparison, arithmetic
+
+fn fib(n: i32) -> i32 {
+    if n <= 1 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+fn! main() {
+    print("fib(0) = ");
+    print_i32(fib(0));
+    println("");
+    print("fib(1) = ");
+    print_i32(fib(1));
+    println("");
+    print("fib(5) = ");
+    print_i32(fib(5));
+    println("");
+    print("fib(10) = ");
+    print_i32(fib(10));
+    println("");
+}
