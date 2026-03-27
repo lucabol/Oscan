@@ -1,0 +1,17 @@
+// Test: Calling extern from fn! (should work)
+// Exercises: fn! can call extern functions
+
+extern {
+    fn! abs(n: i32) -> i32;
+}
+
+fn! impure_abs(x: i32) -> i32 {
+    abs(x)
+}
+
+fn! main() {
+    let result: i32 = impure_abs(-10);
+    print("abs(-10) = ");
+    print_i32(result);
+    println("");
+}

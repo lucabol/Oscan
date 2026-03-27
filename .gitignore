@@ -1,0 +1,4 @@
+/target/
+tests/build/
+*.exe
+*.o

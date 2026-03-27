@@ -8,6 +8,7 @@ use std::fmt;
 pub struct CompileError {
     pub span: Span,
     pub message: String,
+    pub file: Option<String>,
 }
 
 impl CompileError {
@@ -15,13 +16,23 @@ impl CompileError {
         Self {
             span,
             message: message.into(),
+            file: None,
         }
+    }
+
+    pub fn with_file(mut self, file: impl Into<String>) -> Self {
+        self.file = Some(file.into());
+        self
     }
 }
 
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error at {}: {}", self.span, self.message)
+        if let Some(file) = &self.file {
+            write!(f, "error in {}:{}: {}", file, self.span, self.message)
+        } else {
+            write!(f, "error at {}: {}", self.span, self.message)
+        }
     }
 }
 

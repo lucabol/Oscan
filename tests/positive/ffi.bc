@@ -4,17 +4,17 @@
 //       The test runner will need to link against the C standard library.
 
 extern {
-    fn! c_abs(n: i32) -> i32;
+    fn! abs(n: i32) -> i32;
 }
 
 fn! main() {
     // Call an extern C function (abs from stdlib.h)
-    let val: i32 = c_abs(-42);
+    let val: i32 = abs(-42);
     print("abs(-42) = ");
     print_i32(val);
     println("");
 
-    let val2: i32 = c_abs(10);
+    let val2: i32 = abs(10);
     print("abs(10) = ");
     print_i32(val2);
     println("");

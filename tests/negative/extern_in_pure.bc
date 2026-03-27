@@ -1,0 +1,17 @@
+// Negative Test: Pure function calling extern function
+// Should be rejected: pure functions cannot call extern functions
+
+extern {
+    fn! abs(n: i32) -> i32;
+}
+
+// This should fail: pure function calling extern function
+fn pure_abs(x: i32) -> i32 {
+    abs(x)
+}
+
+fn! main() {
+    let result: i32 = pure_abs(-5);
+    print_i32(result);
+    println("");
+}

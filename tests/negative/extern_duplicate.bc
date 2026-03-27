@@ -1,0 +1,16 @@
+// Negative Test: Duplicate extern function declaration
+// Should be rejected: duplicate function name in extern blocks
+
+extern {
+    fn! abs(n: i32) -> i32;
+}
+
+// Duplicate declaration
+extern {
+    fn! abs(x: i32) -> i32;
+}
+
+fn! main() {
+    print_i32(abs(-5));
+    println("");
+}

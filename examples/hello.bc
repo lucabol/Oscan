@@ -1,0 +1,15 @@
+// Hello World in Babel-C
+//
+// This demonstrates the simplest possible Babel-C program.
+// The `fn!` keyword indicates a side-effecting function (it performs I/O).
+// `println` is a built-in function from the runtime library.
+//
+// To run:
+//   babelc hello.bc --run
+//
+// To transpile only:
+//   babelc hello.bc -o hello.c
+
+fn! main() {
+    println("Hello, Babel-C!");
+}

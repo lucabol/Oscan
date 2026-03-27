@@ -1,0 +1,100 @@
+// Error Handling with Result<T, E>
+//
+// This example demonstrates:
+// - Result<T, E> type for error handling
+// - Pattern matching with `match` expressions
+// - The `try` operator for error propagation
+// - User-defined pure and impure functions
+// - String operations
+//
+// Babel-C uses Result types instead of exceptions for error handling.
+// The `try` operator automatically propagates errors up the call stack.
+//
+// To run:
+//   babelc error_handling.bc --run
+
+// A pure function that can fail
+fn parse_positive(s: str) -> Result<i32, str> {
+    // In a real implementation, we'd parse the string
+    // For this example, we'll just check if it's a known value
+    if str_eq(s, "42") {
+        Result::Ok(42)
+    } else if str_eq(s, "100") {
+        Result::Ok(100)
+    } else {
+        Result::Err("not a known positive number")
+    }
+}
+
+// Another function that uses `try` to propagate errors
+fn double_positive(s: str) -> Result<i32, str> {
+    let n: i32 = try parse_positive(s);
+    Result::Ok(n * 2)
+}
+
+fn! main() {
+    println("=== Error Handling Demo ===");
+    println("");
+    
+    // Example 1: Successful parsing
+    println("Parsing '42':");
+    match parse_positive("42") {
+        Result::Ok(val) => {
+            print("Success! Value = ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            print("Error: ");
+            println(msg);
+        },
+    };
+    
+    println("");
+    
+    // Example 2: Failed parsing
+    println("Parsing 'invalid':");
+    match parse_positive("invalid") {
+        Result::Ok(val) => {
+            print("Success! Value = ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            print("Error: ");
+            println(msg);
+        },
+    };
+    
+    println("");
+    
+    // Example 3: Error propagation with `try`
+    println("Doubling '100' (with try):");
+    match double_positive("100") {
+        Result::Ok(val) => {
+            print("Doubled value = ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            print("Error: ");
+            println(msg);
+        },
+    };
+    
+    println("");
+    
+    // Example 4: Error propagation catches errors
+    println("Doubling 'bad' (with try):");
+    match double_positive("bad") {
+        Result::Ok(val) => {
+            print("Doubled value = ");
+            print_i32(val);
+            println("");
+        },
+        Result::Err(msg) => {
+            print("Error propagated: ");
+            println(msg);
+        },
+    };
+}

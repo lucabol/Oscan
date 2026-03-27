@@ -449,7 +449,20 @@ void bc_print_i64(int64_t n)
 
 void bc_print_f64(double n)
 {
-    printf("%g", n);
+    /* Shortest-representation: find the minimum precision that round-trips */
+    char buf[32];
+    int prec;
+    for (prec = 1; prec <= 17; prec++) {
+        double reparsed;
+        snprintf(buf, sizeof(buf), "%.*g", prec, n);
+        sscanf(buf, "%lf", &reparsed);
+        if (reparsed == n) {
+            printf("%s", buf);
+            fflush(stdout);
+            return;
+        }
+    }
+    printf("%.17g", n);
     fflush(stdout);
 }
 

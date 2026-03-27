@@ -1,0 +1,54 @@
+// Test: Advanced FFI - multiple extern functions with different signatures
+// Exercises: Multiple extern blocks, various type mappings, calling extern functions
+
+// Standard math functions from <math.h>
+extern {
+    fn! sqrt(x: f64) -> f64;
+    fn! pow(x: f64, y: f64) -> f64;
+    fn! fabs(x: f64) -> f64;
+}
+
+// Standard library functions from <stdlib.h>
+extern {
+    fn! abs(n: i32) -> i32;
+}
+
+// Additional math functions
+extern {
+    fn! floor(x: f64) -> f64;
+    fn! ceil(x: f64) -> f64;
+}
+
+fn! main() {
+    // Test math functions with different types
+    print("sqrt(16.0) = ");
+    print_f64(sqrt(16.0));
+    println("");
+    
+    print("pow(2.0, 3.0) = ");
+    print_f64(pow(2.0, 3.0));
+    println("");
+    
+    print("fabs(-3.14) = ");
+    print_f64(fabs(-3.14));
+    println("");
+    
+    print("floor(3.7) = ");
+    print_f64(floor(3.7));
+    println("");
+    
+    print("ceil(3.2) = ");
+    print_f64(ceil(3.2));
+    println("");
+    
+    // Test stdlib function with i32
+    print("abs(-42) = ");
+    print_i32(abs(-42));
+    println("");
+    
+    // Test multiple extern calls in expressions
+    let hypotenuse: f64 = sqrt(pow(3.0, 2.0) + pow(4.0, 2.0));
+    print("sqrt(3^2 + 4^2) = ");
+    print_f64(hypotenuse);
+    println("");
+}

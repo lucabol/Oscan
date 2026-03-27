@@ -1,0 +1,1826 @@
+use std::collections::{HashMap, HashSet};
+
+use crate::ast::*;
+use crate::types::*;
+
+// ---------------------------------------------------------------------------
+// Code Generator — Typed AST → C99 source
+// ---------------------------------------------------------------------------
+
+pub struct CodeGenerator {
+    out: String,
+    indent: usize,
+    temp_counter: usize,
+    structs: HashMap<String, StructInfo>,
+    enums: HashMap<String, EnumInfo>,
+    functions: HashMap<String, FunctionInfo>,
+    constants: HashMap<String, ConstInfo>,
+    scopes: Vec<HashMap<String, BcType>>,
+    mut_vars: HashSet<String>,
+    current_fn_return_type: Option<BcType>,
+    result_types: Vec<(BcType, BcType)>,
+}
+
+impl CodeGenerator {
+    pub fn generate(program: &Program, info: &SemanticInfo) -> String {
+        let mut cg = Self {
+            out: String::new(),
+            indent: 0,
+            temp_counter: 0,
+            structs: info.structs.clone(),
+            enums: info.enums.clone(),
+            functions: info.functions.clone(),
+            constants: info.constants.clone(),
+            scopes: Vec::new(),
+            mut_vars: HashSet::new(),
+            current_fn_return_type: None,
+            result_types: Vec::new(),
+        };
+
+        // Collect all unique Result types used in the program
+        cg.collect_result_types(program);
+
+        cg.emit_includes();
+        cg.emit_result_typedefs();
+        cg.emit_struct_defs(program);
+        cg.emit_enum_defs(program);
+        cg.emit_forward_decls(program);
+        cg.emit_top_level_constants(program);
+        cg.emit_function_defs(program);
+        cg.emit_main_wrapper();
+
+        cg.out
+    }
+
+    // -----------------------------------------------------------------------
+    // Result type collection
+    // -----------------------------------------------------------------------
+
+    fn collect_result_types(&mut self, program: &Program) {
+        let mut seen = HashSet::new();
+        for decl in &program.decls {
+            self.collect_result_types_decl(decl, &mut seen);
+        }
+        // Also collect from function return types
+        for fi in self.functions.values() {
+            if let BcType::Result(ok, err) = &fi.return_type {
+                let key = ((**ok).clone(), (**err).clone());
+                if seen.insert(key.clone()) {
+                    self.result_types.push(key);
+                }
+            }
+        }
+        // Always include Result<str, str> for read_line
+        let str_str = (BcType::Str, BcType::Str);
+        if !seen.contains(&str_str) {
+            // Already defined in runtime, skip
+        }
+    }
+
+    fn collect_result_types_decl(&mut self, decl: &TopDecl, seen: &mut HashSet<(BcType, BcType)>) {
+        match decl {
+            TopDecl::Fn(f) => {
+                if let Some(ty) = &f.return_type {
+                    self.collect_result_types_from_ast_type(ty, seen);
+                }
+                for p in &f.params {
+                    self.collect_result_types_from_ast_type(&p.ty, seen);
+                }
+                self.collect_result_types_block(&f.body, seen);
+            }
+            TopDecl::Let(l) => {
+                self.collect_result_types_from_ast_type(&l.ty, seen);
+            }
+            TopDecl::Struct(s) => {
+                for field in &s.fields {
+                    self.collect_result_types_from_ast_type(&field.ty, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_result_types_from_ast_type(&mut self, ty: &Type, seen: &mut HashSet<(BcType, BcType)>) {
+        if let Type::Result(ok, err, _) = ty {
+            let ok_bc = self.resolve_ast_type(ok);
+            let err_bc = self.resolve_ast_type(err);
+            let key = (ok_bc, err_bc);
+            if seen.insert(key.clone()) {
+                self.result_types.push(key);
+            }
+            self.collect_result_types_from_ast_type(ok, seen);
+            self.collect_result_types_from_ast_type(err, seen);
+        }
+    }
+
+    fn collect_result_types_block(&mut self, block: &Block, seen: &mut HashSet<(BcType, BcType)>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let(ls) => {
+                    self.collect_result_types_from_ast_type(&ls.ty, seen);
+                }
+                Stmt::For(f) => self.collect_result_types_block(&f.body, seen),
+                Stmt::While(w) => self.collect_result_types_block(&w.body, seen),
+                _ => {}
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Output helpers
+    // -----------------------------------------------------------------------
+
+    fn line(&mut self, s: &str) {
+        for _ in 0..self.indent {
+            self.out.push_str("    ");
+        }
+        self.out.push_str(s);
+        self.out.push('\n');
+    }
+
+    fn blank(&mut self) {
+        self.out.push('\n');
+    }
+
+    fn fresh_tmp(&mut self) -> String {
+        let n = self.temp_counter;
+        self.temp_counter += 1;
+        format!("_tmp_{}", n)
+    }
+
+    /// Mangle identifiers that clash with C keywords or standard type names.
+    fn mangle_c_name(name: &str) -> String {
+        const C_RESERVED: &[&str] = &[
+            "auto", "break", "case", "char", "const", "continue", "default", "do",
+            "double", "else", "enum", "extern", "float", "for", "goto", "if",
+            "int", "long", "register", "return", "short", "signed", "sizeof",
+            "static", "struct", "switch", "typedef", "union", "unsigned", "void",
+            "volatile", "while", "inline", "restrict",
+        ];
+        if C_RESERVED.contains(&name) {
+            format!("{}_", name)
+        } else {
+            name.to_string()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Includes
+    // -----------------------------------------------------------------------
+
+    fn emit_includes(&mut self) {
+        self.line("#include <stdint.h>");
+        self.line("#include <stdio.h>");
+        self.line("#include <stdlib.h>");
+        self.line("#include <math.h>");
+        self.line("#include \"bc_runtime.h\"");
+        self.blank();
+    }
+
+    // -----------------------------------------------------------------------
+    // Result typedefs
+    // -----------------------------------------------------------------------
+
+    fn emit_result_typedefs(&mut self) {
+        for (ok, err) in &self.result_types.clone() {
+            let name = self.result_type_name(ok, err);
+            if name == "bc_result_str_str" {
+                continue; // Already in runtime
+            }
+            let ok_c = self.type_to_c(ok);
+            let err_c = self.type_to_c(err);
+            let ok_c_field = if *ok == BcType::Unit { "uint8_t".to_string() } else { ok_c };
+            self.line(&format!("BC_RESULT_DECL({}, {}, {});", ok_c_field, err_c, name));
+        }
+        self.blank();
+    }
+
+    // -----------------------------------------------------------------------
+    // Enum definitions
+    // -----------------------------------------------------------------------
+
+    fn emit_enum_defs(&mut self, program: &Program) {
+        for decl in &program.decls {
+            if let TopDecl::Enum(e) = decl {
+                self.emit_enum_def(e);
+            }
+        }
+    }
+
+    fn emit_enum_def(&mut self, e: &EnumDecl) {
+        // Tag constants
+        for (i, v) in e.variants.iter().enumerate() {
+            self.line(&format!("#define {}_TAG_{} {}", e.name, v.name, i));
+        }
+        self.blank();
+
+        let has_payload = e.variants.iter().any(|v| !v.payload_types.is_empty());
+
+        if has_payload {
+            self.line(&format!("typedef struct {{"));
+            self.indent += 1;
+            self.line("int tag;");
+            self.line("union {");
+            self.indent += 1;
+            for v in &e.variants {
+                if !v.payload_types.is_empty() {
+                    self.line(&format!("struct {{"));
+                    self.indent += 1;
+                    for (i, pt) in v.payload_types.iter().enumerate() {
+                        let ct = self.type_to_c(&self.resolve_ast_type(pt));
+                        self.line(&format!("{} _{};", ct, i));
+                    }
+                    self.indent -= 1;
+                    self.line(&format!("}} {};", v.name));
+                }
+            }
+            self.indent -= 1;
+            self.line("} data;");
+            self.indent -= 1;
+            self.line(&format!("}} {};", e.name));
+        } else {
+            // Simple int enum
+            self.line(&format!("typedef int {};", e.name));
+        }
+        self.blank();
+    }
+
+    // -----------------------------------------------------------------------
+    // Struct definitions
+    // -----------------------------------------------------------------------
+
+    fn emit_struct_defs(&mut self, program: &Program) {
+        for decl in &program.decls {
+            if let TopDecl::Struct(s) = decl {
+                self.emit_struct_def(s);
+            }
+        }
+    }
+
+    fn emit_struct_def(&mut self, s: &StructDecl) {
+        self.line(&format!("typedef struct {{"));
+        self.indent += 1;
+        for f in &s.fields {
+            let ct = self.type_to_c(&self.resolve_ast_type(&f.ty));
+            self.line(&format!("{} {};", ct, f.name));
+        }
+        self.indent -= 1;
+        self.line(&format!("}} {};", s.name));
+        self.blank();
+    }
+
+    // -----------------------------------------------------------------------
+    // Forward declarations
+    // -----------------------------------------------------------------------
+
+    fn emit_forward_decls(&mut self, program: &Program) {
+        for decl in &program.decls {
+            if let TopDecl::Fn(f) = decl {
+                if f.name == "main" {
+                    let ret = self.fn_return_c(f);
+                    let params = self.fn_params_c(f);
+                    self.line(&format!("{} babel_main({});", ret, params));
+                } else {
+                    let ret = self.fn_return_c(f);
+                    let params = self.fn_params_c(f);
+                    let cname = Self::mangle_c_name(&f.name);
+                    self.line(&format!("{} {}({});", ret, cname, params));
+                }
+            }
+        }
+        self.blank();
+    }
+
+    // -----------------------------------------------------------------------
+    // Top-level constants
+    // -----------------------------------------------------------------------
+
+    fn emit_top_level_constants(&mut self, program: &Program) {
+        for decl in &program.decls {
+            if let TopDecl::Let(l) = decl {
+                let ty = self.resolve_ast_type(&l.ty);
+                let c_ty = self.type_to_c(&ty);
+                match &l.value {
+                    Expr::StringLit(s, _) => {
+                        let escaped = self.escape_c_string(s);
+                        self.line(&format!(
+                            "static const bc_str {} = {{ \"{}\", {} }};",
+                            l.name, escaped, s.len()
+                        ));
+                    }
+                    _ => {
+                        // Try compile-time constant evaluation first (C99 requires
+                        // static initializers to be constant expressions).
+                        if let Some(const_val) = Self::try_const_eval(&l.value) {
+                            self.line(&format!("static const {} {} = {};", c_ty, l.name, const_val));
+                        } else {
+                            self.scopes.push(HashMap::new());
+                            let val = self.emit_expr(&l.value);
+                            self.scopes.pop();
+                            self.line(&format!("static const {} {} = {};", c_ty, l.name, val));
+                        }
+                    }
+                }
+            }
+        }
+        self.blank();
+    }
+
+    /// Attempt to evaluate a constant expression at compile time.
+    fn try_const_eval(expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::IntLit(v, _) => Some(format!("{}", v)),
+            Expr::FloatLit(v, _) => Some(format!("{:?}", v)),
+            Expr::BoolLit(b, _) => Some(if *b { "1".to_string() } else { "0".to_string() }),
+            Expr::BinaryOp { op, left, right, .. } => {
+                let l = Self::try_const_eval(left)?;
+                let r = Self::try_const_eval(right)?;
+                let lv = l.parse::<i64>().ok()?;
+                let rv = r.parse::<i64>().ok()?;
+                match op {
+                    BinOp::Add => Some(format!("{}", lv.checked_add(rv)?)),
+                    BinOp::Sub => Some(format!("{}", lv.checked_sub(rv)?)),
+                    BinOp::Mul => Some(format!("{}", lv.checked_mul(rv)?)),
+                    BinOp::Div if rv != 0 => Some(format!("{}", lv / rv)),
+                    BinOp::Mod if rv != 0 => Some(format!("{}", lv % rv)),
+                    _ => None,
+                }
+            }
+            Expr::UnaryOp { op: UnaryOp::Neg, operand, .. } => {
+                let v = Self::try_const_eval(operand)?;
+                let iv = v.parse::<i64>().ok()?;
+                Some(format!("{}", iv.checked_neg()?))
+            }
+            _ => None,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Function definitions
+    // -----------------------------------------------------------------------
+
+    fn emit_function_defs(&mut self, program: &Program) {
+        for decl in &program.decls {
+            if let TopDecl::Fn(f) = decl {
+                self.emit_function(f);
+            }
+        }
+    }
+
+    fn emit_function(&mut self, f: &FnDecl) {
+        let ret = self.fn_return_c(f);
+        let params = self.fn_params_c(f);
+        let name = if f.name == "main" { "babel_main".to_string() } else { Self::mangle_c_name(&f.name) };
+
+        self.current_fn_return_type = match &f.return_type {
+            Some(t) => Some(self.resolve_ast_type(t)),
+            None => Some(BcType::Unit),
+        };
+
+        self.line(&format!("{} {}({}) {{", ret, name, params));
+        self.indent += 1;
+
+        // Set up scope with parameters
+        self.push_scope();
+        for p in &f.params {
+            let ty = self.resolve_ast_type(&p.ty);
+            self.scopes.last_mut().unwrap().insert(p.name.clone(), ty);
+        }
+
+        // Emit body
+        let body_val = self.emit_block_body(&f.body);
+
+        // If the body has a tail expression and function returns non-unit, emit return
+        if f.body.tail_expr.is_some() {
+            let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
+            if fn_ret != BcType::Unit {
+                self.line(&format!("return {};", body_val));
+            } else if body_val != "(void)0" {
+                self.line(&format!("{};", body_val));
+            }
+        }
+
+        self.pop_scope();
+        self.indent -= 1;
+        self.line("}");
+        self.blank();
+        self.current_fn_return_type = None;
+    }
+
+    // -----------------------------------------------------------------------
+    // Main wrapper
+    // -----------------------------------------------------------------------
+
+    fn emit_main_wrapper(&mut self) {
+        self.line("int main(void) {");
+        self.indent += 1;
+        self.line("bc_arena* _arena = bc_arena_create(1048576);");
+        self.line("bc_global_arena = _arena;");
+
+        // Check if babel_main returns Result
+        if let Some(fi) = self.functions.get("main") {
+            if let BcType::Result(_, _) = &fi.return_type {
+                let ret_c = self.type_to_c(&fi.return_type);
+                self.line(&format!("{} _result = babel_main(_arena);", ret_c));
+                self.line("bc_arena_destroy(_arena);");
+                self.line("if (!_result.is_ok) {");
+                self.indent += 1;
+                self.line("return 1;");
+                self.indent -= 1;
+                self.line("}");
+                self.line("return 0;");
+            } else {
+                self.line("babel_main(_arena);");
+                self.line("bc_arena_destroy(_arena);");
+                self.line("return 0;");
+            }
+        } else {
+            self.line("babel_main(_arena);");
+            self.line("bc_arena_destroy(_arena);");
+            self.line("return 0;");
+        }
+
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Block emission (statements + optional tail)
+    // -----------------------------------------------------------------------
+
+    /// Emits all statements in the block. Returns the C expression for the
+    /// tail expression, or "(void)0" for unit blocks.
+    fn emit_block_body(&mut self, block: &Block) -> String {
+        for stmt in &block.stmts {
+            self.emit_stmt(stmt);
+        }
+        if let Some(tail) = &block.tail_expr {
+            self.emit_expr(tail)
+        } else {
+            "(void)0".to_string()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Statement emission
+    // -----------------------------------------------------------------------
+
+    fn emit_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Let(ls) => {
+                let ty = self.resolve_ast_type(&ls.ty);
+                let c_ty = self.type_to_c(&ty);
+                let val = self.emit_expr(&ls.value);
+                if ls.is_mut {
+                    self.line(&format!("{} {} = {};", c_ty, ls.name, val));
+                    self.mut_vars.insert(ls.name.clone());
+                } else {
+                    // For structs/enums/arrays, skip const qualifier to avoid C issues
+                    match &ty {
+                        BcType::Struct(_) | BcType::Enum(_) | BcType::Array(_) | BcType::FixedArray(_, _) | BcType::Result(_, _) => {
+                            self.line(&format!("{} {} = {};", c_ty, ls.name, val));
+                        }
+                        _ => {
+                            self.line(&format!("const {} {} = {};", c_ty, ls.name, val));
+                        }
+                    }
+                }
+                self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
+            }
+            Stmt::Assign(a) => {
+                let val = self.emit_expr(&a.value);
+                if a.target.accessors.is_empty() {
+                    self.line(&format!("{} = {};", a.target.name, val));
+                } else {
+                    let target = self.emit_place(&a.target);
+                    self.line(&format!("{} = {};", target, val));
+                }
+            }
+            Stmt::Expr(es) => {
+                let val = self.emit_expr(&es.expr);
+                if val != "(void)0" {
+                    self.line(&format!("{};", val));
+                }
+            }
+            Stmt::While(w) => {
+                let cond = self.emit_expr(&w.condition);
+                self.line(&format!("while ({}) {{", cond));
+                self.indent += 1;
+                self.push_scope();
+                for s in &w.body.stmts {
+                    self.emit_stmt(s);
+                }
+                if let Some(tail) = &w.body.tail_expr {
+                    let v = self.emit_expr(tail);
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
+                }
+                self.pop_scope();
+                self.indent -= 1;
+                self.line("}");
+            }
+            Stmt::For(f) => {
+                let start = self.emit_expr(&f.start);
+                let end = self.emit_expr(&f.end);
+                self.line(&format!("for (int32_t {} = {}; {} < {}; {}++) {{",
+                    f.var, start, f.var, end, f.var));
+                self.indent += 1;
+                self.push_scope();
+                self.scopes.last_mut().unwrap().insert(f.var.clone(), BcType::I32);
+                for s in &f.body.stmts {
+                    self.emit_stmt(s);
+                }
+                if let Some(tail) = &f.body.tail_expr {
+                    let v = self.emit_expr(tail);
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
+                }
+                self.pop_scope();
+                self.indent -= 1;
+                self.line("}");
+            }
+            Stmt::Return(r) => {
+                if let Some(val) = &r.value {
+                    let v = self.emit_expr(val);
+                    self.line(&format!("return {};", v));
+                } else {
+                    self.line("return;");
+                }
+            }
+        }
+    }
+
+    fn emit_place(&mut self, place: &Place) -> String {
+        let mut s = place.name.clone();
+        for acc in &place.accessors {
+            match acc {
+                PlaceAccessor::Field(f) => {
+                    s = format!("{}.{}", s, f);
+                }
+                PlaceAccessor::Index(idx) => {
+                    let idx_c = self.emit_expr(idx);
+                    // For array set, we need the element type
+                    let arr_ty = self.lookup_type(&place.name).unwrap_or(BcType::Unit);
+                    let elem_ty = match &arr_ty {
+                        BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
+                        _ => BcType::I32,
+                    };
+                    let elem_c = self.type_to_c(&elem_ty);
+                    // Use a special marker — we handle array set in emit_stmt for Assign
+                    s = format!("(*({}*)bc_array_get({}, {}))", elem_c, s, idx_c);
+                }
+            }
+        }
+        s
+    }
+
+    // -----------------------------------------------------------------------
+    // Expression emission — returns a C expression string
+    // May emit supporting statements to `self.out`.
+    // -----------------------------------------------------------------------
+
+    fn emit_expr(&mut self, expr: &Expr) -> String {
+        match expr {
+            Expr::IntLit(v, _) => format!("{}", v),
+            Expr::FloatLit(v, _) => {
+                let s = format!("{}", v);
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    s
+                } else {
+                    format!("{}.0", s)
+                }
+            }
+            Expr::StringLit(s, _) => {
+                let escaped = self.escape_c_string(s);
+                format!("bc_str_from_cstr(\"{}\")", escaped)
+            }
+            Expr::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
+
+            Expr::Ident(name, _) => name.clone(),
+
+            Expr::BinaryOp { op, left, right, .. } => {
+                self.emit_binary_op(*op, left, right)
+            }
+
+            Expr::UnaryOp { op, operand, .. } => {
+                let val = self.emit_expr(operand);
+                match op {
+                    UnaryOp::Not => format!("(!{})", val),
+                    UnaryOp::Neg => {
+                        let ty = self.type_of(operand);
+                        match ty {
+                            BcType::I32 => format!("bc_neg_i32({})", val),
+                            BcType::I64 => format!("bc_neg_i64({})", val),
+                            BcType::F64 => format!("(-{})", val),
+                            _ => format!("(-{})", val),
+                        }
+                    }
+                }
+            }
+
+            Expr::Cast { expr: inner, ty, .. } => {
+                let val = self.emit_expr(inner);
+                let from = self.type_of(inner);
+                let to = self.resolve_ast_type(ty);
+                self.emit_cast(&val, &from, &to)
+            }
+
+            Expr::Call { callee, args, .. } => {
+                let name = match callee.as_ref() {
+                    Expr::Ident(n, _) => n.clone(),
+                    _ => "unknown".to_string(),
+                };
+                self.emit_call(&name, args)
+            }
+
+            Expr::FieldAccess { expr: obj, field, .. } => {
+                let obj_c = self.emit_expr(obj);
+                format!("{}.{}", obj_c, field)
+            }
+
+            Expr::Index { expr: arr, index, .. } => {
+                let arr_c = self.emit_expr(arr);
+                let idx_c = self.emit_expr(index);
+                let arr_ty = self.type_of(arr);
+                let elem_ty = match &arr_ty {
+                    BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
+                    _ => BcType::I32,
+                };
+                let elem_c = self.type_to_c(&elem_ty);
+                format!("(*({}*)bc_array_get({}, {}))", elem_c, arr_c, idx_c)
+            }
+
+            Expr::Block(block) => {
+                // Pre-scan let stmts to populate a temporary scope so
+                // block_type can resolve identifiers defined inside the block.
+                let ty = if block.tail_expr.is_some() {
+                    self.push_scope();
+                    for stmt in &block.stmts {
+                        if let Stmt::Let(ls) = stmt {
+                            let ty = self.resolve_ast_type(&ls.ty);
+                            self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
+                        }
+                    }
+                    let ty = self.block_type(block);
+                    self.pop_scope();
+                    ty
+                } else {
+                    BcType::Unit
+                };
+
+                if ty == BcType::Unit {
+                    self.line("{");
+                    self.indent += 1;
+                    self.push_scope();
+                    for s in &block.stmts {
+                        self.emit_stmt(s);
+                    }
+                    if let Some(tail) = &block.tail_expr {
+                        let v = self.emit_expr(tail);
+                        if v != "(void)0" {
+                            self.line(&format!("{};", v));
+                        }
+                    }
+                    self.pop_scope();
+                    self.indent -= 1;
+                    self.line("}");
+                    "(void)0".to_string()
+                } else {
+                    let tmp = self.fresh_tmp();
+                    let c_ty = self.type_to_c(&ty);
+                    self.line(&format!("{} {};", c_ty, tmp));
+                    self.line("{");
+                    self.indent += 1;
+                    self.push_scope();
+                    for s in &block.stmts {
+                        self.emit_stmt(s);
+                    }
+                    if let Some(tail) = &block.tail_expr {
+                        let v = self.emit_expr(tail);
+                        self.line(&format!("{} = {};", tmp, v));
+                    }
+                    self.pop_scope();
+                    self.indent -= 1;
+                    self.line("}");
+                    tmp
+                }
+            }
+
+            Expr::If { condition, then_block, else_branch, .. } => {
+                self.emit_if(condition, then_block, else_branch.as_deref())
+            }
+
+            Expr::Match { scrutinee, arms, .. } => {
+                self.emit_match(scrutinee, arms)
+            }
+
+            Expr::Try { call, span } => {
+                self.emit_try(call, *span)
+            }
+
+            Expr::ArrayLit { elements, .. } => {
+                self.emit_array_lit(elements)
+            }
+
+            Expr::StructLit { name, fields, .. } => {
+                self.emit_struct_lit(name, fields)
+            }
+
+            Expr::EnumConstructor { enum_name, variant, args, .. } => {
+                self.emit_enum_constructor(enum_name, variant, args)
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Binary operations
+    // -----------------------------------------------------------------------
+
+    fn emit_binary_op(&mut self, op: BinOp, left: &Expr, right: &Expr) -> String {
+        let lv = self.emit_expr(left);
+        let rv = self.emit_expr(right);
+        let ty = self.type_of(left);
+
+        match op {
+            BinOp::Add => match ty {
+                BcType::I32 => format!("bc_add_i32({}, {})", lv, rv),
+                BcType::I64 => format!("bc_add_i64({}, {})", lv, rv),
+                BcType::F64 => format!("({} + {})", lv, rv),
+                BcType::Str => format!("bc_str_concat(_arena, {}, {})", lv, rv),
+                _ => format!("({} + {})", lv, rv),
+            },
+            BinOp::Sub => match ty {
+                BcType::I32 => format!("bc_sub_i32({}, {})", lv, rv),
+                BcType::I64 => format!("bc_sub_i64({}, {})", lv, rv),
+                _ => format!("({} - {})", lv, rv),
+            },
+            BinOp::Mul => match ty {
+                BcType::I32 => format!("bc_mul_i32({}, {})", lv, rv),
+                BcType::I64 => format!("bc_mul_i64({}, {})", lv, rv),
+                _ => format!("({} * {})", lv, rv),
+            },
+            BinOp::Div => match ty {
+                BcType::I32 => format!("bc_div_i32({}, {})", lv, rv),
+                BcType::I64 => format!("bc_div_i64({}, {})", lv, rv),
+                _ => format!("({} / {})", lv, rv),
+            },
+            BinOp::Mod => match ty {
+                BcType::I32 => format!("bc_mod_i32({}, {})", lv, rv),
+                BcType::I64 => format!("bc_mod_i64({}, {})", lv, rv),
+                _ => format!("({} %% {})", lv, rv),
+            },
+            BinOp::Eq => {
+                match ty {
+                    BcType::Str => format!("bc_str_eq({}, {})", lv, rv),
+                    BcType::Enum(_) => format!("({}.tag == {}.tag)", lv, rv),
+                    _ => format!("({} == {})", lv, rv),
+                }
+            }
+            BinOp::Neq => {
+                match ty {
+                    BcType::Str => format!("(!bc_str_eq({}, {}))", lv, rv),
+                    BcType::Enum(_) => format!("({}.tag != {}.tag)", lv, rv),
+                    _ => format!("({} != {})", lv, rv),
+                }
+            }
+            BinOp::Lt => format!("({} < {})", lv, rv),
+            BinOp::Gt => format!("({} > {})", lv, rv),
+            BinOp::LtEq => format!("({} <= {})", lv, rv),
+            BinOp::GtEq => format!("({} >= {})", lv, rv),
+            BinOp::And => format!("({} && {})", lv, rv),
+            BinOp::Or => format!("({} || {})", lv, rv),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Cast
+    // -----------------------------------------------------------------------
+
+    fn emit_cast(&self, val: &str, from: &BcType, to: &BcType) -> String {
+        match (from, to) {
+            (BcType::I32, BcType::I64) => format!("bc_i32_to_i64({})", val),
+            (BcType::I64, BcType::I32) => format!("bc_i64_to_i32({})", val),
+            (BcType::I32, BcType::F64) => format!("bc_i32_to_f64({})", val),
+            (BcType::I64, BcType::F64) => format!("bc_i64_to_f64({})", val),
+            (BcType::F64, BcType::I32) => format!("bc_f64_to_i32({})", val),
+            (BcType::F64, BcType::I64) => format!("bc_f64_to_i64({})", val),
+            _ => format!("(({}){})", self.type_to_c(to), val),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Function calls
+    // -----------------------------------------------------------------------
+
+    fn emit_call(&mut self, name: &str, args: &[Expr]) -> String {
+        let mut arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+
+        match name {
+            "print" => format!("bc_print({})", arg_strs[0]),
+            "println" => format!("bc_println({})", arg_strs[0]),
+            "print_i32" => format!("bc_print_i32({})", arg_strs[0]),
+            "print_i64" => format!("bc_print_i64({})", arg_strs[0]),
+            "print_f64" => format!("bc_print_f64({})", arg_strs[0]),
+            "print_bool" => format!("bc_print_bool({})", arg_strs[0]),
+            "read_line" => "bc_read_line(_arena)".to_string(),
+            "str_len" => format!("bc_str_len({})", arg_strs[0]),
+            "str_eq" => format!("bc_str_eq({}, {})", arg_strs[0], arg_strs[1]),
+            "str_concat" => format!("bc_str_concat(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "str_to_cstr" => format!("bc_str_to_cstr(_arena, {})", arg_strs[0]),
+            "abs_i32" => format!("bc_abs_i32({})", arg_strs[0]),
+            "abs_f64" => format!("bc_abs_f64({})", arg_strs[0]),
+            "mod_i32" => format!("bc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "i32_to_str" => format!("bc_i32_to_str(_arena, {})", arg_strs[0]),
+            "arena_reset" => "bc_arena_reset_global()".to_string(),
+            "len" => format!("bc_array_len({})", arg_strs[0]),
+            "push" => {
+                // Need to get element type for the &val
+                let arr_ty = self.type_of(&args[0]);
+                let elem_ty = match &arr_ty {
+                    BcType::Array(e) => (**e).clone(),
+                    _ => BcType::I32,
+                };
+                let elem_c = self.type_to_c(&elem_ty);
+                let tmp = self.fresh_tmp();
+                self.line(&format!("{} {} = {};", elem_c, tmp, arg_strs[1]));
+                format!("bc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
+            }
+            _ => {
+                // User-defined or extern function
+                let fi = self.functions.get(name).cloned();
+                let cname = Self::mangle_c_name(name);
+                if let Some(info) = fi {
+                    if info.is_extern {
+                        format!("{}({})", cname, arg_strs.join(", "))
+                    } else {
+                        arg_strs.insert(0, "_arena".to_string());
+                        format!("{}({})", cname, arg_strs.join(", "))
+                    }
+                } else {
+                    arg_strs.insert(0, "_arena".to_string());
+                    format!("{}({})", cname, arg_strs.join(", "))
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // If expression
+    // -----------------------------------------------------------------------
+
+    fn emit_if(&mut self, condition: &Expr, then_block: &Block, else_branch: Option<&Expr>) -> String {
+        // Pre-scan then_block let stmts to determine type correctly
+        let ty = if then_block.tail_expr.is_some() {
+            self.push_scope();
+            for stmt in &then_block.stmts {
+                if let Stmt::Let(ls) = stmt {
+                    let ty = self.resolve_ast_type(&ls.ty);
+                    self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
+                }
+            }
+            let ty = self.block_type(then_block);
+            self.pop_scope();
+            ty
+        } else {
+            BcType::Unit
+        };
+        let cond = self.emit_expr(condition);
+
+        if ty == BcType::Unit {
+            self.line(&format!("if ({}) {{", cond));
+            self.indent += 1;
+            self.push_scope();
+            for s in &then_block.stmts {
+                self.emit_stmt(s);
+            }
+            if let Some(tail) = &then_block.tail_expr {
+                let v = self.emit_expr(tail);
+                if v != "(void)0" {
+                    self.line(&format!("{};", v));
+                }
+            }
+            self.pop_scope();
+            self.indent -= 1;
+            if let Some(else_expr) = else_branch {
+                match else_expr {
+                    Expr::If { condition: ec, then_block: et, else_branch: ee, .. } => {
+                        // else if
+                        let ec_c = self.emit_expr(ec);
+                        self.line(&format!("}} else if ({}) {{", ec_c));
+                        self.indent += 1;
+                        self.push_scope();
+                        for s in &et.stmts {
+                            self.emit_stmt(s);
+                        }
+                        if let Some(tail) = &et.tail_expr {
+                            let v = self.emit_expr(tail);
+                            if v != "(void)0" {
+                                self.line(&format!("{};", v));
+                            }
+                        }
+                        self.pop_scope();
+                        self.indent -= 1;
+                        if let Some(ee) = ee {
+                            self.emit_else_unit(ee);
+                        }
+                        self.line("}");
+                    }
+                    Expr::Block(blk) => {
+                        self.line("} else {");
+                        self.indent += 1;
+                        self.push_scope();
+                        for s in &blk.stmts {
+                            self.emit_stmt(s);
+                        }
+                        if let Some(tail) = &blk.tail_expr {
+                            let v = self.emit_expr(tail);
+                            if v != "(void)0" {
+                                self.line(&format!("{};", v));
+                            }
+                        }
+                        self.pop_scope();
+                        self.indent -= 1;
+                        self.line("}");
+                    }
+                    _ => {
+                        self.line("} else {");
+                        self.indent += 1;
+                        let v = self.emit_expr(else_expr);
+                        if v != "(void)0" {
+                            self.line(&format!("{};", v));
+                        }
+                        self.indent -= 1;
+                        self.line("}");
+                    }
+                }
+            } else {
+                self.line("}");
+            }
+            "(void)0".to_string()
+        } else {
+            // Expression if — use temp variable
+            let tmp = self.fresh_tmp();
+            let c_ty = self.type_to_c(&ty);
+            self.line(&format!("{} {};", c_ty, tmp));
+            self.line(&format!("if ({}) {{", cond));
+            self.indent += 1;
+            self.push_scope();
+            let then_val = self.emit_block_body(then_block);
+            self.line(&format!("{} = {};", tmp, then_val));
+            self.pop_scope();
+            self.indent -= 1;
+            if let Some(else_expr) = else_branch {
+                self.line("} else {");
+                self.indent += 1;
+                self.push_scope();
+                let else_val = self.emit_expr(else_expr);
+                self.line(&format!("{} = {};", tmp, else_val));
+                self.pop_scope();
+                self.indent -= 1;
+            }
+            self.line("}");
+            tmp
+        }
+    }
+
+    fn emit_else_unit(&mut self, expr: &Expr) {
+        match expr {
+            Expr::If { condition, then_block, else_branch, .. } => {
+                let cond = self.emit_expr(condition);
+                self.line(&format!("}} else if ({}) {{", cond));
+                self.indent += 1;
+                self.push_scope();
+                for s in &then_block.stmts {
+                    self.emit_stmt(s);
+                }
+                if let Some(tail) = &then_block.tail_expr {
+                    let v = self.emit_expr(tail);
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
+                }
+                self.pop_scope();
+                self.indent -= 1;
+                if let Some(ee) = else_branch {
+                    self.emit_else_unit(ee);
+                }
+            }
+            Expr::Block(blk) => {
+                self.line("} else {");
+                self.indent += 1;
+                self.push_scope();
+                for s in &blk.stmts {
+                    self.emit_stmt(s);
+                }
+                if let Some(tail) = &blk.tail_expr {
+                    let v = self.emit_expr(tail);
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
+                }
+                self.pop_scope();
+                self.indent -= 1;
+            }
+            _ => {
+                self.line("} else {");
+                self.indent += 1;
+                let v = self.emit_expr(expr);
+                if v != "(void)0" {
+                    self.line(&format!("{};", v));
+                }
+                self.indent -= 1;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Match expression
+    // -----------------------------------------------------------------------
+
+    fn emit_match(&mut self, scrutinee: &Expr, arms: &[MatchArm]) -> String {
+        let scrut_ty = self.type_of(scrutinee);
+        let scrut_c = self.emit_expr(scrutinee);
+
+        // Determine result type from first arm, pre-scanning pattern bindings
+        let result_ty = self.match_arm_result_type(&scrut_ty, &arms[0]);
+
+        if result_ty == BcType::Unit {
+            self.emit_match_unit(&scrut_c, &scrut_ty, arms);
+            "(void)0".to_string()
+        } else {
+            let tmp = self.fresh_tmp();
+            let c_ty = self.type_to_c(&result_ty);
+            self.line(&format!("{} {};", c_ty, tmp));
+            self.emit_match_valued(&tmp, &scrut_c, &scrut_ty, arms);
+            tmp
+        }
+    }
+
+    fn emit_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+        match scrut_ty {
+            BcType::Enum(ename) => {
+                let has_payload = self.enums.get(ename)
+                    .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
+                    .unwrap_or(false);
+                if has_payload {
+                    self.line(&format!("switch ({}.tag) {{", scrut_c));
+                } else {
+                    self.line(&format!("switch ({}) {{", scrut_c));
+                }
+                self.indent += 1;
+                for arm in arms {
+                    self.emit_enum_arm_unit(scrut_c, ename, arm);
+                }
+                self.indent -= 1;
+                self.line("}");
+            }
+            BcType::Result(ok_ty, err_ty) => {
+                self.emit_result_match_unit(scrut_c, ok_ty, err_ty, arms);
+            }
+            _ => {
+                // Literal match using if/else
+                self.emit_literal_match_unit(scrut_c, scrut_ty, arms);
+            }
+        }
+    }
+
+    fn emit_match_valued(&mut self, tmp: &str, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+        match scrut_ty {
+            BcType::Enum(ename) => {
+                let has_payload = self.enums.get(ename)
+                    .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
+                    .unwrap_or(false);
+                if has_payload {
+                    self.line(&format!("switch ({}.tag) {{", scrut_c));
+                } else {
+                    self.line(&format!("switch ({}) {{", scrut_c));
+                }
+                self.indent += 1;
+                for arm in arms {
+                    self.emit_enum_arm_valued(tmp, scrut_c, ename, arm);
+                }
+                self.indent -= 1;
+                self.line("}");
+            }
+            BcType::Result(ok_ty, err_ty) => {
+                self.emit_result_match_valued(tmp, scrut_c, ok_ty, err_ty, arms);
+            }
+            _ => {
+                self.emit_literal_match_valued(tmp, scrut_c, scrut_ty, arms);
+            }
+        }
+    }
+
+    fn emit_enum_arm_unit(&mut self, scrut_c: &str, ename: &str, arm: &MatchArm) {
+        match &arm.pattern {
+            Pattern::Wildcard(_) => {
+                self.line("default: {");
+            }
+            Pattern::Ident(name, _) => {
+                self.line("default: {");
+                self.indent += 1;
+                let _info = self.enums.get(ename).unwrap().clone();
+                // Can't easily bind the whole value for default
+                let ty = BcType::Enum(ename.to_string());
+                let c_ty = self.type_to_c(&ty);
+                self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
+                self.push_scope();
+                self.scopes.last_mut().unwrap().insert(name.clone(), ty);
+                let v = self.emit_expr(&arm.body);
+                if v != "(void)0" {
+                    self.line(&format!("{};", v));
+                }
+                self.pop_scope();
+                self.indent -= 1;
+                self.line("    break;");
+                self.line("}");
+                return;
+            }
+            Pattern::Enum { variant, bindings: _, .. } => {
+                self.line(&format!("case {}_TAG_{}: {{", ename, variant));
+            }
+            _ => { self.line("default: {"); }
+        }
+        self.indent += 1;
+        self.push_scope();
+        self.bind_enum_payload(scrut_c, ename, &arm.pattern);
+        let v = self.emit_expr(&arm.body);
+        if v != "(void)0" {
+            self.line(&format!("{};", v));
+        }
+        self.pop_scope();
+        self.line("break;");
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    fn emit_enum_arm_valued(&mut self, tmp: &str, scrut_c: &str, ename: &str, arm: &MatchArm) {
+        match &arm.pattern {
+            Pattern::Wildcard(_) => {
+                self.line("default: {");
+            }
+            Pattern::Enum { variant, .. } => {
+                self.line(&format!("case {}_TAG_{}: {{", ename, variant));
+            }
+            _ => { self.line("default: {"); }
+        }
+        self.indent += 1;
+        self.push_scope();
+        self.bind_enum_payload(scrut_c, ename, &arm.pattern);
+        let v = self.emit_expr(&arm.body);
+        self.line(&format!("{} = {};", tmp, v));
+        self.pop_scope();
+        self.line("break;");
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    fn bind_enum_payload(&mut self, scrut_c: &str, ename: &str, pattern: &Pattern) {
+        if let Pattern::Enum { variant, bindings, .. } = pattern {
+            let info = self.enums.get(ename).unwrap().clone();
+            let var_info = info.variants.iter().find(|(n, _)| n == variant);
+            if let Some((_, payload_types)) = var_info {
+                for (i, binding) in bindings.iter().enumerate() {
+                    if let Pattern::Ident(name, _) = binding {
+                        if i < payload_types.len() {
+                            let ty = &payload_types[i];
+                            let c_ty = self.type_to_c(ty);
+                            self.line(&format!("{} {} = {}.data.{}._{};",
+                                c_ty, name, scrut_c, variant, i));
+                            self.scopes.last_mut().unwrap().insert(name.clone(), ty.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn emit_result_match_unit(&mut self, scrut_c: &str, ok_ty: &BcType, err_ty: &BcType, arms: &[MatchArm]) {
+        let mut ok_arm = None;
+        let mut err_arm = None;
+        let mut wildcard_arm = None;
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
+                Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
+                Pattern::Wildcard(_) => wildcard_arm = Some(arm),
+                _ => wildcard_arm = Some(arm),
+            }
+        }
+
+        self.line(&format!("if ({}.is_ok) {{", scrut_c));
+        self.indent += 1;
+        self.push_scope();
+        if let Some(arm) = ok_arm {
+            if let Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+                    let c_ty = self.type_to_c(ok_ty);
+                    self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
+                    self.scopes.last_mut().unwrap().insert(name.clone(), ok_ty.clone());
+                }
+            }
+            let v = self.emit_expr(&arm.body);
+            if v != "(void)0" { self.line(&format!("{};", v)); }
+        } else if let Some(arm) = wildcard_arm {
+            let v = self.emit_expr(&arm.body);
+            if v != "(void)0" { self.line(&format!("{};", v)); }
+        }
+        self.pop_scope();
+        self.indent -= 1;
+        self.line("} else {");
+        self.indent += 1;
+        self.push_scope();
+        if let Some(arm) = err_arm {
+            if let Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+                    let c_ty = self.type_to_c(err_ty);
+                    self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
+                    self.scopes.last_mut().unwrap().insert(name.clone(), err_ty.clone());
+                }
+            }
+            let v = self.emit_expr(&arm.body);
+            if v != "(void)0" { self.line(&format!("{};", v)); }
+        } else if let Some(arm) = wildcard_arm {
+            let v = self.emit_expr(&arm.body);
+            if v != "(void)0" { self.line(&format!("{};", v)); }
+        }
+        self.pop_scope();
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    fn emit_result_match_valued(&mut self, tmp: &str, scrut_c: &str, ok_ty: &BcType, err_ty: &BcType, arms: &[MatchArm]) {
+        let mut ok_arm = None;
+        let mut err_arm = None;
+        let mut wildcard_arm = None;
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
+                Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
+                Pattern::Wildcard(_) => wildcard_arm = Some(arm),
+                _ => wildcard_arm = Some(arm),
+            }
+        }
+
+        self.line(&format!("if ({}.is_ok) {{", scrut_c));
+        self.indent += 1;
+        self.push_scope();
+        if let Some(arm) = ok_arm {
+            if let Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+                    let c_ty = self.type_to_c(ok_ty);
+                    self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
+                    self.scopes.last_mut().unwrap().insert(name.clone(), ok_ty.clone());
+                }
+            }
+            let v = self.emit_expr(&arm.body);
+            self.line(&format!("{} = {};", tmp, v));
+        } else if let Some(arm) = wildcard_arm {
+            let v = self.emit_expr(&arm.body);
+            self.line(&format!("{} = {};", tmp, v));
+        }
+        self.pop_scope();
+        self.indent -= 1;
+        self.line("} else {");
+        self.indent += 1;
+        self.push_scope();
+        if let Some(arm) = err_arm {
+            if let Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+                    let c_ty = self.type_to_c(err_ty);
+                    self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
+                    self.scopes.last_mut().unwrap().insert(name.clone(), err_ty.clone());
+                }
+            }
+            let v = self.emit_expr(&arm.body);
+            self.line(&format!("{} = {};", tmp, v));
+        } else if let Some(arm) = wildcard_arm {
+            let v = self.emit_expr(&arm.body);
+            self.line(&format!("{} = {};", tmp, v));
+        }
+        self.pop_scope();
+        self.indent -= 1;
+        self.line("}");
+    }
+
+    fn emit_literal_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+        let mut first = true;
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Wildcard(_) => {
+                    if first { self.line("{"); } else { self.line("} else {"); }
+                    self.indent += 1;
+                    self.push_scope();
+                    let v = self.emit_expr(&arm.body);
+                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    self.pop_scope();
+                    self.indent -= 1;
+                    self.line("}");
+                    return;
+                }
+                Pattern::Ident(name, _) => {
+                    if first { self.line("{"); } else { self.line("} else {"); }
+                    self.indent += 1;
+                    self.push_scope();
+                    let c_ty = self.type_to_c(scrut_ty);
+                    self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
+                    self.scopes.last_mut().unwrap().insert(name.clone(), scrut_ty.clone());
+                    let v = self.emit_expr(&arm.body);
+                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    self.pop_scope();
+                    self.indent -= 1;
+                    self.line("}");
+                    return;
+                }
+                _ => {
+                    let pat_val = self.pattern_to_c(&arm.pattern);
+                    let cmp = self.emit_comparison(scrut_c, scrut_ty, &pat_val);
+                    if first {
+                        self.line(&format!("if ({}) {{", cmp));
+                        first = false;
+                    } else {
+                        self.line(&format!("}} else if ({}) {{", cmp));
+                    }
+                    self.indent += 1;
+                    self.push_scope();
+                    let v = self.emit_expr(&arm.body);
+                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    self.pop_scope();
+                    self.indent -= 1;
+                }
+            }
+        }
+        self.line("}");
+    }
+
+    fn emit_literal_match_valued(&mut self, tmp: &str, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+        let mut first = true;
+        for arm in arms {
+            match &arm.pattern {
+                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                    if first { self.line("{"); } else { self.line("} else {"); }
+                    self.indent += 1;
+                    self.push_scope();
+                    if let Pattern::Ident(name, _) = &arm.pattern {
+                        let c_ty = self.type_to_c(scrut_ty);
+                        self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
+                        self.scopes.last_mut().unwrap().insert(name.clone(), scrut_ty.clone());
+                    }
+                    let v = self.emit_expr(&arm.body);
+                    self.line(&format!("{} = {};", tmp, v));
+                    self.pop_scope();
+                    self.indent -= 1;
+                    self.line("}");
+                    return;
+                }
+                _ => {
+                    let pat_val = self.pattern_to_c(&arm.pattern);
+                    let cmp = self.emit_comparison(scrut_c, scrut_ty, &pat_val);
+                    if first {
+                        self.line(&format!("if ({}) {{", cmp));
+                        first = false;
+                    } else {
+                        self.line(&format!("}} else if ({}) {{", cmp));
+                    }
+                    self.indent += 1;
+                    self.push_scope();
+                    let v = self.emit_expr(&arm.body);
+                    self.line(&format!("{} = {};", tmp, v));
+                    self.pop_scope();
+                    self.indent -= 1;
+                }
+            }
+        }
+        self.line("}");
+    }
+
+    fn pattern_to_c(&self, pat: &Pattern) -> String {
+        match pat {
+            Pattern::IntLit(v, _) => format!("{}", v),
+            Pattern::FloatLit(v, _) => format!("{}", v),
+            Pattern::StringLit(s, _) => format!("bc_str_from_cstr(\"{}\")", self.escape_c_string(s)),
+            Pattern::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
+            _ => "0".to_string(),
+        }
+    }
+
+    fn emit_comparison(&self, lhs: &str, ty: &BcType, rhs: &str) -> String {
+        match ty {
+            BcType::Str => format!("bc_str_eq({}, {})", lhs, rhs),
+            _ => format!("({} == {})", lhs, rhs),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Try expression
+    // -----------------------------------------------------------------------
+
+    fn emit_try(&mut self, call: &Expr, _span: crate::token::Span) -> String {
+        let call_ty = self.type_of(call);
+        let (_ok_ty, _err_ty) = match &call_ty {
+            BcType::Result(o, e) => ((**o).clone(), (**e).clone()),
+            _ => (BcType::Unit, BcType::Str),
+        };
+
+        let call_c = self.emit_expr(call);
+        let call_tmp = self.fresh_tmp();
+        let call_c_ty = self.type_to_c(&call_ty);
+        self.line(&format!("{} {} = {};", call_c_ty, call_tmp, call_c));
+
+        // Early return on error
+        let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
+        let fn_ret_c = self.type_to_c(&fn_ret);
+        self.line(&format!("if (!{}.is_ok) {{", call_tmp));
+        self.indent += 1;
+        self.line(&format!("{} _err_ret;", fn_ret_c));
+        self.line("_err_ret.is_ok = 0;");
+        self.line(&format!("_err_ret.value.err = {}.value.err;", call_tmp));
+        self.line("return _err_ret;");
+        self.indent -= 1;
+        self.line("}");
+
+        format!("{}.value.ok", call_tmp)
+    }
+
+    // -----------------------------------------------------------------------
+    // Array literal
+    // -----------------------------------------------------------------------
+
+    fn emit_array_lit(&mut self, elements: &[Expr]) -> String {
+        if elements.is_empty() {
+            return "bc_array_new(_arena, 1, 0)".to_string();
+        }
+
+        let elem_ty = self.type_of(&elements[0]);
+        let elem_c = self.type_to_c(&elem_ty);
+        let tmp = self.fresh_tmp();
+        let size_expr = self.c_sizeof(&elem_ty);
+        self.line(&format!("bc_array* {} = bc_array_new(_arena, {}, {});",
+            tmp, size_expr, elements.len()));
+        for elem in elements {
+            let v = self.emit_expr(elem);
+            let push_tmp = self.fresh_tmp();
+            self.line(&format!("{} {} = {};", elem_c, push_tmp, v));
+            self.line(&format!("bc_array_push(_arena, {}, &{});", tmp, push_tmp));
+        }
+        tmp
+    }
+
+    // -----------------------------------------------------------------------
+    // Struct literal
+    // -----------------------------------------------------------------------
+
+    fn emit_struct_lit(&mut self, name: &str, fields: &[FieldInit]) -> String {
+        let mut parts = Vec::new();
+        for fi in fields {
+            let v = self.emit_expr(&fi.value);
+            parts.push(format!(".{} = {}", fi.name, v));
+        }
+        format!("({}){{ {} }}", name, parts.join(", "))
+    }
+
+    // -----------------------------------------------------------------------
+    // Enum constructor
+    // -----------------------------------------------------------------------
+
+    fn emit_enum_constructor(&mut self, enum_name: &str, variant: &str, args: &[Expr]) -> String {
+        if enum_name == "Result" {
+            return self.emit_result_constructor(variant, args);
+        }
+
+        let info = self.enums.get(enum_name).cloned();
+        let has_payload = info.as_ref()
+            .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
+            .unwrap_or(false);
+
+        if !has_payload {
+            // Simple int enum
+            return format!("{}_TAG_{}", enum_name, variant);
+        }
+
+        if args.is_empty() {
+            format!("({}){{ .tag = {}_TAG_{} }}", enum_name, enum_name, variant)
+        } else {
+            let mut payload_parts = Vec::new();
+            for (i, arg) in args.iter().enumerate() {
+                let v = self.emit_expr(arg);
+                payload_parts.push(format!("._{} = {}", i, v));
+            }
+            format!("({}){{ .tag = {}_TAG_{}, .data.{} = {{ {} }} }}",
+                enum_name, enum_name, variant, variant, payload_parts.join(", "))
+        }
+    }
+
+    fn emit_result_constructor(&mut self, variant: &str, args: &[Expr]) -> String {
+        let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
+        let result_c_ty = self.type_to_c(&fn_ret);
+
+        match variant {
+            "Ok" => {
+                let val = self.emit_expr(&args[0]);
+                let (ok_ty, _) = match &fn_ret {
+                    BcType::Result(o, _) => ((**o).clone(), BcType::Unit),
+                    _ => (BcType::Unit, BcType::Unit),
+                };
+                if ok_ty == BcType::Unit {
+                    format!("({}){{ .is_ok = 1 }}", result_c_ty)
+                } else {
+                    format!("({}){{ .is_ok = 1, .value = {{ .ok = {} }} }}", result_c_ty, val)
+                }
+            }
+            "Err" => {
+                let val = self.emit_expr(&args[0]);
+                format!("({}){{ .is_ok = 0, .value = {{ .err = {} }} }}", result_c_ty, val)
+            }
+            _ => "0".to_string(),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Type helpers
+    // -----------------------------------------------------------------------
+
+    fn type_to_c(&self, ty: &BcType) -> String {
+        match ty {
+            BcType::I32 => "int32_t".to_string(),
+            BcType::I64 => "int64_t".to_string(),
+            BcType::F64 => "double".to_string(),
+            BcType::Bool => "uint8_t".to_string(),
+            BcType::Str => "bc_str".to_string(),
+            BcType::Unit => "void".to_string(),
+            BcType::Struct(name) => name.clone(),
+            BcType::Enum(name) => name.clone(),
+            BcType::Array(_) | BcType::FixedArray(_, _) => "bc_array*".to_string(),
+            BcType::Result(ok, err) => self.result_type_name(ok, err),
+        }
+    }
+
+    fn result_type_name(&self, ok: &BcType, err: &BcType) -> String {
+        format!("bc_result_{}_{}", self.type_tag(ok), self.type_tag(err))
+    }
+
+    fn type_tag(&self, ty: &BcType) -> String {
+        match ty {
+            BcType::I32 => "i32".to_string(),
+            BcType::I64 => "i64".to_string(),
+            BcType::F64 => "f64".to_string(),
+            BcType::Bool => "bool".to_string(),
+            BcType::Str => "str".to_string(),
+            BcType::Unit => "unit".to_string(),
+            BcType::Struct(name) => name.to_lowercase(),
+            BcType::Enum(name) => name.to_lowercase(),
+            BcType::Array(e) => format!("arr_{}", self.type_tag(e)),
+            BcType::FixedArray(e, n) => format!("arr_{}_{}", self.type_tag(e), n),
+            BcType::Result(o, e) => format!("result_{}_{}", self.type_tag(o), self.type_tag(e)),
+        }
+    }
+
+    fn c_sizeof(&self, ty: &BcType) -> String {
+        match ty {
+            BcType::I32 => "sizeof(int32_t)".to_string(),
+            BcType::I64 => "sizeof(int64_t)".to_string(),
+            BcType::F64 => "sizeof(double)".to_string(),
+            BcType::Bool => "sizeof(uint8_t)".to_string(),
+            BcType::Str => "sizeof(bc_str)".to_string(),
+            BcType::Struct(name) => format!("sizeof({})", name),
+            BcType::Enum(name) => format!("sizeof({})", name),
+            BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(bc_array*)".to_string(),
+            BcType::Result(ok, err) => format!("sizeof({})", self.result_type_name(ok, err)),
+            BcType::Unit => "1".to_string(),
+        }
+    }
+
+    fn resolve_ast_type(&self, ty: &Type) -> BcType {
+        match ty {
+            Type::Primitive(p, _) => match p {
+                PrimitiveType::I32 => BcType::I32,
+                PrimitiveType::I64 => BcType::I64,
+                PrimitiveType::F64 => BcType::F64,
+                PrimitiveType::Bool => BcType::Bool,
+                PrimitiveType::Str => BcType::Str,
+                PrimitiveType::Unit => BcType::Unit,
+            },
+            Type::Named(name, _) => {
+                if self.structs.contains_key(name) {
+                    BcType::Struct(name.clone())
+                } else {
+                    BcType::Enum(name.clone())
+                }
+            }
+            Type::FixedArray(elem, size, _) => {
+                BcType::FixedArray(Box::new(self.resolve_ast_type(elem)), *size)
+            }
+            Type::DynamicArray(elem, _) => {
+                BcType::Array(Box::new(self.resolve_ast_type(elem)))
+            }
+            Type::Result(ok, err, _) => {
+                BcType::Result(
+                    Box::new(self.resolve_ast_type(ok)),
+                    Box::new(self.resolve_ast_type(err)),
+                )
+            }
+        }
+    }
+
+    /// Determine the type of an expression (for codegen, uses scope + symbol tables)
+    fn type_of(&self, expr: &Expr) -> BcType {
+        match expr {
+            Expr::IntLit(_, _) => BcType::I32,
+            Expr::FloatLit(_, _) => BcType::F64,
+            Expr::StringLit(_, _) => BcType::Str,
+            Expr::BoolLit(_, _) => BcType::Bool,
+            Expr::Ident(name, _) => {
+                self.lookup_type(name).unwrap_or(BcType::Unit)
+            }
+            Expr::BinaryOp { op, left, .. } => {
+                match op {
+                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt
+                    | BinOp::LtEq | BinOp::GtEq | BinOp::And | BinOp::Or => BcType::Bool,
+                    _ => self.type_of(left),
+                }
+            }
+            Expr::UnaryOp { op, operand, .. } => {
+                match op {
+                    UnaryOp::Not => BcType::Bool,
+                    UnaryOp::Neg => self.type_of(operand),
+                }
+            }
+            Expr::Cast { ty, .. } => self.resolve_ast_type(ty),
+            Expr::Call { callee, args: _, .. } => {
+                if let Expr::Ident(name, _) = callee.as_ref() {
+                    if name == "len" { return BcType::I32; }
+                    if name == "push" { return BcType::Unit; }
+                    self.functions.get(name)
+                        .map(|f| f.return_type.clone())
+                        .unwrap_or(BcType::Unit)
+                } else {
+                    BcType::Unit
+                }
+            }
+            Expr::FieldAccess { expr: obj, field, .. } => {
+                if let BcType::Struct(name) = self.type_of(obj) {
+                    self.structs.get(&name)
+                        .and_then(|s| s.fields.iter().find(|(n, _)| n == field))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or(BcType::Unit)
+                } else {
+                    BcType::Unit
+                }
+            }
+            Expr::Index { expr: arr, .. } => {
+                match self.type_of(arr) {
+                    BcType::Array(e) | BcType::FixedArray(e, _) => *e,
+                    _ => BcType::Unit,
+                }
+            }
+            Expr::Block(block) => self.block_type(block),
+            Expr::If { then_block, else_branch, .. } => {
+                if else_branch.is_some() {
+                    self.block_type(then_block)
+                } else {
+                    BcType::Unit
+                }
+            }
+            Expr::Match { arms, .. } => {
+                if arms.is_empty() {
+                    BcType::Unit
+                } else {
+                    self.arm_body_type(&arms[0].body)
+                }
+            }
+            Expr::Try { call, .. } => {
+                match self.type_of(call) {
+                    BcType::Result(ok, _) => *ok,
+                    _ => BcType::Unit,
+                }
+            }
+            Expr::ArrayLit { elements, .. } => {
+                if elements.is_empty() {
+                    BcType::Array(Box::new(BcType::Unit))
+                } else {
+                    BcType::Array(Box::new(self.type_of(&elements[0])))
+                }
+            }
+            Expr::StructLit { name, .. } => BcType::Struct(name.clone()),
+            Expr::EnumConstructor { enum_name, .. } => {
+                if enum_name == "Result" {
+                    self.current_fn_return_type.clone().unwrap_or(BcType::Unit)
+                } else {
+                    BcType::Enum(enum_name.clone())
+                }
+            }
+        }
+    }
+
+    fn block_type(&self, block: &Block) -> BcType {
+        if let Some(tail) = &block.tail_expr {
+            self.type_of(tail)
+        } else {
+            BcType::Unit
+        }
+    }
+
+    fn arm_body_type(&self, body: &Expr) -> BcType {
+        self.type_of(body)
+    }
+
+    /// Determine the result type of a match arm by temporarily pushing
+    /// pattern bindings into scope so identifiers resolve correctly.
+    fn match_arm_result_type(&mut self, scrut_ty: &BcType, arm: &MatchArm) -> BcType {
+        self.push_scope();
+        // Register pattern bindings from enum/result patterns
+        match (&arm.pattern, scrut_ty) {
+            (Pattern::Enum { enum_name, variant, bindings, .. }, BcType::Enum(ename)) => {
+                let lookup = if enum_name.is_empty() { ename.as_str() } else { enum_name.as_str() };
+                if let Some(info) = self.enums.get(lookup).cloned() {
+                    if let Some((_, payload_types)) = info.variants.iter().find(|(n, _)| n == variant) {
+                        for (i, binding) in bindings.iter().enumerate() {
+                            if let Pattern::Ident(name, _) = binding {
+                                if i < payload_types.len() {
+                                    self.scopes.last_mut().unwrap().insert(name.clone(), payload_types[i].clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (Pattern::Enum { variant, bindings, .. }, BcType::Result(ok_ty, err_ty)) => {
+                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+                    match variant.as_str() {
+                        "Ok" => { self.scopes.last_mut().unwrap().insert(name.clone(), (**ok_ty).clone()); }
+                        "Err" => { self.scopes.last_mut().unwrap().insert(name.clone(), (**err_ty).clone()); }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+        // Also pre-scan let stmts in arm body if it's a block
+        if let Expr::Block(block) = &arm.body {
+            for stmt in &block.stmts {
+                if let Stmt::Let(ls) = stmt {
+                    let ty = self.resolve_ast_type(&ls.ty);
+                    self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
+                }
+            }
+        }
+        let ty = self.type_of(&arm.body);
+        self.pop_scope();
+        ty
+    }
+
+    fn lookup_type(&self, name: &str) -> Option<BcType> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.get(name) {
+                return Some(ty.clone());
+            }
+        }
+        if let Some(ci) = self.constants.get(name) {
+            return Some(ci.ty.clone());
+        }
+        None
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn fn_return_c(&self, f: &FnDecl) -> String {
+        match &f.return_type {
+            Some(t) => self.type_to_c(&self.resolve_ast_type(t)),
+            None => "void".to_string(),
+        }
+    }
+
+    fn fn_params_c(&self, f: &FnDecl) -> String {
+        let mut parts = vec!["bc_arena* _arena".to_string()];
+        for p in &f.params {
+            let ty = self.resolve_ast_type(&p.ty);
+            let c_ty = self.type_to_c(&ty);
+            parts.push(format!("{} {}", c_ty, p.name));
+        }
+        parts.join(", ")
+    }
+
+    fn escape_c_string(&self, s: &str) -> String {
+        let mut out = String::new();
+        for c in s.chars() {
+            match c {
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                '\r' => out.push_str("\\r"),
+                '\\' => out.push_str("\\\\"),
+                '"' => out.push_str("\\\""),
+                '\0' => out.push_str("\\0"),
+                _ => out.push(c),
+            }
+        }
+        out
+    }
+}

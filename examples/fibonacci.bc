@@ -1,0 +1,36 @@
+// Fibonacci with Recursion
+//
+// This example demonstrates:
+// - Pure function declaration with `fn` (no side effects)
+// - Recursive function calls
+// - Conditional expressions with `if`/`else`
+// - Integer arithmetic
+// - Side-effecting `fn!` for I/O
+//
+// The Fibonacci sequence: F(0) = 0, F(1) = 1, F(n) = F(n-1) + F(n-2)
+//
+// To run:
+//   babelc fibonacci.bc --run
+
+fn fib(n: i32) -> i32 {
+    if n <= 1 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+fn! main() {
+    println("Fibonacci sequence:");
+    
+    let mut i: i32 = 0;
+    while i < 15 {
+        let result: i32 = fib(i);
+        print("fib(");
+        print_i32(i);
+        print(") = ");
+        print_i32(result);
+        println("");
+        i = i + 1;
+    }
+}

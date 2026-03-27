@@ -610,6 +610,10 @@ impl Parser {
         self.expect(&TokenKind::While)?;
         let condition = self.parse_expr()?;
         let body = self.parse_block()?;
+        // Consume optional trailing semicolon (e.g. `while cond { ... };`)
+        if self.at(&TokenKind::Semicolon) {
+            self.advance();
+        }
         Ok(Stmt::While(WhileStmt {
             condition,
             body,
@@ -626,6 +630,10 @@ impl Parser {
         self.expect(&TokenKind::DotDot)?;
         let end = self.parse_expr()?;
         let body = self.parse_block()?;
+        // Consume optional trailing semicolon (e.g. `for x in 0..5 { ... };`)
+        if self.at(&TokenKind::Semicolon) {
+            self.advance();
+        }
         Ok(Stmt::For(ForStmt {
             var,
             start,
