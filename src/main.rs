@@ -129,29 +129,135 @@ fn main() {
     }
 }
 
+/// Represents a discovered C compiler with enough info to invoke it.
+enum CCompiler {
+    Gcc(String),
+    Clang(String),
+    /// cl.exe path and optional vcvarsall.bat path (needed when cl.exe is not already on PATH)
+    Msvc { cl_path: String, vcvars: Option<String> },
+}
+
+fn command_exists(cmd: &str) -> bool {
+    let check = if cfg!(windows) { "where.exe" } else { "which" };
+    Command::new(check)
+        .arg(cmd)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Walk up from a cl.exe path to find the sibling vcvarsall.bat.
+fn find_vcvarsall_from_cl(cl_path: &str) -> Option<String> {
+    let mut dir = Path::new(cl_path);
+    while let Some(parent) = dir.parent() {
+        if parent.file_name().map(|n| n == "VC").unwrap_or(false) {
+            let vcvars = parent.join(r"Auxiliary\Build\vcvarsall.bat");
+            if vcvars.exists() {
+                return vcvars.to_str().map(|s| s.to_string());
+            }
+        }
+        dir = parent;
+    }
+    None
+}
+
+/// Try to locate cl.exe via vswhere or well-known Visual Studio paths.
+fn find_msvc_cl() -> Option<(String, Option<String>)> {
+    // Try vswhere first
+    let vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe";
+    if Path::new(vswhere).exists() {
+        let output = Command::new(vswhere)
+            .args([
+                "-latest", "-products", "*",
+                "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-find", r"VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+            ])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = stdout.lines().filter(|l| !l.trim().is_empty()).last() {
+                    let cl = line.trim().to_string();
+                    if Path::new(&cl).exists() {
+                        let vcvars = find_vcvarsall_from_cl(&cl);
+                        return Some((cl, vcvars));
+                    }
+                }
+            }
+        }
+    }
+
+    // Scan well-known installation directories
+    let bases = [
+        r"C:\Program Files\Microsoft Visual Studio",
+        r"C:\Program Files (x86)\Microsoft Visual Studio",
+    ];
+    for base in &bases {
+        for year in &["2022", "2019"] {
+            for edition in &["Enterprise", "Professional", "Community", "BuildTools"] {
+                let vc_tools = format!(r"{}\{}\{}\VC\Tools\MSVC", base, year, edition);
+                if let Ok(entries) = fs::read_dir(&vc_tools) {
+                    let mut versions: Vec<_> = entries
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                        .map(|e| e.path())
+                        .collect();
+                    versions.sort();
+                    if let Some(latest) = versions.last() {
+                        let cl = latest.join(r"bin\Hostx64\x64\cl.exe");
+                        if cl.exists() {
+                            let cl_str = cl.to_str().unwrap().to_string();
+                            let vcvars = find_vcvarsall_from_cl(&cl_str);
+                            return Some((cl_str, vcvars));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Detect the first available C compiler in priority order:
+/// gcc → clang → cl.exe (PATH) → cl.exe (Visual Studio installation).
+fn find_c_compiler() -> Option<CCompiler> {
+    if command_exists("gcc") {
+        return Some(CCompiler::Gcc("gcc".to_string()));
+    }
+    if command_exists("clang") {
+        return Some(CCompiler::Clang("clang".to_string()));
+    }
+    if cfg!(windows) {
+        if command_exists("cl.exe") {
+            return Some(CCompiler::Msvc { cl_path: "cl.exe".to_string(), vcvars: None });
+        }
+        if let Some((cl_path, vcvars)) = find_msvc_cl() {
+            return Some(CCompiler::Msvc { cl_path, vcvars });
+        }
+    }
+    None
+}
+
 fn run_program(source_path: &str, c_code: &str) {
-    // Create a temporary directory in the current workspace
     let temp_dir = Path::new("target").join("babelc_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
     }
 
-    // Write the generated C code to a temp file
     let c_file = temp_dir.join("program.c");
     if let Err(e) = fs::write(&c_file, c_code) {
         eprintln!("error writing temporary C file: {e}");
         process::exit(1);
     }
 
-    // Determine the executable name
     let exe_file = if cfg!(windows) {
         temp_dir.join("program.exe")
     } else {
         temp_dir.join("program")
     };
 
-    // Get the runtime directory
     let runtime_dir = Path::new("runtime");
     if !runtime_dir.exists() {
         eprintln!("error: runtime directory not found");
@@ -161,59 +267,47 @@ fn run_program(source_path: &str, c_code: &str) {
 
     let runtime_c = runtime_dir.join("bc_runtime.c");
     let runtime_h = runtime_dir.join("bc_runtime.h");
-
     if !runtime_c.exists() || !runtime_h.exists() {
         eprintln!("error: runtime files not found in runtime/");
         process::exit(1);
     }
 
-    // Try to compile with gcc
-    // On Windows, try WSL first, then native gcc
-    let (compiled, use_wsl) = if cfg!(windows) {
-        // Try WSL gcc first
-        let wsl_result = compile_with_wsl(&c_file, &exe_file, &runtime_c, runtime_dir);
-        if wsl_result {
-            (true, true)
-        } else {
-            // Fall back to native gcc if available
-            (compile_with_native_gcc(&c_file, &exe_file, &runtime_c, runtime_dir), false)
+    let compiler = match find_c_compiler() {
+        Some(c) => c,
+        None => {
+            eprintln!("error: no C compiler found");
+            eprintln!("please install one of the following:");
+            eprintln!("  - GCC:   https://gcc.gnu.org/");
+            eprintln!("  - Clang: https://releases.llvm.org/");
+            if cfg!(windows) {
+                eprintln!("  - Visual Studio Build Tools: https://visualstudio.microsoft.com/visual-cpp-build-tools/");
+            }
+            process::exit(1);
         }
-    } else {
-        // Unix: use gcc directly
-        (compile_with_native_gcc(&c_file, &exe_file, &runtime_c, runtime_dir), false)
+    };
+
+    let compiled = match &compiler {
+        CCompiler::Gcc(cmd) => {
+            eprintln!("Compiling with gcc...");
+            compile_with_gcc_or_clang(cmd, &c_file, &exe_file, &runtime_c, runtime_dir)
+        }
+        CCompiler::Clang(cmd) => {
+            eprintln!("Compiling with clang...");
+            compile_with_gcc_or_clang(cmd, &c_file, &exe_file, &runtime_c, runtime_dir)
+        }
+        CCompiler::Msvc { cl_path, vcvars } => {
+            eprintln!("Compiling with MSVC cl.exe...");
+            compile_with_msvc(cl_path, vcvars.as_deref(), &c_file, &exe_file, &runtime_c, runtime_dir)
+        }
     };
 
     if !compiled {
-        eprintln!("\nerror: failed to compile");
-        eprintln!("on Windows, gcc must be available via WSL or in PATH");
+        eprintln!("\nerror: compilation failed");
         process::exit(1);
     }
 
-    // Run the compiled executable
     eprintln!("\n=== Running {} ===\n", source_path);
-    let status = if cfg!(windows) && use_wsl {
-        // If compiled with WSL, run with WSL
-        let to_wsl_path = |p: &Path| -> String {
-            let s = p.to_str().unwrap().replace("\\", "/");
-            let lower = s.to_lowercase();
-            if lower.starts_with("c:/") {
-                format!("/mnt/c/{}", &s[3..])
-            } else if lower.starts_with("c:\\") {
-                format!("/mnt/c/{}", &s[3..].replace("\\", "/"))
-            } else {
-                s
-            }
-        };
-        let wsl_exe = to_wsl_path(&exe_file);
-        Command::new("wsl")
-            .arg("bash")
-            .arg("-c")
-            .arg(&wsl_exe)
-            .status()
-    } else {
-        // Native execution
-        Command::new(&exe_file).status()
-    };
+    let status = Command::new(&exe_file).status();
 
     match status {
         Ok(exit_status) => {
@@ -228,83 +322,99 @@ fn run_program(source_path: &str, c_code: &str) {
     }
 }
 
-fn compile_with_wsl(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path) -> bool {
-    eprintln!("Compiling with WSL gcc...");
-    
-    // Convert Windows paths to WSL paths properly
-    let to_wsl_path = |p: &Path| -> String {
-        let s = p.to_str().unwrap().replace("\\", "/");
-        // Handle C:/... or c:/...
-        let lower = s.to_lowercase();
-        if lower.starts_with("c:/") {
-            format!("/mnt/c/{}", &s[3..])
-        } else if lower.starts_with("c:\\") {
-            format!("/mnt/c/{}", &s[3..].replace("\\", "/"))
-        } else {
-            // Relative path - convert backslashes
-            s
-        }
-    };
-    
-    let wsl_c_file = to_wsl_path(c_file);
-    let wsl_runtime_c = to_wsl_path(runtime_c);
-    let wsl_runtime_dir = to_wsl_path(runtime_dir);
-    let wsl_exe = to_wsl_path(exe_file);
-    
-    let compile_cmd = format!(
-        "gcc {} {} -I{} -o {} -lm -std=c99",
-        wsl_c_file, wsl_runtime_c, wsl_runtime_dir, wsl_exe
-    );
-    
-    let output = Command::new("wsl")
-        .arg("bash")
-        .arg("-c")
-        .arg(&compile_cmd)
-        .output();
-    
-    match output {
-        Ok(out) => {
-            if !out.status.success() {
-                eprintln!("WSL gcc compilation failed:");
-                std::io::stderr().write_all(&out.stderr).ok();
-                false
-            } else {
-                true
-            }
-        }
-        Err(_) => {
-            eprintln!("WSL not available");
-            false
-        }
-    }
-}
-
-fn compile_with_native_gcc(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path) -> bool {
-    eprintln!("Compiling with native gcc...");
-    
-    let output = Command::new("gcc")
+fn compile_with_gcc_or_clang(
+    cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
+) -> bool {
+    let output = Command::new(cmd)
+        .arg("-std=c99")
         .arg(c_file)
         .arg(runtime_c)
         .arg(format!("-I{}", runtime_dir.display()))
         .arg("-o")
         .arg(exe_file)
         .arg("-lm")
-        .arg("-std=c99")
         .output();
-    
+
     match output {
         Ok(out) => {
             if !out.status.success() {
-                eprintln!("gcc compilation failed:");
+                eprintln!("{cmd} compilation failed:");
                 std::io::stderr().write_all(&out.stderr).ok();
                 false
             } else {
                 true
             }
         }
-        Err(_) => {
-            eprintln!("gcc not found in PATH");
+        Err(e) => {
+            eprintln!("failed to run {cmd}: {e}");
             false
+        }
+    }
+}
+
+fn compile_with_msvc(
+    cl_path: &str, vcvars: Option<&str>,
+    c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
+) -> bool {
+    if let Some(vcvars_path) = vcvars {
+        // cl.exe was found outside PATH – use a temporary .bat file so that
+        // vcvarsall.bat can set up the environment in the same cmd session.
+        // (Embedding quotes inside `cmd /c "..."` from Rust is unreliable
+        //  because Rust escapes `"` as `\"` which cmd.exe does not understand.)
+        let bat_file = exe_file.with_extension("bat");
+        let bat_content = format!(
+            "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /I\"{}\" \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+            vcvars_path, cl_path,
+            runtime_dir.display(), c_file.display(), runtime_c.display(), exe_file.display(),
+        );
+        if let Err(e) = fs::write(&bat_file, &bat_content) {
+            eprintln!("failed to write compile script: {e}");
+            return false;
+        }
+        let output = Command::new("cmd").arg("/c").arg(&bat_file).output();
+        let _ = fs::remove_file(&bat_file);
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    eprintln!("MSVC compilation failed:");
+                    std::io::stderr().write_all(&out.stderr).ok();
+                    std::io::stderr().write_all(&out.stdout).ok();
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                eprintln!("failed to run cl.exe via vcvarsall: {e}");
+                false
+            }
+        }
+    } else {
+        // cl.exe already on PATH (e.g. Developer Command Prompt)
+        let output = Command::new(cl_path)
+            .arg("/nologo")
+            .arg("/std:c11")
+            .arg(format!("/I{}", runtime_dir.display()))
+            .arg(c_file)
+            .arg(runtime_c)
+            .arg(format!("/Fe:{}", exe_file.display()))
+            .arg("/link")
+            .output();
+        match output {
+            Ok(out) => {
+                if !out.status.success() {
+                    eprintln!("MSVC compilation failed:");
+                    std::io::stderr().write_all(&out.stderr).ok();
+                    std::io::stderr().write_all(&out.stdout).ok();
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                eprintln!("failed to run cl.exe: {e}");
+                false
+            }
         }
     }
 }
