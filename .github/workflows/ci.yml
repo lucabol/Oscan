@@ -1,0 +1,437 @@
+name: Babel-C CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Unit Tests + Integration Tests (Linux)
+  # ─────────────────────────────────────────────
+  linux:
+    name: Linux (GCC, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: linux-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Run unit tests (53 tests)
+        run: cargo test
+
+      - name: Integration tests — positive (GCC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BABELC="./target/release/babelc"
+          CC="gcc"
+          PASS=0
+          FAIL=0
+          TOTAL=0
+
+          mkdir -p tests/build
+
+          echo "=== Positive Integration Tests (Linux/GCC) ==="
+          for bc_file in tests/positive/*.bc; do
+            name=$(basename "$bc_file" .bc)
+            expected="tests/expected/${name}.expected"
+            TOTAL=$((TOTAL + 1))
+
+            if [ ! -f "$expected" ]; then
+              echo "FAIL: $name — missing expected file"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Transpile .bc → .c
+            if ! "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+              echo "FAIL: $name — transpile error"
+              cat "tests/build/${name}.err"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Compile C with GCC
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+              echo "FAIL: $name — C compile error"
+              cat "tests/build/${name}.err"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Run and compare
+            actual=$("./tests/build/${name}" 2>&1) || true
+            expected_content=$(cat "$expected")
+
+            if [ "$actual" = "$expected_content" ]; then
+              echo "PASS: $name"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL: $name — output mismatch"
+              echo "  Expected: $(head -3 <<< "$expected_content")"
+              echo "  Actual:   $(head -3 <<< "$actual")"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo ""
+          echo "Positive: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+      - name: Integration tests — negative (GCC)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BABELC="./target/release/babelc"
+          PASS=0
+          FAIL=0
+          TOTAL=0
+
+          mkdir -p tests/build
+
+          echo "=== Negative Integration Tests (Linux/GCC) ==="
+          for bc_file in tests/negative/*.bc; do
+            name=$(basename "$bc_file" .bc)
+            TOTAL=$((TOTAL + 1))
+
+            if "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+              echo "FAIL: $name — should have been rejected"
+              FAIL=$((FAIL + 1))
+            else
+              echo "PASS: $name — correctly rejected"
+              PASS=$((PASS + 1))
+            fi
+          done
+
+          echo ""
+          echo "Negative: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+  # ─────────────────────────────────────────────
+  # Unit Tests + Integration Tests (Windows)
+  # ─────────────────────────────────────────────
+  windows:
+    name: Windows (MSVC, x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\bin\
+            ~\.cargo\registry\index\
+            ~\.cargo\registry\cache\
+            ~\.cargo\git\db\
+            target\
+          key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Set up MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Run unit tests (53 tests)
+        run: cargo test
+
+      - name: Integration tests — positive (MSVC)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $BABELC = ".\target\release\babelc.exe"
+          $Pass = 0
+          $Fail = 0
+          $Total = 0
+
+          if (-not (Test-Path "tests\build")) {
+            New-Item -ItemType Directory -Path "tests\build" | Out-Null
+          }
+
+          Write-Host "=== Positive Integration Tests (Windows/MSVC) ==="
+
+          foreach ($bcFile in Get-ChildItem "tests\positive\*.bc") {
+            $name = $bcFile.BaseName
+            $expectedFile = "tests\expected\$name.expected"
+            $Total++
+
+            if (-not (Test-Path $expectedFile)) {
+              Write-Host "FAIL: $name - missing expected file"
+              $Fail++
+              continue
+            }
+
+            # Transpile .bc -> .c
+            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $name - transpile error"
+              if (Test-Path "tests\build\$name.err") {
+                Get-Content "tests\build\$name.err"
+              }
+              $Fail++
+              continue
+            }
+
+            # Compile with MSVC cl.exe
+            & cl.exe /nologo /std:c11 /Iruntime "tests\build\$name.c" runtime\bc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $name - C compile error (MSVC)"
+              if (Test-Path "tests\build\$name.err") {
+                Get-Content "tests\build\$name.err"
+              }
+              $Fail++
+              continue
+            }
+
+            # Run and compare
+            $actual = & ".\tests\build\$name.exe" 2>&1 | Out-String
+            $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+            $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+
+            if ($actual -eq $expected) {
+              Write-Host "PASS: $name"
+              $Pass++
+            } else {
+              Write-Host "FAIL: $name - output mismatch"
+              Write-Host "  Expected: $($expected.Split("`n")[0..2] -join ' | ')"
+              Write-Host "  Actual:   $($actual.Split("`n")[0..2] -join ' | ')"
+              $Fail++
+            }
+          }
+
+          Write-Host ""
+          Write-Host "Positive: $Pass passed, $Fail failed out of $Total"
+          if ($Fail -gt 0) { exit 1 }
+
+      - name: Integration tests — negative (MSVC)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $BABELC = ".\target\release\babelc.exe"
+          $Pass = 0
+          $Fail = 0
+          $Total = 0
+
+          if (-not (Test-Path "tests\build")) {
+            New-Item -ItemType Directory -Path "tests\build" | Out-Null
+          }
+
+          Write-Host "=== Negative Integration Tests (Windows/MSVC) ==="
+
+          foreach ($bcFile in Get-ChildItem "tests\negative\*.bc") {
+            $name = $bcFile.BaseName
+            $Total++
+
+            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "FAIL: $name - should have been rejected"
+              $Fail++
+            } else {
+              Write-Host "PASS: $name - correctly rejected"
+              $Pass++
+            }
+          }
+
+          Write-Host ""
+          Write-Host "Negative: $Pass passed, $Fail failed out of $Total"
+          if ($Fail -gt 0) { exit 1 }
+
+  # ─────────────────────────────────────────────
+  # Unit Tests + Integration Tests (macOS)
+  # ─────────────────────────────────────────────
+  macos:
+    name: macOS (Clang, ARM64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: macos-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Run unit tests (53 tests)
+        run: cargo test
+
+      - name: Integration tests — positive (Clang)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BABELC="./target/release/babelc"
+          CC="clang"
+          PASS=0
+          FAIL=0
+          TOTAL=0
+
+          mkdir -p tests/build
+
+          echo "=== Positive Integration Tests (macOS/Clang) ==="
+          for bc_file in tests/positive/*.bc; do
+            name=$(basename "$bc_file" .bc)
+            expected="tests/expected/${name}.expected"
+            TOTAL=$((TOTAL + 1))
+
+            if [ ! -f "$expected" ]; then
+              echo "FAIL: $name — missing expected file"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Transpile .bc → .c
+            if ! "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+              echo "FAIL: $name — transpile error"
+              cat "tests/build/${name}.err"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Compile C with Clang
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+              echo "FAIL: $name — C compile error"
+              cat "tests/build/${name}.err"
+              FAIL=$((FAIL + 1))
+              continue
+            fi
+
+            # Run and compare
+            actual=$("./tests/build/${name}" 2>&1) || true
+            expected_content=$(cat "$expected")
+
+            if [ "$actual" = "$expected_content" ]; then
+              echo "PASS: $name"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL: $name — output mismatch"
+              echo "  Expected: $(head -3 <<< "$expected_content")"
+              echo "  Actual:   $(head -3 <<< "$actual")"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo ""
+          echo "Positive: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+      - name: Integration tests — negative (Clang)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BABELC="./target/release/babelc"
+          PASS=0
+          FAIL=0
+          TOTAL=0
+
+          mkdir -p tests/build
+
+          echo "=== Negative Integration Tests (macOS/Clang) ==="
+          for bc_file in tests/negative/*.bc; do
+            name=$(basename "$bc_file" .bc)
+            TOTAL=$((TOTAL + 1))
+
+            if "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+              echo "FAIL: $name — should have been rejected"
+              FAIL=$((FAIL + 1))
+            else
+              echo "PASS: $name — correctly rejected"
+              PASS=$((PASS + 1))
+            fi
+          done
+
+          echo ""
+          echo "Negative: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+  # ─────────────────────────────────────────────
+  # ARM Cross-Compilation (QEMU) — Optional
+  # ─────────────────────────────────────────────
+  # Uncomment this job to enable ARM cross-compilation testing via QEMU on Linux.
+  # This installs gcc-aarch64-linux-gnu and qemu-user to cross-compile and run
+  # ARM64 binaries from the generated C code.
+  #
+  # arm-qemu:
+  #   name: Linux ARM64 (QEMU cross-compile)
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - name: Install Rust toolchain
+  #       uses: dtolnay/rust-toolchain@stable
+  #
+  #     - name: Install ARM64 cross-compiler and QEMU
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
+  #
+  #     - name: Build babelc (host x86_64)
+  #       run: cargo build --release
+  #
+  #     - name: Integration tests — positive (ARM64 via QEMU)
+  #       shell: bash
+  #       run: |
+  #         set -euo pipefail
+  #         BABELC="./target/release/babelc"
+  #         CC="aarch64-linux-gnu-gcc"
+  #         PASS=0; FAIL=0; TOTAL=0
+  #         mkdir -p tests/build
+  #
+  #         for bc_file in tests/positive/*.bc; do
+  #           name=$(basename "$bc_file" .bc)
+  #           expected="tests/expected/${name}.expected"
+  #           TOTAL=$((TOTAL + 1))
+  #           [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
+  #
+  #           "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+  #           $CC -std=c99 -static "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+  #
+  #           actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
+  #           expected_content=$(cat "$expected")
+  #           if [ "$actual" = "$expected_content" ]; then
+  #             echo "PASS: $name (ARM64)"
+  #             PASS=$((PASS + 1))
+  #           else
+  #             echo "FAIL: $name — output mismatch (ARM64)"
+  #             FAIL=$((FAIL + 1))
+  #           fi
+  #         done
+  #
+  #         echo "ARM64 Positive: $PASS passed, $FAIL failed out of $TOTAL"
+  #         [ $FAIL -eq 0 ]
