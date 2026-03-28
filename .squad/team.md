@@ -16,6 +16,7 @@
 | Trinity | Compiler Dev | .squad/agents/trinity/charter.md | ⚙️ Compiler |
 | Morpheus | Runtime Dev | .squad/agents/morpheus/charter.md | 🔧 Runtime |
 | Tank | Tester | .squad/agents/tank/charter.md | 🧪 Tester |
+| Oracle | Language Spec Specialist | .squad/agents/oracle/charter.md | 🔮 Spec |
 | Scribe | Session Logger | .squad/agents/scribe/charter.md | 📋 Scribe |
 | Ralph | Work Monitor | .squad/agents/ralph/charter.md | 🔄 Monitor |
 

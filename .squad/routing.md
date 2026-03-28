@@ -17,6 +17,8 @@ How to decide who handles what.
 | Standard library | Morpheus | Micro-lib: I/O, math primitives, memory interfaces |
 | FFI | Morpheus | C-FFI mechanism, external function declarations |
 | Runtime | Morpheus | Error-value runtime support, UB guard runtime |
+| Language spec | Oracle | Spec maintenance, semantics, spec-compiler alignment, edge case analysis |
+| Spec compliance tests | Oracle | Test cases that verify spec-defined behavior boundaries |
 | Testing | Tank | Conformance tests, negative tests, edge cases |
 | UB verification | Tank | Sanitizer runs, bounds checks, overflow detection |
 | Scope & priorities | Neo | What to build next, trade-offs, decisions |

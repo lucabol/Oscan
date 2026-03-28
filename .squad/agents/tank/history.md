@@ -27,3 +27,13 @@
 - `order_independence.bc` validates two-pass name resolution (forward references)
 - Purity tests: `purity.bc` (valid pure→pure chain) vs `purity_violation.bc` (pure calling fn!)
 - Anti-shadowing tested across block boundaries, not across functions (per spec §6.2)
+
+### Mixed Allocation & Arena Corner-Case Tests (2025-07-14)
+- Added 8 new positive tests covering mixed stack/arena allocation edge cases
+- Test files: `mixed_alloc_struct_with_array.bc`, `mixed_alloc_struct_with_string.bc`, `mixed_alloc_nested_dynamic.bc`, `mixed_alloc_array_of_structs.bc`, `mixed_alloc_enum_dynamic.bc`, `mixed_alloc_return_dynamic.bc`, `arena_stress.bc`, `mixed_alloc_mutable_reassign.bc`
+- **BUG FOUND:** Empty array literal `[]` generates `bc_array_new(_arena, 1, 0)` with hardcoded elem_size=1 regardless of declared type. Causes silent memory corruption when pushing i32/struct/etc. elements. Filed in `.squad/decisions/inbox/tank-allocation-bugs.md`.
+- Existing `arrays.bc` test has a latent instance of this bug that passes by coincidence (single small value + zeroed arena memory)
+- **Patterns that work correctly:** Structs with array fields (pre-initialized), nested struct field access (e.g. `out.inner.values[0]`), arrays of structs, enum variants with struct/string payloads, returning dynamic data from fn!, mutable struct reassignment with array fields, arena growth under stress (500 pushes, 50 string concats)
+- **Purity constraint:** `push`, `str_concat`, `i32_to_str` are all impure — helper functions using these must be `fn!`, not `fn`
+- `len` and `str_len` and `str_eq` are pure-safe
+- All 46 tests pass (30 positive + 16 negative) after adding the 8 new tests

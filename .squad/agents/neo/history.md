@@ -85,3 +85,12 @@
 
 **Files modified:**
 - `docs/guide.md` — fixed all 9 issues; guide now aligns with spec and compiler on purity, available functions, and semantics.
+
+### 2026-03-28 — Documentation & Decisions Archive
+
+**Orchestration:**
+- Wrote `.squad/orchestration-log/2026-03-28T0520-oracle.md` documenting Oracle's spec audit and fixes
+- Wrote `.squad/orchestration-log/2026-03-28T0520-neo.md` documenting Neo's guide alignment work
+- Merged all inbox decisions into `.squad/decisions.md` (entries 2–6)
+- Archived spec/guide alignment as complete ("Specification Audit & Fixes" decision)
+
