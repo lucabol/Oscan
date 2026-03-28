@@ -101,6 +101,47 @@ jobs:
           echo "Positive: $PASS passed, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
 
+      - name: Freestanding verification (Linux)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Freestanding Verification (Linux) ==="
+          VPASS=0; VFAIL=0
+          for exe in tests/build/*; do
+            [ -x "$exe" ] || continue
+            name=$(basename "$exe")
+            # Skip FFI tests (they use libc)
+            echo "$name" | grep -q '^ffi' && continue
+            # Skip .c and .err files
+            echo "$name" | grep -qE '\.(c|err)$' && continue
+
+            size=$(stat -c%s "$exe")
+            file_info=$(file "$exe")
+            dep_ok="PASS"; stdlib_ok="PASS"
+
+            # Check static linking
+            if ! echo "$file_info" | grep -q 'statically linked'; then
+              ldd_out=$(ldd "$exe" 2>&1 || true)
+              if ! echo "$ldd_out" | grep -q 'not a dynamic executable'; then
+                dep_ok="FAIL"
+              fi
+            fi
+
+            # Check no stdlib symbols
+            stdlib_count=$(strings "$exe" | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)
+            [ "$stdlib_count" -gt 0 ] && stdlib_ok="FAIL"
+
+            if [ "$dep_ok" = "PASS" ] && [ "$stdlib_ok" = "PASS" ]; then
+              echo "  PASS: $name (${size} bytes, static, no stdlib)"
+              VPASS=$((VPASS + 1))
+            else
+              echo "  FAIL: $name (deps=$dep_ok stdlib=$stdlib_ok)"
+              VFAIL=$((VFAIL + 1))
+            fi
+          done
+          echo "Verification: $VPASS passed, $VFAIL failed"
+          [ $VFAIL -eq 0 ]
+
       - name: Integration tests — negative
         shell: bash
         run: |
@@ -225,6 +266,48 @@ jobs:
           Write-Host ""
           Write-Host "Positive: $Pass passed, $Fail failed out of $Total"
           if ($Fail -gt 0) { exit 1 }
+
+      - name: Freestanding verification (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          Write-Host "=== Freestanding Verification (Windows) ==="
+          $VPass = 0; $VFail = 0
+
+          foreach ($exe in Get-ChildItem "tests\build\*.exe") {
+            $name = $exe.BaseName
+            if ($name -match '^ffi') { continue }
+
+            $size = $exe.Length
+            $depOk = "PASS"; $stdlibOk = "PASS"
+
+            # Check dependencies with dumpbin
+            $raw = & dumpbin /nologo /dependents $exe.FullName 2>$null
+            $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
+            $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)KERNEL32\.dll$' }
+            if ($badDeps) {
+              $depOk = "FAIL"
+              Write-Host "  Bad deps for ${name}: $($badDeps -join ', ')"
+            }
+
+            # Check for stdlib strings in binary
+            $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
+            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            $patterns = @('msvcrt', 'ucrt', 'vcruntime', 'api-ms-win-crt')
+            $found = $patterns | Where-Object { $text -match $_ }
+            if ($found) { $stdlibOk = "FAIL" }
+
+            $depsStr = ($deps -join ", ")
+            if ($depOk -eq "PASS" -and $stdlibOk -eq "PASS") {
+              Write-Host "  PASS: $name ($size bytes, deps=[$depsStr], no stdlib)"
+              $VPass++
+            } else {
+              Write-Host "  FAIL: $name (deps=$depOk stdlib=$stdlibOk)"
+              $VFail++
+            }
+          }
+          Write-Host "Verification: $VPass passed, $VFail failed"
+          if ($VFail -gt 0) { exit 1 }
 
       - name: Integration tests — negative
         shell: pwsh
@@ -436,3 +519,42 @@ jobs:
 
           echo "ARM64 Positive: $PASS passed, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
+
+      - name: Freestanding verification (ARM64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Freestanding Verification (ARM64) ==="
+          VPASS=0; VFAIL=0
+          for exe in tests/build/*; do
+            [ -f "$exe" ] || continue
+            name=$(basename "$exe")
+            # Skip non-binary files and FFI tests
+            echo "$name" | grep -qE '\.(c|err)$' && continue
+            echo "$name" | grep -q '^ffi' && continue
+            # Must be an ELF file
+            file "$exe" | grep -q 'ELF' || continue
+
+            size=$(stat -c%s "$exe")
+            file_info=$(file "$exe")
+            dep_ok="PASS"; stdlib_ok="PASS"
+
+            # Check static linking via file command
+            if ! echo "$file_info" | grep -q 'statically linked'; then
+              dep_ok="FAIL"
+            fi
+
+            # Check no stdlib symbols
+            stdlib_count=$(strings "$exe" | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)
+            [ "$stdlib_count" -gt 0 ] && stdlib_ok="FAIL"
+
+            if [ "$dep_ok" = "PASS" ] && [ "$stdlib_ok" = "PASS" ]; then
+              echo "  PASS: $name (${size} bytes, static, no stdlib)"
+              VPASS=$((VPASS + 1))
+            else
+              echo "  FAIL: $name (deps=$dep_ok stdlib=$stdlib_ok, file=$file_info)"
+              VFAIL=$((VFAIL + 1))
+            fi
+          done
+          echo "Verification: $VPASS passed, $VFAIL failed"
+          [ $VFAIL -eq 0 ]
