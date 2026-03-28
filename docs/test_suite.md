@@ -1,4 +1,4 @@
-# Babel-C Test Suite
+# Oscan Test Suite
 
 ## Summary
 - **Total Tests**: 38
@@ -56,7 +56,7 @@
 ## FFI Tests (Phase 6)
 
 ### Positive FFI Tests
-1. **ffi.bc** - Basic FFI
+1. **ffi.osc** - Basic FFI
    - Tests: `extern { fn! abs(n: i32) -> i32; }`
    - Calls: `abs(-42)`, `abs(10)`
    - Expected output:
@@ -65,7 +65,7 @@
      abs(10) = 10
      ```
 
-2. **ffi_advanced.bc** - Multiple extern functions
+2. **ffi_advanced.osc** - Multiple extern functions
    - Tests: Multiple extern blocks with various signatures
    - Functions: sqrt, pow, fabs, floor, ceil, abs
    - Type mappings: i32→i32, f64→f64, (f64,f64)→f64
@@ -81,7 +81,7 @@
      sqrt(3^2 + 4^2) = 5
      ```
 
-3. **ffi_impure_wrapper.bc** - fn! calling extern
+3. **ffi_impure_wrapper.osc** - fn! calling extern
    - Tests: Impure function can wrap extern function
    - Pattern: `fn! impure_abs(x: i32) -> i32 { abs(x) }`
    - Expected output:
@@ -90,12 +90,12 @@
      ```
 
 ### Negative FFI Tests
-1. **extern_in_pure.bc** - Pure function calling extern
+1. **extern_in_pure.osc** - Pure function calling extern
    - Tests: Purity violation detection
    - Code: `fn pure_abs(x: i32) -> i32 { abs(x) }`
    - Error: "pure function cannot call impure function 'abs'"
 
-2. **extern_duplicate.bc** - Duplicate extern declaration
+2. **extern_duplicate.osc** - Duplicate extern declaration
    - Tests: Duplicate function name detection
    - Code: Two extern blocks both declaring `abs`
    - Error: "duplicate extern function 'abs'"
@@ -120,11 +120,11 @@ wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && <commands>"
 
 ### Test individual file:
 ```powershell
-# Compile Babel-C to C
-.\target\release\babelc.exe tests\positive\ffi.bc -o tests\build\ffi.c
+# Compile Oscan to C
+.\target\release\oscan.exe tests\positive\ffi.osc -o tests\build\ffi.c
 
 # Compile C to binary (via WSL)
-wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && gcc tests/build/ffi.c runtime/bc_runtime.c -Iruntime -o tests/build/ffi -std=c99 -lm"
+wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && gcc tests/build/ffi.c runtime/osc_runtime.c -Iruntime -o tests/build/ffi -std=c99 -lm"
 
 # Run
 wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && tests/build/ffi"

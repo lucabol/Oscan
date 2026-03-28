@@ -1,7 +1,7 @@
 #!/bin/bash
-# Babel-C Test Runner
-# Usage: ./run_tests.sh <babelc-binary> [cc-compiler]
-# Example: ./run_tests.sh ../target/release/babelc gcc
+# Oscan Test Runner
+# Usage: ./run_tests.sh <oscan-binary> [cc-compiler]
+# Example: ./run_tests.sh ../target/release/oscan gcc
 
 set -euo pipefail
 
@@ -9,12 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <babelc-binary> [cc-compiler]"
-    echo "Example: $0 ../target/release/babelc gcc"
+    echo "Usage: $0 <oscan-binary> [cc-compiler]"
+    echo "Example: $0 ../target/release/oscan gcc"
     exit 1
 fi
 
-BABELC="$1"
+OSCAN="$1"
 CC="${2:-gcc}"
 PASS=0
 FAIL=0
@@ -23,8 +23,8 @@ TOTAL=0
 # Ensure build directory exists
 mkdir -p build
 
-echo "=== Babel-C Test Suite ==="
-echo "Compiler: $BABELC"
+echo "=== Oscan Test Suite ==="
+echo "Compiler: $OSCAN"
 echo "C Compiler: $CC"
 echo ""
 
@@ -32,8 +32,8 @@ echo ""
 echo "--- Positive Tests (must compile and produce correct output) ---"
 echo ""
 
-for bc_file in positive/*.bc; do
-    name=$(basename "$bc_file" .bc)
+for osc_file in positive/*.osc; do
+    name=$(basename "$osc_file" .osc)
     expected_file="expected/${name}.expected"
     TOTAL=$((TOTAL + 1))
     echo -n "  Testing $name... "
@@ -45,8 +45,8 @@ for bc_file in positive/*.bc; do
         continue
     fi
 
-    # Step 1: Transpile .bc → .c
-    if ! "$BABELC" "$bc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
+    # Step 1: Transpile .osc → .c
+    if ! "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
         echo "FAIL (transpile error)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
@@ -54,7 +54,7 @@ for bc_file in positive/*.bc; do
     fi
 
     # Step 2: Compile .c → binary
-    if ! $CC "build/${name}.c" ../runtime/bc_runtime.c -I../runtime -o "build/${name}" -std=c99 -lm 2>"build/${name}.err"; then
+    if ! $CC "build/${name}.c" ../runtime/osc_runtime.c -I../runtime -o "build/${name}" -std=c99 -lm 2>"build/${name}.err"; then
         echo "FAIL (C compile error)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
@@ -84,12 +84,12 @@ echo ""
 echo "--- Negative Tests (must be rejected by the compiler) ---"
 echo ""
 
-for bc_file in negative/*.bc; do
-    name=$(basename "$bc_file" .bc)
+for osc_file in negative/*.osc; do
+    name=$(basename "$osc_file" .osc)
     TOTAL=$((TOTAL + 1))
     echo -n "  Testing reject $name... "
 
-    if "$BABELC" "$bc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
+    if "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
         echo "FAIL (should have been rejected)"
         FAIL=$((FAIL + 1))
     else

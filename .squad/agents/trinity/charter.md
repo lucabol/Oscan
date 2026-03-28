@@ -6,7 +6,7 @@
 - **Scope:** Lexer, parser, AST, type checker, semantic analysis, C code generation
 
 ## Responsibilities
-1. Implement the lexer/tokenizer for Babel-C
+1. Implement the lexer/tokenizer for Oscan
 2. Build the parser (context-free grammar, single-pass)
 3. Define and maintain the AST data structures
 4. Implement the type checker (strict static typing, nominal types, no implicit coercion)

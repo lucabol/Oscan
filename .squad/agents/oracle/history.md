@@ -1,18 +1,18 @@
 # Oracle — History
 
 ## Project Context
-- **Project:** Babel-C — LLM-optimized minimalist programming language transpiling to C99/C11
+- **Project:** Oscan — LLM-optimized minimalist programming language transpiling to C99/C11
 - **Tech Stack:** Rust compiler, C runtime, arena + stack hybrid memory model
 - **User:** Luca Bolognese
-- **Spec:** `docs/spec/babel-c-spec.md` (1396 lines, comprehensive)
+- **Spec:** `docs/spec/oscan-spec.md` (1396 lines, comprehensive)
 - **Requirements:** `../requirements.md` (original 80-line spec)
-- **Key files:** src/codegen.rs, src/semantic.rs, src/parser.rs, src/lexer.rs, runtime/bc_runtime.h
+- **Key files:** src/codegen.rs, src/semantic.rs, src/parser.rs, src/lexer.rs, runtime/osc_runtime.h
 
 ## Core Context
-- Babel-C uses hybrid stack/arena allocation: value types on stack, dynamic types (arrays, strings) in arena
+- Oscan uses hybrid stack/arena allocation: value types on stack, dynamic types (arrays, strings) in arena
 - Arena never frees until program exit — known limitation; `temp {}` block proposed but not implemented
 - Empty array literal bug was found and fixed (elem_size was hardcoded to 1)
-- All functions receive hidden `bc_arena* _arena` first parameter
+- All functions receive hidden `osc_arena* _arena` first parameter
 - `fn!` denotes fallible functions (single FN_BANG token)
 - Struct literal vs block ambiguity resolved by pre-scanning struct names
 - 99 tests total: 53 unit + 30 positive integration + 16 negative integration
@@ -24,8 +24,9 @@
 - **Grammar-parser divergence:** while/for trailing semicolons are optional in parser, absent from EBNF, "required" in guide.
 - **try_expr EBNF is ambiguous:** postfix_expr greedily consumes call_suffix, conflicting with try_expr's own call syntax.
 - **Compiler builtin registration:** semantic.rs lines 75-106 define all builtins; `false` = impure, `true` = pure in the `builtin()` helper.
+- **Project rename:** Oscan → Oscan; all runtime symbols changed from `bc_` to `osc_` prefix.
 - **Guide missing:** str_to_cstr, unit type, Result-returning main, recursive data patterns, negative literal patterns.
-- **Spec fixes applied (2025-07-15):** Fixed 4 inconsistencies (IC-4/5/6/7), 4 ambiguities (AMB-1/2/3/4), and 2 gaps (GAP-4/7) in babel-c-spec.md.
+- **Spec fixes applied (2025-07-15):** Fixed 4 inconsistencies (IC-4/5/6/7), 4 ambiguities (AMB-1/2/3/4), and 2 gaps (GAP-4/7) in oscan-spec.md.
   - IC-5: `i32_to_str` changed to `fn!` (arena-allocating = impure).
   - IC-6: Heading changed to "Reserved Words (21 total)" with accurate note.
   - IC-7: `as` cast added to precedence table at prec 9; table renumbered 1–11.

@@ -1,15 +1,15 @@
-// Hello World in Babel-C
+// Hello World in Oscan
 //
-// This demonstrates the simplest possible Babel-C program.
+// This demonstrates the simplest possible Oscan program.
 // The `fn!` keyword indicates a side-effecting function (it performs I/O).
 // `println` is a built-in function from the runtime library.
 //
 // To run:
-//   babelc hello.bc --run
+//   oscan hello.osc --run
 //
 // To transpile only:
-//   babelc hello.bc -o hello.c
+//   oscan hello.osc -o hello.c
 
 fn! main() {
-    println("Hello, Babel-C!");
+    println("Hello, Oscan!");
 }

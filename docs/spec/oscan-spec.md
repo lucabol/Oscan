@@ -1,4 +1,4 @@
-# Babel-C Language Specification v0.1
+# Oscan Language Specification v0.1
 
 **Status:** DEFINITIVE — This is the sole reference for compiler, runtime, and test implementation.
 
@@ -336,7 +336,7 @@ pattern_list     = pattern (',' pattern)* ','? ;
 | `i64`  | 64 bits | Signed integer                 | `int64_t`       |
 | `f64`  | 64 bits | IEEE 754 double                | `double`        |
 | `bool` | 8 bits  | Boolean (true/false only)      | `uint8_t` (0/1) |
-| `str`  | ptr+len | UTF-8 string (immutable view)  | `bc_str`        |
+| `str`  | ptr+len | UTF-8 string (immutable view)  | `osc_str`        |
 | `unit` | 0 bits  | No value (void equivalent)     | `void`          |
 
 ### 3.2 Composite Types
@@ -579,7 +579,7 @@ extern {
 
 - All extern functions are implicitly `fn!` (side-effecting).
 - Extern blocks declare C functions available for linking.
-- Type mappings must use Babel-C types (see §9 for the mapping table).
+- Type mappings must use Oscan types (see §9 for the mapping table).
 - The compiler generates appropriate C `#include` and function declarations.
 
 ---
@@ -913,7 +913,7 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 
 ### 8.1 Decision: Arena-Based Allocation with Scope-Based Deallocation
 
-**Chosen approach:** Every Babel-C program uses a **single implicit arena allocator**. All heap allocations go to this arena. Deallocation happens at arena granularity, not per-object.
+**Chosen approach:** Every Oscan program uses a **single implicit arena allocator**. All heap allocations go to this arena. Deallocation happens at arena granularity, not per-object.
 
 **Justification:**
 - **Deterministic:** No garbage collector pauses, no reference counting cycles.
@@ -925,7 +925,7 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 
 1. **Program arena:** A single arena is created at program start (`main`). All heap allocations (dynamic arrays, large structs) are allocated from this arena.
 
-2. **Allocation:** When the compiler emits code that needs heap memory (e.g., creating a `[T]` dynamic array or growing one via `push`), it calls the runtime's `bc_arena_alloc(arena, size)`.
+2. **Allocation:** When the compiler emits code that needs heap memory (e.g., creating a `[T]` dynamic array or growing one via `push`), it calls the runtime's `osc_arena_alloc(arena, size)`.
 
 3. **Deallocation:** The arena is freed in bulk when the program exits. For long-running programs, the programmer can use `arena_reset()` from the micro-lib to reclaim all arena memory (invalidating all dynamic arrays — the programmer must ensure no references are used after reset).
 
@@ -933,7 +933,7 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 
 ### 8.3 What the LLM Writes
 
-- **Nothing regarding memory.** The LLM writes standard Babel-C code. All memory management is implicit.
+- **Nothing regarding memory.** The LLM writes standard Oscan code. All memory management is implicit.
 - Dynamic arrays are created via literals or `push` and automatically use the arena.
 - The LLM never writes `alloc`, `free`, `new`, or `delete`.
 - The only memory-related function exposed is `arena_reset()` for advanced use.
@@ -947,12 +947,12 @@ typedef struct {
     uint8_t* data;
     size_t   used;
     size_t   capacity;
-} bc_arena;
+} osc_arena;
 
-bc_arena* bc_arena_create(size_t initial_capacity);
-void*     bc_arena_alloc(bc_arena* arena, size_t size);
-void      bc_arena_reset(bc_arena* arena);
-void      bc_arena_destroy(bc_arena* arena);
+osc_arena* osc_arena_create(size_t initial_capacity);
+void*     osc_arena_alloc(osc_arena* arena, size_t size);
+void      osc_arena_reset(osc_arena* arena);
+void      osc_arena_destroy(osc_arena* arena);
 ```
 
 - Default initial capacity: 1 MB.
@@ -967,7 +967,7 @@ Strings (`str`) are immutable UTF-8 byte sequences stored in the arena:
 typedef struct {
     const char* data;
     int32_t     len;
-} bc_str;
+} osc_str;
 ```
 
 - String literals are stored in static data (not the arena).
@@ -981,7 +981,7 @@ typedef struct {
     int32_t len;
     int32_t capacity;
     int32_t elem_size;
-} bc_array;
+} osc_array;
 ```
 
 - `push` grows the array within the arena (may relocate).
@@ -1008,38 +1008,38 @@ extern {
 ```
 
 - All extern functions are `fn!` (side-effecting).
-- The Babel-C function name must exactly match the C function name.
+- The Oscan function name must exactly match the C function name.
 - Multiple extern blocks are allowed.
 
 ### 9.2 Type Mapping Table
 
-| Babel-C Type | C Type         | Notes                              |
+| Oscan Type | C Type         | Notes                              |
 |-------------|----------------|------------------------------------|
 | `i32`       | `int32_t`      | From `<stdint.h>`                  |
 | `i64`       | `int64_t`      | From `<stdint.h>`                  |
 | `f64`       | `double`       |                                    |
 | `bool`      | `uint8_t`      | 0 = false, 1 = true               |
-| `str`       | `bc_str`       | Struct with `data` (const char*) and `len` (int32_t) |
+| `str`       | `osc_str`       | Struct with `data` (const char*) and `len` (int32_t) |
 | `unit`      | `void`         |                                    |
 | `[T; N]`    | `T[N]`         | Passed as pointer in C             |
-| `[T]`       | `bc_array*`    | Pointer to runtime array struct    |
+| `[T]`       | `osc_array*`    | Pointer to runtime array struct    |
 | `struct Foo`| `Foo`          | Same name, matching fields         |
-| `Result<T,E>` | `bc_result_T_E` | Tagged union in C               |
+| `Result<T,E>` | `osc_result_T_E` | Tagged union in C               |
 
 ### 9.3 Safety Rules
 
 1. All extern functions are implicitly side-effecting (`fn!`).
 2. A `fn` (pure function) cannot call an extern function — compile error.
-3. The programmer is responsible for correctness of extern declarations. The Babel-C compiler cannot verify that the declared signature matches the actual C function.
-4. Passing Babel-C strings to C functions expecting `const char*` requires using the micro-lib function `str_to_cstr()` which null-terminates the string.
+3. The programmer is responsible for correctness of extern declarations. The Oscan compiler cannot verify that the declared signature matches the actual C function.
+4. Passing Oscan strings to C functions expecting `const char*` requires using the micro-lib function `str_to_cstr()` which null-terminates the string.
 
 ### 9.4 Linking with C Headers
 
 The compiler generates `#include` directives based on a pragma or configuration file. For v0.1, the approach is:
 
-- The compiler always generates `#include <stdint.h>`, `#include <stdio.h>`, `#include <stdlib.h>`, and `#include "bc_runtime.h"`.
+- The compiler always generates `#include <stdint.h>`, `#include <stdio.h>`, `#include <stdlib.h>`, and `#include "osc_runtime.h"`.
 - Additional C headers are specified via a build configuration file (not part of the language syntax).
-- The generated C file is compiled with a standard C compiler (gcc/clang) and linked with the Babel-C runtime library and any user-specified C libraries.
+- The generated C file is compiled with a standard C compiler (gcc/clang) and linked with the Oscan runtime library and any user-specified C libraries.
 
 ---
 
@@ -1242,7 +1242,7 @@ Error: division by zero
 ### 12.1 Pipeline
 
 ```
-Source Code (.bc)
+Source Code (.osc)
     │
     ▼
 ┌──────────┐
@@ -1321,7 +1321,7 @@ Transforms the typed AST into C99 source code:
 
 1. **Header section:** `#include` directives, type definitions (structs, enums as tagged unions), function prototypes (for order independence).
 
-2. **Runtime integration:** The generated C code links against `bc_runtime.h` / `bc_runtime.c` which provides:
+2. **Runtime integration:** The generated C code links against `osc_runtime.h` / `osc_runtime.c` which provides:
    - Arena allocator
    - Overflow-checked arithmetic functions
    - Bounds-checked array access
@@ -1330,43 +1330,43 @@ Transforms the typed AST into C99 source code:
 
 3. **Translation patterns:**
 
-| Babel-C Construct     | C Output                                    |
+| Oscan Construct     | C Output                                    |
 |----------------------|---------------------------------------------|
-| `fn foo(x: i32) -> i32` | `int32_t foo(bc_arena* _arena, int32_t x)` |
-| `fn! bar()`          | `void bar(bc_arena* _arena)`                |
+| `fn foo(x: i32) -> i32` | `int32_t foo(osc_arena* _arena, int32_t x)` |
+| `fn! bar()`          | `void bar(osc_arena* _arena)`                |
 | `let x: i32 = 5;`   | `const int32_t x = 5;`                      |
 | `let mut x: i32 = 5;` | `int32_t x = 5;`                           |
-| `a + b` (i32)        | `bc_add_i32(a, b)` (checked)                |
-| `a[i]`               | `bc_array_get(a, i)` (bounds-checked)       |
+| `a + b` (i32)        | `osc_add_i32(a, b)` (checked)                |
+| `a[i]`               | `osc_array_get(a, i)` (bounds-checked)       |
 | `if c { a } else { b }` | Ternary or temp variable + if/else        |
 | `match expr { ... }` | `switch` on tag + cast payloads              |
-| `try f(x)`           | `result = f(_arena, x); if (result.tag == BC_ERR) return result;` |
+| `try f(x)`           | `result = f(_arena, x); if (result.tag == osc_ERR) return result;` |
 | `struct Foo { ... }` | `typedef struct { ... } Foo;`               |
 | `enum Bar { A(i32), B }` | Tagged union with tag enum + payload union |
-| `Result::Ok(v)`      | `(bc_result){ .tag = BC_OK, .ok = v }`      |
-| `Result::Err(e)`     | `(bc_result){ .tag = BC_ERR, .err = e }`    |
+| `Result::Ok(v)`      | `(osc_result){ .tag = osc_OK, .ok = v }`      |
+| `Result::Err(e)`     | `(osc_result){ .tag = osc_ERR, .err = e }`    |
 
-4. **The `main` function:** The compiler generates a C `main()` that creates the arena, calls the Babel-C `main`, destroys the arena, and returns.
+4. **The `main` function:** The compiler generates a C `main()` that creates the arena, calls the Oscan `main`, destroys the arena, and returns.
 
 ```c
 int main(void) {
-    bc_arena* _arena = bc_arena_create(1048576); // 1 MB
-    babel_main(_arena);
-    bc_arena_destroy(_arena);
+    osc_arena* _arena = osc_arena_create(1048576); // 1 MB
+    oscan_main(_arena);
+    osc_arena_destroy(_arena);
     return 0;
 }
 ```
 
 ### 12.7 File Extension
 
-- Babel-C source files use the `.bc` extension.
+- Oscan source files use the `.osc` extension.
 - Generated C files use the `.c` extension with the same base name.
 
 ### 12.8 Compilation Command
 
 ```bash
-babelc input.bc -o output.c    # Transpile to C
-cc output.c bc_runtime.c -o program  # Compile with C compiler
+oscan input.osc -o output.c    # Transpile to C
+cc output.c osc_runtime.c -o program  # Compile with C compiler
 ```
 
 ---

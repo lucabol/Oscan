@@ -1,13 +1,13 @@
 # Neo — History
 
 ## Project Context
-- **Project:** Babel-C — An LLM-optimized minimalist programming language that transpiles to C
+- **Project:** Oscan — An LLM-optimized minimalist programming language that transpiles to C
 - **Tech Stack:** Language design, compiler/transpiler (parsing, AST, type checking, C code generation), C99/C11 output
 - **User:** Luca Bolognese
 - **Requirements:** See `../requirements.md` for full specification
 
 ## Core Context
-- Babel-C is designed for LLMs as primary users, not humans
+- Oscan is designed for LLMs as primary users, not humans
 - Key principles: extreme minimalism, hallucination resistance, zero UB, one way to do everything
 - Strict static typing, nominal types, no implicit coercion
 - Immutable by default, explicit `mut` for mutation
@@ -34,7 +34,7 @@
 10. **Panics for programmer bugs** (overflow, bounds, division by zero). Errors-as-values (`Result`) for expected failures.
 
 **Key file paths:**
-- Language spec: `docs/spec/babel-c-spec.md`
+- Language spec: `docs/spec/oscan-spec.md`
 - Requirements: `../requirements.md` (repo root parent)
 - Runtime header (planned): `bc_runtime.h` / `bc_runtime.c`
 
@@ -42,7 +42,7 @@
 - User (Luca) wants extreme minimalism — resist feature creep
 - ≤20 keywords achieved (21 reserved words including true/false/_)
 - Micro-lib kept to exactly 18 functions
-- File extension: `.bc`
+- File extension: `.osc`
 - Grammar is LL(2), recursive descent, no backtracking
 
 ### 2025-07-25 — README Rewrite & Language Guide
@@ -58,7 +58,7 @@
 7. **Struct field mutation requires `let mut`.** `let mut c: Counter = ...; c.value = 42;` is the pattern.
 8. **Negative tests confirm strict enforcement.** Shadowing, purity violations, compound assignment (`+=`), implicit coercion, non-exhaustive match, and unhandled Result all produce compile errors.
 9. **FFI is practical.** Multiple `extern` blocks work; `sqrt`, `pow`, `floor`, `ceil`, `abs` all callable. Expressions can compose extern calls: `sqrt(pow(3.0, 2.0) + pow(4.0, 2.0))`.
-10. **CLI defaults to exe compilation.** `babelc input.bc` → `input.exe`. The `-o foo.c` extension triggers transpile-only mode. `--emit-c` sends C to stdout.
+10. **CLI defaults to exe compilation.** `oscan input.osc` → `input.exe`. The `-o foo.c` extension triggers transpile-only mode. `--emit-c` sends C to stdout.
 
 **Files written:**
 - `README.md` — complete rewrite (112 lines, accurate CLI, no Morpheus quote, no credits, no roadmap phases)

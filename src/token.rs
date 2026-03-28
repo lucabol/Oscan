@@ -17,7 +17,7 @@ impl std::fmt::Display for Span {
     }
 }
 
-/// All token types in the Babel-C language.
+/// All token types in the Oscan language.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Keywords

@@ -10,7 +10,7 @@
 // The Fibonacci sequence: F(0) = 0, F(1) = 1, F(n) = F(n-1) + F(n-2)
 //
 // To run:
-//   babelc fibonacci.bc --run
+//   oscan fibonacci.osc --run
 
 fn fib(n: i32) -> i32 {
     if n <= 1 {

@@ -1,10 +1,10 @@
-# Babel-C
+# Oscan
 
 A minimalist programming language designed for LLM code generation, transpiling to C.
 
-## Why Babel-C?
+## Why Oscan?
 
-LLMs hallucinate less when the target language is small and unambiguous. Babel-C gives them:
+LLMs hallucinate less when the target language is small and unambiguous. Oscan gives them:
 
 - **21 reserved words.** One way to do everything — no syntax to argue about.
 - **`fn` / `fn!` purity split.** Side effects are visible in the signature.
@@ -31,30 +31,30 @@ cd Squad
 cargo build --release
 ```
 
-The binary is `target/release/babelc` (or `babelc.exe` on Windows).
+The binary is `target/release/oscan` (or `oscan.exe` on Windows).
 
 ### Hello World
 
-Create `hello.bc`:
+Create `hello.osc`:
 
 ```
 fn! main() {
-    println("Hello, Babel-C!");
+    println("Hello, Oscan!");
 }
 ```
 
 ```bash
-babelc hello.bc --run        # compile and execute immediately
-babelc hello.bc              # compile to hello.exe (Windows) / hello (Linux/macOS)
-babelc hello.bc -o out       # compile to out.exe / out
-babelc hello.bc -o out.c     # transpile to C only (no compilation)
-babelc hello.bc --emit-c     # emit generated C to stdout
+oscan hello.osc --run        # compile and execute immediately
+oscan hello.osc              # compile to hello.exe (Windows) / hello (Linux/macOS)
+oscan hello.osc -o out       # compile to out.exe / out
+oscan hello.osc -o out.c     # transpile to C only (no compilation)
+oscan hello.osc --emit-c     # emit generated C to stdout
 ```
 
 ## CLI Reference
 
 ```
-babelc [OPTIONS] <file.bc>
+oscan [OPTIONS] <file.osc>
 
 Options:
   -o <path>        Output path. If extension is .c, transpile only.
@@ -86,7 +86,7 @@ fn! main() {
 ```
 
 For a complete walkthrough, see the **[Language Guide](docs/guide.md)**.
-For the full formal specification, see **[docs/spec/babel-c-spec.md](docs/spec/babel-c-spec.md)**.
+For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Oscan-spec.md)**.
 
 ## Building & Testing
 
@@ -120,24 +120,24 @@ cd runtime && make test
 │   ├── types.rs         # Type system definitions
 │   └── error.rs         # Compiler error types
 ├── runtime/
-│   ├── bc_runtime.c     # Arena allocator + standard library (C)
-│   ├── bc_runtime.h     # Runtime header
+│   ├── osc_runtime.c     # Arena allocator + standard library (C)
+│   ├── osc_runtime.h     # Runtime header
 │   └── test_runtime.c   # Runtime unit tests
 ├── tests/
 │   ├── positive/        # 22 programs that must compile & produce expected output
 │   ├── negative/        # 16 programs that must be rejected by the compiler
 │   └── integration.rs   # Test harness
-├── examples/            # hello.bc, fibonacci.bc, error_handling.bc
+├── examples/            # hello.osc, fibonacci.osc, error_handling.osc
 ├── docs/
 │   ├── guide.md         # Concise language guide
 │   └── spec/
-│       └── babel-c-spec.md  # Full language specification
+│       └── Oscan-spec.md  # Full language specification
 └── Cargo.toml
 ```
 
 ## Status
 
-Babel-C v0.1 is feature-complete for its initial scope: the full language compiles to C, all 91 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies.
+Oscan v0.1 is feature-complete for its initial scope: the full language compiles to C, all 91 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies.
 
 ## Contributing
 

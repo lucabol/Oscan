@@ -6,7 +6,7 @@
 - **Scope:** Language design decisions, compiler architecture, code review, technical direction
 
 ## Responsibilities
-1. Own the overall architecture of the Babel-C compiler/transpiler
+1. Own the overall architecture of the Oscan compiler/transpiler
 2. Make and document language design decisions (syntax, semantics, type system)
 3. Review code from Trinity, Morpheus, and Tank before merge
 4. Resolve cross-cutting concerns between compiler, runtime, and tests

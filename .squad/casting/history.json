@@ -2,12 +2,12 @@
   "universe_usage_history": [
     {
       "universe": "The Matrix",
-      "assignment_id": "babel-c-init-2026-03-27",
+      "assignment_id": "oscan-init-2026-03-27",
       "used_at": "2026-03-27T12:46:15.678Z"
     }
   ],
   "assignment_cast_snapshots": {
-    "babel-c-init-2026-03-27": {
+    "oscan-init-2026-03-27": {
       "universe": "The Matrix",
       "agents": {
         "lead": "Neo",

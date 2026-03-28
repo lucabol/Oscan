@@ -11,7 +11,7 @@
 3. Implement the C-FFI mechanism for calling external C functions
 4. Build runtime support for error-as-value types (Result pattern)
 5. Implement UB guard runtime (bounds checking, overflow detection)
-6. Define the runtime representation of Babel-C types in C
+6. Define the runtime representation of Oscan types in C
 7. Keep the runtime minimal — no domain-specific modules
 
 ## Boundaries

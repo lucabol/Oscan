@@ -175,7 +175,7 @@ impl CodeGenerator {
         self.line("#include <stdio.h>");
         self.line("#include <stdlib.h>");
         self.line("#include <math.h>");
-        self.line("#include \"bc_runtime.h\"");
+        self.line("#include \"osc_runtime.h\"");
         self.blank();
     }
 
@@ -186,13 +186,13 @@ impl CodeGenerator {
     fn emit_result_typedefs(&mut self) {
         for (ok, err) in &self.result_types.clone() {
             let name = self.result_type_name(ok, err);
-            if name == "bc_result_str_str" {
+            if name == "osc_result_str_str" {
                 continue; // Already in runtime
             }
             let ok_c = self.type_to_c(ok);
             let err_c = self.type_to_c(err);
             let ok_c_field = if *ok == BcType::Unit { "uint8_t".to_string() } else { ok_c };
-            self.line(&format!("BC_RESULT_DECL({}, {}, {});", ok_c_field, err_c, name));
+            self.line(&format!("OSC_RESULT_DECL({}, {}, {});", ok_c_field, err_c, name));
         }
         self.blank();
     }
@@ -281,7 +281,7 @@ impl CodeGenerator {
                 if f.name == "main" {
                     let ret = self.fn_return_c(f);
                     let params = self.fn_params_c(f);
-                    self.line(&format!("{} babel_main({});", ret, params));
+                    self.line(&format!("{} oscan_main({});", ret, params));
                 } else {
                     let ret = self.fn_return_c(f);
                     let params = self.fn_params_c(f);
@@ -306,7 +306,7 @@ impl CodeGenerator {
                     Expr::StringLit(s, _) => {
                         let escaped = self.escape_c_string(s);
                         self.line(&format!(
-                            "static const bc_str {} = {{ \"{}\", {} }};",
+                            "static const osc_str {} = {{ \"{}\", {} }};",
                             l.name, escaped, s.len()
                         ));
                     }
@@ -372,7 +372,7 @@ impl CodeGenerator {
     fn emit_function(&mut self, f: &FnDecl) {
         let ret = self.fn_return_c(f);
         let params = self.fn_params_c(f);
-        let name = if f.name == "main" { "babel_main".to_string() } else { Self::mangle_c_name(&f.name) };
+        let name = if f.name == "main" { "oscan_main".to_string() } else { Self::mangle_c_name(&f.name) };
 
         self.current_fn_return_type = match &f.return_type {
             Some(t) => Some(self.resolve_ast_type(t)),
@@ -416,15 +416,15 @@ impl CodeGenerator {
     fn emit_main_wrapper(&mut self) {
         self.line("int main(void) {");
         self.indent += 1;
-        self.line("bc_arena* _arena = bc_arena_create(1048576);");
-        self.line("bc_global_arena = _arena;");
+        self.line("osc_arena* _arena = osc_arena_create(1048576);");
+        self.line("osc_global_arena = _arena;");
 
-        // Check if babel_main returns Result
+        // Check if oscan_main returns Result
         if let Some(fi) = self.functions.get("main") {
             if let BcType::Result(_, _) = &fi.return_type {
                 let ret_c = self.type_to_c(&fi.return_type);
-                self.line(&format!("{} _result = babel_main(_arena);", ret_c));
-                self.line("bc_arena_destroy(_arena);");
+                self.line(&format!("{} _result = oscan_main(_arena);", ret_c));
+                self.line("osc_arena_destroy(_arena);");
                 self.line("if (!_result.is_ok) {");
                 self.indent += 1;
                 self.line("return 1;");
@@ -432,13 +432,13 @@ impl CodeGenerator {
                 self.line("}");
                 self.line("return 0;");
             } else {
-                self.line("babel_main(_arena);");
-                self.line("bc_arena_destroy(_arena);");
+                self.line("oscan_main(_arena);");
+                self.line("osc_arena_destroy(_arena);");
                 self.line("return 0;");
             }
         } else {
-            self.line("babel_main(_arena);");
-            self.line("bc_arena_destroy(_arena);");
+            self.line("oscan_main(_arena);");
+            self.line("osc_arena_destroy(_arena);");
             self.line("return 0;");
         }
 
@@ -576,7 +576,7 @@ impl CodeGenerator {
                     };
                     let elem_c = self.type_to_c(&elem_ty);
                     // Use a special marker — we handle array set in emit_stmt for Assign
-                    s = format!("(*({}*)bc_array_get({}, {}))", elem_c, s, idx_c);
+                    s = format!("(*({}*)osc_array_get({}, {}))", elem_c, s, idx_c);
                 }
             }
         }
@@ -601,7 +601,7 @@ impl CodeGenerator {
             }
             Expr::StringLit(s, _) => {
                 let escaped = self.escape_c_string(s);
-                format!("bc_str_from_cstr(\"{}\")", escaped)
+                format!("osc_str_from_cstr(\"{}\")", escaped)
             }
             Expr::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
 
@@ -618,8 +618,8 @@ impl CodeGenerator {
                     UnaryOp::Neg => {
                         let ty = self.type_of(operand);
                         match ty {
-                            BcType::I32 => format!("bc_neg_i32({})", val),
-                            BcType::I64 => format!("bc_neg_i64({})", val),
+                            BcType::I32 => format!("osc_neg_i32({})", val),
+                            BcType::I64 => format!("osc_neg_i64({})", val),
                             BcType::F64 => format!("(-{})", val),
                             _ => format!("(-{})", val),
                         }
@@ -656,7 +656,7 @@ impl CodeGenerator {
                     _ => BcType::I32,
                 };
                 let elem_c = self.type_to_c(&elem_ty);
-                format!("(*({}*)bc_array_get({}, {}))", elem_c, arr_c, idx_c)
+                format!("(*({}*)osc_array_get({}, {}))", elem_c, arr_c, idx_c)
             }
 
             Expr::Block(block) => {
@@ -752,42 +752,42 @@ impl CodeGenerator {
 
         match op {
             BinOp::Add => match ty {
-                BcType::I32 => format!("bc_add_i32({}, {})", lv, rv),
-                BcType::I64 => format!("bc_add_i64({}, {})", lv, rv),
+                BcType::I32 => format!("osc_add_i32({}, {})", lv, rv),
+                BcType::I64 => format!("osc_add_i64({}, {})", lv, rv),
                 BcType::F64 => format!("({} + {})", lv, rv),
-                BcType::Str => format!("bc_str_concat(_arena, {}, {})", lv, rv),
+                BcType::Str => format!("osc_str_concat(_arena, {}, {})", lv, rv),
                 _ => format!("({} + {})", lv, rv),
             },
             BinOp::Sub => match ty {
-                BcType::I32 => format!("bc_sub_i32({}, {})", lv, rv),
-                BcType::I64 => format!("bc_sub_i64({}, {})", lv, rv),
+                BcType::I32 => format!("osc_sub_i32({}, {})", lv, rv),
+                BcType::I64 => format!("osc_sub_i64({}, {})", lv, rv),
                 _ => format!("({} - {})", lv, rv),
             },
             BinOp::Mul => match ty {
-                BcType::I32 => format!("bc_mul_i32({}, {})", lv, rv),
-                BcType::I64 => format!("bc_mul_i64({}, {})", lv, rv),
+                BcType::I32 => format!("osc_mul_i32({}, {})", lv, rv),
+                BcType::I64 => format!("osc_mul_i64({}, {})", lv, rv),
                 _ => format!("({} * {})", lv, rv),
             },
             BinOp::Div => match ty {
-                BcType::I32 => format!("bc_div_i32({}, {})", lv, rv),
-                BcType::I64 => format!("bc_div_i64({}, {})", lv, rv),
+                BcType::I32 => format!("osc_div_i32({}, {})", lv, rv),
+                BcType::I64 => format!("osc_div_i64({}, {})", lv, rv),
                 _ => format!("({} / {})", lv, rv),
             },
             BinOp::Mod => match ty {
-                BcType::I32 => format!("bc_mod_i32({}, {})", lv, rv),
-                BcType::I64 => format!("bc_mod_i64({}, {})", lv, rv),
+                BcType::I32 => format!("osc_mod_i32({}, {})", lv, rv),
+                BcType::I64 => format!("osc_mod_i64({}, {})", lv, rv),
                 _ => format!("({} %% {})", lv, rv),
             },
             BinOp::Eq => {
                 match ty {
-                    BcType::Str => format!("bc_str_eq({}, {})", lv, rv),
+                    BcType::Str => format!("osc_str_eq({}, {})", lv, rv),
                     BcType::Enum(_) => format!("({}.tag == {}.tag)", lv, rv),
                     _ => format!("({} == {})", lv, rv),
                 }
             }
             BinOp::Neq => {
                 match ty {
-                    BcType::Str => format!("(!bc_str_eq({}, {}))", lv, rv),
+                    BcType::Str => format!("(!osc_str_eq({}, {}))", lv, rv),
                     BcType::Enum(_) => format!("({}.tag != {}.tag)", lv, rv),
                     _ => format!("({} != {})", lv, rv),
                 }
@@ -807,12 +807,12 @@ impl CodeGenerator {
 
     fn emit_cast(&self, val: &str, from: &BcType, to: &BcType) -> String {
         match (from, to) {
-            (BcType::I32, BcType::I64) => format!("bc_i32_to_i64({})", val),
-            (BcType::I64, BcType::I32) => format!("bc_i64_to_i32({})", val),
-            (BcType::I32, BcType::F64) => format!("bc_i32_to_f64({})", val),
-            (BcType::I64, BcType::F64) => format!("bc_i64_to_f64({})", val),
-            (BcType::F64, BcType::I32) => format!("bc_f64_to_i32({})", val),
-            (BcType::F64, BcType::I64) => format!("bc_f64_to_i64({})", val),
+            (BcType::I32, BcType::I64) => format!("osc_i32_to_i64({})", val),
+            (BcType::I64, BcType::I32) => format!("osc_i64_to_i32({})", val),
+            (BcType::I32, BcType::F64) => format!("osc_i32_to_f64({})", val),
+            (BcType::I64, BcType::F64) => format!("osc_i64_to_f64({})", val),
+            (BcType::F64, BcType::I32) => format!("osc_f64_to_i32({})", val),
+            (BcType::F64, BcType::I64) => format!("osc_f64_to_i64({})", val),
             _ => format!("(({}){})", self.type_to_c(to), val),
         }
     }
@@ -825,23 +825,23 @@ impl CodeGenerator {
         let mut arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
 
         match name {
-            "print" => format!("bc_print({})", arg_strs[0]),
-            "println" => format!("bc_println({})", arg_strs[0]),
-            "print_i32" => format!("bc_print_i32({})", arg_strs[0]),
-            "print_i64" => format!("bc_print_i64({})", arg_strs[0]),
-            "print_f64" => format!("bc_print_f64({})", arg_strs[0]),
-            "print_bool" => format!("bc_print_bool({})", arg_strs[0]),
-            "read_line" => "bc_read_line(_arena)".to_string(),
-            "str_len" => format!("bc_str_len({})", arg_strs[0]),
-            "str_eq" => format!("bc_str_eq({}, {})", arg_strs[0], arg_strs[1]),
-            "str_concat" => format!("bc_str_concat(_arena, {}, {})", arg_strs[0], arg_strs[1]),
-            "str_to_cstr" => format!("bc_str_to_cstr(_arena, {})", arg_strs[0]),
-            "abs_i32" => format!("bc_abs_i32({})", arg_strs[0]),
-            "abs_f64" => format!("bc_abs_f64({})", arg_strs[0]),
-            "mod_i32" => format!("bc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
-            "i32_to_str" => format!("bc_i32_to_str(_arena, {})", arg_strs[0]),
-            "arena_reset" => "bc_arena_reset_global()".to_string(),
-            "len" => format!("bc_array_len({})", arg_strs[0]),
+            "print" => format!("osc_print({})", arg_strs[0]),
+            "println" => format!("osc_println({})", arg_strs[0]),
+            "print_i32" => format!("osc_print_i32({})", arg_strs[0]),
+            "print_i64" => format!("osc_print_i64({})", arg_strs[0]),
+            "print_f64" => format!("osc_print_f64({})", arg_strs[0]),
+            "print_bool" => format!("osc_print_bool({})", arg_strs[0]),
+            "read_line" => "osc_read_line(_arena)".to_string(),
+            "str_len" => format!("osc_str_len({})", arg_strs[0]),
+            "str_eq" => format!("osc_str_eq({}, {})", arg_strs[0], arg_strs[1]),
+            "str_concat" => format!("osc_str_concat(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "str_to_cstr" => format!("osc_str_to_cstr(_arena, {})", arg_strs[0]),
+            "abs_i32" => format!("osc_abs_i32({})", arg_strs[0]),
+            "abs_f64" => format!("osc_abs_f64({})", arg_strs[0]),
+            "mod_i32" => format!("osc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "i32_to_str" => format!("osc_i32_to_str(_arena, {})", arg_strs[0]),
+            "arena_reset" => "osc_arena_reset_global()".to_string(),
+            "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val
                 let arr_ty = self.type_of(&args[0]);
@@ -852,7 +852,7 @@ impl CodeGenerator {
                 let elem_c = self.type_to_c(&elem_ty);
                 let tmp = self.fresh_tmp();
                 self.line(&format!("{} {} = {};", elem_c, tmp, arg_strs[1]));
-                format!("bc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
+                format!("osc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
             }
             _ => {
                 // User-defined or extern function
@@ -1407,7 +1407,7 @@ impl CodeGenerator {
         match pat {
             Pattern::IntLit(v, _) => format!("{}", v),
             Pattern::FloatLit(v, _) => format!("{}", v),
-            Pattern::StringLit(s, _) => format!("bc_str_from_cstr(\"{}\")", self.escape_c_string(s)),
+            Pattern::StringLit(s, _) => format!("osc_str_from_cstr(\"{}\")", self.escape_c_string(s)),
             Pattern::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
             _ => "0".to_string(),
         }
@@ -1415,7 +1415,7 @@ impl CodeGenerator {
 
     fn emit_comparison(&self, lhs: &str, ty: &BcType, rhs: &str) -> String {
         match ty {
-            BcType::Str => format!("bc_str_eq({}, {})", lhs, rhs),
+            BcType::Str => format!("osc_str_eq({}, {})", lhs, rhs),
             _ => format!("({} == {})", lhs, rhs),
         }
     }
@@ -1463,20 +1463,20 @@ impl CodeGenerator {
                 // Fallback: should not happen with correct type annotations
                 "1".to_string()
             };
-            return format!("bc_array_new(_arena, {}, 0)", size_expr);
+            return format!("osc_array_new(_arena, {}, 0)", size_expr);
         }
 
         let elem_ty = self.type_of(&elements[0]);
         let elem_c = self.type_to_c(&elem_ty);
         let tmp = self.fresh_tmp();
         let size_expr = self.c_sizeof(&elem_ty);
-        self.line(&format!("bc_array* {} = bc_array_new(_arena, {}, {});",
+        self.line(&format!("osc_array* {} = osc_array_new(_arena, {}, {});",
             tmp, size_expr, elements.len()));
         for elem in elements {
             let v = self.emit_expr(elem);
             let push_tmp = self.fresh_tmp();
             self.line(&format!("{} {} = {};", elem_c, push_tmp, v));
-            self.line(&format!("bc_array_push(_arena, {}, &{});", tmp, push_tmp));
+            self.line(&format!("osc_array_push(_arena, {}, &{});", tmp, push_tmp));
         }
         tmp
     }
@@ -1561,17 +1561,17 @@ impl CodeGenerator {
             BcType::I64 => "int64_t".to_string(),
             BcType::F64 => "double".to_string(),
             BcType::Bool => "uint8_t".to_string(),
-            BcType::Str => "bc_str".to_string(),
+            BcType::Str => "osc_str".to_string(),
             BcType::Unit => "void".to_string(),
             BcType::Struct(name) => name.clone(),
             BcType::Enum(name) => name.clone(),
-            BcType::Array(_) | BcType::FixedArray(_, _) => "bc_array*".to_string(),
+            BcType::Array(_) | BcType::FixedArray(_, _) => "osc_array*".to_string(),
             BcType::Result(ok, err) => self.result_type_name(ok, err),
         }
     }
 
     fn result_type_name(&self, ok: &BcType, err: &BcType) -> String {
-        format!("bc_result_{}_{}", self.type_tag(ok), self.type_tag(err))
+        format!("osc_result_{}_{}", self.type_tag(ok), self.type_tag(err))
     }
 
     fn type_tag(&self, ty: &BcType) -> String {
@@ -1596,10 +1596,10 @@ impl CodeGenerator {
             BcType::I64 => "sizeof(int64_t)".to_string(),
             BcType::F64 => "sizeof(double)".to_string(),
             BcType::Bool => "sizeof(uint8_t)".to_string(),
-            BcType::Str => "sizeof(bc_str)".to_string(),
+            BcType::Str => "sizeof(osc_str)".to_string(),
             BcType::Struct(name) => format!("sizeof({})", name),
             BcType::Enum(name) => format!("sizeof({})", name),
-            BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(bc_array*)".to_string(),
+            BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(osc_array*)".to_string(),
             BcType::Result(ok, err) => format!("sizeof({})", self.result_type_name(ok, err)),
             BcType::Unit => "1".to_string(),
         }
@@ -1812,7 +1812,7 @@ impl CodeGenerator {
     }
 
     fn fn_params_c(&self, f: &FnDecl) -> String {
-        let mut parts = vec!["bc_arena* _arena".to_string()];
+        let mut parts = vec!["osc_arena* _arena".to_string()];
         for p in &f.params {
             let ty = self.resolve_ast_type(&p.ty);
             let c_ty = self.type_to_c(&ty);

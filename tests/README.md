@@ -1,8 +1,8 @@
-# Babel-C Test Suite
+# Oscan Test Suite
 
 ## Overview
 
-This directory contains the conformance test suite for the Babel-C compiler. Tests verify that the compiler correctly accepts valid programs, rejects invalid programs, and produces correct output.
+This directory contains the conformance test suite for the Oscan compiler. Tests verify that the compiler correctly accepts valid programs, rejects invalid programs, and produces correct output.
 
 ## Directory Structure
 
@@ -12,41 +12,41 @@ tests/
 ├── run_tests.sh            # Test runner (bash/Linux/macOS)
 ├── run_tests.ps1           # Test runner (PowerShell/Windows)
 ├── positive/               # Valid programs that must compile and run correctly
-│   ├── hello_world.bc      # Basic hello world
-│   ├── fibonacci.bc        # Recursion, if/else
-│   ├── structs_enums.bc    # Struct/enum declarations and usage
-│   ├── match_exhaustive.bc # Match expressions, exhaustive patterns
-│   ├── error_handling.bc   # Result type, try, match on Result
-│   ├── mutability.bc       # let vs let mut, assignment
-│   ├── control_flow.bc     # if/else, while, for loops
-│   ├── arithmetic.bc       # All arithmetic ops, precedence
-│   ├── logical.bc          # and, or, not operators
-│   ├── comparison.bc       # All comparison operators
-│   ├── type_casts.bc       # Explicit casts (as keyword)
-│   ├── arrays.bc           # Fixed and dynamic arrays, indexing, push, len
-│   ├── strings.bc          # String literals, string functions
-│   ├── block_expr.bc       # Block expressions returning values
-│   ├── scope.bc            # Lexical scoping, variable lifetime
-│   ├── purity.bc           # fn vs fn! purity enforcement
-│   ├── top_level_const.bc  # Top-level let bindings
-│   ├── ffi.bc              # Extern declarations
-│   ├── order_independence.bc # Functions/types used before declaration
-│   └── nested_control.bc   # Nested if/while/for/match
+│   ├── hello_world.osc      # Basic hello world
+│   ├── fibonacci.osc        # Recursion, if/else
+│   ├── structs_enums.osc    # Struct/enum declarations and usage
+│   ├── match_exhaustive.osc # Match expressions, exhaustive patterns
+│   ├── error_handling.osc   # Result type, try, match on Result
+│   ├── mutability.osc       # let vs let mut, assignment
+│   ├── control_flow.osc     # if/else, while, for loops
+│   ├── arithmetic.osc       # All arithmetic ops, precedence
+│   ├── logical.osc          # and, or, not operators
+│   ├── comparison.osc       # All comparison operators
+│   ├── type_casts.osc       # Explicit casts (as keyword)
+│   ├── arrays.osc           # Fixed and dynamic arrays, indexing, push, len
+│   ├── strings.osc          # String literals, string functions
+│   ├── block_expr.osc       # Block expressions returning values
+│   ├── scope.osc            # Lexical scoping, variable lifetime
+│   ├── purity.osc           # fn vs fn! purity enforcement
+│   ├── top_level_const.osc  # Top-level let bindings
+│   ├── ffi.osc              # Extern declarations
+│   ├── order_independence.osc # Functions/types used before declaration
+│   └── nested_control.osc   # Nested if/while/for/match
 ├── negative/               # Invalid programs that must be REJECTED
-│   ├── shadowing.bc        # Variable shadowing → compile error
-│   ├── non_exhaustive_match.bc # Missing enum variant → error
-│   ├── unhandled_result.bc # Using Result without match/try → error
-│   ├── implicit_coercion.bc # Type mismatch without cast → error
-│   ├── immutable_assign.bc # Assigning to immutable binding → error
-│   ├── undeclared_var.bc   # Using undeclared variable → error
-│   ├── type_mismatch.bc    # Wrong types in expressions → error
-│   ├── purity_violation.bc # Pure fn calling fn! → error
-│   ├── missing_type_annotation.bc # Binding without type → error
-│   ├── mixed_arithmetic.bc # i32 + f64 without cast → error
-│   ├── non_bool_condition.bc # if/while with non-bool → error
-│   ├── global_mut.bc       # let mut at top level → error
-│   ├── comparison_chain.bc # a < b < c → error
-│   └── compound_assign.bc  # += operator → error
+│   ├── shadowing.osc        # Variable shadowing → compile error
+│   ├── non_exhaustive_match.osc # Missing enum variant → error
+│   ├── unhandled_result.osc # Using Result without match/try → error
+│   ├── implicit_coercion.osc # Type mismatch without cast → error
+│   ├── immutable_assign.osc # Assigning to immutable binding → error
+│   ├── undeclared_var.osc   # Using undeclared variable → error
+│   ├── type_mismatch.osc    # Wrong types in expressions → error
+│   ├── purity_violation.osc # Pure fn calling fn! → error
+│   ├── missing_type_annotation.osc # Binding without type → error
+│   ├── mixed_arithmetic.osc # i32 + f64 without cast → error
+│   ├── non_bool_condition.osc # if/while with non-bool → error
+│   ├── global_mut.osc       # let mut at top level → error
+│   ├── comparison_chain.osc # a < b < c → error
+│   └── compound_assign.osc  # += operator → error
 ├── expected/               # Expected stdout for positive tests
 │   ├── hello_world.expected
 │   ├── fibonacci.expected
@@ -58,43 +58,43 @@ tests/
 ## Running Tests
 
 ### Prerequisites
-- The `babelc` compiler binary
+- The `oscan` compiler binary
 - A C compiler (gcc or clang)
-- The Babel-C runtime library (`../runtime/bc_runtime.c` and `../runtime/bc_runtime.h`)
+- The Oscan runtime library (`../runtime/osc_runtime.c` and `../runtime/osc_runtime.h`)
 
 ### Linux / macOS (bash)
 ```bash
 chmod +x run_tests.sh
-./run_tests.sh ../target/release/babelc gcc
+./run_tests.sh ../target/release/oscan gcc
 # or with clang:
-./run_tests.sh ../target/release/babelc clang
+./run_tests.sh ../target/release/oscan clang
 ```
 
 ### Windows (PowerShell)
 ```powershell
-.\run_tests.ps1 -BabelC ..\target\release\babelc.exe -CC gcc
+.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -CC gcc
 ```
 
 ## How It Works
 
 ### Positive Tests
-1. **Transpile:** `babelc input.bc -o build/input.c`
-2. **Compile C:** `gcc build/input.c ../runtime/bc_runtime.c -I../runtime -o build/input -std=c99 -lm`
+1. **Transpile:** `oscan input.osc -o build/input.c`
+2. **Compile C:** `gcc build/input.c ../runtime/osc_runtime.c -I../runtime -o build/input -std=c99 -lm`
 3. **Run & compare:** Execute `build/input`, capture stdout, compare against `expected/input.expected`
 
 ### Negative Tests
-1. **Transpile:** `babelc input.bc -o build/input.c`
+1. **Transpile:** `oscan input.osc -o build/input.c`
 2. **Expect failure:** The compiler must return a non-zero exit code
 
 ## Writing New Tests
 
 ### Positive Test
-1. Create `positive/my_test.bc` with valid Babel-C code
+1. Create `positive/my_test.osc` with valid Oscan code
 2. Create `expected/my_test.expected` with exact expected stdout
 3. Include comments explaining what language features are being tested
 
 ### Negative Test
-1. Create `negative/my_test.bc` with intentionally invalid code
+1. Create `negative/my_test.osc` with intentionally invalid code
 2. Include `// EXPECT ERROR: <description>` as the first comment
 3. Each test should trigger exactly ONE specific error
 

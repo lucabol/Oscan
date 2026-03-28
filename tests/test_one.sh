@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test individual Babel-C file with WSL gcc
+# Test individual Oscan file with WSL gcc
 set -e
 
 if [ "$#" -ne 1 ]; then
@@ -8,17 +8,17 @@ if [ "$#" -ne 1 ]; then
 fi
 
 NAME=$1
-BABEL_C="../target/release/babelc.exe"
-BC_FILE="positive/${NAME}.bc"
+OSCAN="../target/release/oscan.exe"
+OSC_FILE="positive/${NAME}.osc"
 EXPECTED_FILE="expected/${NAME}.expected"
 
 echo "Testing $NAME..."
 
 # Transpile
-$BABEL_C "$BC_FILE" -o "build/${NAME}.c" 2>"build/${NAME}.err"
+$OSCAN "$OSC_FILE" -o "build/${NAME}.c" 2>"build/${NAME}.err"
 
 # Compile
-gcc "build/${NAME}.c" "../runtime/bc_runtime.c" -I../runtime -o "build/${NAME}" -std=c99 -lm
+gcc "build/${NAME}.c" "../runtime/osc_runtime.c" -I../runtime -o "build/${NAME}" -std=c99 -lm
 
 # Run
 ./build/${NAME} > build/${NAME}.out 2>&1

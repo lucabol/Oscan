@@ -7,11 +7,11 @@
 // - User-defined pure and impure functions
 // - String operations
 //
-// Babel-C uses Result types instead of exceptions for error handling.
+// Oscan uses Result types instead of exceptions for error handling.
 // The `try` operator automatically propagates errors up the call stack.
 //
 // To run:
-//   babelc error_handling.bc --run
+//   oscan error_handling.osc --run
 
 // A pure function that can fail
 fn parse_positive(s: str) -> Result<i32, str> {

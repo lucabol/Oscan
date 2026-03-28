@@ -2,7 +2,7 @@
 
 ## Active Decisions
 
-### 1. Babel-C Language Specification v0.1
+### 1. Oscan Language Specification v0.1
 
 **Author:** Neo (Lead Architect)  
 **Date:** 2025-07-14  
@@ -10,7 +10,7 @@
 
 #### Summary
 
-Completed the full language specification for Babel-C v0.1. The spec is at `docs/spec/babel-c-spec.md` and serves as the sole reference for Trinity (compiler), Morpheus (runtime), and Tank (tests).
+Completed the full language specification for Oscan v0.1. The spec is at `docs/spec/oscan-spec.md` and serves as the sole reference for Trinity (compiler), Morpheus (runtime), and Tank (tests).
 
 #### Key Decisions
 
@@ -18,7 +18,7 @@ Completed the full language specification for Babel-C v0.1. The spec is at `docs
 - Single implicit arena per program, bulk deallocation on exit
 - LLMs never write memory management code
 - `arena_reset()` exposed for advanced use in long-running programs
-- Runtime provides `bc_arena` with create/alloc/reset/destroy
+- Runtime provides `osc_arena` with create/alloc/reset/destroy
 
 **Type System → Explicit, No Inference, No Generics**
 - All bindings require type annotations (no inference)
@@ -58,7 +58,7 @@ This spec enables parallel implementation by Trinity (compiler), Morpheus (runti
 
 #### Summary
 
-Comprehensive audit of `docs/spec/babel-c-spec.md` identified 9 inconsistencies, 7 gaps, and 5 ambiguities across spec, guide, and compiler. Applied 10 fixes to establish spec as source of truth.
+Comprehensive audit of `docs/spec/oscan-spec.md` identified 9 inconsistencies, 7 gaps, and 5 ambiguities across spec, guide, and compiler. Applied 10 fixes to establish spec as source of truth.
 
 #### Key Fixes Applied
 
@@ -70,6 +70,7 @@ Comprehensive audit of `docs/spec/babel-c-spec.md` identified 9 inconsistencies,
 - **Empty structs:** Now explicitly permitted with nominal type semantics
 - **while/for semicolons:** Grammar updated to show optional trailing semicolons (`;`?)
 - **as cast operator:** Added to precedence table at level 9
+- **Project rename:** Oscan → Oscan; runtime symbols changed from `bc_` to `osc_` prefix
 
 #### Guide Alignment
 
@@ -82,7 +83,7 @@ Neo applied 11 corresponding fixes to `docs/guide.md`:
 
 #### Impact
 
-Spec and guide now aligned. Trinity should verify negative literal pattern support in parser; Tank should add test coverage.
+Spec and guide now aligned. Neo should verify negative literal pattern support in parser; Tank should add test coverage.
 
 ---
 
@@ -94,7 +95,7 @@ Spec and guide now aligned. Trinity should verify negative literal pattern suppo
 
 #### Problem
 
-Empty array literals like `let mut arr: [i32] = []` generated `bc_array_new(_arena, 1, 0)` with hardcoded `elem_size=1`, causing silent memory corruption when elements ≥2 bytes were pushed.
+Empty array literals like `let mut arr: [i32] = []` generated `osc_array_new(_arena, 1, 0)` with hardcoded `elem_size=1`, causing silent memory corruption when elements ≥2 bytes were pushed.
 
 #### Solution
 
@@ -124,6 +125,7 @@ Created `.github/workflows/ci.yml` with three parallel platform jobs (Linux/GCC,
 - **Windows MSVC setup** via `ilammy/msvc-dev-cmd@v1` — required for `cl.exe` availability
 - **Integration tests inline** in workflow YAML — clear per-step GitHub Actions output
 - **Cargo caching** on all platforms
+- **Project context:** Oscan (formerly Oscan) — references updated accordingly
 
 #### Impact
 
@@ -162,19 +164,19 @@ Enhanced `test.ps1` with WSL-based Linux testing and ARM64/QEMU testing. Gracefu
 
 #### Summary
 
-Implemented semantic analysis (Phase 3) and C code generation (Phase 4), completing the Babel-C compiler pipeline from `.bc` source to working C99 output.
+Implemented semantic analysis (Phase 3) and C code generation (Phase 4), completing the Oscan compiler pipeline from `.osc` source to working C99 output.
 
 #### Key Architecture Decisions
 
 - **Type re-derivation in codegen:** No typed AST — code generator re-derives types using type_of() with symbol table access
 - **Result<T,E>:** Uses runtime BC_RESULT_DECL macro; each unique combination gets a typedef
-- **All arrays are dynamic:** Both fixed-size and dynamic Babel-C arrays represented as `bc_array*` in C
+- **All arrays are dynamic:** Both fixed-size and dynamic Oscan arrays represented as `osc_array*` in C
 - **Anti-shadowing scope:** Within function only (parameters can shadow top-level constants)
 - **Micro-lib mapping:** 18 functions hard-coded to bc_-prefixed C runtime counterparts
 
 #### Impact
 
-Full pipeline operational: `babelc input.bc -o output.c` produces valid C99 linking against `bc_runtime.c`. All spec examples work end-to-end.
+Full pipeline operational: `oscan input.osc -o output.c` produces valid C99 linking against `osc_runtime.c`. All spec examples work end-to-end.
 
 ---
 

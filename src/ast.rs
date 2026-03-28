@@ -2,7 +2,7 @@
 
 use crate::token::Span;
 
-/// A complete Babel-C program.
+/// A complete Oscan program.
 #[derive(Debug)]
 pub struct Program {
     pub decls: Vec<TopDecl>,

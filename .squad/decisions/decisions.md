@@ -1,4 +1,4 @@
-# Decisions — Babel-C Project
+# Decisions — Oscan Project
 
 **Last Updated:** 2026-03-27T13:05
 
@@ -13,14 +13,14 @@
 **Status:** Implemented  
 
 #### Context
-Needed to establish the foundational language design for Babel-C v0.1.
+Needed to establish the foundational language design for Oscan v0.1.
 
 #### Decision
 - **Memory Model** → Arena-based allocation
   - Single implicit arena per program with bulk deallocation on exit
   - LLMs never write memory management code
   - `arena_reset()` exposed for long-running programs
-  - Runtime provides `bc_arena` with create/alloc/reset/destroy
+  - Runtime provides `osc_arena` with create/alloc/reset/destroy
 
 - **Type System** → Explicit, no inference, no generics
   - All bindings require type annotations
@@ -60,7 +60,7 @@ Specification is authoritative and unambiguous, serving as the sole reference fo
 **Status:** Implemented  
 
 #### Context
-Needed to establish the foundational compiler pipeline for Babel-C.
+Needed to establish the foundational compiler pipeline for Oscan.
 
 #### Decision
 - **Language:** Rust with edition 2021.
@@ -84,28 +84,28 @@ This establishes the foundation that the type checker and C code generator will 
 **Status:** Implemented  
 
 #### Context
-Phase 5 required implementing the complete Babel-C runtime as a C static library.
+Phase 5 required implementing the complete Oscan runtime as a C static library.
 
 #### Decisions
 
 **1. Arena growth via realloc-copy (not linked chunks)**
-When the arena runs out of space, we allocate a new 2× buffer, copy, and free the old one. This keeps all arena memory contiguous, which simplifies pointer arithmetic and array relocation. Linked-chunk arenas would avoid copies but complicate `bc_array_push` (data might span chunks).
+When the arena runs out of space, we allocate a new 2× buffer, copy, and free the old one. This keeps all arena memory contiguous, which simplifies pointer arithmetic and array relocation. Linked-chunk arenas would avoid copies but complicate `osc_array_push` (data might span chunks).
 
 **2. 8-byte alignment for all arena allocations**
-Every `bc_arena_alloc` rounds up to 8-byte boundaries. This satisfies alignment requirements for all Babel-C types (i64, f64, pointers) without per-type alignment logic.
+Every `osc_arena_alloc` rounds up to 8-byte boundaries. This satisfies alignment requirements for all Oscan types (i64, f64, pointers) without per-type alignment logic.
 
 **3. Result type via macro, not void***
-`BC_RESULT_DECL(ok_type, err_type, name)` generates a concrete tagged union struct. The compiler will emit one `BC_RESULT_DECL` per distinct `Result<T, E>` instantiation. This gives type safety and avoids casts.
+`OSC_RESULT_DECL(ok_type, err_type, name)` generates a concrete tagged union struct. The compiler will emit one `OSC_RESULT_DECL` per distinct `Result<T, E>` instantiation. This gives type safety and avoids casts.
 
 **4. i32 overflow detection via i64 widening**
-`bc_mul_i32` widens operands to i64 before multiplying, then checks if the result fits i32. Simple, correct, zero UB. For i64 mul, we use careful case-analysis since C99 has no portable 128-bit integer.
+`osc_mul_i32` widens operands to i64 before multiplying, then checks if the result fits i32. Simple, correct, zero UB. For i64 mul, we use careful case-analysis since C99 has no portable 128-bit integer.
 
 **5. Panic tests via fork()**
 Test suite uses `fork()` to test that panics actually `exit(1)`. On Windows (no fork), these tests are skipped. This is acceptable since CI will run on Linux.
 
 #### Impact
 - Compiler codegen (Trinity) should target these exact function signatures.
-- Generated `main()` must create `bc_global_arena` and destroy it on exit.
+- Generated `main()` must create `osc_global_arena` and destroy it on exit.
 - All allocating micro-lib functions receive the arena as a hidden first parameter.
 
 ---
@@ -123,7 +123,7 @@ Created the Phase 7A test suite. Establishing conventions for how tests are orga
 
 #### Decisions
 
-1. **Test naming**: `.bc` filename matches `.expected` filename (e.g., `fibonacci.bc` → `fibonacci.expected`).
+1. **Test naming**: `.osc` filename matches `.expected` filename (e.g., `fibonacci.osc` → `fibonacci.expected`).
 2. **Negative tests use exit code**: The test runner checks only that the compiler returns non-zero for negative tests. We don't yet assert specific error messages (can add later).
 3. **Expected output files**: Use exact byte-level comparison (no regex). This means runtime output formatting must be deterministic.
 4. **FFI test assumes**: `c_abs` maps to C `abs()`. The compiler or a shim must handle this name mapping.
@@ -136,6 +136,6 @@ All team members writing the compiler/runtime should ensure their output format 
 
 ## Decision Archive
 
-All major architectural and implementation decisions for Babel-C v0.1 are documented above. This file serves as the authoritative decision log for the project.
+All major architectural and implementation decisions for Oscan v0.1 are documented above. This file serves as the authoritative decision log for the project.
 
 Last decision entry: 2026-03-27T13:05 (Phases 2, 5, 7A complete)

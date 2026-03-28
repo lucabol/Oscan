@@ -1,10 +1,10 @@
-# Babel-C Test Runner (PowerShell)
-# Usage: .\run_tests.ps1 -BabelC <babelc-binary> [-CC <cc-compiler>]
-# Example: .\run_tests.ps1 -BabelC ..\target\release\babelc.exe -CC gcc
+# Oscan Test Runner (PowerShell)
+# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-CC <cc-compiler>]
+# Example: .\run_tests.ps1 -Oscan ..\target\release\oscan.exe -CC gcc
 
 param(
     [Parameter(Mandatory=$true)]
-    [string]$BabelC,
+    [string]$Oscan,
 
     [string]$CC = "gcc"
 )
@@ -22,8 +22,8 @@ if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
 }
 
-Write-Host "=== Babel-C Test Suite ==="
-Write-Host "Compiler: $BabelC"
+Write-Host "=== Oscan Test Suite ==="
+Write-Host "Compiler: $Oscan"
 Write-Host "C Compiler: $CC"
 Write-Host ""
 
@@ -31,8 +31,8 @@ Write-Host ""
 Write-Host "--- Positive Tests (must compile and produce correct output) ---"
 Write-Host ""
 
-foreach ($bcFile in Get-ChildItem "positive\*.bc") {
-    $name = $bcFile.BaseName
+foreach ($oscFile in Get-ChildItem "positive\*.osc") {
+    $name = $oscFile.BaseName
     $expectedFile = "expected\$name.expected"
     $Total++
     Write-Host -NoNewline "  Testing $name... "
@@ -44,9 +44,9 @@ foreach ($bcFile in Get-ChildItem "positive\*.bc") {
         continue
     }
 
-    # Step 1: Transpile .bc -> .c
+    # Step 1: Transpile .osc -> .c
     $transpileErr = $null
-    & $BabelC $bcFile.FullName -o "build\$name.c" 2>"build\$name.err"
+    & $Oscan $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL (transpile error)"
         if (Test-Path "build\$name.err") {
@@ -57,7 +57,7 @@ foreach ($bcFile in Get-ChildItem "positive\*.bc") {
     }
 
     # Step 2: Compile .c -> binary
-    & $CC "build\$name.c" "..\runtime\bc_runtime.c" "-I..\runtime" -o "build\$name.exe" -std=c99 -lm 2>"build\$name.err"
+    & $CC "build\$name.c" "..\runtime\osc_runtime.c" "-I..\runtime" -o "build\$name.exe" -std=c99 -lm 2>"build\$name.err"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL (C compile error)"
         if (Test-Path "build\$name.err") {
@@ -91,12 +91,12 @@ Write-Host ""
 Write-Host "--- Negative Tests (must be rejected by the compiler) ---"
 Write-Host ""
 
-foreach ($bcFile in Get-ChildItem "negative\*.bc") {
-    $name = $bcFile.BaseName
+foreach ($oscFile in Get-ChildItem "negative\*.osc") {
+    $name = $oscFile.BaseName
     $Total++
     Write-Host -NoNewline "  Testing reject $name... "
 
-    & $BabelC $bcFile.FullName -o "build\$name.c" 2>"build\$name.err"
+    & $Oscan $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
     if ($LASTEXITCODE -eq 0) {
         Write-Host "FAIL (should have been rejected)"
         $Fail++

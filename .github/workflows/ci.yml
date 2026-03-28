@@ -1,4 +1,4 @@
-name: Babel-C CI
+name: Oscan CI
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BABELC="./target/release/babelc"
+          oscan="./target/release/oscan"
           CC="gcc"
           PASS=0
           FAIL=0
@@ -53,8 +53,8 @@ jobs:
           mkdir -p tests/build
 
           echo "=== Positive Integration Tests (Linux/GCC) ==="
-          for bc_file in tests/positive/*.bc; do
-            name=$(basename "$bc_file" .bc)
+          for osc_file in tests/positive/*.osc; do
+            name=$(basename "$osc_file" .osc)
             expected="tests/expected/${name}.expected"
             TOTAL=$((TOTAL + 1))
 
@@ -64,8 +64,8 @@ jobs:
               continue
             fi
 
-            # Transpile .bc → .c
-            if ! "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+            # Transpile .osc → .c
+            if ! "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — transpile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -73,7 +73,7 @@ jobs:
             fi
 
             # Compile C with GCC
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — C compile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -103,7 +103,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BABELC="./target/release/babelc"
+          oscan="./target/release/oscan"
           PASS=0
           FAIL=0
           TOTAL=0
@@ -111,11 +111,11 @@ jobs:
           mkdir -p tests/build
 
           echo "=== Negative Integration Tests (Linux/GCC) ==="
-          for bc_file in tests/negative/*.bc; do
-            name=$(basename "$bc_file" .bc)
+          for osc_file in tests/negative/*.osc; do
+            name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -165,7 +165,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          $BABELC = ".\target\release\babelc.exe"
+          $oscan = ".\target\release\oscan.exe"
           $Pass = 0
           $Fail = 0
           $Total = 0
@@ -176,7 +176,7 @@ jobs:
 
           Write-Host "=== Positive Integration Tests (Windows/MSVC) ==="
 
-          foreach ($bcFile in Get-ChildItem "tests\positive\*.bc") {
+          foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
             $expectedFile = "tests\expected\$name.expected"
             $Total++
@@ -187,8 +187,8 @@ jobs:
               continue
             }
 
-            # Transpile .bc -> .c
-            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
+            # Transpile .osc -> .c
+            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - transpile error"
               if (Test-Path "tests\build\$name.err") {
@@ -199,7 +199,7 @@ jobs:
             }
 
             # Compile with MSVC cl.exe
-            & cl.exe /nologo /std:c11 /Iruntime "tests\build\$name.c" runtime\bc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
+            & cl.exe /nologo /std:c11 /Iruntime "tests\build\$name.c" runtime\osc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - C compile error (MSVC)"
               if (Test-Path "tests\build\$name.err") {
@@ -233,7 +233,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          $BABELC = ".\target\release\babelc.exe"
+          $oscan = ".\target\release\oscan.exe"
           $Pass = 0
           $Fail = 0
           $Total = 0
@@ -244,11 +244,11 @@ jobs:
 
           Write-Host "=== Negative Integration Tests (Windows/MSVC) ==="
 
-          foreach ($bcFile in Get-ChildItem "tests\negative\*.bc") {
+          foreach ($bcFile in Get-ChildItem "tests\negative\*.osc") {
             $name = $bcFile.BaseName
             $Total++
 
-            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -eq 0) {
               Write-Host "FAIL: $name - should have been rejected"
               $Fail++
@@ -296,7 +296,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BABELC="./target/release/babelc"
+          oscan="./target/release/oscan"
           CC="clang"
           PASS=0
           FAIL=0
@@ -305,8 +305,8 @@ jobs:
           mkdir -p tests/build
 
           echo "=== Positive Integration Tests (macOS/Clang) ==="
-          for bc_file in tests/positive/*.bc; do
-            name=$(basename "$bc_file" .bc)
+          for osc_file in tests/positive/*.osc; do
+            name=$(basename "$osc_file" .osc)
             expected="tests/expected/${name}.expected"
             TOTAL=$((TOTAL + 1))
 
@@ -316,8 +316,8 @@ jobs:
               continue
             fi
 
-            # Transpile .bc → .c
-            if ! "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+            # Transpile .osc → .c
+            if ! "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — transpile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -325,7 +325,7 @@ jobs:
             fi
 
             # Compile C with Clang
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — C compile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -355,7 +355,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BABELC="./target/release/babelc"
+          oscan="./target/release/oscan"
           PASS=0
           FAIL=0
           TOTAL=0
@@ -363,11 +363,11 @@ jobs:
           mkdir -p tests/build
 
           echo "=== Negative Integration Tests (macOS/Clang) ==="
-          for bc_file in tests/negative/*.bc; do
-            name=$(basename "$bc_file" .bc)
+          for osc_file in tests/negative/*.osc; do
+            name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -397,26 +397,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user
 
-      - name: Build babelc (host x86_64)
+      - name: Build oscan (host x86_64)
         run: cargo build --release
 
       - name: Integration tests — positive (ARM64 via QEMU)
         shell: bash
         run: |
           set -euo pipefail
-          BABELC="./target/release/babelc"
+          oscan="./target/release/oscan"
           CC="aarch64-linux-gnu-gcc"
           PASS=0; FAIL=0; TOTAL=0
           mkdir -p tests/build
 
-          for bc_file in tests/positive/*.bc; do
-            name=$(basename "$bc_file" .bc)
+          for osc_file in tests/positive/*.osc; do
+            name=$(basename "$osc_file" .osc)
             expected="tests/expected/${name}.expected"
             TOTAL=$((TOTAL + 1))
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
-            "$BABELC" "$bc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-            $CC -std=c99 -static "tests/build/${name}.c" runtime/bc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+            $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
             expected_content=$(cat "$expected")

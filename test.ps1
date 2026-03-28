@@ -49,7 +49,7 @@ function Find-CCompiler {
 }
 
 function Compile-C-GCC($cc, $srcC, $outExe) {
-    & $cc -std=c99 $srcC runtime/bc_runtime.c -Iruntime -o $outExe -lm 2>&1
+    & $cc -std=c99 $srcC runtime/osc_runtime.c -Iruntime -o $outExe -lm 2>&1
     return $LASTEXITCODE -eq 0
 }
 
@@ -59,7 +59,7 @@ function Compile-C-MSVC($compiler, $srcC, $outExe) {
         @"
 @echo off
 call "$($compiler.VcVars)" x64 >nul 2>&1
-cl.exe /nologo /std:c11 /Iruntime "$srcC" runtime\bc_runtime.c /Fe:"$outExe" /link >nul 2>&1
+cl.exe /nologo /std:c11 /Iruntime "$srcC" runtime\osc_runtime.c /Fe:"$outExe" /link >nul 2>&1
 exit /b %ERRORLEVEL%
 "@ | Set-Content $bat
         cmd /c $bat 2>&1 | Out-Null
@@ -67,7 +67,7 @@ exit /b %ERRORLEVEL%
         Remove-Item $bat -ErrorAction SilentlyContinue
         return $ok
     } else {
-        & cl.exe /nologo /std:c11 /Iruntime $srcC runtime\bc_runtime.c /Fe:"$outExe" /link 2>&1 | Out-Null
+        & cl.exe /nologo /std:c11 /Iruntime $srcC runtime\osc_runtime.c /Fe:"$outExe" /link 2>&1 | Out-Null
         return $LASTEXITCODE -eq 0
     }
 }
@@ -105,9 +105,9 @@ if (-not $SkipBuild) {
     Write-Host "Build OK" -ForegroundColor Green
 }
 
-$BABELC = ".\target\release\babelc.exe"
-if (-not (Test-Path $BABELC)) {
-    Write-Host "Error: $BABELC not found. Run without -SkipBuild first." -ForegroundColor Red
+$oscan = ".\target\release\oscan.exe"
+if (-not (Test-Path $oscan)) {
+    Write-Host "Error: $oscan not found. Run without -SkipBuild first." -ForegroundColor Red
     exit 1
 }
 
@@ -138,7 +138,7 @@ if (-not $SkipIntegration) {
     # ── Positive tests ──
     Write-Host "`n── Positive tests ──" -ForegroundColor Yellow
     $pass = 0; $fail = 0
-    foreach ($bcFile in Get-ChildItem "tests\positive\*.bc") {
+    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
         $name = $bcFile.BaseName
         $expectedFile = "tests\expected\$name.expected"
 
@@ -148,7 +148,7 @@ if (-not $SkipIntegration) {
         }
 
         # Transpile
-        & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+        & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
             $fail++; continue
@@ -185,10 +185,10 @@ if (-not $SkipIntegration) {
     # ── Negative tests ──
     Write-Host "`n── Negative tests ──" -ForegroundColor Yellow
     $pass = 0; $fail = 0
-    foreach ($bcFile in Get-ChildItem "tests\negative\*.bc") {
+    foreach ($bcFile in Get-ChildItem "tests\negative\*.osc") {
         $name = $bcFile.BaseName
 
-        & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+        & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
         if ($LASTEXITCODE -eq 0) {
             Write-Host "  FAIL: $name — should have been rejected" -ForegroundColor Red
             $fail++
@@ -224,7 +224,7 @@ if (-not $SkipWSL) {
 
         Write-Host "`n── WSL Positive tests ──" -ForegroundColor Yellow
         $pass = 0; $fail = 0
-        foreach ($bcFile in Get-ChildItem "tests\positive\*.bc") {
+        foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
             $expectedFile = "tests\expected\$name.expected"
 
@@ -233,15 +233,15 @@ if (-not $SkipWSL) {
                 $fail++; continue
             }
 
-            # Transpile (Windows-native babelc.exe)
-            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            # Transpile (Windows-native oscan.exe)
+            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                 $fail++; continue
             }
 
             # Compile inside WSL with gcc
-            wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/bc_runtime.c -Iruntime -o tests/build/${name}_wsl -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
+            wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -o tests/build/${name}_wsl -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — gcc compile error (WSL)" -ForegroundColor Red
                 $fail++; continue
@@ -285,7 +285,7 @@ if (-not $SkipARM) {
 
         Write-Host "`n── ARM64 Positive tests ──" -ForegroundColor Yellow
         $pass = 0; $fail = 0
-        foreach ($bcFile in Get-ChildItem "tests\positive\*.bc") {
+        foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
             $expectedFile = "tests\expected\$name.expected"
 
@@ -294,15 +294,15 @@ if (-not $SkipARM) {
                 $fail++; continue
             }
 
-            # Transpile (Windows-native babelc.exe)
-            & $BABELC $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            # Transpile (Windows-native oscan.exe)
+            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                 $fail++; continue
             }
 
             # Cross-compile with aarch64-linux-gnu-gcc -static inside WSL
-            wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/bc_runtime.c -Iruntime -o tests/build/${name}_arm -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
+            wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -o tests/build/${name}_arm -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — cross-compile error (ARM64)" -ForegroundColor Red
                 $fail++; continue

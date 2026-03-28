@@ -1,12 +1,12 @@
 /*
- * test_runtime.c — Babel-C Runtime Test Suite
+ * test_runtime.c — Oscan Runtime Test Suite
  *
  * Runs assert-based tests covering arena, checked arithmetic, arrays,
  * strings, type casts, and conversions. Panics are tested via fork/exec
  * where supported; on Windows we skip panic-specific tests.
  */
 
-#include "bc_runtime.h"
+#include "osc_runtime.h"
 
 #include <assert.h>
 #include <inttypes.h>
@@ -44,7 +44,7 @@ static int tests_passed = 0;
 
 /*
  * EXPECT_PANIC: run a block of code and verify it exits with a
- * non-zero status (i.e., calls bc_panic).
+ * non-zero status (i.e., calls OSC_PANIC).
  * On POSIX we fork; on Windows we skip the test.
  */
 #ifdef _WIN32
@@ -85,100 +85,100 @@ static void test_arena(void)
 
     TEST("create with default capacity");
     {
-        bc_arena *a = bc_arena_create(0);
+        osc_arena *a = osc_arena_create(0);
         assert(a != NULL);
         assert(a->head != NULL);
-        assert(a->head->capacity == BC_ARENA_DEFAULT_CAPACITY);
+        assert(a->head->capacity == OSC_ARENA_DEFAULT_CAPACITY);
         assert(a->head->used == 0);
         assert(a->current == a->head);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("alloc within capacity");
     {
-        bc_arena *a = bc_arena_create(256);
-        void *p1 = bc_arena_alloc(a, 64);
-        void *p2 = bc_arena_alloc(a, 64);
+        osc_arena *a = osc_arena_create(256);
+        void *p1 = osc_arena_alloc(a, 64);
+        void *p2 = osc_arena_alloc(a, 64);
         assert(p1 != NULL);
         assert(p2 != NULL);
         assert(p1 != p2);
         assert(a->head->used <= a->head->capacity);
         /* No new block should have been allocated */
         assert(a->head->next == NULL);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("alloc beyond capacity (growth via new block)");
     {
-        bc_arena *a = bc_arena_create(32);
+        osc_arena *a = osc_arena_create(32);
         /* Force new block: allocate more than first block capacity */
-        void *p1 = bc_arena_alloc(a, 16);
-        void *p2 = bc_arena_alloc(a, 128);
+        void *p1 = osc_arena_alloc(a, 16);
+        void *p2 = osc_arena_alloc(a, 128);
         assert(p1 != NULL);
         assert(p2 != NULL);
         /* A second block must have been created */
         assert(a->head->next != NULL);
         assert(a->current == a->head->next);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("alloc beyond capacity — old pointers remain valid");
     {
-        bc_arena *a = bc_arena_create(64);
-        int32_t *p1 = (int32_t *)bc_arena_alloc(a, sizeof(int32_t));
+        osc_arena *a = osc_arena_create(64);
+        int32_t *p1 = (int32_t *)osc_arena_alloc(a, sizeof(int32_t));
         *p1 = 0xDEAD;
         /* Fill up the first block */
-        bc_arena_alloc(a, 48);
+        osc_arena_alloc(a, 48);
         /* This must spill into a new block */
-        int32_t *p2 = (int32_t *)bc_arena_alloc(a, sizeof(int32_t));
+        int32_t *p2 = (int32_t *)osc_arena_alloc(a, sizeof(int32_t));
         *p2 = 0xBEEF;
         /* p1 must still be readable from the old (unmoved) block */
         assert(*p1 == 0xDEAD);
         assert(*p2 == 0xBEEF);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("reset");
     {
-        bc_arena *a = bc_arena_create(256);
-        bc_arena_alloc(a, 100);
+        osc_arena *a = osc_arena_create(256);
+        osc_arena_alloc(a, 100);
         assert(a->head->used > 0);
-        bc_arena_reset(a);
+        osc_arena_reset(a);
         assert(a->head->used == 0);
         assert(a->current == a->head);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("reset with multiple blocks");
     {
-        bc_arena *a = bc_arena_create(32);
-        bc_arena_alloc(a, 16);
-        bc_arena_alloc(a, 64); /* forces new block */
+        osc_arena *a = osc_arena_create(32);
+        osc_arena_alloc(a, 16);
+        osc_arena_alloc(a, 64); /* forces new block */
         assert(a->head->next != NULL);
-        bc_arena_reset(a);
+        osc_arena_reset(a);
         assert(a->head->used == 0);
         assert(a->head->next->used == 0);
         assert(a->current == a->head);
         /* Blocks are kept for reuse */
         assert(a->head->next != NULL);
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 
     TEST("multiple allocs alignment");
     {
-        bc_arena *a = bc_arena_create(1024);
-        void *p1 = bc_arena_alloc(a, 1);
-        void *p2 = bc_arena_alloc(a, 1);
+        osc_arena *a = osc_arena_create(1024);
+        void *p1 = osc_arena_alloc(a, 1);
+        void *p2 = osc_arena_alloc(a, 1);
         /* Each alloc should be 8-byte aligned */
         assert(((size_t)p1 & 7) == 0 || (size_t)p2 - (size_t)p1 >= 8);
         (void)p1; (void)p2;
-        bc_arena_destroy(a);
+        osc_arena_destroy(a);
     }
     PASS();
 }
@@ -192,65 +192,65 @@ static void test_checked_arith_i32(void)
     printf("\n[Checked Arithmetic i32]\n");
 
     TEST("add normal");
-    assert(bc_add_i32(10, 20) == 30);
-    assert(bc_add_i32(-5, 5) == 0);
-    assert(bc_add_i32(0, 0) == 0);
+    assert(osc_add_i32(10, 20) == 30);
+    assert(osc_add_i32(-5, 5) == 0);
+    assert(osc_add_i32(0, 0) == 0);
     PASS();
 
     TEST("add overflow");
-    EXPECT_PANIC({ bc_add_i32(INT32_MAX, 1); });
+    EXPECT_PANIC({ osc_add_i32(INT32_MAX, 1); });
 
     TEST("add underflow");
-    EXPECT_PANIC({ bc_add_i32(INT32_MIN, -1); });
+    EXPECT_PANIC({ osc_add_i32(INT32_MIN, -1); });
 
     TEST("sub normal");
-    assert(bc_sub_i32(30, 10) == 20);
-    assert(bc_sub_i32(0, 0) == 0);
-    assert(bc_sub_i32(-5, -3) == -2);
+    assert(osc_sub_i32(30, 10) == 20);
+    assert(osc_sub_i32(0, 0) == 0);
+    assert(osc_sub_i32(-5, -3) == -2);
     PASS();
 
     TEST("sub overflow");
-    EXPECT_PANIC({ bc_sub_i32(INT32_MIN, 1); });
+    EXPECT_PANIC({ osc_sub_i32(INT32_MIN, 1); });
 
     TEST("sub underflow");
-    EXPECT_PANIC({ bc_sub_i32(INT32_MAX, -1); });
+    EXPECT_PANIC({ osc_sub_i32(INT32_MAX, -1); });
 
     TEST("mul normal");
-    assert(bc_mul_i32(6, 7) == 42);
-    assert(bc_mul_i32(-3, 4) == -12);
-    assert(bc_mul_i32(0, INT32_MAX) == 0);
+    assert(osc_mul_i32(6, 7) == 42);
+    assert(osc_mul_i32(-3, 4) == -12);
+    assert(osc_mul_i32(0, INT32_MAX) == 0);
     PASS();
 
     TEST("mul overflow");
-    EXPECT_PANIC({ bc_mul_i32(INT32_MAX, 2); });
+    EXPECT_PANIC({ osc_mul_i32(INT32_MAX, 2); });
 
     TEST("div normal");
-    assert(bc_div_i32(42, 6) == 7);
-    assert(bc_div_i32(-10, 3) == -3);
+    assert(osc_div_i32(42, 6) == 7);
+    assert(osc_div_i32(-10, 3) == -3);
     PASS();
 
     TEST("div by zero");
-    EXPECT_PANIC({ bc_div_i32(1, 0); });
+    EXPECT_PANIC({ osc_div_i32(1, 0); });
 
     TEST("div MIN / -1");
-    EXPECT_PANIC({ bc_div_i32(INT32_MIN, -1); });
+    EXPECT_PANIC({ osc_div_i32(INT32_MIN, -1); });
 
     TEST("mod normal");
-    assert(bc_mod_i32(10, 3) == 1);
-    assert(bc_mod_i32(-10, 3) == -1);
+    assert(osc_mod_i32(10, 3) == 1);
+    assert(osc_mod_i32(-10, 3) == -1);
     PASS();
 
     TEST("mod by zero");
-    EXPECT_PANIC({ bc_mod_i32(1, 0); });
+    EXPECT_PANIC({ osc_mod_i32(1, 0); });
 
     TEST("neg normal");
-    assert(bc_neg_i32(5) == -5);
-    assert(bc_neg_i32(-5) == 5);
-    assert(bc_neg_i32(0) == 0);
+    assert(osc_neg_i32(5) == -5);
+    assert(osc_neg_i32(-5) == 5);
+    assert(osc_neg_i32(0) == 0);
     PASS();
 
     TEST("neg MIN_VALUE");
-    EXPECT_PANIC({ bc_neg_i32(INT32_MIN); });
+    EXPECT_PANIC({ osc_neg_i32(INT32_MIN); });
 }
 
 /* ================================================================== */
@@ -262,53 +262,53 @@ static void test_checked_arith_i64(void)
     printf("\n[Checked Arithmetic i64]\n");
 
     TEST("add normal");
-    assert(bc_add_i64(100LL, 200LL) == 300LL);
-    assert(bc_add_i64(-50LL, 50LL) == 0LL);
+    assert(osc_add_i64(100LL, 200LL) == 300LL);
+    assert(osc_add_i64(-50LL, 50LL) == 0LL);
     PASS();
 
     TEST("add overflow");
-    EXPECT_PANIC({ bc_add_i64(INT64_MAX, 1); });
+    EXPECT_PANIC({ osc_add_i64(INT64_MAX, 1); });
 
     TEST("sub normal");
-    assert(bc_sub_i64(300LL, 100LL) == 200LL);
+    assert(osc_sub_i64(300LL, 100LL) == 200LL);
     PASS();
 
     TEST("sub overflow");
-    EXPECT_PANIC({ bc_sub_i64(INT64_MIN, 1); });
+    EXPECT_PANIC({ osc_sub_i64(INT64_MIN, 1); });
 
     TEST("mul normal");
-    assert(bc_mul_i64(6LL, 7LL) == 42LL);
-    assert(bc_mul_i64(-3LL, 4LL) == -12LL);
-    assert(bc_mul_i64(0LL, INT64_MAX) == 0LL);
+    assert(osc_mul_i64(6LL, 7LL) == 42LL);
+    assert(osc_mul_i64(-3LL, 4LL) == -12LL);
+    assert(osc_mul_i64(0LL, INT64_MAX) == 0LL);
     PASS();
 
     TEST("mul overflow");
-    EXPECT_PANIC({ bc_mul_i64(INT64_MAX, 2); });
+    EXPECT_PANIC({ osc_mul_i64(INT64_MAX, 2); });
 
     TEST("div normal");
-    assert(bc_div_i64(42LL, 6LL) == 7LL);
+    assert(osc_div_i64(42LL, 6LL) == 7LL);
     PASS();
 
     TEST("div by zero");
-    EXPECT_PANIC({ bc_div_i64(1, 0); });
+    EXPECT_PANIC({ osc_div_i64(1, 0); });
 
     TEST("div MIN / -1");
-    EXPECT_PANIC({ bc_div_i64(INT64_MIN, -1); });
+    EXPECT_PANIC({ osc_div_i64(INT64_MIN, -1); });
 
     TEST("mod normal");
-    assert(bc_mod_i64(10LL, 3LL) == 1LL);
+    assert(osc_mod_i64(10LL, 3LL) == 1LL);
     PASS();
 
     TEST("mod by zero");
-    EXPECT_PANIC({ bc_mod_i64(1, 0); });
+    EXPECT_PANIC({ osc_mod_i64(1, 0); });
 
     TEST("neg normal");
-    assert(bc_neg_i64(5LL) == -5LL);
-    assert(bc_neg_i64(0LL) == 0LL);
+    assert(osc_neg_i64(5LL) == -5LL);
+    assert(osc_neg_i64(0LL) == 0LL);
     PASS();
 
     TEST("neg MIN_VALUE");
-    EXPECT_PANIC({ bc_neg_i64(INT64_MIN); });
+    EXPECT_PANIC({ osc_neg_i64(INT64_MIN); });
 }
 
 /* ================================================================== */
@@ -319,75 +319,75 @@ static void test_array(void)
 {
     printf("\n[Array]\n");
 
-    bc_arena *arena = bc_arena_create(4096);
+    osc_arena *arena = osc_arena_create(4096);
 
     TEST("create and push");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 4);
-        assert(bc_array_len(arr) == 0);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
+        assert(osc_array_len(arr) == 0);
         int32_t v = 42;
-        bc_array_push(arena, arr, &v);
-        assert(bc_array_len(arr) == 1);
-        assert(*(int32_t *)bc_array_get(arr, 0) == 42);
+        osc_array_push(arena, arr, &v);
+        assert(osc_array_len(arr) == 1);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 42);
     }
     PASS();
 
     TEST("set and get");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 4);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
         int32_t values[] = {10, 20, 30};
         int i;
         for (i = 0; i < 3; i++) {
-            bc_array_push(arena, arr, &values[i]);
+            osc_array_push(arena, arr, &values[i]);
         }
         int32_t new_val = 99;
-        bc_array_set(arr, 1, &new_val);
-        assert(*(int32_t *)bc_array_get(arr, 0) == 10);
-        assert(*(int32_t *)bc_array_get(arr, 1) == 99);
-        assert(*(int32_t *)bc_array_get(arr, 2) == 30);
+        osc_array_set(arr, 1, &new_val);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 10);
+        assert(*(int32_t *)osc_array_get(arr, 1) == 99);
+        assert(*(int32_t *)osc_array_get(arr, 2) == 30);
     }
     PASS();
 
     TEST("push beyond capacity (growth)");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 2);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 2);
         int32_t i;
         for (i = 0; i < 100; i++) {
-            bc_array_push(arena, arr, &i);
+            osc_array_push(arena, arr, &i);
         }
-        assert(bc_array_len(arr) == 100);
+        assert(osc_array_len(arr) == 100);
         for (i = 0; i < 100; i++) {
-            assert(*(int32_t *)bc_array_get(arr, i) == i);
+            assert(*(int32_t *)osc_array_get(arr, i) == i);
         }
     }
     PASS();
 
     TEST("get out of bounds (negative)");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 4);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
         int32_t v = 1;
-        bc_array_push(arena, arr, &v);
-        EXPECT_PANIC({ bc_array_get(arr, -1); });
+        osc_array_push(arena, arr, &v);
+        EXPECT_PANIC({ osc_array_get(arr, -1); });
     }
 
     TEST("get out of bounds (too large)");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 4);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
         int32_t v = 1;
-        bc_array_push(arena, arr, &v);
-        EXPECT_PANIC({ bc_array_get(arr, 1); });
+        osc_array_push(arena, arr, &v);
+        EXPECT_PANIC({ osc_array_get(arr, 1); });
     }
 
     TEST("set out of bounds");
     {
-        bc_array *arr = bc_array_new(arena, (int32_t)sizeof(int32_t), 4);
+        osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
         int32_t v = 1;
-        bc_array_push(arena, arr, &v);
+        osc_array_push(arena, arr, &v);
         int32_t nv = 99;
-        EXPECT_PANIC({ bc_array_set(arr, 5, &nv); });
+        EXPECT_PANIC({ osc_array_set(arr, 5, &nv); });
     }
 
-    bc_arena_destroy(arena);
+    osc_arena_destroy(arena);
 }
 
 /* ================================================================== */
@@ -398,11 +398,11 @@ static void test_strings(void)
 {
     printf("\n[Strings]\n");
 
-    bc_arena *arena = bc_arena_create(4096);
+    osc_arena *arena = osc_arena_create(4096);
 
     TEST("from_cstr");
     {
-        bc_str s = bc_str_from_cstr("hello");
+        osc_str s = osc_str_from_cstr("hello");
         assert(s.len == 5);
         assert(memcmp(s.data, "hello", 5) == 0);
     }
@@ -410,47 +410,47 @@ static void test_strings(void)
 
     TEST("from_cstr NULL");
     {
-        bc_str s = bc_str_from_cstr(NULL);
+        osc_str s = osc_str_from_cstr(NULL);
         assert(s.len == 0);
     }
     PASS();
 
     TEST("len");
     {
-        bc_str s = bc_str_from_cstr("abc");
-        assert(bc_str_len(s) == 3);
+        osc_str s = osc_str_from_cstr("abc");
+        assert(osc_str_len(s) == 3);
     }
     PASS();
 
     TEST("eq (equal)");
     {
-        bc_str a = bc_str_from_cstr("foo");
-        bc_str b = bc_str_from_cstr("foo");
-        assert(bc_str_eq(a, b) == 1);
+        osc_str a = osc_str_from_cstr("foo");
+        osc_str b = osc_str_from_cstr("foo");
+        assert(osc_str_eq(a, b) == 1);
     }
     PASS();
 
     TEST("eq (not equal)");
     {
-        bc_str a = bc_str_from_cstr("foo");
-        bc_str b = bc_str_from_cstr("bar");
-        assert(bc_str_eq(a, b) == 0);
+        osc_str a = osc_str_from_cstr("foo");
+        osc_str b = osc_str_from_cstr("bar");
+        assert(osc_str_eq(a, b) == 0);
     }
     PASS();
 
     TEST("eq (different lengths)");
     {
-        bc_str a = bc_str_from_cstr("foo");
-        bc_str b = bc_str_from_cstr("foobar");
-        assert(bc_str_eq(a, b) == 0);
+        osc_str a = osc_str_from_cstr("foo");
+        osc_str b = osc_str_from_cstr("foobar");
+        assert(osc_str_eq(a, b) == 0);
     }
     PASS();
 
     TEST("concat");
     {
-        bc_str a = bc_str_from_cstr("hello");
-        bc_str b = bc_str_from_cstr(" world");
-        bc_str c = bc_str_concat(arena, a, b);
+        osc_str a = osc_str_from_cstr("hello");
+        osc_str b = osc_str_from_cstr(" world");
+        osc_str c = osc_str_concat(arena, a, b);
         assert(c.len == 11);
         assert(memcmp(c.data, "hello world", 11) == 0);
     }
@@ -458,9 +458,9 @@ static void test_strings(void)
 
     TEST("concat with empty");
     {
-        bc_str a = bc_str_from_cstr("hello");
-        bc_str b = bc_str_from_cstr("");
-        bc_str c = bc_str_concat(arena, a, b);
+        osc_str a = osc_str_from_cstr("hello");
+        osc_str b = osc_str_from_cstr("");
+        osc_str c = osc_str_concat(arena, a, b);
         assert(c.len == 5);
         assert(memcmp(c.data, "hello", 5) == 0);
     }
@@ -468,15 +468,15 @@ static void test_strings(void)
 
     TEST("to_cstr (null-terminated)");
     {
-        bc_str s = bc_str_from_cstr("test");
-        bc_str c = bc_str_to_cstr(arena, s);
+        osc_str s = osc_str_from_cstr("test");
+        osc_str c = osc_str_to_cstr(arena, s);
         assert(c.len == 4);
         assert(c.data[4] == '\0');
         assert(strcmp(c.data, "test") == 0);
     }
     PASS();
 
-    bc_arena_destroy(arena);
+    osc_arena_destroy(arena);
 }
 
 /* ================================================================== */
@@ -488,60 +488,60 @@ static void test_type_casts(void)
     printf("\n[Type Casts]\n");
 
     TEST("i32 to i64 (safe widening)");
-    assert(bc_i32_to_i64(42) == 42LL);
-    assert(bc_i32_to_i64(INT32_MIN) == (int64_t)INT32_MIN);
-    assert(bc_i32_to_i64(INT32_MAX) == (int64_t)INT32_MAX);
+    assert(osc_i32_to_i64(42) == 42LL);
+    assert(osc_i32_to_i64(INT32_MIN) == (int64_t)INT32_MIN);
+    assert(osc_i32_to_i64(INT32_MAX) == (int64_t)INT32_MAX);
     PASS();
 
     TEST("i64 to i32 (valid narrow)");
-    assert(bc_i64_to_i32(42LL) == 42);
-    assert(bc_i64_to_i32(-100LL) == -100);
+    assert(osc_i64_to_i32(42LL) == 42);
+    assert(osc_i64_to_i32(-100LL) == -100);
     PASS();
 
     TEST("i64 to i32 (overflow)");
-    EXPECT_PANIC({ bc_i64_to_i32((int64_t)INT32_MAX + 1); });
+    EXPECT_PANIC({ osc_i64_to_i32((int64_t)INT32_MAX + 1); });
 
     TEST("i64 to i32 (underflow)");
-    EXPECT_PANIC({ bc_i64_to_i32((int64_t)INT32_MIN - 1); });
+    EXPECT_PANIC({ osc_i64_to_i32((int64_t)INT32_MIN - 1); });
 
     TEST("i32 to f64 (safe)");
-    assert(bc_i32_to_f64(42) == 42.0);
-    assert(bc_i32_to_f64(-1) == -1.0);
+    assert(osc_i32_to_f64(42) == 42.0);
+    assert(osc_i32_to_f64(-1) == -1.0);
     PASS();
 
     TEST("i64 to f64 (may lose precision)");
-    assert(bc_i64_to_f64(42LL) == 42.0);
+    assert(osc_i64_to_f64(42LL) == 42.0);
     PASS();
 
     TEST("f64 to i32 (valid)");
-    assert(bc_f64_to_i32(42.0) == 42);
-    assert(bc_f64_to_i32(-100.9) == -100);
+    assert(osc_f64_to_i32(42.0) == 42);
+    assert(osc_f64_to_i32(-100.9) == -100);
     PASS();
 
     TEST("f64 to i32 (NaN)");
     {
         double nan_val = 0.0 / 0.0;
-        EXPECT_PANIC({ bc_f64_to_i32(nan_val); });
+        EXPECT_PANIC({ osc_f64_to_i32(nan_val); });
     }
 
     TEST("f64 to i32 (out of range)");
-    EXPECT_PANIC({ bc_f64_to_i32(3.0e10); });
+    EXPECT_PANIC({ osc_f64_to_i32(3.0e10); });
 
     TEST("f64 to i64 (valid)");
-    assert(bc_f64_to_i64(42.0) == 42LL);
-    assert(bc_f64_to_i64(-100.5) == -100LL);
+    assert(osc_f64_to_i64(42.0) == 42LL);
+    assert(osc_f64_to_i64(-100.5) == -100LL);
     PASS();
 
     TEST("f64 to i64 (NaN)");
     {
         double nan_val = 0.0 / 0.0;
-        EXPECT_PANIC({ bc_f64_to_i64(nan_val); });
+        EXPECT_PANIC({ osc_f64_to_i64(nan_val); });
     }
 
     TEST("f64 to i64 (Inf)");
     {
         double inf_val = 1.0 / 0.0;
-        EXPECT_PANIC({ bc_f64_to_i64(inf_val); });
+        EXPECT_PANIC({ osc_f64_to_i64(inf_val); });
     }
 }
 
@@ -553,11 +553,11 @@ static void test_conversions(void)
 {
     printf("\n[Conversions]\n");
 
-    bc_arena *arena = bc_arena_create(4096);
+    osc_arena *arena = osc_arena_create(4096);
 
     TEST("i32_to_str positive");
     {
-        bc_str s = bc_i32_to_str(arena, 42);
+        osc_str s = osc_i32_to_str(arena, 42);
         assert(s.len == 2);
         assert(memcmp(s.data, "42", 2) == 0);
     }
@@ -565,7 +565,7 @@ static void test_conversions(void)
 
     TEST("i32_to_str negative");
     {
-        bc_str s = bc_i32_to_str(arena, -123);
+        osc_str s = osc_i32_to_str(arena, -123);
         assert(s.len == 4);
         assert(memcmp(s.data, "-123", 4) == 0);
     }
@@ -573,7 +573,7 @@ static void test_conversions(void)
 
     TEST("i32_to_str zero");
     {
-        bc_str s = bc_i32_to_str(arena, 0);
+        osc_str s = osc_i32_to_str(arena, 0);
         assert(s.len == 1);
         assert(s.data[0] == '0');
     }
@@ -581,13 +581,13 @@ static void test_conversions(void)
 
     TEST("i32_to_str MIN");
     {
-        bc_str s = bc_i32_to_str(arena, INT32_MIN);
+        osc_str s = osc_i32_to_str(arena, INT32_MIN);
         assert(s.len == 11); /* -2147483648 */
         assert(memcmp(s.data, "-2147483648", 11) == 0);
     }
     PASS();
 
-    bc_arena_destroy(arena);
+    osc_arena_destroy(arena);
 }
 
 /* ================================================================== */
@@ -599,24 +599,24 @@ static void test_math(void)
     printf("\n[Math]\n");
 
     TEST("abs_i32 positive");
-    assert(bc_abs_i32(5) == 5);
+    assert(osc_abs_i32(5) == 5);
     PASS();
 
     TEST("abs_i32 negative");
-    assert(bc_abs_i32(-5) == 5);
+    assert(osc_abs_i32(-5) == 5);
     PASS();
 
     TEST("abs_i32 zero");
-    assert(bc_abs_i32(0) == 0);
+    assert(osc_abs_i32(0) == 0);
     PASS();
 
     TEST("abs_i32 MIN_VALUE");
-    EXPECT_PANIC({ bc_abs_i32(INT32_MIN); });
+    EXPECT_PANIC({ osc_abs_i32(INT32_MIN); });
 
     TEST("abs_f64");
-    assert(bc_abs_f64(-3.14) == 3.14);
-    assert(bc_abs_f64(2.71) == 2.71);
-    assert(bc_abs_f64(0.0) == 0.0);
+    assert(osc_abs_f64(-3.14) == 3.14);
+    assert(osc_abs_f64(2.71) == 2.71);
+    assert(osc_abs_f64(0.0) == 0.0);
     PASS();
 }
 
@@ -630,32 +630,32 @@ static void test_io(void)
 
     TEST("print and println (smoke)");
     {
-        bc_str s = bc_str_from_cstr("hello");
-        bc_print(s);
+        osc_str s = osc_str_from_cstr("hello");
+        osc_print(s);
         printf(" ");
-        bc_println(s);
+        osc_println(s);
     }
     PASS();
 
     TEST("print_i32");
-    bc_print_i32(42);
+    osc_print_i32(42);
     printf("\n");
     PASS();
 
     TEST("print_i64");
-    bc_print_i64(123456789LL);
+    osc_print_i64(123456789LL);
     printf("\n");
     PASS();
 
     TEST("print_f64");
-    bc_print_f64(3.14);
+    osc_print_f64(3.14);
     printf("\n");
     PASS();
 
     TEST("print_bool");
-    bc_print_bool(1);
+    osc_print_bool(1);
     printf(" ");
-    bc_print_bool(0);
+    osc_print_bool(0);
     printf("\n");
     PASS();
 }
@@ -670,21 +670,21 @@ static void test_result(void)
 
     TEST("construct Ok");
     {
-        bc_result_str_str r;
+        osc_result_str_str r;
         r.is_ok = 1;
-        r.value.ok = bc_str_from_cstr("success");
+        r.value.ok = osc_str_from_cstr("success");
         assert(r.is_ok == 1);
-        assert(bc_str_eq(r.value.ok, bc_str_from_cstr("success")));
+        assert(osc_str_eq(r.value.ok, osc_str_from_cstr("success")));
     }
     PASS();
 
     TEST("construct Err");
     {
-        bc_result_str_str r;
+        osc_result_str_str r;
         r.is_ok = 0;
-        r.value.err = bc_str_from_cstr("failure");
+        r.value.err = osc_str_from_cstr("failure");
         assert(r.is_ok == 0);
-        assert(bc_str_eq(r.value.err, bc_str_from_cstr("failure")));
+        assert(osc_str_eq(r.value.err, osc_str_from_cstr("failure")));
     }
     PASS();
 }
@@ -695,7 +695,7 @@ static void test_result(void)
 
 int main(void)
 {
-    printf("=== Babel-C Runtime Test Suite ===\n");
+    printf("=== Oscan Runtime Test Suite ===\n");
 
     test_arena();
     test_checked_arith_i32();

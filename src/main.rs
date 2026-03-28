@@ -51,7 +51,7 @@ fn main() {
     let path = match file_path {
         Some(p) => p,
         None => {
-            eprintln!("usage: babelc [--dump-tokens] [--dump-ast] [--run] [--emit-c] [-o output] <file.bc>");
+            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [-o output] <file.osc>");
             process::exit(1);
         }
     };
@@ -299,7 +299,7 @@ fn find_runtime_dir() -> PathBuf {
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
 fn compile_to_executable(c_code: &str, exe_path: &Path) {
-    let temp_dir = env::temp_dir().join("babelc_temp");
+    let temp_dir = env::temp_dir().join("oscan_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -312,8 +312,8 @@ fn compile_to_executable(c_code: &str, exe_path: &Path) {
     }
 
     let runtime_dir = find_runtime_dir();
-    let runtime_c = runtime_dir.join("bc_runtime.c");
-    let runtime_h = runtime_dir.join("bc_runtime.h");
+    let runtime_c = runtime_dir.join("osc_runtime.c");
+    let runtime_h = runtime_dir.join("osc_runtime.h");
     if !runtime_c.exists() || !runtime_h.exists() {
         eprintln!("error: runtime files not found in {}", runtime_dir.display());
         process::exit(1);
@@ -332,7 +332,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path) {
 }
 
 fn run_program(source_path: &str, c_code: &str) {
-    let temp_dir = env::temp_dir().join("babelc_temp");
+    let temp_dir = env::temp_dir().join("oscan_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -351,8 +351,8 @@ fn run_program(source_path: &str, c_code: &str) {
     };
 
     let runtime_dir = find_runtime_dir();
-    let runtime_c = runtime_dir.join("bc_runtime.c");
-    let runtime_h = runtime_dir.join("bc_runtime.h");
+    let runtime_c = runtime_dir.join("osc_runtime.c");
+    let runtime_h = runtime_dir.join("osc_runtime.h");
     if !runtime_c.exists() || !runtime_h.exists() {
         eprintln!("error: runtime files not found in {}", runtime_dir.display());
         process::exit(1);

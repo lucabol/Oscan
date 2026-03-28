@@ -1,5 +1,5 @@
 // EXPECT ERROR: Implicit coercion — i32 used where f64 expected without cast
-// There are no implicit type coercions in Babel-C.
+// There are no implicit type coercions in Oscan.
 
 fn! main() {
     let x: i32 = 5;

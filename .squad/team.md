@@ -22,7 +22,7 @@
 
 ## Project Context
 
-- **Project:** Babel-C — LLM-optimized minimalist programming language transpiling to C
+- **Project:** Oscan — LLM-optimized minimalist programming language transpiling to C
 - **Tech Stack:** Language design, compiler/transpiler, C99/C11 code generation, runtime (micro-lib, FFI)
 - **User:** Luca Bolognese
 - **Created:** 2026-03-27

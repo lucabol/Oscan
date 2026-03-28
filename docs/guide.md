@@ -1,12 +1,12 @@
-# Babel-C Language Guide
+# Oscan Language Guide
 
-A concise guide to writing correct Babel-C programs. For the full formal specification, see [babel-c-spec.md](spec/babel-c-spec.md).
+A concise guide to writing correct Oscan programs. For the full formal specification, see [Oscan-spec.md](spec/Oscan-spec.md).
 
 ---
 
 ## Basics
 
-Every Babel-C program needs a `fn! main()` entry point. Files use the `.bc` extension.
+Every Oscan program needs a `fn! main()` entry point. Files use the `.osc` extension.
 
 ```
 fn! main() {
