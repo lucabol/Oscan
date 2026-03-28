@@ -346,7 +346,7 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
 fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
-    let temp_dir = env::temp_dir().join("oscan_temp");
+    let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -368,8 +368,9 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
     let extra_includes = find_extra_include_dirs(&runtime_dir);
 
     let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir, &extra_includes, freestanding);
-    // Clean up temp C file
+    // Clean up temp files and directory
     let _ = fs::remove_file(&c_file);
+    let _ = fs::remove_dir(&temp_dir);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -380,7 +381,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
 }
 
 fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
-    let temp_dir = env::temp_dir().join("oscan_temp");
+    let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);

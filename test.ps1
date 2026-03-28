@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Oscan Test Runner — quiet by default, verbose on --VerboseOutput or failure
-# Usage: .\test.ps1 [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-VerboseOutput]
+# Usage: .\test.ps1 [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-SkipLibc] [-VerboseOutput]
 
 param(
     [switch]$SkipBuild,
@@ -8,6 +8,7 @@ param(
     [switch]$SkipIntegration,
     [switch]$SkipWSL,
     [switch]$SkipARM,
+    [switch]$SkipLibc,
     [switch]$VerboseOutput
 )
 
@@ -314,47 +315,53 @@ if (-not $SkipIntegration) {
         New-Item -ItemType Directory -Path "tests\build" | Out-Null
     }
 
-    # Positive tests
+    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
+
+    # Positive tests (parallel compile + run)
     Write-Phase "Windows x64 (positive)"
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (freestanding) ──" -ForegroundColor Yellow }
-    $secPass = 0; $secFail = 0; $secTotal = @(Get-ChildItem "tests\positive\*.osc").Count
-    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-        $name = $bcFile.BaseName
-        $expectedFile = "tests\expected\$name.expected"
+    $secPass = 0; $secFail = 0
+    $projectRoot = (Get-Location).Path
+    $parallelResults = Get-ChildItem "tests\positive\*.osc" | ForEach-Object -Parallel {
+        $name = $_.BaseName
+        $root = $using:projectRoot
+        $oscanExe = "$root\target\release\oscan.exe"
+        $expectedFile = "$root\tests\expected\$name.expected"
 
         if (-not (Test-Path $expectedFile)) {
-            Add-TestResult $name "win-x64" "positive" "FAIL" "missing expected file"
-            $secFail++; continue
+            return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'missing expected file' }
         }
 
         if ($name -match '^ffi') {
-            & $oscan --libc $bcFile.FullName -o "tests\build\$name.exe" 2>$null
+            & $oscanExe --libc $_.FullName -o "$root\tests\build\$name.exe" 2>$null
         } else {
-            & $oscan $bcFile.FullName -o "tests\build\$name.exe" 2>$null
+            & $oscanExe $_.FullName -o "$root\tests\build\$name.exe" 2>$null
         }
         if ($LASTEXITCODE -ne 0) {
-            Add-TestResult $name "win-x64" "positive" "FAIL" "compile error"
-            $secFail++; continue
+            return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'compile error' }
         }
 
-        $actual = & ".\tests\build\$name.exe" 2>&1 | Out-String
+        $actual = & "$root\tests\build\$name.exe" 2>&1 | Out-String
         $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
         $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
         if ($actual -eq $expected) {
-            Add-TestResult $name "win-x64" "positive" "PASS" ""
-            $secPass++
+            [PSCustomObject]@{ Name = $name; Status = 'PASS'; Detail = '' }
         } else {
-            Add-TestResult $name "win-x64" "positive" "FAIL" "output mismatch"
-            $secFail++
+            [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'output mismatch' }
         }
+    } -ThrottleLimit $throttle
+
+    foreach ($r in $parallelResults) {
+        Add-TestResult $r.Name "win-x64" "positive" $r.Status $r.Detail
+        if ($r.Status -eq 'PASS') { $secPass++ } else { $secFail++ }
     }
     if (-not $VerboseOutput) {
         $color = if ($secFail -gt 0) { "Red" } else { "Green" }
         Write-PhaseResult "$secPass passed, $secFail failed" $color
     }
 
-    # Negative tests
+    # Negative tests (sequential — fast, no compilation needed)
     Write-Phase "Negative tests"
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Negative tests ──" -ForegroundColor Yellow }
     $negPass = 0; $negFail = 0
@@ -402,40 +409,44 @@ if (-not $SkipIntegration) {
         $color = if ($vFail -gt 0) { "Red" } else { "Green" }
         Write-PhaseResult "$vPass verified, $vFail failed" $color
     }
-    # Windows libc (stdlib) tests
+    # Windows libc (stdlib) tests — parallel
+    if (-not $SkipLibc) {
     Write-Phase "Windows x64 (libc)"
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (libc/stdlib) ──" -ForegroundColor Yellow }
     $libcPass = 0; $libcFail = 0
-    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-        $name = $bcFile.BaseName
+    $libcResults = Get-ChildItem "tests\positive\*.osc" | ForEach-Object -Parallel {
+        $name = $_.BaseName
+        $root = $using:projectRoot
+        $oscanExe = "$root\target\release\oscan.exe"
 
         # Use libc-specific expected output if available, else standard
-        $libcExpected = "tests\expected_libc\$name.expected"
-        $stdExpected  = "tests\expected\$name.expected"
+        $libcExpected = "$root\tests\expected_libc\$name.expected"
+        $stdExpected  = "$root\tests\expected\$name.expected"
         $expectedFile = if (Test-Path $libcExpected) { $libcExpected } else { $stdExpected }
 
         if (-not (Test-Path $expectedFile)) {
-            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "missing expected file"
-            $libcFail++; continue
+            return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'missing expected file' }
         }
 
-        & $oscan --libc $bcFile.FullName -o "tests\build\${name}_libc.exe" 2>$null
+        & $oscanExe --libc $_.FullName -o "$root\tests\build\${name}_libc.exe" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "compile error"
-            $libcFail++; continue
+            return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'compile error' }
         }
 
-        $actual = & ".\tests\build\${name}_libc.exe" 2>&1 | Out-String
+        $actual = & "$root\tests\build\${name}_libc.exe" 2>&1 | Out-String
         $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
         $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
         if ($actual -eq $expected) {
-            Add-TestResult $name "win-x64-libc" "positive-libc" "PASS" ""
-            $libcPass++
+            [PSCustomObject]@{ Name = $name; Status = 'PASS'; Detail = '' }
         } else {
-            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "output mismatch"
-            $libcFail++
+            [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'output mismatch' }
         }
+    } -ThrottleLimit $throttle
+
+    foreach ($r in $libcResults) {
+        Add-TestResult $r.Name "win-x64-libc" "positive-libc" $r.Status $r.Detail
+        if ($r.Status -eq 'PASS') { $libcPass++ } else { $libcFail++ }
     }
     if (-not $VerboseOutput) {
         $color = if ($libcFail -gt 0) { "Red" } else { "Green" }
@@ -445,6 +456,9 @@ if (-not $SkipIntegration) {
     # Cleanup libc .obj files
     Get-ChildItem "*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
     Get-ChildItem "tests\build\*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+    } else {
+        Write-Phase "Windows x64 (libc)"; Write-PhaseResult "skipped" Yellow
+    }
 }
 
 # ══════════════════════════════════════════════════════
@@ -464,34 +478,69 @@ if (-not $SkipWSL) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
         }
 
+        # Phase 1: Transpile all .osc → .c in parallel on Windows
         Write-Phase "WSL Linux x64 (positive)"
         if ($VerboseOutput) { Write-Host ""; Write-Host "  ── WSL Positive tests (freestanding) ──" -ForegroundColor Yellow }
-        $wslPass = 0; $wslFail = 0
-        foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-            $name = $bcFile.BaseName
-            $expectedFile = "tests\expected\$name.expected"
 
+        $oscFiles = @(Get-ChildItem "tests\positive\*.osc")
+        $transpileResults = $oscFiles | ForEach-Object -Parallel {
+            $name = $_.BaseName
+            $root = $using:projectRoot
+            $oscanExe = "$root\target\release\oscan.exe"
+            if ($name -match '^ffi') {
+                & $oscanExe --libc $_.FullName -o "$root\tests\build\${name}.c" 2>$null
+            } else {
+                & $oscanExe $_.FullName -o "$root\tests\build\${name}.c" 2>$null
+            }
+            [PSCustomObject]@{ Name = $name; IsFfi = ($name -match '^ffi'); Success = ($LASTEXITCODE -eq 0) }
+        } -ThrottleLimit $throttle
+
+        # Phase 2: Generate batch bash script for compile + run
+        $bashLines = @("#!/bin/bash", "cd '$wslDir'")
+        foreach ($t in $transpileResults) {
+            if (-not $t.Success) {
+                $bashLines += "echo 'FAIL|$($t.Name)|transpile error'"
+                continue
+            }
+            $n = $t.Name
+            if ($t.IsFfi) {
+                $bashLines += "gcc -std=c99 tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl -lm 2>/dev/null"
+            } else {
+                $bashLines += "gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl 2>/dev/null"
+            }
+            $bashLines += "if [ `$? -ne 0 ]; then echo 'FAIL|$n|gcc compile error'; else"
+            $bashLines += "  ./tests/build/${n}_wsl > tests/build/${n}_wsl.out 2>&1; echo `"OK|$n|`$?`"; fi"
+        }
+
+        $bashScript = $bashLines -join "`n"
+        Set-Content "tests\build\_wsl_batch.sh" $bashScript -NoNewline
+
+        # Phase 3: Execute single WSL call
+        $batchOutput = wsl bash -c "cd '$wslDir' && bash tests/build/_wsl_batch.sh" 2>&1 | Out-String
+
+        # Phase 4: Parse results and compare outputs
+        $wslPass = 0; $wslFail = 0
+        foreach ($line in ($batchOutput -split "`n" | Where-Object { $_ -match '^(OK|FAIL)\|' })) {
+            $parts = $line.Trim() -split '\|', 3
+            $status = $parts[0]; $name = $parts[1]; $detail = $parts[2]
+
+            if ($status -eq 'FAIL') {
+                Add-TestResult $name "wsl-x64" "positive" "FAIL" $detail
+                $wslFail++; continue
+            }
+
+            # Compare output from .out file
+            $expectedFile = "tests\expected\$name.expected"
             if (-not (Test-Path $expectedFile)) {
                 Add-TestResult $name "wsl-x64" "positive" "FAIL" "missing expected file"
                 $wslFail++; continue
             }
-
-            if ($name -match '^ffi') {
-                & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
-                if ($LASTEXITCODE -ne 0) { Add-TestResult $name "wsl-x64" "positive" "FAIL" "transpile error"; $wslFail++; continue }
-                wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl -lm" 2>&1 | Out-Null
-            } else {
-                & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
-                if ($LASTEXITCODE -ne 0) { Add-TestResult $name "wsl-x64" "positive" "FAIL" "transpile error"; $wslFail++; continue }
-                wsl bash -c "cd '$wslDir' && gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
-            }
-            if ($LASTEXITCODE -ne 0) {
-                Add-TestResult $name "wsl-x64" "positive" "FAIL" "gcc compile error"
+            $outFile = "tests\build\${name}_wsl.out"
+            if (-not (Test-Path $outFile)) {
+                Add-TestResult $name "wsl-x64" "positive" "FAIL" "no output file"
                 $wslFail++; continue
             }
-
-            $actual = wsl bash -c "cd '$wslDir' && ./tests/build/${name}_wsl" 2>&1 | Out-String
-            $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+            $actual = (Get-Content $outFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
             $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
             if ($actual -eq $expected) {
@@ -507,25 +556,48 @@ if (-not $SkipWSL) {
             Write-PhaseResult "$wslPass passed, $wslFail failed" $color
         }
 
-        # WSL freestanding verification
+        # WSL freestanding verification (batch: single WSL call)
         Write-Phase "Verifying (WSL)"
         if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Freestanding verification (WSL) ──" -ForegroundColor Yellow }
         $wvPass = 0; $wvFail = 0
+        # Build a list of binaries to verify
+        $verifyNames = @()
         foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
             if ($name -match '^ffi') { continue }
-            $wslExe = "tests/build/${name}_wsl"
-            $exists = wsl bash -c "test -f '$wslDir/$wslExe' && echo yes || echo no" 2>&1 | Out-String
-            if ($exists.Trim() -ne 'yes') { continue }
+            $verifyNames += $name
+        }
+        # Generate batch verification script
+        $vBash = @("#!/bin/bash", "cd '$wslDir'")
+        foreach ($name in $verifyNames) {
+            $exe = "tests/build/${name}_wsl"
+            $vBash += "if [ -f '$exe' ]; then"
+            $vBash += "  sz=`$(stat -c%s '$exe' 2>/dev/null || echo 0)"
+            $vBash += "  fi=`$(file '$exe')"
+            $vBash += "  sc=`$(strings '$exe' | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)"
+            $vBash += "  echo `"VERIFY|$name|`$sz|`$fi|`$sc`""
+            $vBash += "fi"
+        }
+        Set-Content "tests\build\_wsl_verify.sh" ($vBash -join "`n") -NoNewline
+        $verifyOutput = wsl bash -c "cd '$wslDir' && bash tests/build/_wsl_verify.sh" 2>&1 | Out-String
 
-            $r = Test-LinuxFreestanding $wslExe $wslDir
-            Add-VerifyResult $name "wsl-x64" $r.DepCheck $r.DepDetail $r.StdlibCheck $r.Size
-            if (($r.DepCheck -ne 'FAIL') -and ($r.StdlibCheck -ne 'FAIL')) { $wvPass++ } else { $wvFail++ }
+        foreach ($line in ($verifyOutput -split "`n" | Where-Object { $_ -match '^VERIFY\|' })) {
+            $parts = $line.Trim() -split '\|', 5
+            $name = $parts[1]; $size = [int64]$parts[2]; $fileInfo = $parts[3]; $stdlibCount = [int]$parts[4]
+
+            $depCheck = "PASS"; $depDetail = "static"; $stdlibCheck = "PASS"
+            if ($fileInfo -notmatch 'statically linked' -and $fileInfo -notmatch 'not a dynamic executable') {
+                $depCheck = "FAIL"; $depDetail = "dynamic"
+            }
+            if ($stdlibCount -gt 0) { $stdlibCheck = "FAIL" }
+
+            Add-VerifyResult $name "wsl-x64" $depCheck $depDetail $stdlibCheck $size
+            if (($depCheck -ne 'FAIL') -and ($stdlibCheck -ne 'FAIL')) { $wvPass++ } else { $wvFail++ }
 
             if ($VerboseOutput) {
-                $ok = ($r.DepCheck -ne 'FAIL') -and ($r.StdlibCheck -ne 'FAIL')
+                $ok = ($depCheck -ne 'FAIL') -and ($stdlibCheck -ne 'FAIL')
                 $color = if ($ok) { "Green" } else { "Red" }
-                Write-Host ("  {0}: {1}  link={2} stdlib={3} size={4}" -f $(if ($ok) {'PASS'} else {'FAIL'}), $name, $r.DepCheck, $r.StdlibCheck, (Format-Size $r.Size)) -ForegroundColor $color
+                Write-Host ("  {0}: {1}  link={2} stdlib={3} size={4}" -f $(if ($ok) {'PASS'} else {'FAIL'}), $name, $depCheck, $stdlibCheck, (Format-Size $size)) -ForegroundColor $color
             }
         }
         if (-not $VerboseOutput) {
@@ -552,34 +624,69 @@ if (-not $SkipARM) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
         }
 
+        # Reuse .c files from WSL phase if available, otherwise transpile
         Write-Phase "ARM64 (QEMU, positive)"
         if ($VerboseOutput) { Write-Host ""; Write-Host "  ── ARM64 Positive tests (freestanding) ──" -ForegroundColor Yellow }
-        $armPass = 0; $armFail = 0
-        foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-            $name = $bcFile.BaseName
-            $expectedFile = "tests\expected\$name.expected"
 
+        $oscFiles = @(Get-ChildItem "tests\positive\*.osc")
+
+        # Transpile any missing .c files (skip if WSL phase already generated them)
+        $needTranspile = @($oscFiles | Where-Object { -not (Test-Path "tests\build\$($_.BaseName).c") })
+        if ($needTranspile.Count -gt 0) {
+            $needTranspile | ForEach-Object -Parallel {
+                $name = $_.BaseName
+                $root = $using:projectRoot
+                $oscanExe = "$root\target\release\oscan.exe"
+                if ($name -match '^ffi') {
+                    & $oscanExe --libc $_.FullName -o "$root\tests\build\${name}.c" 2>$null
+                } else {
+                    & $oscanExe $_.FullName -o "$root\tests\build\${name}.c" 2>$null
+                }
+            } -ThrottleLimit $throttle
+        }
+
+        # Generate batch bash script for ARM64 compile + run
+        $bashLines = @("#!/bin/bash", "cd '$wslDir'")
+        foreach ($bcFile in $oscFiles) {
+            $n = $bcFile.BaseName
+            if (-not (Test-Path "tests\build\$n.c")) {
+                $bashLines += "echo 'FAIL|$n|transpile error'"
+                continue
+            }
+            if ($n -match '^ffi') {
+                $bashLines += "aarch64-linux-gnu-gcc -std=c99 -static tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_arm -lm 2>/dev/null"
+            } else {
+                $bashLines += "aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding -o tests/build/${n}_arm 2>/dev/null"
+            }
+            $bashLines += "if [ `$? -ne 0 ]; then echo 'FAIL|$n|cross-compile error'; else"
+            $bashLines += "  qemu-aarch64 ./tests/build/${n}_arm > tests/build/${n}_arm.out 2>&1; echo `"OK|$n|`$?`"; fi"
+        }
+
+        Set-Content "tests\build\_arm_batch.sh" ($bashLines -join "`n") -NoNewline
+        $batchOutput = wsl bash -c "cd '$wslDir' && bash tests/build/_arm_batch.sh" 2>&1 | Out-String
+
+        # Parse results
+        $armPass = 0; $armFail = 0
+        foreach ($line in ($batchOutput -split "`n" | Where-Object { $_ -match '^(OK|FAIL)\|' })) {
+            $parts = $line.Trim() -split '\|', 3
+            $status = $parts[0]; $name = $parts[1]; $detail = $parts[2]
+
+            if ($status -eq 'FAIL') {
+                Add-TestResult $name "arm64" "positive" "FAIL" $detail
+                $armFail++; continue
+            }
+
+            $expectedFile = "tests\expected\$name.expected"
             if (-not (Test-Path $expectedFile)) {
                 Add-TestResult $name "arm64" "positive" "FAIL" "missing expected file"
                 $armFail++; continue
             }
-
-            if ($name -match '^ffi') {
-                & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
-                if ($LASTEXITCODE -ne 0) { Add-TestResult $name "arm64" "positive" "FAIL" "transpile error"; $armFail++; continue }
-                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm -lm" 2>&1 | Out-Null
-            } else {
-                & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
-                if ($LASTEXITCODE -ne 0) { Add-TestResult $name "arm64" "positive" "FAIL" "transpile error"; $armFail++; continue }
-                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
-            }
-            if ($LASTEXITCODE -ne 0) {
-                Add-TestResult $name "arm64" "positive" "FAIL" "cross-compile error"
+            $outFile = "tests\build\${name}_arm.out"
+            if (-not (Test-Path $outFile)) {
+                Add-TestResult $name "arm64" "positive" "FAIL" "no output file"
                 $armFail++; continue
             }
-
-            $actual = wsl bash -c "cd '$wslDir' && qemu-aarch64 ./tests/build/${name}_arm" 2>&1 | Out-String
-            $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+            $actual = (Get-Content $outFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
             $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
             if ($actual -eq $expected) {
@@ -595,34 +702,40 @@ if (-not $SkipARM) {
             Write-PhaseResult "$armPass passed, $armFail failed" $color
         }
 
-        # ARM64 freestanding verification
+        # ARM64 freestanding verification (batch: single WSL call)
         Write-Phase "Verifying (ARM64)"
         if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Freestanding verification (ARM64) ──" -ForegroundColor Yellow }
         $avPass = 0; $avFail = 0
+        $vBash = @("#!/bin/bash", "cd '$wslDir'")
         foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
             if ($name -match '^ffi') { continue }
-            $armExe = "tests/build/${name}_arm"
-            $exists = wsl bash -c "test -f '$wslDir/$armExe' && echo yes || echo no" 2>&1 | Out-String
-            if ($exists.Trim() -ne 'yes') { continue }
+            $exe = "tests/build/${name}_arm"
+            $vBash += "if [ -f '$exe' ]; then"
+            $vBash += "  sz=`$(stat -c%s '$exe' 2>/dev/null || echo 0)"
+            $vBash += "  fi=`$(file '$exe')"
+            $vBash += "  sc=`$(strings '$exe' | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)"
+            $vBash += "  echo `"VERIFY|$name|`$sz|`$fi|`$sc`""
+            $vBash += "fi"
+        }
+        Set-Content "tests\build\_arm_verify.sh" ($vBash -join "`n") -NoNewline
+        $verifyOutput = wsl bash -c "cd '$wslDir' && bash tests/build/_arm_verify.sh" 2>&1 | Out-String
 
-            $fileInfo = wsl bash -c "file '$wslDir/$armExe'" 2>&1 | Out-String
-            $sizeStr = wsl bash -c "stat -c%s '$wslDir/$armExe'" 2>&1 | Out-String
-            $sizeNum = [int64]($sizeStr.Trim())
+        foreach ($line in ($verifyOutput -split "`n" | Where-Object { $_ -match '^VERIFY\|' })) {
+            $parts = $line.Trim() -split '\|', 5
+            $name = $parts[1]; $size = [int64]$parts[2]; $fileInfo = $parts[3]; $stdlibCount = [int]$parts[4]
 
             $depCheck = if ($fileInfo -match 'statically linked') { "PASS" } else { "FAIL" }
             $depDetail = if ($depCheck -eq "PASS") { "static" } else { "not static" }
+            $stdlibCheck = if ($stdlibCount -gt 0) { "FAIL" } else { "PASS" }
 
-            $cnt = wsl bash -c "strings '$wslDir/$armExe' | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true" 2>&1 | Out-String
-            $stdlibCheck = if ([int]($cnt.Trim()) -gt 0) { "FAIL" } else { "PASS" }
-
-            Add-VerifyResult $name "arm64" $depCheck $depDetail $stdlibCheck $sizeNum
+            Add-VerifyResult $name "arm64" $depCheck $depDetail $stdlibCheck $size
             if (($depCheck -ne 'FAIL') -and ($stdlibCheck -ne 'FAIL')) { $avPass++ } else { $avFail++ }
 
             if ($VerboseOutput) {
                 $ok = ($depCheck -ne 'FAIL') -and ($stdlibCheck -ne 'FAIL')
                 $color = if ($ok) { "Green" } else { "Red" }
-                Write-Host ("  {0}: {1}  link={2} stdlib={3} size={4}" -f $(if ($ok) {'PASS'} else {'FAIL'}), $name, $depCheck, $stdlibCheck, (Format-Size $sizeNum)) -ForegroundColor $color
+                Write-Host ("  {0}: {1}  link={2} stdlib={3} size={4}" -f $(if ($ok) {'PASS'} else {'FAIL'}), $name, $depCheck, $stdlibCheck, (Format-Size $size)) -ForegroundColor $color
             }
         }
         if (-not $VerboseOutput) {
