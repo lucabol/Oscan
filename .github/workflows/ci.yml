@@ -501,7 +501,7 @@ jobs:
               $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             else
               "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-              $CC -std=gnu11 -ffreestanding -nostdlib -static "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             fi
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true

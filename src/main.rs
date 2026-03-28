@@ -498,14 +498,23 @@ fn compile_with_gcc_or_clang(
     if freestanding {
         // Freestanding: single TU (runtime is #included), no libc
         // Use gnu11 for GNU extensions required by l_os.h (register asm, etc.)
-        command.arg("-std=gnu11").arg("-ffreestanding");
+        // Size optimization flags matching laststanding build scripts
+        command.arg("-std=gnu11").arg("-ffreestanding")
+            .arg("-Oz")  // aggressive size optimization
+            .arg("-fno-builtin")
+            .arg("-fno-asynchronous-unwind-tables")
+            .arg("-fomit-frame-pointer")
+            .arg("-ffunction-sections")
+            .arg("-fdata-sections")
+            .arg("-s");  // strip symbols
         if cfg!(windows) {
             // Windows: link kernel32 for Win32 API (VirtualAlloc, WriteFile, etc.)
             command.arg("-lkernel32");
         } else {
             // Unix: fully standalone, no system libraries
             command.arg("-nostdlib").arg("-static")
-                .arg("-Wno-builtin-declaration-mismatch");
+                .arg("-Wno-builtin-declaration-mismatch")
+                .arg("-Wl,--gc-sections,--build-id=none");
         }
         command
             .arg(c_file)
@@ -564,9 +573,9 @@ fn compile_with_msvc(
             .collect();
 
         let bat_content = if freestanding {
-            // Freestanding: single TU, no CRT
+            // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /GS- /I\"{}\"{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS- /I\"{}\"{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
                 vcvars_path, cl_path,
                 runtime_dir.display(), extra_i, c_file.display(), exe_file.display(),
             )
@@ -609,6 +618,7 @@ fn compile_with_msvc(
             command
                 .arg("/nologo")
                 .arg("/std:c11")
+                .arg("/Os")  // optimize for size
                 .arg("/GS-")
                 .arg(format!("/I{}", runtime_dir.display()));
             for dir in extra_includes {

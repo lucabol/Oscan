@@ -423,7 +423,7 @@ if (-not $SkipWSL) {
             } else {
                 & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
                 if ($LASTEXITCODE -ne 0) { Add-TestResult $name "wsl-x64" "positive" "FAIL" "transpile error"; $wslFail++; continue }
-                wsl bash -c "cd '$wslDir' && gcc -std=gnu11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
+                wsl bash -c "cd '$wslDir' && gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
             }
             if ($LASTEXITCODE -ne 0) {
                 Add-TestResult $name "wsl-x64" "positive" "FAIL" "gcc compile error"
@@ -511,7 +511,7 @@ if (-not $SkipARM) {
             } else {
                 & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
                 if ($LASTEXITCODE -ne 0) { Add-TestResult $name "arm64" "positive" "FAIL" "transpile error"; $armFail++; continue }
-                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
             }
             if ($LASTEXITCODE -ne 0) {
                 Add-TestResult $name "arm64" "positive" "FAIL" "cross-compile error"
