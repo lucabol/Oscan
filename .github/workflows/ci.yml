@@ -261,6 +261,7 @@ jobs:
           Write-Host ""
           Write-Host "Negative: $Pass passed, $Fail failed out of $Total"
           if ($Fail -gt 0) { exit 1 }
+          exit 0
 
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (macOS)
