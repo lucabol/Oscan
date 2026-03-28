@@ -46,7 +46,7 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
 
     # Step 1: Transpile .osc -> .c
     $transpileErr = $null
-    & $Oscan $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
+    & $Oscan --libc $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL (transpile error)"
         if (Test-Path "build\$name.err") {

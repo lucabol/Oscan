@@ -22,6 +22,7 @@ fn main() {
     let mut file_path = None;
     let mut run_mode = false;
     let mut emit_c = false;
+    let mut use_libc = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -30,6 +31,7 @@ fn main() {
             "--dump-ast" => dump_ast = true,
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
+            "--libc" => use_libc = true,
             "-o" => {
                 i += 1;
                 if i < args.len() {
@@ -51,7 +53,7 @@ fn main() {
     let path = match file_path {
         Some(p) => p,
         None => {
-            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [-o output] <file.osc>");
+            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [-o output] <file.osc>");
             process::exit(1);
         }
     };
@@ -111,7 +113,8 @@ fn main() {
     };
 
     // Code generation
-    let c_code = codegen::CodeGenerator::generate(&program, &info);
+    let freestanding = !use_libc;
+    let c_code = codegen::CodeGenerator::generate(&program, &info, freestanding);
 
     // Determine the output mode:
     //   --run           → compile and execute
@@ -124,7 +127,7 @@ fn main() {
         .unwrap_or(false);
 
     if run_mode {
-        run_program(&path, &c_code);
+        run_program(&path, &c_code, freestanding);
     } else if emit_c || output_ends_in_c {
         // Emit C mode
         if let Some(out_path) = output_path {
@@ -161,7 +164,7 @@ fn main() {
                 pb
             }
         };
-        compile_to_executable(&c_code, &exe_path);
+        compile_to_executable(&c_code, &exe_path, freestanding);
     }
 }
 
@@ -312,7 +315,7 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
-fn compile_to_executable(c_code: &str, exe_path: &Path) {
+fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
     let temp_dir = env::temp_dir().join("oscan_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
@@ -334,7 +337,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path) {
     }
     let extra_includes = find_extra_include_dirs(&runtime_dir);
 
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir, &extra_includes);
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir, &extra_includes, freestanding);
     // Clean up temp C file
     let _ = fs::remove_file(&c_file);
 
@@ -346,7 +349,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path) {
     eprintln!("Compiled {}", exe_path.display());
 }
 
-fn run_program(source_path: &str, c_code: &str) {
+fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
     let temp_dir = env::temp_dir().join("oscan_temp");
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
@@ -374,7 +377,7 @@ fn run_program(source_path: &str, c_code: &str) {
     }
     let extra_includes = find_extra_include_dirs(&runtime_dir);
 
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir, &extra_includes);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir, &extra_includes, freestanding);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -398,7 +401,7 @@ fn run_program(source_path: &str, c_code: &str) {
 }
 
 /// Detect a C compiler and invoke it. Returns true on success.
-fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path, extra_includes: &[PathBuf]) -> bool {
+fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path, extra_includes: &[PathBuf], freestanding: bool) -> bool {
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
@@ -415,33 +418,54 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
 
     match &compiler {
         CCompiler::Gcc(cmd) => {
-            eprintln!("Compiling with gcc...");
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes)
+            eprintln!("Compiling with gcc{}...", if freestanding { " (freestanding)" } else { "" });
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
         }
         CCompiler::Clang(cmd) => {
-            eprintln!("Compiling with clang...");
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes)
+            eprintln!("Compiling with clang{}...", if freestanding { " (freestanding)" } else { "" });
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
         }
         CCompiler::Msvc { cl_path, vcvars } => {
+            if freestanding {
+                eprintln!("note: freestanding mode requires GCC/Clang; falling back to libc mode for MSVC");
+            }
             eprintln!("Compiling with MSVC cl.exe...");
-            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir, extra_includes)
+            // MSVC always uses libc mode; pass OSC_NOFREESTANDING to select libc headers in dual-mode code
+            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir, extra_includes, false, freestanding)
         }
     }
 }
 
 fn compile_with_gcc_or_clang(
     cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
-    extra_includes: &[PathBuf],
+    extra_includes: &[PathBuf], freestanding: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
-    command
-        .arg("-std=c99")
-        .arg(c_file)
-        .arg(runtime_c)
-        .arg(format!("-I{}", runtime_dir.display()))
-        .arg("-o")
-        .arg(exe_file)
-        .arg("-lm");
+
+    if freestanding {
+        // Freestanding: single TU (runtime is #included), no libc
+        command
+            .arg("-std=c11")
+            .arg("-ffreestanding")
+            .arg("-nostdlib")
+            .arg("-static")
+            .arg("-Wno-builtin-declaration-mismatch")
+            .arg(c_file)
+            .arg(format!("-I{}", runtime_dir.display()))
+            .arg("-o")
+            .arg(exe_file);
+    } else {
+        // libc mode: two TUs (generated + runtime), link libc + libm
+        command
+            .arg("-std=c99")
+            .arg(c_file)
+            .arg(runtime_c)
+            .arg(format!("-I{}", runtime_dir.display()))
+            .arg("-o")
+            .arg(exe_file)
+            .arg("-lm");
+    }
+
     for dir in extra_includes {
         command.arg(format!("-I{}", dir.display()));
     }
@@ -467,22 +491,36 @@ fn compile_with_gcc_or_clang(
 fn compile_with_msvc(
     cl_path: &str, vcvars: Option<&str>,
     c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
-    extra_includes: &[PathBuf],
+    extra_includes: &[PathBuf], freestanding: bool, needs_nofreestanding: bool,
 ) -> bool {
+    // When codegen emitted dual-mode headers but we're compiling with MSVC (libc),
+    // define OSC_NOFREESTANDING to select the libc path.
+    let nofree_flag = if needs_nofreestanding { " /DOSC_NOFREESTANDING" } else { "" };
+
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
         // vcvarsall.bat can set up the environment in the same cmd session.
-        // (Embedding quotes inside `cmd /c "..."` from Rust is unreliable
-        //  because Rust escapes `"` as `\"` which cmd.exe does not understand.)
         let bat_file = exe_file.with_extension("bat");
         let extra_i: String = extra_includes.iter()
             .map(|d| format!(" /I\"{}\"", d.display()))
             .collect();
-        let bat_content = format!(
-            "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /I\"{}\"{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
-            vcvars_path, cl_path,
-            runtime_dir.display(), extra_i, c_file.display(), runtime_c.display(), exe_file.display(),
-        );
+
+        let bat_content = if freestanding {
+            // Freestanding: single TU, no CRT
+            format!(
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /GS- /I\"{}\"{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
+                vcvars_path, cl_path,
+                runtime_dir.display(), extra_i, c_file.display(), exe_file.display(),
+            )
+        } else {
+            // libc mode: two TUs, default CRT
+            format!(
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11{} /I\"{}\"{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+                vcvars_path, cl_path, nofree_flag,
+                runtime_dir.display(), extra_i, c_file.display(), runtime_c.display(), exe_file.display(),
+            )
+        };
+
         if let Err(e) = fs::write(&bat_file, &bat_content) {
             eprintln!("failed to write compile script: {e}");
             return false;
@@ -508,18 +546,40 @@ fn compile_with_msvc(
     } else {
         // cl.exe already on PATH (e.g. Developer Command Prompt)
         let mut command = Command::new(cl_path);
-        command
-            .arg("/nologo")
-            .arg("/std:c11")
-            .arg(format!("/I{}", runtime_dir.display()));
-        for dir in extra_includes {
-            command.arg(format!("/I{}", dir.display()));
+
+        if freestanding {
+            command
+                .arg("/nologo")
+                .arg("/std:c11")
+                .arg("/GS-")
+                .arg(format!("/I{}", runtime_dir.display()));
+            for dir in extra_includes {
+                command.arg(format!("/I{}", dir.display()));
+            }
+            command
+                .arg(c_file)
+                .arg(format!("/Fe:{}", exe_file.display()))
+                .arg("/link")
+                .arg("/NODEFAULTLIB")
+                .arg("kernel32.lib");
+        } else {
+            command
+                .arg("/nologo")
+                .arg("/std:c11");
+            if needs_nofreestanding {
+                command.arg("/DOSC_NOFREESTANDING");
+            }
+            command.arg(format!("/I{}", runtime_dir.display()));
+            for dir in extra_includes {
+                command.arg(format!("/I{}", dir.display()));
+            }
+            command
+                .arg(c_file)
+                .arg(runtime_c)
+                .arg(format!("/Fe:{}", exe_file.display()))
+                .arg("/link");
         }
-        command
-            .arg(c_file)
-            .arg(runtime_c)
-            .arg(format!("/Fe:{}", exe_file.display()))
-            .arg("/link");
+
         let output = command.output();
         match output {
             Ok(out) => {

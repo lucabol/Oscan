@@ -148,7 +148,7 @@ if (-not $SkipIntegration) {
         }
 
         # Transpile
-        & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+        & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
             $fail++; continue
@@ -234,7 +234,7 @@ if (-not $SkipWSL) {
             }
 
             # Transpile (Windows-native oscan.exe)
-            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                 $fail++; continue
@@ -295,7 +295,7 @@ if (-not $SkipARM) {
             }
 
             # Transpile (Windows-native oscan.exe)
-            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                 $fail++; continue

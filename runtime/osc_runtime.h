@@ -32,6 +32,7 @@ typedef struct osc_arena_block {
     uint8_t *data;
     size_t   used;
     size_t   capacity;
+    size_t   alloc_size; /* total allocation size (for munmap in freestanding) */
     struct osc_arena_block *next;
 } osc_arena_block;
 

@@ -20,10 +20,11 @@ pub struct CodeGenerator {
     current_fn_return_type: Option<BcType>,
     result_types: Vec<(BcType, BcType)>,
     expected_array_elem_type: Option<BcType>,
+    freestanding: bool,
 }
 
 impl CodeGenerator {
-    pub fn generate(program: &Program, info: &SemanticInfo) -> String {
+    pub fn generate(program: &Program, info: &SemanticInfo, freestanding: bool) -> String {
         let mut cg = Self {
             out: String::new(),
             indent: 0,
@@ -37,6 +38,7 @@ impl CodeGenerator {
             current_fn_return_type: None,
             result_types: Vec::new(),
             expected_array_elem_type: None,
+            freestanding,
         };
 
         // Collect all unique Result types used in the program
@@ -171,11 +173,31 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_includes(&mut self) {
-        self.line("#include <stdint.h>");
-        self.line("#include <stdio.h>");
-        self.line("#include <stdlib.h>");
-        self.line("#include <math.h>");
-        self.line("#include \"osc_runtime.h\"");
+        if self.freestanding {
+            // Dual-mode header block: freestanding by default, libc if
+            // the compiler doesn't define OSC_FREESTANDING (e.g. MSVC fallback)
+            self.line("#ifndef OSC_NOFREESTANDING");
+            self.line("#define OSC_FREESTANDING");
+            self.line("#define L_MAINFILE");
+            self.line("#define L_WITHSNPRINTF");
+            self.line("#include \"l_os.h\"");
+            self.line("#include \"osc_runtime.h\"");
+            self.line("#include \"osc_runtime.c\"");
+            self.line("#else");
+            self.line("#include <stdint.h>");
+            self.line("#include <stdio.h>");
+            self.line("#include <stdlib.h>");
+            self.line("#include <math.h>");
+            self.line("#include \"osc_runtime.h\"");
+            self.line("#endif");
+        } else {
+            // libc mode: standard headers, runtime linked separately
+            self.line("#include <stdint.h>");
+            self.line("#include <stdio.h>");
+            self.line("#include <stdlib.h>");
+            self.line("#include <math.h>");
+            self.line("#include \"osc_runtime.h\"");
+        }
         self.blank();
     }
 

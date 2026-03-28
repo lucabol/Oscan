@@ -67,7 +67,7 @@ jobs:
             fi
 
             # Transpile .osc → .c
-            if ! "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+            if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — transpile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -117,7 +117,7 @@ jobs:
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -192,7 +192,7 @@ jobs:
             }
 
             # Transpile .osc -> .c
-            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
+            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - transpile error"
               if (Test-Path "tests\build\$name.err") {
@@ -252,7 +252,7 @@ jobs:
             $name = $bcFile.BaseName
             $Total++
 
-            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -eq 0) {
               Write-Host "FAIL: $name - should have been rejected"
               $Fail++
@@ -324,7 +324,7 @@ jobs:
             fi
 
             # Transpile .osc → .c
-            if ! "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
+            if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — transpile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -374,7 +374,7 @@ jobs:
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -424,7 +424,7 @@ jobs:
             TOTAL=$((TOTAL + 1))
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
-            "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+            "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
             $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true

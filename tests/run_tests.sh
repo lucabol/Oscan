@@ -46,7 +46,7 @@ for osc_file in positive/*.osc; do
     fi
 
     # Step 1: Transpile .osc → .c
-    if ! "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
+    if ! "$OSCAN" --libc "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
         echo "FAIL (transpile error)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
@@ -89,7 +89,7 @@ for osc_file in negative/*.osc; do
     TOTAL=$((TOTAL + 1))
     echo -n "  Testing reject $name... "
 
-    if "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
+    if "$OSCAN" --libc "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
         echo "FAIL (should have been rejected)"
         FAIL=$((FAIL + 1))
     else

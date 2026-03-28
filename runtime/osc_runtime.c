@@ -1,14 +1,23 @@
 /*
  * osc_runtime.c — Oscan Runtime Implementation
+ *
+ * Supports two modes:
+ *   - Freestanding (OSC_FREESTANDING defined): uses l_os.h, no libc dependency.
+ *     In this mode, l_os.h is already included by the main TU before this file.
+ *     Its macro redirects (strlen→l_strlen, memcpy→l_memcpy, exit→l_exit, etc.)
+ *     are active, so most code works unchanged.
+ *   - libc mode (default): uses standard C library headers.
  */
 
 #include "osc_runtime.h"
 
+#ifndef OSC_FREESTANDING
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#endif
 
 /* Global arena pointer — set by generated main() */
 osc_arena *osc_global_arena = NULL;
@@ -19,16 +28,49 @@ osc_arena *osc_global_arena = NULL;
 
 void osc_panic(const char *message, const char *file, int line)
 {
+#ifdef OSC_FREESTANDING
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf), "panic at %s:%d: %s\n", file, line, message);
+    if (n > 0) {
+        size_t wlen = (size_t)n;
+        if (wlen > sizeof(buf) - 1) wlen = sizeof(buf) - 1;
+        write(L_STDERR, buf, wlen);
+    }
+    exit(1);
+#else
     fprintf(stderr, "panic at %s:%d: %s\n", file, line, message);
     exit(1);
+#endif
 }
 
 /* ================================================================== */
 /*  Arena allocator (linked-list of blocks — pointers never move)      */
 /* ================================================================== */
 
+#ifdef OSC_FREESTANDING
+#define OSC_PAGE_SIZE ((size_t)4096)
+#define OSC_PAGE_ROUND(n) (((n) + OSC_PAGE_SIZE - 1) & ~(OSC_PAGE_SIZE - 1))
+#endif
+
 static osc_arena_block *osc_arena_block_new(size_t capacity)
 {
+#ifdef OSC_FREESTANDING
+    /* Single mmap: [osc_arena_block struct | data ...] */
+    size_t total = OSC_PAGE_ROUND(sizeof(osc_arena_block) + capacity);
+    void *mem = l_mmap(0, total,
+                       L_PROT_READ | L_PROT_WRITE,
+                       L_MAP_PRIVATE | L_MAP_ANONYMOUS, -1, 0);
+    if (mem == L_MAP_FAILED) {
+        osc_panic("failed to mmap arena block", __FILE__, __LINE__);
+    }
+    osc_arena_block *block = (osc_arena_block *)mem;
+    block->data       = (uint8_t *)mem + sizeof(osc_arena_block);
+    block->used       = 0;
+    block->capacity   = total - sizeof(osc_arena_block);
+    block->alloc_size = total;
+    block->next       = NULL;
+    return block;
+#else
     osc_arena_block *block = (osc_arena_block *)malloc(sizeof(osc_arena_block));
     if (!block) {
         osc_panic("failed to allocate arena block struct", __FILE__, __LINE__);
@@ -38,10 +80,12 @@ static osc_arena_block *osc_arena_block_new(size_t capacity)
         free(block);
         osc_panic("failed to allocate arena block data", __FILE__, __LINE__);
     }
-    block->used     = 0;
-    block->capacity = capacity;
-    block->next     = NULL;
+    block->used       = 0;
+    block->capacity   = capacity;
+    block->alloc_size = 0;
+    block->next       = NULL;
     return block;
+#endif
 }
 
 osc_arena *osc_arena_create(size_t initial_capacity)
@@ -51,10 +95,21 @@ osc_arena *osc_arena_create(size_t initial_capacity)
     if (initial_capacity == 0) {
         initial_capacity = OSC_ARENA_DEFAULT_CAPACITY;
     }
+#ifdef OSC_FREESTANDING
+    size_t arena_alloc = OSC_PAGE_ROUND(sizeof(osc_arena));
+    void *mem = l_mmap(0, arena_alloc,
+                       L_PROT_READ | L_PROT_WRITE,
+                       L_MAP_PRIVATE | L_MAP_ANONYMOUS, -1, 0);
+    if (mem == L_MAP_FAILED) {
+        osc_panic("failed to mmap arena struct", __FILE__, __LINE__);
+    }
+    arena = (osc_arena *)mem;
+#else
     arena = (osc_arena *)malloc(sizeof(osc_arena));
     if (!arena) {
         osc_panic("failed to allocate arena struct", __FILE__, __LINE__);
     }
+#endif
     arena->head       = osc_arena_block_new(initial_capacity);
     arena->current    = arena->head;
     arena->block_size = initial_capacity;
@@ -117,13 +172,21 @@ void osc_arena_destroy(osc_arena *arena)
         osc_arena_block *block = arena->head;
         while (block) {
             osc_arena_block *next = block->next;
+#ifdef OSC_FREESTANDING
+            l_munmap(block, block->alloc_size);
+#else
             free(block->data);
             free(block);
+#endif
             block = next;
         }
         arena->head    = NULL;
         arena->current = NULL;
+#ifdef OSC_FREESTANDING
+        l_munmap(arena, OSC_PAGE_ROUND(sizeof(osc_arena)));
+#else
         free(arena);
+#endif
     }
 }
 
@@ -444,6 +507,150 @@ osc_str osc_str_to_cstr(osc_arena *arena, osc_str s)
 /*  Micro-lib I/O                                                      */
 /* ================================================================== */
 
+#ifdef OSC_FREESTANDING
+
+/* Helper: write a buffer to stdout */
+static void osc_write_stdout(const char *buf, size_t len)
+{
+    if (len > 0) write(L_STDOUT, buf, len);
+}
+
+void osc_print(osc_str s)
+{
+    if (s.len > 0) write(L_STDOUT, s.data, (size_t)s.len);
+}
+
+void osc_println(osc_str s)
+{
+    if (s.len > 0) write(L_STDOUT, s.data, (size_t)s.len);
+    write(L_STDOUT, "\n", 1);
+}
+
+void osc_print_i32(int32_t n)
+{
+    char buf[16];
+    int len = snprintf(buf, sizeof(buf), "%d", (int)n);
+    if (len > 0) osc_write_stdout(buf, (size_t)len);
+}
+
+void osc_print_i64(int64_t n)
+{
+    char buf[24];
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
+    if (len > 0) osc_write_stdout(buf, (size_t)len);
+}
+
+/* Fixed-point float formatting (6 decimal places, trailing zeros trimmed) */
+static void osc_format_f64(char *buf, size_t bufsz, double n)
+{
+    size_t pos = 0;
+
+    /* NaN */
+    if (n != n) {
+        buf[0] = 'N'; buf[1] = 'a'; buf[2] = 'N'; buf[3] = '\0';
+        return;
+    }
+
+    /* Negative */
+    if (n < 0.0) {
+        buf[pos++] = '-';
+        n = -n;
+    }
+
+    /* Very large — use integer-only representation */
+    if (n >= 1e18) {
+        /* Format as large integer (approximate) */
+        unsigned long long ipart = (unsigned long long)n;
+        pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
+        buf[pos] = '\0';
+        return;
+    }
+
+    /* Integer part */
+    unsigned long long ipart = (unsigned long long)n;
+    double frac = n - (double)ipart;
+
+    pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
+
+    /* Fractional part: 6 digits */
+    buf[pos++] = '.';
+    {
+        int i;
+        for (i = 0; i < 6 && pos < bufsz - 1; i++) {
+            frac *= 10.0;
+            int digit = (int)frac;
+            if (digit > 9) digit = 9;
+            buf[pos++] = (char)('0' + digit);
+            frac -= (double)digit;
+        }
+    }
+    buf[pos] = '\0';
+
+    /* Trim trailing zeros (keep at least "X.0") */
+    {
+        int end = (int)pos - 1;
+        while (end > 0 && buf[end] == '0') end--;
+        if (buf[end] == '.') end++; /* keep one digit after dot */
+        buf[end + 1] = '\0';
+    }
+}
+
+void osc_print_f64(double n)
+{
+    char buf[64];
+    osc_format_f64(buf, sizeof(buf), n);
+    osc_write_stdout(buf, strlen(buf));
+}
+
+void osc_print_bool(uint8_t b)
+{
+    if (b) {
+        write(L_STDOUT, "true", 4);
+    } else {
+        write(L_STDOUT, "false", 5);
+    }
+}
+
+osc_result_str_str osc_read_line(osc_arena *arena)
+{
+    osc_result_str_str result;
+    char              buf[4096];
+    size_t            pos = 0;
+
+    /* Read one byte at a time until newline or error */
+    while (pos < sizeof(buf) - 1) {
+        ssize_t n = read(L_STDIN, &buf[pos], 1);
+        if (n <= 0) {
+            if (pos == 0) {
+                result.is_ok     = 0;
+                result.value.err = osc_str_from_cstr("failed to read line from stdin");
+                return result;
+            }
+            break;
+        }
+        if (buf[pos] == '\n') break;
+        pos++;
+    }
+    buf[pos] = '\0';
+
+    /* Strip trailing CR */
+    if (pos > 0 && buf[pos - 1] == '\r') {
+        buf[--pos] = '\0';
+    }
+
+    {
+        char *copy = (char *)osc_arena_alloc(arena, pos + 1);
+        memcpy(copy, buf, pos + 1);
+
+        result.is_ok          = 1;
+        result.value.ok.data  = copy;
+        result.value.ok.len   = (int32_t)pos;
+    }
+    return result;
+}
+
+#else /* libc mode */
+
 void osc_print(osc_str s)
 {
     if (s.len > 0) {
@@ -529,6 +736,8 @@ osc_result_str_str osc_read_line(osc_arena *arena)
     return result;
 }
 
+#endif /* OSC_FREESTANDING */
+
 /* ================================================================== */
 /*  Type-cast functions                                                */
 /* ================================================================== */
@@ -591,7 +800,11 @@ osc_str osc_i32_to_str(osc_arena *arena, int32_t n)
     int    written;
     char  *copy;
 
+#ifdef OSC_FREESTANDING
+    written = snprintf(buf, sizeof(buf), "%d", (int)n);
+#else
     written = snprintf(buf, sizeof(buf), "%" PRId32, n);
+#endif
     if (written < 0 || (size_t)written >= sizeof(buf)) {
         OSC_PANIC("i32_to_str: snprintf failed");
     }
@@ -617,5 +830,9 @@ int32_t osc_abs_i32(int32_t n)
 
 double osc_abs_f64(double n)
 {
+#ifdef OSC_FREESTANDING
+    return n < 0.0 ? -n : n;
+#else
     return fabs(n);
+#endif
 }
