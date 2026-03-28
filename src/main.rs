@@ -289,7 +289,8 @@ fn find_msvc_cl() -> Option<(String, Option<String>)> {
 }
 
 /// Detect the first available C compiler in priority order:
-/// gcc → clang → cl.exe (PATH) → cl.exe (Visual Studio installation).
+/// gcc → clang (PATH) → VS-bundled clang → cl.exe (PATH) → cl.exe (VS installation).
+/// Clang is preferred over MSVC because it compiles significantly faster.
 fn find_c_compiler() -> Option<CCompiler> {
     if command_exists("gcc") {
         return Some(CCompiler::Gcc("gcc".to_string()));
@@ -298,6 +299,9 @@ fn find_c_compiler() -> Option<CCompiler> {
         return Some(CCompiler::Clang("clang".to_string()));
     }
     if cfg!(windows) {
+        if let Some(clang_path) = find_vs_clang() {
+            return Some(CCompiler::Clang(clang_path));
+        }
         if command_exists("cl.exe") {
             return Some(CCompiler::Msvc { cl_path: "cl.exe".to_string(), vcvars: None });
         }
@@ -530,8 +534,12 @@ fn compile_with_gcc_or_clang(
             .arg(runtime_c)
             .arg(format!("-I{}", runtime_dir.display()))
             .arg("-o")
-            .arg(exe_file)
-            .arg("-lm");
+            .arg(exe_file);
+        // On Windows, math functions live in ucrt (no separate libm);
+        // -lm is only needed on Unix.
+        if !cfg!(windows) {
+            command.arg("-lm");
+        }
     }
 
     for dir in extra_includes {
