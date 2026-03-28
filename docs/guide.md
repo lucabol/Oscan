@@ -34,6 +34,7 @@ fn! main() {
 | `f64`  | 64-bit float                 | `3.14`, `0.0`           |
 | `bool` | Boolean                      | `true`, `false`         |
 | `str`  | Immutable string (UTF-8)     | `"hello"`, `"line\n"`   |
+| `unit` | Void equivalent (0 bits)     | `()`                    |
 
 - Integer literals are `i32` by default. Use `as i64` for i64.
 - Float literals must have digits on both sides: `0.5` not `.5`.
@@ -102,7 +103,7 @@ fn! greet(name: str) {
 **Rules:**
 - `fn` cannot call `fn!` or `extern` functions — compile error if it tries.
 - `fn!` can call anything.
-- `main` must be `fn!`.
+- `main` must be `fn!`. It can return `unit` (implicitly) or `Result<unit, str>` (explicit error handling).
 - Functions without `->` return unit (no value).
 - The last expression in the body (without `;`) is the return value.
 - `return` is available for early exit.
@@ -117,6 +118,19 @@ fn! main() {
 }
 
 fn compute(x: i32) -> i32 { x * 2 }
+```
+
+### Parameters and Passing Semantics
+
+All parameters are passed by value and are immutable inside the function. There is no `mut` parameter syntax. If you need to modify a parameter or pass a mutable reference, bind it to a local `let mut`:
+
+```
+fn process(arr: [i32]) {
+    // arr is immutable; you cannot call push(arr, val)
+    // To work with a mutable copy, create a local binding:
+    let mut local_arr: [i32] = arr;
+    push(local_arr, 99);   // OK
+}
 ```
 
 ---
@@ -140,6 +154,8 @@ fn! main() {
     q.x = 5.0;                 // field mutation (binding must be mut)
 }
 ```
+
+**Field order in struct literals does not need to match declaration order.** You can write `Point { y: 2.0, x: 1.0 }` and it will work.
 
 ---
 
@@ -166,6 +182,19 @@ fn area(s: Shape) -> f64 {
 ```
 
 Enum variants are always qualified: `Shape::Circle(5.0)`, never just `Circle(5.0)`.
+
+### Recursive Data Structures
+
+To define recursive structures (e.g., tree nodes), use dynamic arrays for indirection:
+
+```
+enum Tree {
+    Leaf(i32),
+    Node([Tree]),     // array of Tree nodes
+}
+```
+
+This works because array elements are allocated indirectly through the array's backing buffer, avoiding infinite type sizes.
 
 ---
 
@@ -343,12 +372,24 @@ print_bool(str_eq(a, b));        // false
 
 String escape sequences: `\n` (newline), `\t` (tab), `\r` (carriage return), `\\`, `\"`, `\0`.
 
----
+### String Functions (Pure)
+
+| Function                          | Description              |
+|-----------------------------------|--------------------------|
+| `str_len(s: str) -> i32`         | String length            |
+| `str_eq(a: str, b: str) -> bool` | String equality          |
+
+### String Functions (Impure)
+
+| Function                          | Description                              |
+|-----------------------------------|------------------------------------------|
+| `str_concat(a: str, b: str) -> str` | Concatenate strings (allocates)      |
+| `str_to_cstr(s: str) -> str`      | Convert to C-compatible null-terminated string (FFI) |
 
 ## Operators
 
 ### Arithmetic
-`+`, `-`, `*`, `/`, `%` (remainder), unary `-`
+`+`, `-`, `*`, `/`, `%` (remainder, integers only), unary `-`
 
 ### Comparison
 `==`, `!=`, `<`, `>`, `<=`, `>=`
@@ -400,13 +441,9 @@ Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`) are supported in FFI s
 | `print_bool(b: bool)`          | Print bool                   |
 | `read_line() -> Result<str, str>` | Read a line from stdin    |
 
-### String (all `fn`)
+### String (split into Pure and Impure)
 
-| Function                          | Description              |
-|-----------------------------------|--------------------------|
-| `str_len(s: str) -> i32`         | String length            |
-| `str_eq(a: str, b: str) -> bool` | String equality          |
-| `str_concat(a: str, b: str) -> str` | Concatenate strings   |
+See the **Strings** section above for the complete string function tables.
 
 ### Math (all `fn`)
 
@@ -416,20 +453,22 @@ Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`) are supported in FFI s
 | `abs_f64(n: f64) -> f64`          | Absolute value          |
 | `mod_i32(a: i32, b: i32) -> i32`  | Integer modulo          |
 
-### Conversion
+### Conversion (Impure)
 
 | Function                            | Description             |
 |-------------------------------------|-------------------------|
-| `i32_to_str(n: i32) -> str`        | Integer to string       |
-| `i64_to_str(n: i64) -> str`        | Integer to string       |
-| `f64_to_str(n: f64) -> str`        | Float to string         |
-| `str_to_i32(s: str) -> Result<i32, str>` | Parse string to int |
+| `i32_to_str(n: i32) -> str`        | Integer to string (allocates) |
 
-### Array (all `fn!`)
+### Array Functions (Pure)
 
 | Function                   | Description                |
 |----------------------------|----------------------------|
 | `len(arr) -> i32`          | Array length               |
+
+### Array Functions (Impure)
+
+| Function                   | Description                |
+|----------------------------|----------------------------|
 | `push(arr, elem)`          | Append to dynamic array    |
 
 ### Memory
@@ -465,6 +504,6 @@ let x: i32 = 1;
 5. **No methods.** All functions are free-standing. Use `area(shape)`, not `shape.area()`.
 6. **No generics** except the built-in `Result<T, E>`.
 7. **No string interpolation.** Use `str_concat` and conversion functions.
-8. **Semicolons after control flow.** `if`/`while`/`for`/`match` used as statements need a trailing `;`.
+8. **Semicolons after control flow (optional).** `if`/`while`/`for`/`match` used as statements may have a trailing `;` but it is not required.
 9. **Integer literals are `i32`.** For `i64`, write `42 as i64`.
 10. **Panics are for bugs.** Overflow, out-of-bounds, division by zero panic at runtime. Expected failures use `Result`.

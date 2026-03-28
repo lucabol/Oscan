@@ -27,7 +27,7 @@
 
 ## 1. Keywords & Tokens
 
-### 1.1 Keywords (18 total)
+### 1.1 Reserved Words (21 total)
 
 | Keyword   | Purpose                                      |
 |-----------|----------------------------------------------|
@@ -53,7 +53,7 @@
 | `true`    | Boolean literal                              |
 | `false`   | Boolean literal                              |
 
-**Note:** `true` and `false` are reserved keywords, not identifiers. Total reserved words: 21 (18 keywords + `true` + `false` + `_` wildcard pattern). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere.
+**Note:** The table above lists 21 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
 
 ### 1.2 Operators and Precedence
 
@@ -61,10 +61,11 @@ Precedence from **highest** (tightest binding) to **lowest**:
 
 | Prec | Operator(s)            | Associativity | Description                    |
 |------|------------------------|---------------|--------------------------------|
-| 10   | `(` `)` (grouping)    | —             | Parenthesized expression       |
-| 9    | `f(args)` (call)      | Left          | Function call                  |
-| 9    | `a[i]` (index)        | Left          | Array indexing                 |
-| 9    | `a.field` (access)    | Left          | Field access                   |
+| 11   | `(` `)` (grouping)    | —             | Parenthesized expression       |
+| 10   | `f(args)` (call)      | Left          | Function call                  |
+| 10   | `a[i]` (index)        | Left          | Array indexing                 |
+| 10   | `a.field` (access)    | Left          | Field access                   |
+| 9    | `as`                  | Left          | Type cast (e.g., `x as i64`)  |
 | 8    | `not`                 | Prefix        | Logical negation               |
 | 8    | `-` (unary)           | Prefix        | Arithmetic negation            |
 | 7    | `*` `/` `%`           | Left          | Multiplication, division, remainder |
@@ -198,7 +199,7 @@ return_type      = '->' type ;
 
 (* === Struct Declaration === *)
 
-struct_decl      = 'struct' IDENT '{' field_list? '}' ;
+struct_decl      = 'struct' IDENT '{' field_list? '}' ;  (* empty structs are permitted; see §4.3 *)
 field_list       = field (',' field)* ','? ;
 field            = IDENT ':' type ;
 
@@ -245,8 +246,8 @@ stmt             = let_stmt
 let_stmt         = 'let' 'mut'? IDENT ':' type '=' expr ';' ;
 assign_stmt      = place '=' expr ';' ;
 expr_stmt        = expr ';' ;
-while_stmt       = 'while' expr block ;
-for_stmt         = 'for' IDENT 'in' expr '..' expr block ;
+while_stmt       = 'while' expr block ';'? ;
+for_stmt         = 'for' IDENT 'in' expr '..' expr block ';'? ;
 return_stmt      = 'return' expr? ';' ;
 
 place            = IDENT ( '.' IDENT | '[' expr ']' )* ;
@@ -288,7 +289,7 @@ block_expr       = block ;
 if_expr          = 'if' expr block ('else' (if_expr | block))? ;
 match_expr       = 'match' expr '{' match_arm+ '}' ;
 match_arm        = pattern '=>' expr ','  ;
-try_expr         = 'try' postfix_expr '(' arg_list? ')' ;
+try_expr         = 'try' IDENT ('.' IDENT)* '(' arg_list? ')' ;
 
 array_literal    = '[' (expr (',' expr)* ','?)? ']' ;
 
@@ -304,7 +305,7 @@ pattern          = '_'
                  | literal_pattern
                  | enum_pattern ;
 
-literal_pattern  = INT_LIT | FLOAT_LIT | STRING_LIT | 'true' | 'false' ;
+literal_pattern  = '-'? (INT_LIT | FLOAT_LIT) | STRING_LIT | 'true' | 'false' ;
 enum_pattern     = IDENT '::' IDENT ('(' pattern_list ')')? ;
 pattern_list     = pattern (',' pattern)* ','? ;
 ```
@@ -317,9 +318,11 @@ pattern_list     = pattern (',' pattern)* ','? ;
 
 3. **Trailing commas:** Allowed everywhere lists appear (parameters, arguments, fields, variants, match arms). This improves LLM generation consistency.
 
-4. **Semicolons:** Required on all statements. The last expression in a block (the "tail expression") does NOT have a semicolon — it becomes the block's value. If the block ends with a semicolon, the block has type `unit`.
+4. **Semicolons:** Required on all statements. The last expression in a block (the "tail expression") does NOT have a semicolon — it becomes the block's value. If the block ends with a semicolon, the block has type `unit`. **Exception:** Trailing semicolons are optional for `while`, `for`, `if`, and `match` when used as statements (since these constructs end with a closing `}`). The parser accepts the semicolon if present but does not require it.
 
-5. **`try` syntax:** `try` is a prefix on a function call expression. `try foo(x)` calls `foo(x)` which must return `Result<T, E>`, and either unwraps to `T` or causes an early return of the error. The enclosing function must also return `Result<_, E>` with a compatible error type.
+5. **`try` syntax:** `try` is a prefix on a function call. The grammar restricts `try` to a dotted name path followed by arguments: `try foo(x)` or `try obj.method(x)`. This avoids ambiguity with `postfix_expr` greedily consuming the call suffix. `try foo(x)` calls `foo(x)` which must return `Result<T, E>`, and either unwraps to `T` or causes an early return of the error. The enclosing function must also return `Result<_, E>` with a compatible error type.
+
+6. **Negative literal patterns:** Match patterns allow an optional leading `-` on integer and float literals (e.g., `match x { -1 => "neg", _ => "other" }`). The `-` is part of the pattern syntax, not a unary operator.
 
 ---
 
@@ -384,6 +387,7 @@ enum Result {
 
 But it is special-cased in the compiler for `try` support.
 
+- `Result` is a **reserved type name**. Users cannot define `struct Result { ... }` or `enum Result { ... }` — doing so is a compile error.
 - `Result::Ok(value)` constructs the success variant.
 - `Result::Err(error)` constructs the error variant.
 - You cannot access the inner value without `match` or `try`. There is no `.ok` field, `.err` field, or `.unwrap()` method.
@@ -547,6 +551,7 @@ struct Color {
 - Constructed with struct literal syntax: `Color { r: 255, g: 0, b: 0 }`.
 - All fields must be specified in the literal (no defaults).
 - Field order in the literal does not need to match declaration order.
+- **Empty structs** (`struct Void {}`) are grammatically valid. An empty struct has a distinct nominal type and is constructed with `Void {}`. Its runtime size is implementation-defined (typically 0 or 1 byte in the generated C).
 
 ### 4.4 Enum Declarations
 
@@ -590,7 +595,7 @@ All arithmetic is **checked for overflow** at runtime.
 | `+`      | i32, i64, f64  | Same        | Runtime panic (integer); IEEE 754 (float) |
 | `-`      | i32, i64, f64  | Same        | Runtime panic (integer); IEEE 754 (float) |
 | `*`      | i32, i64, f64  | Same        | Runtime panic (integer); IEEE 754 (float) |
-| `/`      | i32, i64, f64  | Same        | Panic on division by zero     |
+| `/`      | i32, i64, f64  | Same        | Panic on division by zero (integer); IEEE 754 (float) |
 | `%`      | i32, i64       | Same        | Panic on division by zero     |
 | `-` (unary) | i32, i64, f64 | Same      | Panic on `MIN_VALUE` negate (integer) |
 
@@ -924,7 +929,7 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 
 3. **Deallocation:** The arena is freed in bulk when the program exits. For long-running programs, the programmer can use `arena_reset()` from the micro-lib to reclaim all arena memory (invalidating all dynamic arrays — the programmer must ensure no references are used after reset).
 
-4. **Stack allocation:** Primitives, fixed-size arrays, and small structs are stack-allocated. The compiler decides based on size.
+4. **Stack allocation:** Primitives, fixed-size arrays, and small structs are stack-allocated. The threshold for "small" is implementation-defined; the compiler determines placement based on size. This is an optimization detail that does not affect program semantics.
 
 ### 8.3 What the LLM Writes
 
@@ -1085,8 +1090,10 @@ fn! push(arr: [i32], val: i32)             // Append to dynamic array (generic i
 ### 10.5 Conversion Functions (1)
 
 ```
-fn i32_to_str(n: i32) -> str               // Convert integer to string representation
+fn! i32_to_str(n: i32) -> str              // Convert integer to string representation (allocates on arena)
 ```
+
+**Note:** `i32_to_str` is `fn!` because it returns a `str`, which requires arena allocation. By the same logic as `str_concat`, any function that allocates on the arena is side-effecting.
 
 ### 10.6 Memory Functions (1)
 
