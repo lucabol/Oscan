@@ -113,7 +113,13 @@ fn main() {
     };
 
     // Code generation
-    let freestanding = !use_libc;
+    // macOS: l_os.h uses Linux syscalls for Unix; freestanding is not possible on macOS
+    let freestanding = if !use_libc && cfg!(target_os = "macos") {
+        eprintln!("note: freestanding mode not supported on macOS; using libc mode");
+        false
+    } else {
+        !use_libc
+    };
     let c_code = codegen::CodeGenerator::generate(&program, &info, freestanding);
 
     // Determine the output mode:
@@ -442,10 +448,26 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
 
     match &compiler {
         CCompiler::Gcc(cmd) => {
+            // On Windows, MinGW GCC from PATH may not work with l_os.h freestanding;
+            // prefer VS-bundled clang which is MSVC-compatible
+            if freestanding && cfg!(windows) {
+                if let Some(clang_path) = find_vs_clang() {
+                    eprintln!("Compiling with VS clang (freestanding)...");
+                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                }
+            }
             eprintln!("Compiling with gcc{}...", if freestanding { " (freestanding)" } else { "" });
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
         }
         CCompiler::Clang(cmd) => {
+            // On Windows, clang from PATH (e.g. MSYS2) may lack MSVC compat;
+            // prefer VS-bundled clang for freestanding
+            if freestanding && cfg!(windows) {
+                if let Some(clang_path) = find_vs_clang() {
+                    eprintln!("Compiling with VS clang (freestanding)...");
+                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                }
+            }
             eprintln!("Compiling with clang{}...", if freestanding { " (freestanding)" } else { "" });
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
         }
@@ -475,7 +497,8 @@ fn compile_with_gcc_or_clang(
 
     if freestanding {
         // Freestanding: single TU (runtime is #included), no libc
-        command.arg("-std=c11").arg("-ffreestanding");
+        // Use gnu11 for GNU extensions required by l_os.h (register asm, etc.)
+        command.arg("-std=gnu11").arg("-ffreestanding");
         if cfg!(windows) {
             // Windows: link kernel32 for Win32 API (VirtualAlloc, WriteFile, etc.)
             command.arg("-lkernel32");

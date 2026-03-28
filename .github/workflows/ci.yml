@@ -292,7 +292,7 @@ jobs:
       - name: Run unit tests (53 tests)
         run: cargo test
 
-      - name: Integration tests — positive (freestanding)
+      - name: Integration tests — positive (libc — freestanding not supported on macOS)
         shell: bash
         run: |
           set -euo pipefail
@@ -303,33 +303,28 @@ jobs:
 
           mkdir -p tests/build
 
-          echo "=== Positive Integration Tests (macOS/Clang, freestanding) ==="
+          echo "=== Positive Integration Tests (macOS/Clang, libc) ==="
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
-            expected="tests/expected/${name}.expected"
             TOTAL=$((TOTAL + 1))
 
-            if [ ! -f "$expected" ]; then
+            # Use libc-specific expected output if available, otherwise default
+            if [ -f "tests/expected_libc/${name}.expected" ]; then
+              expected="tests/expected_libc/${name}.expected"
+            elif [ -f "tests/expected/${name}.expected" ]; then
+              expected="tests/expected/${name}.expected"
+            else
               echo "FAIL: $name — missing expected file"
               FAIL=$((FAIL + 1))
               continue
             fi
 
-            # FFI tests need libc
-            if echo "$name" | grep -q '^ffi'; then
-              if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
-                echo "FAIL: $name — compile error (libc)"
-                cat "tests/build/${name}.err"
-                FAIL=$((FAIL + 1))
-                continue
-              fi
-            else
-              if ! "$oscan" "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
-                echo "FAIL: $name — compile error (freestanding)"
-                cat "tests/build/${name}.err"
-                FAIL=$((FAIL + 1))
-                continue
-              fi
+            # All tests use --libc on macOS
+            if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+              echo "FAIL: $name — compile error (libc)"
+              cat "tests/build/${name}.err"
+              FAIL=$((FAIL + 1))
+              continue
             fi
 
             # Run and compare
@@ -423,7 +418,7 @@ jobs:
               $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             else
               "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-              $CC -std=c11 -ffreestanding -nostdlib -static "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=gnu11 -ffreestanding -nostdlib -static "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             fi
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
