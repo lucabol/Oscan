@@ -1,0 +1,11 @@
+mod_i64 = 2
+neg_f64 = -3.14
+neg_i64 = -100
+var_range: 2 3 4
+zero_iter_ok
+reverse_range_ok
+match_f64 = one
+nested_if = F
+precedence_logic = false
+parens = 9
+complex_prec = 13

@@ -1,0 +1,8 @@
+magic = 42
+wrapper = 10
+single = 99
+triple = 1 2 3
+field_order: a=1 b=2
+forward_struct: hello
+forward_fn: 5
+trailing_commas_ok: 3

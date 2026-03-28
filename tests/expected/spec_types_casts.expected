@@ -1,0 +1,10 @@
+cast_arith = 30
+cast_neg = -5
+trunc_f64_i32 = 3
+trunc_f64_i64 = 99
+i32_f64_arith = 14.0
+enum_tag_eq same = true
+enum_tag_eq diff = false
+wrapper_struct = 77
+result_in_let = 42
+grid_access = 3

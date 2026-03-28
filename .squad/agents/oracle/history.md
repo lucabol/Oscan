@@ -38,3 +38,5 @@
   - GAP-4: `literal_pattern` extended with optional leading `-` for negative numeric patterns.
   - GAP-7: `Result` documented as reserved type name in §1.1 and §3.3.
 - **Verified totals post-fix:** 21 reserved words in table, 18 stdlib functions (6 pure, 12 impure), precedence table matches EBNF grammar.
+- **Spec-to-test gap analysis completed (2025-07-15):** Mapped all 10 spec sections against 32 positive and 16 negative tests. Found 7 high-priority gaps with zero coverage: `Result` reserved name, `try` outside Result fn, assignment-as-expression, match arm type mismatch, 5 untested micro-lib functions (abs_i32, abs_f64, mod_i32, str_to_cstr, arena_reset isolated), negative literal patterns, and for-loop edge cases. Proposed 6 new positive + 4 new negative test files. Full report in `.squad/decisions/inbox/oracle-spec-gap-analysis.md`.
+- **Test grouping strategy:** Minimized file count (10 total) since compilation is slow. Grouped by spec section: tokens/syntax (§1-2), types/casts (§3), declarations (§4), expressions (§5), scoping+errors (§6-7), micro-lib (§10). Four negative files target four distinct compile-error classes.

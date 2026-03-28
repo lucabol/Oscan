@@ -1,0 +1,11 @@
+abs_i32: 42 0 7
+abs_f64: 3.14 0.0
+mod_i32: 2 1 0
+str_to_cstr: hello
+str_len_empty: 0
+str_eq_false: false
+concat_empty: hello hello
+i32_to_str: 0 -99
+arena_reset_ok: 2
+fixed_len: 5
+push_10: 10

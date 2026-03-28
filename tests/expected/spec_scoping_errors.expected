@@ -1,0 +1,7 @@
+arm_reuse: 10 20 30
+inner_scope_ok: 1
+012 loop_var_gone_ok: 999
+nested_3_levels = 6
+const_in_fn = 100
+chained_try = 19
+chained_err: div_by_zero

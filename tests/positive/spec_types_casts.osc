@@ -1,0 +1,86 @@
+// Test §3: casts in expressions, cast precedence, truncation, enum tag equality,
+// single-field struct, Result in let binding, array of arrays.
+
+enum Color {
+    Red(i32),
+    Blue(i32),
+}
+
+struct Wrapper {
+    value: i32,
+}
+
+fn! print_wrapper(w: Wrapper) {
+    print("wrapper_struct = ");
+    print_i32(w.value);
+    println("");
+}
+
+fn safe_ok(x: i32) -> Result<i32, str> {
+    Result::Ok(x)
+}
+
+fn! main() {
+    // Cast in arithmetic expression
+    let r: i64 = (10 as i64) + (20 as i64);
+    print("cast_arith = ");
+    print_i64(r);
+    println("");
+
+    // Cast precedence: -5 as i64
+    let x: i64 = -5 as i64;
+    print("cast_neg = ");
+    print_i64(x);
+    println("");
+
+    // f64 -> i32 truncation
+    let t1: i32 = 3.7 as i32;
+    print("trunc_f64_i32 = ");
+    print_i32(t1);
+    println("");
+
+    // f64 -> i64 truncation
+    let t2: i64 = 99.9 as i64;
+    print("trunc_f64_i64 = ");
+    print_i64(t2);
+    println("");
+
+    // i32 -> f64 arithmetic
+    let f: f64 = (7 as f64) * 2.0;
+    print("i32_f64_arith = ");
+    print_f64(f);
+    println("");
+
+    // Enum tag equality (== compares tags not payloads)
+    let c1: Color = Color::Red(10);
+    let c2: Color = Color::Red(99);
+    let c3: Color = Color::Blue(10);
+    print("enum_tag_eq same = ");
+    print_bool(c1 == c2);
+    println("");
+    print("enum_tag_eq diff = ");
+    print_bool(c1 == c3);
+    println("");
+
+    // Single-field struct construction
+    let w: Wrapper = Wrapper { value: 77 };
+    print_wrapper(w);
+
+    // Result in let binding via function
+    let res: Result<i32, str> = safe_ok(42);
+    let val: i32 = match res {
+        Result::Ok(v) => v,
+        Result::Err(e) => 0,
+    };
+    print("result_in_let = ");
+    print_i32(val);
+    println("");
+
+    // Array of arrays access
+    let mut row1: [i32] = [1, 2];
+    let mut row2: [i32] = [3, 4];
+    let grid: [[i32]; 2] = [row1, row2];
+    print("grid_access = ");
+    print_i32(grid[1][0]);
+    println("");
+}

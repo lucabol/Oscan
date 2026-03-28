@@ -1,0 +1,98 @@
+// Test §1-2: escape sequences, _-prefixed identifiers, block comments,
+// explicit return, trailing commas, empty array+len, negative literal patterns,
+// match on string literals, zero-parameter function.
+
+/* This is a block comment */
+
+fn answer() -> i32 {
+    42
+}
+
+fn early_return(x: i32) -> i32 {
+    if x > 0 {
+        return x * 2;
+    };
+    0
+}
+
+fn match_negative(x: i32) -> str {
+    match x {
+        -1 => "neg_one",
+        0 => "zero",
+        _ => "other",
+    }
+}
+
+fn match_string(s: str) -> i32 {
+    match s {
+        "hello" => 1,
+        "world" => 2,
+        _ => 0,
+    }
+}
+
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+fn! main() {
+    // Escape sequences
+    print("backslash: \\");
+    println("");
+    print("quote: \"");
+    println("");
+    print("tab:\tdone");
+    println("");
+
+    // _-prefixed identifier
+    let _unused: i32 = 99;
+    print("_unused = ");
+    print_i32(_unused);
+    println("");
+
+    // Block comment was above — if we got here it works
+    /* another block comment */ println("block_comment_ok");
+
+    // Explicit return
+    print("early_return = ");
+    print_i32(early_return(5));
+    println("");
+
+    // Zero-parameter function
+    print("answer = ");
+    print_i32(answer());
+    println("");
+
+    // Trailing commas: struct fields, array literal
+    let p: Pair = Pair { a: 1, b: 2, };
+    let arr: [i32; 3] = [10, 20, 30,];
+    print("trailing_commas: ");
+    print_i32(p.a + arr[0]);
+    println("");
+
+    // Empty dynamic array + len
+    let mut empty: [i32] = [];
+    print("empty_len = ");
+    print_i32(len(empty));
+    println("");
+
+    // Negative literal pattern in match
+    print("match(-1) = ");
+    println(match_negative(-1));
+    print("match(0) = ");
+    println(match_negative(0));
+    print("match(5) = ");
+    println(match_negative(5));
+
+    // Match on string literals
+    print("match_str(hello) = ");
+    print_i32(match_string("hello"));
+    println("");
+    print("match_str(world) = ");
+    print_i32(match_string("world"));
+    println("");
+    print("match_str(other) = ");
+    print_i32(match_string("xyz"));
+    println("");
+}

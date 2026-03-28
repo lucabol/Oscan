@@ -1,0 +1,8 @@
+// EXPECT ERROR: Assignment is a statement, not an expression (§5.4)
+// Chained assignment x = y = 5 is not valid.
+
+fn! main() {
+    let mut x: i32 = 0;
+    let mut y: i32 = 0;
+    x = y = 5;
+}

@@ -1,0 +1,11 @@
+// EXPECT ERROR: Result is a reserved type name (§3.3)
+// Users cannot define a struct named Result.
+
+struct Result {
+    value: i32,
+}
+
+fn! main() {
+    let r: Result = Result { value: 42 };
+    print_i32(r.value);
+}

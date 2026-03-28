@@ -1,0 +1,99 @@
+// Test §4: zero-arg pure function, single-field struct, single-variant enum,
+// 3-payload variant, field order independence, trailing commas, forward struct ref.
+
+fn get_magic() -> i32 {
+    42
+}
+
+struct Wrapper {
+    value: i32,
+}
+
+enum Single {
+    Only(i32),
+}
+
+enum Triple {
+    Val(i32, i32, i32),
+    None,
+}
+
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+struct Later {
+    name: str,
+}
+
+// Function defined before main, uses struct defined above
+fn make_later() -> Later {
+    Later { name: "hello" }
+}
+
+fn! main() {
+    // Zero-arg pure function
+    print("magic = ");
+    print_i32(get_magic());
+    println("");
+
+    // Struct with single field
+    let w: Wrapper = Wrapper { value: 10 };
+    print("wrapper = ");
+    print_i32(w.value);
+    println("");
+
+    // Enum with single variant
+    let s: Single = Single::Only(99);
+    let sv: i32 = match s {
+        Single::Only(v) => v,
+    };
+    print("single = ");
+    print_i32(sv);
+    println("");
+
+    // Enum variant with 3 payloads
+    let t: Triple = Triple::Val(1, 2, 3);
+    match t {
+        Triple::Val(a, b, c) => {
+            print("triple = ");
+            print_i32(a);
+            print(" ");
+            print_i32(b);
+            print(" ");
+            print_i32(c);
+            println("");
+        },
+        Triple::None => {
+            println("none");
+        },
+    };
+
+    // Field order independence in struct literal
+    let p: Pair = Pair { b: 2, a: 1 };
+    print("field_order: a=");
+    print_i32(p.a);
+    print(" b=");
+    print_i32(p.b);
+    println("");
+
+    // Forward function reference (main calls make_later defined above, and uses_later defined below)
+    let later: Later = make_later();
+    print("forward_struct: ");
+    println(later.name);
+    print("forward_fn: ");
+    print_i32(uses_later());
+    println("");
+
+    // Trailing commas in all positions
+    let arr: [i32; 3] = [1, 2, 3,];
+    print("trailing_commas_ok: ");
+    print_i32(len(arr));
+    println("");
+}
+
+fn uses_later() -> i32 {
+    let l: Later = make_later();
+    str_len(l.name)
+}

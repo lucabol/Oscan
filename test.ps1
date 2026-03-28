@@ -173,11 +173,35 @@ function Show-Summary {
         if ($probe) { $probeRows += $probe }
     }
     if ($probeRows.Count -gt 0) {
-        # Get stdlib (libc) exe sizes for hello_world
+        # Get stdlib (libc) exe sizes for hello_world per arch
         $stdlibSizes = @{}
         $hwLibc = "tests\build\hello_world_libc.exe"
         if (Test-Path $hwLibc) { $stdlibSizes["win-x64"] = (Get-Item $hwLibc).Length }
-        # WSL/ARM64 stdlib sizes would need wsl stat — approximate from test results if available
+        # WSL: compile hello_world with libc and get size
+        if ($script:WSLAvail) {
+            try {
+                $wslDir = Convert-ToWSLPath (Get-Location).Path
+                $wslLibcExe = "tests/build/hello_world_libc_wsl"
+                # Compile with libc (std=c99, link -lm)
+                & $oscan --libc "tests\positive\hello_world.osc" -o "tests\build\hello_world_libc.c" 2>$null
+                wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/hello_world_libc.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $wslLibcExe -lm" 2>&1 | Out-Null
+                $sz = wsl bash -c "stat -c%s '$wslDir/$wslLibcExe' 2>/dev/null || echo 0" 2>&1 | Out-String
+                $szVal = [int64]($sz.Trim())
+                if ($szVal -gt 0) { $stdlibSizes["wsl-x64"] = $szVal }
+            } catch {}
+        }
+        # ARM64: compile hello_world with libc and get size
+        if ($script:ARMAvail) {
+            try {
+                $wslDir = Convert-ToWSLPath (Get-Location).Path
+                $armLibcExe = "tests/build/hello_world_libc_arm"
+                & $oscan --libc "tests\positive\hello_world.osc" -o "tests\build\hello_world_libc_arm.c" 2>$null
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/hello_world_libc_arm.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $armLibcExe -lm" 2>&1 | Out-Null
+                $sz = wsl bash -c "stat -c%s '$wslDir/$armLibcExe' 2>/dev/null || echo 0" 2>&1 | Out-String
+                $szVal = [int64]($sz.Trim())
+                if ($szVal -gt 0) { $stdlibSizes["arm64"] = $szVal }
+            } catch {}
+        }
 
         Write-Host "  Freestanding Verification (hello_world):" -ForegroundColor White
         Write-Host ("  {0,-16} {1,10} {2,-18} {3,10}" -f "Architecture", "Size", "Dependencies", "Stdlib")

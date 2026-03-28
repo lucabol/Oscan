@@ -1,0 +1,15 @@
+backslash: \
+quote: "
+tab:	done
+_unused = 99
+block_comment_ok
+early_return = 10
+answer = 42
+trailing_commas: 11
+empty_len = 0
+match(-1) = neg_one
+match(0) = zero
+match(5) = other
+match_str(hello) = 1
+match_str(world) = 2
+match_str(other) = 0

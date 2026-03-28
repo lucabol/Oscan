@@ -1,0 +1,124 @@
+// Test §6-7: match arm name reuse, inner block scope, for-loop var after loop,
+// nested 3-level blocks, top-level const in function, chained try.
+
+let GLOBAL_CONST: i32 = 100;
+
+enum MyOption {
+    Some(i32),
+    None,
+}
+
+fn safe_divide(a: i32, b: i32) -> Result<i32, str> {
+    if b == 0 {
+        Result::Err("div_by_zero")
+    } else {
+        Result::Ok(a / b)
+    }
+}
+
+fn chained_ops(x: i32) -> Result<i32, str> {
+    let a: i32 = try safe_divide(x, 2);
+    let b: i32 = try safe_divide(a, 3);
+    let c: i32 = try safe_divide(b + 60, 4);
+    Result::Ok(c)
+}
+
+fn chain_with_zero(x: i32, d: i32) -> Result<i32, str> {
+    let a: i32 = try safe_divide(x, d);
+    let b: i32 = try safe_divide(a, 5);
+    Result::Ok(b)
+}
+
+fn! main() {
+    // Reuse name across different match arms
+    let opt: MyOption = MyOption::Some(10);
+    let r1: i32 = match opt {
+        MyOption::Some(v) => v,
+        MyOption::None => 0,
+    };
+    let opt2: MyOption = MyOption::Some(20);
+    let r2: i32 = match opt2 {
+        MyOption::Some(v) => v,
+        MyOption::None => 0,
+    };
+    let opt3: MyOption = MyOption::None;
+    let r3: i32 = match opt3 {
+        MyOption::Some(v) => v,
+        MyOption::None => 30,
+    };
+    print("arm_reuse: ");
+    print_i32(r1);
+    print(" ");
+    print_i32(r2);
+    print(" ");
+    print_i32(r3);
+    println("");
+
+    // Inner block scope isolation
+    let outer: i32 = 1;
+    {
+        let inner: i32 = 2;
+        let check: i32 = outer + inner;
+    };
+    // inner is no longer visible; outer still is
+    print("inner_scope_ok: ");
+    print_i32(outer);
+    println("");
+
+    // For-loop variable not visible after loop
+    for i in 0..3 {
+        print_i32(i);
+    };
+    let i: i32 = 999;
+    print(" loop_var_gone_ok: ");
+    print_i32(i);
+    println("");
+
+    // Nested 3-level blocks
+    let n: i32 = {
+        let x: i32 = 1;
+        {
+            let y: i32 = 2;
+            {
+                let z: i32 = 3;
+                x + y + z
+            }
+        }
+    };
+    print("nested_3_levels = ");
+    print_i32(n);
+    println("");
+
+    // Top-level const used in function
+    print("const_in_fn = ");
+    print_i32(GLOBAL_CONST);
+    println("");
+
+    // Chained try (3 operations): 100 / 2 = 50, 50 / 3 = 16, (16+60) / 4 = 19
+    let r: Result<i32, str> = chained_ops(100);
+    match r {
+        Result::Ok(v) => {
+            print("chained_try = ");
+            print_i32(v);
+            println("");
+        },
+        Result::Err(e) => {
+            print("error: ");
+            println(e);
+        },
+    };
+
+    // Chained try with error propagation
+    let re: Result<i32, str> = chain_with_zero(100, 0);
+    match re {
+        Result::Ok(v) => {
+            print("should_not_reach: ");
+            print_i32(v);
+            println("");
+        },
+        Result::Err(e) => {
+            print("chained_err: ");
+            println(e);
+        },
+    };
+}

@@ -1,0 +1,92 @@
+// Test §5: modulo on i64, unary minus on f64/i64, for-loop edge cases,
+// match on f64, deeply nested if-else-if, logical precedence, parenthesized expr.
+
+fn classify(x: f64) -> str {
+    match x {
+        0.0 => "zero",
+        1.0 => "one",
+        _ => "other",
+    }
+}
+
+fn grade(score: i32) -> str {
+    if score >= 90 {
+        "A"
+    } else if score >= 80 {
+        "B"
+    } else if score >= 70 {
+        "C"
+    } else if score >= 60 {
+        "D"
+    } else {
+        "F"
+    }
+}
+
+fn! main() {
+    // Modulo on i64
+    let m: i64 = (17 as i64) % (5 as i64);
+    print("mod_i64 = ");
+    print_i64(m);
+    println("");
+
+    // Unary minus on f64
+    let nf: f64 = -3.14;
+    print("neg_f64 = ");
+    print_f64(nf);
+    println("");
+
+    // Unary minus on i64
+    let ni: i64 = -(100 as i64);
+    print("neg_i64 = ");
+    print_i64(ni);
+    println("");
+
+    // For-loop with variable range
+    let a: i32 = 2;
+    let b: i32 = 5;
+    print("var_range:");
+    for i in a..b {
+        print(" ");
+        print_i32(i);
+    };
+    println("");
+
+    // For-loop zero iterations (start == end)
+    for i in 5..5 {
+        print("FAIL");
+    };
+    println("zero_iter_ok");
+
+    // For-loop reverse range (start > end) — zero iterations
+    for i in 10..5 {
+        print("FAIL");
+    };
+    println("reverse_range_ok");
+
+    // Match on f64 literal
+    print("match_f64 = ");
+    println(classify(1.0));
+
+    // Deeply nested if-else-if
+    print("nested_if = ");
+    println(grade(55));
+
+    // Logical operator precedence: not > and > or
+    // not true or false and true => (not true) or (false and true) => false or false => false
+    print("precedence_logic = ");
+    print_bool(not true or false and true);
+    println("");
+
+    // Parenthesized expressions
+    let p: i32 = (((1 + 2)) * (3));
+    print("parens = ");
+    print_i32(p);
+    println("");
+
+    // Complex arithmetic precedence: 2 + 3 * 4 - 1 = 2 + 12 - 1 = 13
+    let c: i32 = 2 + 3 * 4 - 1;
+    print("complex_prec = ");
+    print_i32(c);
+    println("");
+}

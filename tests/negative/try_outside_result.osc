@@ -1,0 +1,19 @@
+// EXPECT ERROR: try used outside a Result-returning function (§7.4)
+// try can only appear in a function that returns Result.
+
+fn divide(a: i32, b: i32) -> Result<i32, str> {
+    if b == 0 {
+        Result::Err("division by zero")
+    } else {
+        Result::Ok(a / b)
+    }
+}
+
+fn compute(a: i32, b: i32) -> i32 {
+    try divide(a, b)
+}
+
+fn! main() {
+    let r: i32 = compute(10, 2);
+    print_i32(r);
+}
