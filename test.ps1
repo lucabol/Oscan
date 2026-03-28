@@ -182,7 +182,7 @@ if (-not $SkipWSL) {
                     Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                     $fail++; continue
                 }
-                wsl bash -c "cd '$wslDir' && gcc -std=c11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
+                wsl bash -c "cd '$wslDir' && gcc -std=gnu11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
             }
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — gcc compile error (WSL)" -ForegroundColor Red
@@ -250,7 +250,7 @@ if (-not $SkipARM) {
                     Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
                     $fail++; continue
                 }
-                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
             }
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — cross-compile error (ARM64)" -ForegroundColor Red
