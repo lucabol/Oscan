@@ -1,0 +1,108 @@
+// Test: Heavy arena allocation pressure and array growth
+// Exercises: many array doublings (14+ doublings), data integrity across growth,
+//            structs with dynamic string fields, arena allocation under pressure
+// Uses ~600KB of 1MB arena. TRUE arena growth (>1MB) causes SEGFAULT due to
+// dangling pointer bug in bc_arena_alloc+bc_array_push — see decisions/inbox.
+// NOTE: Initializes arrays with first element to avoid empty-array elem_size bug
+
+struct Record {
+    name: str,
+    id: i32,
+}
+
+fn! main() {
+    // Phase 1: Push 60,000 i32 elements — forces 14+ array doublings
+    // Cumulative arena usage from doublings: ~524KB
+    println("=== Phase 1: Large i32 array ===");
+    let mut nums: [i32] = [0];
+    for i in 1..60000 {
+        push(nums, i);
+    };
+    print("len: ");
+    print_i32(len(nums));
+    println("");
+    print("nums[0]: ");
+    print_i32(nums[0]);
+    println("");
+    print("nums[1]: ");
+    print_i32(nums[1]);
+    println("");
+    print("nums[1000]: ");
+    print_i32(nums[1000]);
+    println("");
+    print("nums[30000]: ");
+    print_i32(nums[30000]);
+    println("");
+    print("nums[59999]: ");
+    print_i32(nums[59999]);
+    println("");
+
+    // Phase 2: Continue pushing after many doublings
+    println("=== Phase 2: Post-growth pushes ===");
+    for i in 60000..65000 {
+        push(nums, i);
+    };
+    print("len: ");
+    print_i32(len(nums));
+    println("");
+    print("nums[64999]: ");
+    print_i32(nums[64999]);
+    println("");
+    // Re-verify early data survived all the doublings
+    print("nums[0]: ");
+    print_i32(nums[0]);
+    println("");
+    print("nums[100]: ");
+    print_i32(nums[100]);
+    println("");
+
+    // Phase 3: Array of structs with arena-allocated string fields
+    // Each push allocates struct data + str_concat allocates string in arena
+    println("=== Phase 3: Struct array with strings ===");
+    let mut records: [Record] = [Record { name: "rec_0", id: 0 }];
+    for i in 1..1000 {
+        let label: str = str_concat("rec_", i32_to_str(i));
+        push(records, Record { name: label, id: i });
+    };
+    print("records len: ");
+    print_i32(len(records));
+    println("");
+    print("records[0]: ");
+    print(records[0].name);
+    print(" ");
+    print_i32(records[0].id);
+    println("");
+    print("records[500]: ");
+    print(records[500].name);
+    print(" ");
+    print_i32(records[500].id);
+    println("");
+    print("records[999]: ");
+    print(records[999].name);
+    print(" ");
+    print_i32(records[999].id);
+    println("");
+
+    // Phase 4: More struct pushes to stress arena further
+    println("=== Phase 4: More structs continued ===");
+    for i in 1000..1200 {
+        let label: str = str_concat("extra_", i32_to_str(i));
+        push(records, Record { name: label, id: i });
+    };
+    print("records len: ");
+    print_i32(len(records));
+    println("");
+    print("records[1199]: ");
+    print(records[1199].name);
+    print(" ");
+    print_i32(records[1199].id);
+    println("");
+    // Re-verify early struct data still intact
+    print("records[0]: ");
+    print(records[0].name);
+    print(" ");
+    print_i32(records[0].id);
+    println("");
+
+    println("arena growth test PASSED");
+}

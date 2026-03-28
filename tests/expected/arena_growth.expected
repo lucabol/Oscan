@@ -1,0 +1,22 @@
+=== Phase 1: Large i32 array ===
+len: 60000
+nums[0]: 0
+nums[1]: 1
+nums[1000]: 1000
+nums[30000]: 30000
+nums[59999]: 59999
+=== Phase 2: Post-growth pushes ===
+len: 65000
+nums[64999]: 64999
+nums[0]: 0
+nums[100]: 100
+=== Phase 3: Struct array with strings ===
+records len: 1000
+records[0]: rec_0 0
+records[500]: rec_500 500
+records[999]: rec_999 999
+=== Phase 4: More structs continued ===
+records len: 1200
+records[1199]: extra_1199 1199
+records[0]: rec_0 0
+arena growth test PASSED

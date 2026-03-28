@@ -1,0 +1,24 @@
+// Test: Arena growth with 200K pushes — crosses the 1MB default block boundary
+// This forces multiple arena blocks under the linked-list model.
+// Previously caused SEGFAULT due to dangling pointers after arena realloc.
+
+fn! main() {
+    let mut nums: [i32] = [0];
+    for i in 1..200000 {
+        push(nums, i);
+    };
+    print("len: ");
+    print_i32(len(nums));
+    println("");
+    // Verify first, middle, and last elements
+    print("nums[0]: ");
+    print_i32(nums[0]);
+    println("");
+    print("nums[100000]: ");
+    print_i32(nums[100000]);
+    println("");
+    print("nums[199999]: ");
+    print_i32(nums[199999]);
+    println("");
+    println("200k stress test PASSED");
+}

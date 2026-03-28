@@ -87,8 +87,10 @@ static void test_arena(void)
     {
         bc_arena *a = bc_arena_create(0);
         assert(a != NULL);
-        assert(a->capacity == BC_ARENA_DEFAULT_CAPACITY);
-        assert(a->used == 0);
+        assert(a->head != NULL);
+        assert(a->head->capacity == BC_ARENA_DEFAULT_CAPACITY);
+        assert(a->head->used == 0);
+        assert(a->current == a->head);
         bc_arena_destroy(a);
     }
     PASS();
@@ -101,19 +103,41 @@ static void test_arena(void)
         assert(p1 != NULL);
         assert(p2 != NULL);
         assert(p1 != p2);
-        assert(a->used <= a->capacity);
+        assert(a->head->used <= a->head->capacity);
+        /* No new block should have been allocated */
+        assert(a->head->next == NULL);
         bc_arena_destroy(a);
     }
     PASS();
 
-    TEST("alloc beyond capacity (growth)");
+    TEST("alloc beyond capacity (growth via new block)");
     {
         bc_arena *a = bc_arena_create(32);
-        size_t old_cap = a->capacity;
-        /* Force growth: allocate more than capacity */
-        void *p = bc_arena_alloc(a, 128);
-        assert(p != NULL);
-        assert(a->capacity > old_cap);
+        /* Force new block: allocate more than first block capacity */
+        void *p1 = bc_arena_alloc(a, 16);
+        void *p2 = bc_arena_alloc(a, 128);
+        assert(p1 != NULL);
+        assert(p2 != NULL);
+        /* A second block must have been created */
+        assert(a->head->next != NULL);
+        assert(a->current == a->head->next);
+        bc_arena_destroy(a);
+    }
+    PASS();
+
+    TEST("alloc beyond capacity — old pointers remain valid");
+    {
+        bc_arena *a = bc_arena_create(64);
+        int32_t *p1 = (int32_t *)bc_arena_alloc(a, sizeof(int32_t));
+        *p1 = 0xDEAD;
+        /* Fill up the first block */
+        bc_arena_alloc(a, 48);
+        /* This must spill into a new block */
+        int32_t *p2 = (int32_t *)bc_arena_alloc(a, sizeof(int32_t));
+        *p2 = 0xBEEF;
+        /* p1 must still be readable from the old (unmoved) block */
+        assert(*p1 == 0xDEAD);
+        assert(*p2 == 0xBEEF);
         bc_arena_destroy(a);
     }
     PASS();
@@ -122,10 +146,26 @@ static void test_arena(void)
     {
         bc_arena *a = bc_arena_create(256);
         bc_arena_alloc(a, 100);
-        assert(a->used > 0);
+        assert(a->head->used > 0);
         bc_arena_reset(a);
-        assert(a->used == 0);
-        assert(a->capacity == 256);
+        assert(a->head->used == 0);
+        assert(a->current == a->head);
+        bc_arena_destroy(a);
+    }
+    PASS();
+
+    TEST("reset with multiple blocks");
+    {
+        bc_arena *a = bc_arena_create(32);
+        bc_arena_alloc(a, 16);
+        bc_arena_alloc(a, 64); /* forces new block */
+        assert(a->head->next != NULL);
+        bc_arena_reset(a);
+        assert(a->head->used == 0);
+        assert(a->head->next->used == 0);
+        assert(a->current == a->head);
+        /* Blocks are kept for reuse */
+        assert(a->head->next != NULL);
         bc_arena_destroy(a);
     }
     PASS();

@@ -28,4 +28,13 @@
 - **Type casts:** f64→i32/i64 check NaN/Inf/range before cast. i64→i32 checks narrowing overflow. Widening casts are unconditional.
 - **Panic handler:** `bc_panic(msg, file, line)` → stderr + `exit(1)`. `BC_PANIC(msg)` macro captures `__FILE__`/`__LINE__`.
 - **Build:** C99, `-Wall -Wextra -Werror -pedantic -fsanitize=address,undefined`. Zero warnings on both GCC 13 and Clang 18.
-- **Tests:** 76 assert-based tests, panic tests use `fork()` on POSIX (skipped on Windows). All passing.
+- **Tests:** 78 assert-based tests (up from 76), panic tests use `fork()` on POSIX (skipped on Windows). All passing.
+
+### Arena Linked-List Fix (critical bug fix)
+- **Bug:** Monolithic arena buffer growth (`malloc→memcpy→free`) invalidated ALL previously returned pointers. Any program allocating >1MB SEGFAULT'd because `bc_array_push` held dangling pointers after arena realloc.
+- **Fix:** Replaced single growable buffer with linked list of fixed-size blocks (`bc_arena_block`). Blocks are NEVER freed or moved until `bc_arena_destroy`. New blocks are `max(block_size, requested)`.
+- **Struct change:** `bc_arena` went from `{data, used, capacity}` to `{head, current, block_size}` with separate `bc_arena_block` type. Public header change but codegen only uses opaque API (`create/alloc/reset/destroy`), so no compiler changes needed.
+- **`bc_arena_reset`:** Walks all blocks, sets `used=0`, resets `current` to `head`. Blocks kept allocated for reuse.
+- **Key insight:** Codegen (codegen.rs) never accesses arena struct fields directly — it only calls the C API functions. This made the struct layout change safe.
+- **Tests added:** 2 new C tests (pointer validity after growth, multi-block reset) + `arena_stress_200k.bc` integration test (200K pushes, ~1.6MB, forces multiple blocks).
+- **Verified:** 53 Rust tests, 78 C runtime tests, 48 integration tests (32 positive + 16 negative) — all passing. WSL/GCC 200K push test passes with exit code 0.

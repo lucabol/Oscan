@@ -37,3 +37,12 @@
 - **Purity constraint:** `push`, `str_concat`, `i32_to_str` are all impure — helper functions using these must be `fn!`, not `fn`
 - `len` and `str_len` and `str_eq` are pure-safe
 - All 46 tests pass (30 positive + 16 negative) after adding the 8 new tests
+
+### Arena Growth Test & Critical Bug Discovery (2025-07-17)
+- Created `arena_growth.bc`: 60K i32 pushes (14 array doublings, ~524KB arena usage), 1200 struct pushes with arena-allocated string fields, 4-phase data integrity verification
+- Expected output: `arena_growth.expected` — verified matching on WSL/GCC
+- **CRITICAL BUG FOUND:** Arena growth (>1MB) causes SEGFAULT. When `bc_arena_alloc` grows the buffer via malloc+memcpy+free, ALL existing pointers into the arena become dangling. On Linux/glibc, `free` on large allocations does `munmap` → immediate page fault. Confirmed with 150K pushes (exit code 139). Filed in `.squad/decisions/inbox/tank-arena-growth.md`.
+- Root cause: `bc_array_push` holds `arr` (a `bc_array*` inside the arena). If `bc_arena_alloc` triggers arena growth during array doubling, `arr` points to freed memory. Both read (`arr->data` for memcpy source) and write (`arr->data = new_data`) are UB.
+- Test adjusted to 60K elements to stay within 1MB arena so it passes, but the underlying bug is a time bomb for any program allocating >1MB
+- Recommended fix: linked-list arena blocks (never free existing blocks) or offset-based allocation
+- All 53 cargo tests pass with the new test added

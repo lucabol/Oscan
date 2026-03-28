@@ -24,8 +24,25 @@ void bc_panic(const char *message, const char *file, int line)
 }
 
 /* ================================================================== */
-/*  Arena allocator                                                    */
+/*  Arena allocator (linked-list of blocks — pointers never move)      */
 /* ================================================================== */
+
+static bc_arena_block *bc_arena_block_new(size_t capacity)
+{
+    bc_arena_block *block = (bc_arena_block *)malloc(sizeof(bc_arena_block));
+    if (!block) {
+        bc_panic("failed to allocate arena block struct", __FILE__, __LINE__);
+    }
+    block->data = (uint8_t *)malloc(capacity);
+    if (!block->data) {
+        free(block);
+        bc_panic("failed to allocate arena block data", __FILE__, __LINE__);
+    }
+    block->used     = 0;
+    block->capacity = capacity;
+    block->next     = NULL;
+    return block;
+}
 
 bc_arena *bc_arena_create(size_t initial_capacity)
 {
@@ -38,13 +55,9 @@ bc_arena *bc_arena_create(size_t initial_capacity)
     if (!arena) {
         bc_panic("failed to allocate arena struct", __FILE__, __LINE__);
     }
-    arena->data = (uint8_t *)malloc(initial_capacity);
-    if (!arena->data) {
-        free(arena);
-        bc_panic("failed to allocate arena data", __FILE__, __LINE__);
-    }
-    arena->used     = 0;
-    arena->capacity = initial_capacity;
+    arena->head       = bc_arena_block_new(initial_capacity);
+    arena->current    = arena->head;
+    arena->block_size = initial_capacity;
     return arena;
 }
 
@@ -60,43 +73,56 @@ void *bc_arena_alloc(bc_arena *arena, size_t size)
     /* 8-byte alignment */
     aligned = (size + 7u) & ~(size_t)7u;
 
-    /* Grow if necessary */
-    if (arena->used + aligned > arena->capacity) {
-        size_t    new_cap  = arena->capacity * 2;
-        uint8_t  *new_data;
-
-        while (new_cap < arena->used + aligned) {
-            new_cap *= 2;
-        }
-        new_data = (uint8_t *)malloc(new_cap);
-        if (!new_data) {
-            bc_panic("arena growth allocation failed", __FILE__, __LINE__);
-        }
-        memcpy(new_data, arena->data, arena->used);
-        free(arena->data);
-        arena->data     = new_data;
-        arena->capacity = new_cap;
+    /* Fast path: current block has room */
+    if (arena->current->used + aligned <= arena->current->capacity) {
+        ptr = arena->current->data + arena->current->used;
+        arena->current->used += aligned;
+        return ptr;
     }
 
-    ptr = arena->data + arena->used;
-    arena->used += aligned;
-    return ptr;
+    /* Slow path: allocate a new block, link it in.
+       Size is max(block_size, aligned) so oversized requests still fit. */
+    {
+        size_t          new_cap   = arena->block_size;
+        bc_arena_block *new_block;
+
+        if (new_cap < aligned) {
+            new_cap = aligned;
+        }
+        new_block = bc_arena_block_new(new_cap);
+        arena->current->next = new_block;
+        arena->current       = new_block;
+
+        ptr = new_block->data;
+        new_block->used = aligned;
+        return ptr;
+    }
 }
 
 void bc_arena_reset(bc_arena *arena)
 {
     if (arena) {
-        arena->used = 0;
+        bc_arena_block *block = arena->head;
+        while (block) {
+            block->used = 0;
+            block = block->next;
+        }
+        arena->current = arena->head;
     }
 }
 
 void bc_arena_destroy(bc_arena *arena)
 {
     if (arena) {
-        free(arena->data);
-        arena->data     = NULL;
-        arena->used     = 0;
-        arena->capacity = 0;
+        bc_arena_block *block = arena->head;
+        while (block) {
+            bc_arena_block *next = block->next;
+            free(block->data);
+            free(block);
+            block = next;
+        }
+        arena->head    = NULL;
+        arena->current = NULL;
         free(arena);
     }
 }

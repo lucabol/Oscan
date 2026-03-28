@@ -28,10 +28,17 @@ void bc_panic(const char *message, const char *file, int line);
 /*  Arena allocator                                                    */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
+typedef struct bc_arena_block {
     uint8_t *data;
     size_t   used;
     size_t   capacity;
+    struct bc_arena_block *next;
+} bc_arena_block;
+
+typedef struct {
+    bc_arena_block *head;     /* first block (for destroy/reset)  */
+    bc_arena_block *current;  /* current allocation block          */
+    size_t          block_size; /* default size for new blocks     */
 } bc_arena;
 
 #define BC_ARENA_DEFAULT_CAPACITY ((size_t)(1024 * 1024)) /* 1 MB */
