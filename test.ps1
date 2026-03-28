@@ -197,7 +197,7 @@ function Show-Summary {
                 $wslDir = Convert-ToWSLPath (Get-Location).Path
                 $armLibcExe = "tests/build/hello_world_libc_arm"
                 & $oscan --libc "tests\positive\hello_world.osc" -o "tests\build\hello_world_libc_arm.c" 2>$null
-                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/hello_world_libc_arm.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $armLibcExe -lm" 2>&1 | Out-Null
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 tests/build/hello_world_libc_arm.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $armLibcExe -lm" 2>&1 | Out-Null
                 $sz = wsl bash -c "stat -c%s '$wslDir/$armLibcExe' 2>/dev/null || echo 0" 2>&1 | Out-String
                 $szVal = [int64]($sz.Trim())
                 if ($szVal -gt 0) { $stdlibSizes["arm64"] = $szVal }
