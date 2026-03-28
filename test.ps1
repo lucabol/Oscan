@@ -164,42 +164,23 @@ function Format-Size($bytes) {
 function Show-Summary {
     Write-Host ""
 
-    # Freestanding verification tables (per-arch)
+    # Compact freestanding verification — one representative binary (hello_world) per arch
     $verifyArchs = @("win-x64", "wsl-x64", "arm64")
     $archLabels = @{ "win-x64" = "Windows x64"; "wsl-x64" = "WSL Linux x64"; "arm64" = "ARM64" }
+    $probeRows = @()
     foreach ($va in $verifyArchs) {
-        $vr = @($script:VerifyResults | Where-Object { $_.Arch -eq $va })
-        if ($vr.Count -eq 0) { continue }
-        Write-Host ("  Freestanding Verification ({0}):" -f $archLabels[$va]) -ForegroundColor White
-        Write-Host ("  {0,-28} {1,10} {2,-18} {3,-8}" -f "Binary", "Size", "Dependencies", "Stdlib")
-        Write-Host ("  {0,-28} {1,10} {2,-18} {3,-8}" -f ("─" * 28), ("─" * 10), ("─" * 18), ("─" * 8))
-        foreach ($v in $vr) {
+        $probe = $script:VerifyResults | Where-Object { $_.Arch -eq $va -and $_.Name -eq "hello_world" } | Select-Object -First 1
+        if ($probe) { $probeRows += $probe }
+    }
+    if ($probeRows.Count -gt 0) {
+        Write-Host "  Freestanding Verification (hello_world):" -ForegroundColor White
+        Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f "Architecture", "Size", "Dependencies", "Stdlib")
+        Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f ("─" * 16), ("─" * 10), ("─" * 18), ("─" * 8))
+        foreach ($v in $probeRows) {
             $ok = ($v.DepCheck -ne 'FAIL') -and ($v.StdlibCheck -ne 'FAIL')
             $color = if ($ok) { "Green" } else { "Red" }
             $depStr = if ($v.DepDetail.Length -gt 18) { $v.DepDetail.Substring(0, 15) + "..." } else { $v.DepDetail }
-            Write-Host ("  {0,-28} {1,10} {2,-18} {3,-8}" -f $v.Name, (Format-Size $v.Size), $depStr, $v.StdlibCheck) -ForegroundColor $color
-        }
-        Write-Host ""
-    }
-
-    # Cross-architecture size comparison (only if 2+ archs have data)
-    $archsWithData = $verifyArchs | Where-Object { @($script:VerifyResults | Where-Object { $_.Arch -eq $_ }).Count -gt 0 }
-    if ($archsWithData.Count -ge 2) {
-        $testNames = $script:VerifyResults | Select-Object -ExpandProperty Name | Sort-Object -Unique
-        Write-Host "  Binary Size Comparison (freestanding):" -ForegroundColor White
-        $hdr = "  {0,-24}" -f "Test"
-        foreach ($aa in $archsWithData) { $hdr += " {0,12}" -f $archLabels[$aa] }
-        Write-Host $hdr
-        $sep = "  {0,-24}" -f ("─" * 24)
-        foreach ($aa in $archsWithData) { $sep += " {0,12}" -f ("─" * 12) }
-        Write-Host $sep
-        foreach ($tn in $testNames) {
-            $line = "  {0,-24}" -f $tn
-            foreach ($aa in $archsWithData) {
-                $s = $script:Sizes["${tn}_${aa}"]
-                $line += " {0,12}" -f (Format-Size $s)
-            }
-            Write-Host $line
+            Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f $archLabels[$v.Arch], (Format-Size $v.Size), $depStr, $v.StdlibCheck) -ForegroundColor $color
         }
         Write-Host ""
     }
