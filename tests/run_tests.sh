@@ -45,20 +45,22 @@ for osc_file in positive/*.osc; do
         continue
     fi
 
-    # Step 1: Transpile .osc → .c
-    if ! "$OSCAN" --libc "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
-        echo "FAIL (transpile error)"
+    # Step 1: Compile .osc → binary
+    # FFI tests need libc
+    if echo "$name" | grep -q '^ffi'; then
+      if ! "$OSCAN" --libc "$osc_file" -o "build/${name}" 2>"build/${name}.err"; then
+        echo "FAIL (compile error, libc)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
         continue
-    fi
-
-    # Step 2: Compile .c → binary
-    if ! $CC "build/${name}.c" ../runtime/osc_runtime.c -I../runtime -I../deps/laststanding -o "build/${name}" -std=c99 -lm 2>"build/${name}.err"; then
-        echo "FAIL (C compile error)"
+      fi
+    else
+      if ! "$OSCAN" "$osc_file" -o "build/${name}" 2>"build/${name}.err"; then
+        echo "FAIL (compile error, freestanding)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))
         continue
+      fi
     fi
 
     # Step 3: Run and compare output
@@ -89,7 +91,7 @@ for osc_file in negative/*.osc; do
     TOTAL=$((TOTAL + 1))
     echo -n "  Testing reject $name... "
 
-    if "$OSCAN" --libc "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
+    if "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
         echo "FAIL (should have been rejected)"
         FAIL=$((FAIL + 1))
     else

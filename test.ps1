@@ -20,58 +20,6 @@ $script:ARMPass = 0
 $script:ARMFail = 0
 $script:ARMSkipped = $false
 
-# ── Detect C compiler ──────────────────────────────────
-function Find-CCompiler {
-    # gcc
-    if (Get-Command gcc -ErrorAction SilentlyContinue) {
-        return @{ Cmd = "gcc"; Type = "gcc" }
-    }
-    # clang
-    if (Get-Command clang -ErrorAction SilentlyContinue) {
-        return @{ Cmd = "clang"; Type = "gcc" }
-    }
-    # cl.exe on PATH
-    if (Get-Command cl.exe -ErrorAction SilentlyContinue) {
-        return @{ Cmd = "cl.exe"; Type = "msvc" }
-    }
-    # cl.exe via vswhere
-    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path $vswhere) {
-        $vsPath = & $vswhere -latest -property installationPath 2>$null
-        if ($vsPath) {
-            $vcvars = "$vsPath\VC\Auxiliary\Build\vcvarsall.bat"
-            if (Test-Path $vcvars) {
-                return @{ Cmd = "cl.exe"; Type = "msvc"; VcVars = $vcvars }
-            }
-        }
-    }
-    return $null
-}
-
-function Compile-C-GCC($cc, $srcC, $outExe) {
-    & $cc -std=c99 $srcC runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $outExe -lm 2>&1
-    return $LASTEXITCODE -eq 0
-}
-
-function Compile-C-MSVC($compiler, $srcC, $outExe) {
-    if ($compiler.VcVars) {
-        $bat = [System.IO.Path]::GetTempFileName() + ".bat"
-        @"
-@echo off
-call "$($compiler.VcVars)" x64 >nul 2>&1
-cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding "$srcC" runtime\osc_runtime.c /Fe:"$outExe" /link >nul 2>&1
-exit /b %ERRORLEVEL%
-"@ | Set-Content $bat
-        cmd /c $bat 2>&1 | Out-Null
-        $ok = $LASTEXITCODE -eq 0
-        Remove-Item $bat -ErrorAction SilentlyContinue
-        return $ok
-    } else {
-        & cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding $srcC runtime\osc_runtime.c /Fe:"$outExe" /link 2>&1 | Out-Null
-        return $LASTEXITCODE -eq 0
-    }
-}
-
 # ── WSL helpers ────────────────────────────────────────
 function Convert-ToWSLPath($windowsPath) {
     $full = (Resolve-Path $windowsPath).Path
@@ -124,19 +72,14 @@ if (-not $SkipUnit) {
 
 # ── Integration tests ──────────────────────────────────
 if (-not $SkipIntegration) {
-    $cc = Find-CCompiler
-    if (-not $cc) {
-        Write-Host "No C compiler found (gcc, clang, or cl.exe). Skipping integration tests." -ForegroundColor Yellow
-        exit 0
-    }
-    Write-Host "`n━━━ Integration Tests (using $($cc.Cmd)) ━━━" -ForegroundColor Cyan
+    Write-Host "`n━━━ Integration Tests (freestanding) ━━━" -ForegroundColor Cyan
 
     if (-not (Test-Path "tests\build")) {
         New-Item -ItemType Directory -Path "tests\build" | Out-Null
     }
 
-    # ── Positive tests ──
-    Write-Host "`n── Positive tests ──" -ForegroundColor Yellow
+    # ── Positive tests (freestanding via oscan compiler) ──
+    Write-Host "`n── Positive tests (freestanding) ──" -ForegroundColor Yellow
     $pass = 0; $fail = 0
     foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
         $name = $bcFile.BaseName
@@ -147,27 +90,19 @@ if (-not $SkipIntegration) {
             $fail++; continue
         }
 
-        # Transpile
-        & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
-            $fail++; continue
-        }
-
-        # Compile C
-        $outExe = "tests\build\$name.exe"
-        if ($cc.Type -eq "msvc") {
-            $ok = Compile-C-MSVC $cc "tests\build\$name.c" $outExe
+        # FFI tests need libc
+        if ($name -match '^ffi') {
+            & $oscan --libc $bcFile.FullName -o "tests\build\$name.exe" 2>$null
         } else {
-            $ok = Compile-C-GCC $cc.Cmd "tests\build\$name.c" $outExe
+            & $oscan $bcFile.FullName -o "tests\build\$name.exe" 2>$null
         }
-        if (-not $ok) {
-            Write-Host "  FAIL: $name — C compile error" -ForegroundColor Red
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  FAIL: $name — compile error" -ForegroundColor Red
             $fail++; continue
         }
 
         # Run and compare
-        $actual = & $outExe 2>&1 | Out-String
+        $actual = & ".\tests\build\$name.exe" 2>&1 | Out-String
         $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
         $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
@@ -203,34 +138,6 @@ if (-not $SkipIntegration) {
     # Cleanup .obj files left by MSVC
     Get-ChildItem "*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
     Get-ChildItem "tests\build\*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
-
-    # ── Freestanding tests (via oscan default mode) ──
-    Write-Host "`n── Freestanding tests (Clang) ──" -ForegroundColor Yellow
-    $pass = 0; $fail = 0
-    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-        $name = $bcFile.BaseName
-        # Skip FFI tests — they require libc symbols
-        if ($name -match '^ffi') { continue }
-
-        & $oscan $bcFile.FullName -o "tests\build\${name}_free.exe" 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "  FAIL: $name — freestanding compile error" -ForegroundColor Red
-            $fail++; continue
-        }
-
-        $exitCode = 0
-        & ".\tests\build\${name}_free.exe" 2>&1 | Out-Null
-        $exitCode = $LASTEXITCODE
-        if ($exitCode -ne 0) {
-            Write-Host "  FAIL: $name — runtime error (exit $exitCode)" -ForegroundColor Red
-            $fail++
-        } else {
-            Write-Host "  PASS: $name (freestanding)" -ForegroundColor Green
-            $pass++
-        }
-    }
-    Write-Host "Freestanding: $pass passed, $fail failed" -ForegroundColor $(if ($fail -gt 0) {"Red"} else {"Green"})
-    $script:TotalPass += $pass; $script:TotalFail += $fail
 }
 
 # ── WSL Integration tests (Linux/GCC via WSL) ─────────
@@ -250,7 +157,7 @@ if (-not $SkipWSL) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
         }
 
-        Write-Host "`n── WSL Positive tests ──" -ForegroundColor Yellow
+        Write-Host "`n── WSL Positive tests (freestanding) ──" -ForegroundColor Yellow
         $pass = 0; $fail = 0
         foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
@@ -261,15 +168,22 @@ if (-not $SkipWSL) {
                 $fail++; continue
             }
 
-            # Transpile (Windows-native oscan.exe)
-            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
-                $fail++; continue
+            # FFI tests need libc
+            if ($name -match '^ffi') {
+                & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
+                    $fail++; continue
+                }
+                wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl -lm" 2>&1 | Out-Null
+            } else {
+                & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
+                    $fail++; continue
+                }
+                wsl bash -c "cd '$wslDir' && gcc -std=c11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl" 2>&1 | Out-Null
             }
-
-            # Compile inside WSL with gcc
-            wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — gcc compile error (WSL)" -ForegroundColor Red
                 $fail++; continue
@@ -311,7 +225,7 @@ if (-not $SkipARM) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
         }
 
-        Write-Host "`n── ARM64 Positive tests ──" -ForegroundColor Yellow
+        Write-Host "`n── ARM64 Positive tests (freestanding) ──" -ForegroundColor Yellow
         $pass = 0; $fail = 0
         foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
@@ -322,15 +236,22 @@ if (-not $SkipARM) {
                 $fail++; continue
             }
 
-            # Transpile (Windows-native oscan.exe)
-            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
-                $fail++; continue
+            # FFI tests need libc
+            if ($name -match '^ffi') {
+                & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
+                    $fail++; continue
+                }
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm -lm" 2>&1 | Out-Null
+            } else {
+                & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host "  FAIL: $name — transpile error" -ForegroundColor Red
+                    $fail++; continue
+                }
+                wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c11 -ffreestanding -nostdlib -static tests/build/$name.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm" 2>&1 | Out-Null
             }
-
-            # Cross-compile with aarch64-linux-gnu-gcc -static inside WSL
-            wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — cross-compile error (ARM64)" -ForegroundColor Red
                 $fail++; continue

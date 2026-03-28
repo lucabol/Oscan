@@ -44,11 +44,15 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
         continue
     }
 
-    # Step 1: Transpile .osc -> .c
-    $transpileErr = $null
-    & $Oscan --libc $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
+    # Step 1: Compile .osc → binary
+    # FFI tests need libc
+    if ($name -match '^ffi') {
+        & $Oscan --libc $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
+    } else {
+        & $Oscan $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
+    }
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "FAIL (transpile error)"
+        Write-Host "FAIL (compile error)"
         if (Test-Path "build\$name.err") {
             Get-Content "build\$name.err" | ForEach-Object { Write-Host "    $_" }
         }
@@ -56,18 +60,7 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
         continue
     }
 
-    # Step 2: Compile .c -> binary
-    & $CC "build\$name.c" "..\runtime\osc_runtime.c" "-I..\runtime" "-I..\deps\laststanding" -o "build\$name.exe" -std=c99 -lm 2>"build\$name.err"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "FAIL (C compile error)"
-        if (Test-Path "build\$name.err") {
-            Get-Content "build\$name.err" | ForEach-Object { Write-Host "    $_" }
-        }
-        $Fail++
-        continue
-    }
-
-    # Step 3: Run and compare output
+    # Step 2: Run and compare output
     $actual = & ".\build\$name.exe" 2>&1 | Out-String
     $actual = $actual.TrimEnd("`r`n").TrimEnd("`n")
     $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n")

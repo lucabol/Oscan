@@ -42,19 +42,18 @@ jobs:
       - name: Run unit tests (53 tests)
         run: cargo test
 
-      - name: Integration tests — positive (GCC)
+      - name: Integration tests — positive (freestanding)
         shell: bash
         run: |
           set -euo pipefail
           oscan="./target/release/oscan"
-          CC="gcc"
           PASS=0
           FAIL=0
           TOTAL=0
 
           mkdir -p tests/build
 
-          echo "=== Positive Integration Tests (Linux/GCC) ==="
+          echo "=== Positive Integration Tests (Linux/GCC, freestanding) ==="
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
             expected="tests/expected/${name}.expected"
@@ -66,20 +65,21 @@ jobs:
               continue
             fi
 
-            # Transpile .osc → .c
-            if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
-              echo "FAIL: $name — transpile error"
-              cat "tests/build/${name}.err"
-              FAIL=$((FAIL + 1))
-              continue
-            fi
-
-            # Compile C with GCC
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
-              echo "FAIL: $name — C compile error"
-              cat "tests/build/${name}.err"
-              FAIL=$((FAIL + 1))
-              continue
+            # FFI tests need libc
+            if echo "$name" | grep -q '^ffi'; then
+              if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+                echo "FAIL: $name — compile error (libc)"
+                cat "tests/build/${name}.err"
+                FAIL=$((FAIL + 1))
+                continue
+              fi
+            else
+              if ! "$oscan" "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+                echo "FAIL: $name — compile error (freestanding)"
+                cat "tests/build/${name}.err"
+                FAIL=$((FAIL + 1))
+                continue
+              fi
             fi
 
             # Run and compare
@@ -101,7 +101,7 @@ jobs:
           echo "Positive: $PASS passed, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
 
-      - name: Integration tests — negative (GCC)
+      - name: Integration tests — negative
         shell: bash
         run: |
           set -euo pipefail
@@ -112,12 +112,12 @@ jobs:
 
           mkdir -p tests/build
 
-          echo "=== Negative Integration Tests (Linux/GCC) ==="
+          echo "=== Negative Integration Tests (Linux) ==="
           for osc_file in tests/negative/*.osc; do
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -165,7 +165,7 @@ jobs:
       - name: Run unit tests (53 tests)
         run: cargo test
 
-      - name: Integration tests — positive (MSVC)
+      - name: Integration tests — positive (freestanding)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -178,7 +178,7 @@ jobs:
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
           }
 
-          Write-Host "=== Positive Integration Tests (Windows/MSVC) ==="
+          Write-Host "=== Positive Integration Tests (Windows, freestanding) ==="
 
           foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
@@ -191,21 +191,14 @@ jobs:
               continue
             }
 
-            # Transpile .osc -> .c
-            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>"tests\build\$name.err"
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "FAIL: $name - transpile error"
-              if (Test-Path "tests\build\$name.err") {
-                Get-Content "tests\build\$name.err"
-              }
-              $Fail++
-              continue
+            # FFI tests need libc
+            if ($name -match '^ffi') {
+              & $oscan --libc $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
+            } else {
+              & $oscan $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
             }
-
-            # Compile with MSVC cl.exe
-            & cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding "tests\build\$name.c" runtime\osc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
             if ($LASTEXITCODE -ne 0) {
-              Write-Host "FAIL: $name - C compile error (MSVC)"
+              Write-Host "FAIL: $name - compile error"
               if (Test-Path "tests\build\$name.err") {
                 Get-Content "tests\build\$name.err"
               }
@@ -233,7 +226,7 @@ jobs:
           Write-Host "Positive: $Pass passed, $Fail failed out of $Total"
           if ($Fail -gt 0) { exit 1 }
 
-      - name: Integration tests — negative (MSVC)
+      - name: Integration tests — negative
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
@@ -246,13 +239,13 @@ jobs:
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
           }
 
-          Write-Host "=== Negative Integration Tests (Windows/MSVC) ==="
+          Write-Host "=== Negative Integration Tests (Windows) ==="
 
           foreach ($bcFile in Get-ChildItem "tests\negative\*.osc") {
             $name = $bcFile.BaseName
             $Total++
 
-            & $oscan --libc $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -eq 0) {
               Write-Host "FAIL: $name - should have been rejected"
               $Fail++
@@ -266,53 +259,6 @@ jobs:
           Write-Host "Negative: $Pass passed, $Fail failed out of $Total"
           if ($Fail -gt 0) { exit 1 }
           exit 0
-
-      - name: Integration tests — freestanding (Clang)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Continue"
-          $oscan = ".\target\release\oscan.exe"
-          $Pass = 0
-          $Fail = 0
-          $Total = 0
-
-          if (-not (Test-Path "tests\build")) {
-            New-Item -ItemType Directory -Path "tests\build" | Out-Null
-          }
-
-          Write-Host "=== Freestanding Integration Tests (Windows/Clang) ==="
-
-          foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
-            $name = $bcFile.BaseName
-            # Skip FFI tests — they require libc symbols
-            if ($name -match '^ffi') { continue }
-            $Total++
-
-            # Compile freestanding (default, no --libc)
-            & $oscan $bcFile.FullName -o "tests\build\${name}_free.exe" 2>"tests\build\${name}_free.err"
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "FAIL: $name - freestanding compile error"
-              if (Test-Path "tests\build\${name}_free.err") {
-                Get-Content "tests\build\${name}_free.err"
-              }
-              $Fail++
-              continue
-            }
-
-            # Run
-            $actual = & ".\tests\build\${name}_free.exe" 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "FAIL: $name - runtime error (exit $LASTEXITCODE)"
-              $Fail++
-            } else {
-              Write-Host "PASS: $name"
-              $Pass++
-            }
-          }
-
-          Write-Host ""
-          Write-Host "Freestanding: $Pass passed, $Fail failed out of $Total"
-          if ($Fail -gt 0) { exit 1 }
 
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (macOS)
@@ -346,19 +292,18 @@ jobs:
       - name: Run unit tests (53 tests)
         run: cargo test
 
-      - name: Integration tests — positive (Clang)
+      - name: Integration tests — positive (freestanding)
         shell: bash
         run: |
           set -euo pipefail
           oscan="./target/release/oscan"
-          CC="clang"
           PASS=0
           FAIL=0
           TOTAL=0
 
           mkdir -p tests/build
 
-          echo "=== Positive Integration Tests (macOS/Clang) ==="
+          echo "=== Positive Integration Tests (macOS/Clang, freestanding) ==="
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
             expected="tests/expected/${name}.expected"
@@ -370,20 +315,21 @@ jobs:
               continue
             fi
 
-            # Transpile .osc → .c
-            if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>"tests/build/${name}.err"; then
-              echo "FAIL: $name — transpile error"
-              cat "tests/build/${name}.err"
-              FAIL=$((FAIL + 1))
-              continue
-            fi
-
-            # Compile C with Clang
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
-              echo "FAIL: $name — C compile error"
-              cat "tests/build/${name}.err"
-              FAIL=$((FAIL + 1))
-              continue
+            # FFI tests need libc
+            if echo "$name" | grep -q '^ffi'; then
+              if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+                echo "FAIL: $name — compile error (libc)"
+                cat "tests/build/${name}.err"
+                FAIL=$((FAIL + 1))
+                continue
+              fi
+            else
+              if ! "$oscan" "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+                echo "FAIL: $name — compile error (freestanding)"
+                cat "tests/build/${name}.err"
+                FAIL=$((FAIL + 1))
+                continue
+              fi
             fi
 
             # Run and compare
@@ -405,7 +351,7 @@ jobs:
           echo "Positive: $PASS passed, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
 
-      - name: Integration tests — negative (Clang)
+      - name: Integration tests — negative
         shell: bash
         run: |
           set -euo pipefail
@@ -416,12 +362,12 @@ jobs:
 
           mkdir -p tests/build
 
-          echo "=== Negative Integration Tests (macOS/Clang) ==="
+          echo "=== Negative Integration Tests (macOS) ==="
           for osc_file in tests/negative/*.osc; do
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -456,7 +402,7 @@ jobs:
       - name: Build oscan (host x86_64)
         run: cargo build --release
 
-      - name: Integration tests — positive (ARM64 via QEMU)
+      - name: Integration tests — positive (ARM64 via QEMU, freestanding)
         shell: bash
         run: |
           set -euo pipefail
@@ -471,8 +417,14 @@ jobs:
             TOTAL=$((TOTAL + 1))
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
-            "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-            $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            # FFI tests need libc
+            if echo "$name" | grep -q '^ffi'; then
+              "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            else
+              "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=c11 -ffreestanding -nostdlib -static "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            fi
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
             expected_content=$(cat "$expected")
@@ -481,6 +433,8 @@ jobs:
               PASS=$((PASS + 1))
             else
               echo "FAIL: $name — output mismatch (ARM64)"
+              echo "  Expected: $(head -3 <<< "$expected_content")"
+              echo "  Actual:   $(head -3 <<< "$actual")"
               FAIL=$((FAIL + 1))
             fi
           done
