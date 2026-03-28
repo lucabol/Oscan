@@ -134,7 +134,7 @@ jobs:
   # Unit Tests + Integration Tests (Windows)
   # ─────────────────────────────────────────────
   windows:
-    name: Windows (MSVC, x86_64)
+    name: Windows (MSVC + Clang, x86_64)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -266,6 +266,53 @@ jobs:
           Write-Host "Negative: $Pass passed, $Fail failed out of $Total"
           if ($Fail -gt 0) { exit 1 }
           exit 0
+
+      - name: Integration tests — freestanding (Clang)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $oscan = ".\target\release\oscan.exe"
+          $Pass = 0
+          $Fail = 0
+          $Total = 0
+
+          if (-not (Test-Path "tests\build")) {
+            New-Item -ItemType Directory -Path "tests\build" | Out-Null
+          }
+
+          Write-Host "=== Freestanding Integration Tests (Windows/Clang) ==="
+
+          foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
+            $name = $bcFile.BaseName
+            # Skip FFI tests — they require libc symbols
+            if ($name -match '^ffi') { continue }
+            $Total++
+
+            # Compile freestanding (default, no --libc)
+            & $oscan $bcFile.FullName -o "tests\build\${name}_free.exe" 2>"tests\build\${name}_free.err"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $name - freestanding compile error"
+              if (Test-Path "tests\build\${name}_free.err") {
+                Get-Content "tests\build\${name}_free.err"
+              }
+              $Fail++
+              continue
+            }
+
+            # Run
+            $actual = & ".\tests\build\${name}_free.exe" 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $name - runtime error (exit $LASTEXITCODE)"
+              $Fail++
+            } else {
+              Write-Host "PASS: $name"
+              $Pass++
+            }
+          }
+
+          Write-Host ""
+          Write-Host "Freestanding: $Pass passed, $Fail failed out of $Total"
+          if ($Fail -gt 0) { exit 1 }
 
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (macOS)

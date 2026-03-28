@@ -200,6 +200,30 @@ fn find_vcvarsall_from_cl(cl_path: &str) -> Option<String> {
     None
 }
 
+/// Try to find Clang bundled with Visual Studio.
+fn find_vs_clang() -> Option<String> {
+    let vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe";
+    if Path::new(vswhere).exists() {
+        let output = Command::new(vswhere)
+            .args(["-latest", "-products", "*",
+                   "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                   "-property", "installationPath"])
+            .output();
+        if let Ok(out) = output {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = stdout.lines().filter(|l| !l.trim().is_empty()).last() {
+                    let clang_path = format!(r"{}\VC\Tools\Llvm\x64\bin\clang.exe", line.trim());
+                    if Path::new(&clang_path).exists() {
+                        return Some(clang_path);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Try to locate cl.exe via vswhere or well-known Visual Studio paths.
 fn find_msvc_cl() -> Option<(String, Option<String>)> {
     // Try vswhere first
@@ -427,6 +451,13 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
         }
         CCompiler::Msvc { cl_path, vcvars } => {
             if freestanding {
+                // Try VS-bundled clang for true freestanding on Windows
+                if cfg!(windows) {
+                    if let Some(clang_path) = find_vs_clang() {
+                        eprintln!("Compiling with clang (freestanding)...");
+                        return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                    }
+                }
                 eprintln!("note: freestanding mode requires GCC/Clang; falling back to libc mode for MSVC");
             }
             eprintln!("Compiling with MSVC cl.exe...");
@@ -444,12 +475,16 @@ fn compile_with_gcc_or_clang(
 
     if freestanding {
         // Freestanding: single TU (runtime is #included), no libc
+        command.arg("-std=c11").arg("-ffreestanding");
+        if cfg!(windows) {
+            // Windows: link kernel32 for Win32 API (VirtualAlloc, WriteFile, etc.)
+            command.arg("-lkernel32");
+        } else {
+            // Unix: fully standalone, no system libraries
+            command.arg("-nostdlib").arg("-static")
+                .arg("-Wno-builtin-declaration-mismatch");
+        }
         command
-            .arg("-std=c11")
-            .arg("-ffreestanding")
-            .arg("-nostdlib")
-            .arg("-static")
-            .arg("-Wno-builtin-declaration-mismatch")
             .arg(c_file)
             .arg(format!("-I{}", runtime_dir.display()))
             .arg("-o")

@@ -203,6 +203,34 @@ if (-not $SkipIntegration) {
     # Cleanup .obj files left by MSVC
     Get-ChildItem "*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
     Get-ChildItem "tests\build\*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+
+    # ── Freestanding tests (via oscan default mode) ──
+    Write-Host "`n── Freestanding tests (Clang) ──" -ForegroundColor Yellow
+    $pass = 0; $fail = 0
+    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
+        $name = $bcFile.BaseName
+        # Skip FFI tests — they require libc symbols
+        if ($name -match '^ffi') { continue }
+
+        & $oscan $bcFile.FullName -o "tests\build\${name}_free.exe" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  FAIL: $name — freestanding compile error" -ForegroundColor Red
+            $fail++; continue
+        }
+
+        $exitCode = 0
+        & ".\tests\build\${name}_free.exe" 2>&1 | Out-Null
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host "  FAIL: $name — runtime error (exit $exitCode)" -ForegroundColor Red
+            $fail++
+        } else {
+            Write-Host "  PASS: $name (freestanding)" -ForegroundColor Green
+            $pass++
+        }
+    }
+    Write-Host "Freestanding: $pass passed, $fail failed" -ForegroundColor $(if ($fail -gt 0) {"Red"} else {"Green"})
+    $script:TotalPass += $pass; $script:TotalFail += $fail
 }
 
 # ── WSL Integration tests (Linux/GCC via WSL) ─────────

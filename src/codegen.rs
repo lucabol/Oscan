@@ -436,8 +436,9 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_main_wrapper(&mut self) {
-        self.line("int main(void) {");
+        self.line("int main(int argc, char *argv[]) {");
         self.indent += 1;
+        self.line("(void)argc; (void)argv;");
         self.line("osc_arena* _arena = osc_arena_create(1048576);");
         self.line("osc_global_arena = _arena;");
 
