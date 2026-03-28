@@ -57,7 +57,7 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     }
 
     # Step 2: Compile .c -> binary
-    & $CC "build\$name.c" "..\runtime\osc_runtime.c" "-I..\runtime" -o "build\$name.exe" -std=c99 -lm 2>"build\$name.err"
+    & $CC "build\$name.c" "..\runtime\osc_runtime.c" "-I..\runtime" "-I..\deps\laststanding" -o "build\$name.exe" -std=c99 -lm 2>"build\$name.err"
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAIL (C compile error)"
         if (Test-Path "build\$name.err") {

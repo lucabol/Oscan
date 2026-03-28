@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -73,7 +75,7 @@ jobs:
             fi
 
             # Compile C with GCC
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — C compile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -136,6 +138,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -199,7 +203,7 @@ jobs:
             }
 
             # Compile with MSVC cl.exe
-            & cl.exe /nologo /std:c11 /Iruntime "tests\build\$name.c" runtime\osc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
+            & cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding "tests\build\$name.c" runtime\osc_runtime.c /Fe:"tests\build\$name.exe" /link 2>"tests\build\$name.err"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - C compile error (MSVC)"
               if (Test-Path "tests\build\$name.err") {
@@ -271,6 +275,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -326,7 +332,7 @@ jobs:
             fi
 
             # Compile C with Clang
-            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
+            if ! $CC -std=c99 "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>"tests/build/${name}.err"; then
               echo "FAIL: $name — C compile error"
               cat "tests/build/${name}.err"
               FAIL=$((FAIL + 1))
@@ -389,6 +395,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -417,7 +425,7 @@ jobs:
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
             "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-            $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
 
             actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
             expected_content=$(cat "$expected")

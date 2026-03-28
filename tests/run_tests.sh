@@ -54,7 +54,7 @@ for osc_file in positive/*.osc; do
     fi
 
     # Step 2: Compile .c → binary
-    if ! $CC "build/${name}.c" ../runtime/osc_runtime.c -I../runtime -o "build/${name}" -std=c99 -lm 2>"build/${name}.err"; then
+    if ! $CC "build/${name}.c" ../runtime/osc_runtime.c -I../runtime -I../deps/laststanding -o "build/${name}" -std=c99 -lm 2>"build/${name}.err"; then
         echo "FAIL (C compile error)"
         cat "build/${name}.err" | sed 's/^/    /'
         FAIL=$((FAIL + 1))

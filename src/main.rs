@@ -297,6 +297,20 @@ fn find_runtime_dir() -> PathBuf {
     process::exit(1);
 }
 
+/// Discover extra include directories (e.g. git submodule deps).
+/// Returns paths that exist; silently skips missing ones.
+fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    // deps/laststanding is a sibling of runtime/
+    if let Some(project_root) = runtime_dir.parent() {
+        let laststanding = project_root.join("deps").join("laststanding");
+        if laststanding.exists() {
+            dirs.push(laststanding);
+        }
+    }
+    dirs
+}
+
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
 fn compile_to_executable(c_code: &str, exe_path: &Path) {
     let temp_dir = env::temp_dir().join("oscan_temp");
@@ -318,8 +332,9 @@ fn compile_to_executable(c_code: &str, exe_path: &Path) {
         eprintln!("error: runtime files not found in {}", runtime_dir.display());
         process::exit(1);
     }
+    let extra_includes = find_extra_include_dirs(&runtime_dir);
 
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir);
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir, &extra_includes);
     // Clean up temp C file
     let _ = fs::remove_file(&c_file);
 
@@ -357,8 +372,9 @@ fn run_program(source_path: &str, c_code: &str) {
         eprintln!("error: runtime files not found in {}", runtime_dir.display());
         process::exit(1);
     }
+    let extra_includes = find_extra_include_dirs(&runtime_dir);
 
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir, &extra_includes);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -382,7 +398,7 @@ fn run_program(source_path: &str, c_code: &str) {
 }
 
 /// Detect a C compiler and invoke it. Returns true on success.
-fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path) -> bool {
+fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path, extra_includes: &[PathBuf]) -> bool {
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
@@ -400,31 +416,36 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
     match &compiler {
         CCompiler::Gcc(cmd) => {
             eprintln!("Compiling with gcc...");
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir)
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes)
         }
         CCompiler::Clang(cmd) => {
             eprintln!("Compiling with clang...");
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir)
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes)
         }
         CCompiler::Msvc { cl_path, vcvars } => {
             eprintln!("Compiling with MSVC cl.exe...");
-            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir)
+            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir, extra_includes)
         }
     }
 }
 
 fn compile_with_gcc_or_clang(
     cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
+    extra_includes: &[PathBuf],
 ) -> bool {
-    let output = Command::new(cmd)
+    let mut command = Command::new(cmd);
+    command
         .arg("-std=c99")
         .arg(c_file)
         .arg(runtime_c)
         .arg(format!("-I{}", runtime_dir.display()))
         .arg("-o")
         .arg(exe_file)
-        .arg("-lm")
-        .output();
+        .arg("-lm");
+    for dir in extra_includes {
+        command.arg(format!("-I{}", dir.display()));
+    }
+    let output = command.output();
 
     match output {
         Ok(out) => {
@@ -446,6 +467,7 @@ fn compile_with_gcc_or_clang(
 fn compile_with_msvc(
     cl_path: &str, vcvars: Option<&str>,
     c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
+    extra_includes: &[PathBuf],
 ) -> bool {
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
@@ -453,10 +475,13 @@ fn compile_with_msvc(
         // (Embedding quotes inside `cmd /c "..."` from Rust is unreliable
         //  because Rust escapes `"` as `\"` which cmd.exe does not understand.)
         let bat_file = exe_file.with_extension("bat");
+        let extra_i: String = extra_includes.iter()
+            .map(|d| format!(" /I\"{}\"", d.display()))
+            .collect();
         let bat_content = format!(
-            "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /I\"{}\" \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+            "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /I\"{}\"{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
             vcvars_path, cl_path,
-            runtime_dir.display(), c_file.display(), runtime_c.display(), exe_file.display(),
+            runtime_dir.display(), extra_i, c_file.display(), runtime_c.display(), exe_file.display(),
         );
         if let Err(e) = fs::write(&bat_file, &bat_content) {
             eprintln!("failed to write compile script: {e}");
@@ -482,15 +507,20 @@ fn compile_with_msvc(
         }
     } else {
         // cl.exe already on PATH (e.g. Developer Command Prompt)
-        let output = Command::new(cl_path)
+        let mut command = Command::new(cl_path);
+        command
             .arg("/nologo")
             .arg("/std:c11")
-            .arg(format!("/I{}", runtime_dir.display()))
+            .arg(format!("/I{}", runtime_dir.display()));
+        for dir in extra_includes {
+            command.arg(format!("/I{}", dir.display()));
+        }
+        command
             .arg(c_file)
             .arg(runtime_c)
             .arg(format!("/Fe:{}", exe_file.display()))
-            .arg("/link")
-            .output();
+            .arg("/link");
+        let output = command.output();
         match output {
             Ok(out) => {
                 if !out.status.success() {

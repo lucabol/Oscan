@@ -49,7 +49,7 @@ function Find-CCompiler {
 }
 
 function Compile-C-GCC($cc, $srcC, $outExe) {
-    & $cc -std=c99 $srcC runtime/osc_runtime.c -Iruntime -o $outExe -lm 2>&1
+    & $cc -std=c99 $srcC runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o $outExe -lm 2>&1
     return $LASTEXITCODE -eq 0
 }
 
@@ -59,7 +59,7 @@ function Compile-C-MSVC($compiler, $srcC, $outExe) {
         @"
 @echo off
 call "$($compiler.VcVars)" x64 >nul 2>&1
-cl.exe /nologo /std:c11 /Iruntime "$srcC" runtime\osc_runtime.c /Fe:"$outExe" /link >nul 2>&1
+cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding "$srcC" runtime\osc_runtime.c /Fe:"$outExe" /link >nul 2>&1
 exit /b %ERRORLEVEL%
 "@ | Set-Content $bat
         cmd /c $bat 2>&1 | Out-Null
@@ -67,7 +67,7 @@ exit /b %ERRORLEVEL%
         Remove-Item $bat -ErrorAction SilentlyContinue
         return $ok
     } else {
-        & cl.exe /nologo /std:c11 /Iruntime $srcC runtime\osc_runtime.c /Fe:"$outExe" /link 2>&1 | Out-Null
+        & cl.exe /nologo /std:c11 /Iruntime /Ideps\laststanding $srcC runtime\osc_runtime.c /Fe:"$outExe" /link 2>&1 | Out-Null
         return $LASTEXITCODE -eq 0
     }
 }
@@ -241,7 +241,7 @@ if (-not $SkipWSL) {
             }
 
             # Compile inside WSL with gcc
-            wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -o tests/build/${name}_wsl -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
+            wsl bash -c "cd '$wslDir' && gcc -std=c99 tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_wsl -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — gcc compile error (WSL)" -ForegroundColor Red
                 $fail++; continue
@@ -302,7 +302,7 @@ if (-not $SkipARM) {
             }
 
             # Cross-compile with aarch64-linux-gnu-gcc -static inside WSL
-            wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -o tests/build/${name}_arm -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
+            wsl bash -c "cd '$wslDir' && aarch64-linux-gnu-gcc -std=c99 -static tests/build/$name.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${name}_arm -lm" 2>&1 | ForEach-Object { "$_" } | Out-Null
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "  FAIL: $name — cross-compile error (ARM64)" -ForegroundColor Red
                 $fail++; continue
