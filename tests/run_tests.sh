@@ -1,7 +1,7 @@
 #!/bin/bash
-# Oscan Test Runner
-# Usage: ./run_tests.sh <oscan-binary> [cc-compiler]
-# Example: ./run_tests.sh ../target/release/oscan gcc
+# Oscan Test Runner — quiet by default, -v for verbose
+# Usage: ./run_tests.sh <oscan-binary> [-v]
+# Example: ./run_tests.sh ../target/release/oscan -v
 
 set -euo pipefail
 
@@ -9,104 +9,104 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <oscan-binary> [cc-compiler]"
-    echo "Example: $0 ../target/release/oscan gcc"
+    echo "Usage: $0 <oscan-binary> [-v]"
     exit 1
 fi
 
 OSCAN="$1"
-CC="${2:-gcc}"
-PASS=0
-FAIL=0
-TOTAL=0
+VERBOSE=false
+[ "${2:-}" = "-v" ] && VERBOSE=true
 
-# Ensure build directory exists
+PASS=0; FAIL=0; NEG_PASS=0; NEG_FAIL=0
+FAILURES=""
+
 mkdir -p build
 
-echo "=== Oscan Test Suite ==="
-echo "Compiler: $OSCAN"
-echo "C Compiler: $CC"
-echo ""
-
 # ─── Positive Tests ───
-echo "--- Positive Tests (must compile and produce correct output) ---"
-echo ""
-
 for osc_file in positive/*.osc; do
     name=$(basename "$osc_file" .osc)
     expected_file="expected/${name}.expected"
-    TOTAL=$((TOTAL + 1))
-    echo -n "  Testing $name... "
 
-    # Check expected file exists
     if [ ! -f "$expected_file" ]; then
-        echo "FAIL (missing expected file: $expected_file)"
-        FAIL=$((FAIL + 1))
-        continue
+        FAILURES="$FAILURES\n  $name — missing expected file"
+        FAIL=$((FAIL + 1)); continue
     fi
 
-    # Step 1: Compile .osc → binary
-    # FFI tests need libc
     if echo "$name" | grep -q '^ffi'; then
-      if ! "$OSCAN" --libc "$osc_file" -o "build/${name}" 2>"build/${name}.err"; then
-        echo "FAIL (compile error, libc)"
-        cat "build/${name}.err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        continue
-      fi
+      "$OSCAN" --libc "$osc_file" -o "build/${name}" 2>"build/${name}.err" || {
+        FAILURES="$FAILURES\n  $name — compile error"; FAIL=$((FAIL + 1)); continue; }
     else
-      if ! "$OSCAN" "$osc_file" -o "build/${name}" 2>"build/${name}.err"; then
-        echo "FAIL (compile error, freestanding)"
-        cat "build/${name}.err" | sed 's/^/    /'
-        FAIL=$((FAIL + 1))
-        continue
-      fi
+      "$OSCAN" "$osc_file" -o "build/${name}" 2>"build/${name}.err" || {
+        FAILURES="$FAILURES\n  $name — compile error"; FAIL=$((FAIL + 1)); continue; }
     fi
 
-    # Step 3: Run and compare output
     actual=$("./build/${name}" 2>&1) || true
     expected=$(cat "$expected_file")
 
     if [ "$actual" = "$expected" ]; then
-        echo "PASS"
+        $VERBOSE && echo "  PASS: $name"
         PASS=$((PASS + 1))
     else
-        echo "FAIL (output mismatch)"
-        echo "    Expected:"
-        echo "$expected" | sed 's/^/      /'
-        echo "    Actual:"
-        echo "$actual" | sed 's/^/      /'
+        FAILURES="$FAILURES\n  $name — output mismatch"
         FAIL=$((FAIL + 1))
     fi
 done
-
-echo ""
 
 # ─── Negative Tests ───
-echo "--- Negative Tests (must be rejected by the compiler) ---"
-echo ""
-
 for osc_file in negative/*.osc; do
     name=$(basename "$osc_file" .osc)
-    TOTAL=$((TOTAL + 1))
-    echo -n "  Testing reject $name... "
-
-    if "$OSCAN" "$osc_file" -o "build/${name}.c" 2>"build/${name}.err"; then
-        echo "FAIL (should have been rejected)"
-        FAIL=$((FAIL + 1))
+    if "$OSCAN" "$osc_file" -o "build/${name}.c" 2>/dev/null; then
+        FAILURES="$FAILURES\n  $name — should have been rejected"
+        NEG_FAIL=$((NEG_FAIL + 1))
     else
-        echo "PASS (correctly rejected)"
-        PASS=$((PASS + 1))
+        $VERBOSE && echo "  PASS: $name — correctly rejected"
+        NEG_PASS=$((NEG_PASS + 1))
     fi
 done
 
-echo ""
-echo "========================================="
-echo "Results: $PASS passed, $FAIL failed out of $TOTAL tests"
-echo "========================================="
+# ─── Freestanding Verification ───
+V_PASS=0; V_FAIL=0
+for exe in build/*; do
+    [ -x "$exe" ] || continue
+    name=$(basename "$exe")
+    echo "$name" | grep -qE '\.(c|err)$' && continue
+    echo "$name" | grep -q '^ffi' && continue
+    file "$exe" | grep -q 'ELF' || continue
 
-if [ $FAIL -gt 0 ]; then
+    file_info=$(file "$exe")
+    ok=true
+    if ! echo "$file_info" | grep -q 'statically linked'; then
+        ldd_out=$(ldd "$exe" 2>&1 || true)
+        echo "$ldd_out" | grep -q 'not a dynamic executable' || ok=false
+    fi
+    stdlib_count=$(strings "$exe" | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)
+    [ "$stdlib_count" -gt 0 ] && ok=false
+
+    if $ok; then V_PASS=$((V_PASS + 1)); else V_FAIL=$((V_FAIL + 1)); fi
+done
+
+# ─── Summary ───
+TOTAL_FAIL=$((FAIL + NEG_FAIL + V_FAIL))
+
+echo ""
+echo "━━━ Oscan Test Suite ━━━"
+echo "  Positive:     $PASS passed, $FAIL failed"
+echo "  Negative:     $NEG_PASS passed, $NEG_FAIL failed"
+if [ $((V_PASS + V_FAIL)) -gt 0 ]; then
+echo "  Freestanding: $V_PASS verified, $V_FAIL failed"
+fi
+
+if [ -n "$FAILURES" ]; then
+    echo ""
+    echo "  Failures:"
+    echo -e "$FAILURES"
+fi
+
+echo ""
+if [ $TOTAL_FAIL -gt 0 ]; then
+    echo "  SOME TESTS FAILED"
     exit 1
 else
+    echo "  ALL TESTS PASSED ✓"
     exit 0
 fi
