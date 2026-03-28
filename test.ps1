@@ -385,6 +385,49 @@ if (-not $SkipIntegration) {
         $color = if ($vFail -gt 0) { "Red" } else { "Green" }
         Write-PhaseResult "$vPass verified, $vFail failed" $color
     }
+    # Windows libc (stdlib) tests
+    Write-Phase "Windows x64 (libc)"
+    if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (libc/stdlib) ──" -ForegroundColor Yellow }
+    $libcPass = 0; $libcFail = 0
+    foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
+        $name = $bcFile.BaseName
+
+        # Use libc-specific expected output if available, else standard
+        $libcExpected = "tests\expected_libc\$name.expected"
+        $stdExpected  = "tests\expected\$name.expected"
+        $expectedFile = if (Test-Path $libcExpected) { $libcExpected } else { $stdExpected }
+
+        if (-not (Test-Path $expectedFile)) {
+            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "missing expected file"
+            $libcFail++; continue
+        }
+
+        & $oscan --libc $bcFile.FullName -o "tests\build\${name}_libc.exe" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "compile error"
+            $libcFail++; continue
+        }
+
+        $actual = & ".\tests\build\${name}_libc.exe" 2>&1 | Out-String
+        $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+        $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+
+        if ($actual -eq $expected) {
+            Add-TestResult $name "win-x64-libc" "positive-libc" "PASS" ""
+            $libcPass++
+        } else {
+            Add-TestResult $name "win-x64-libc" "positive-libc" "FAIL" "output mismatch"
+            $libcFail++
+        }
+    }
+    if (-not $VerboseOutput) {
+        $color = if ($libcFail -gt 0) { "Red" } else { "Green" }
+        Write-PhaseResult "$libcPass passed, $libcFail failed" $color
+    }
+
+    # Cleanup libc .obj files
+    Get-ChildItem "*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
+    Get-ChildItem "tests\build\*.obj" -ErrorAction SilentlyContinue | Remove-Item -ErrorAction SilentlyContinue
 }
 
 # ══════════════════════════════════════════════════════
