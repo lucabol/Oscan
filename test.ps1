@@ -173,14 +173,22 @@ function Show-Summary {
         if ($probe) { $probeRows += $probe }
     }
     if ($probeRows.Count -gt 0) {
+        # Get stdlib (libc) exe sizes for hello_world
+        $stdlibSizes = @{}
+        $hwLibc = "tests\build\hello_world_libc.exe"
+        if (Test-Path $hwLibc) { $stdlibSizes["win-x64"] = (Get-Item $hwLibc).Length }
+        # WSL/ARM64 stdlib sizes would need wsl stat — approximate from test results if available
+
         Write-Host "  Freestanding Verification (hello_world):" -ForegroundColor White
-        Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f "Architecture", "Size", "Dependencies", "Stdlib")
-        Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f ("─" * 16), ("─" * 10), ("─" * 18), ("─" * 8))
+        Write-Host ("  {0,-16} {1,10} {2,-18} {3,10}" -f "Architecture", "Size", "Dependencies", "Stdlib")
+        Write-Host ("  {0,-16} {1,10} {2,-18} {3,10}" -f ("─" * 16), ("─" * 10), ("─" * 18), ("─" * 10))
         foreach ($v in $probeRows) {
             $ok = ($v.DepCheck -ne 'FAIL') -and ($v.StdlibCheck -ne 'FAIL')
             $color = if ($ok) { "Green" } else { "Red" }
             $depStr = if ($v.DepDetail.Length -gt 18) { $v.DepDetail.Substring(0, 15) + "..." } else { $v.DepDetail }
-            Write-Host ("  {0,-16} {1,10} {2,-18} {3,-8}" -f $archLabels[$v.Arch], (Format-Size $v.Size), $depStr, $v.StdlibCheck) -ForegroundColor $color
+            $stdlibStr = if ($stdlibSizes.ContainsKey($v.Arch)) { Format-Size $stdlibSizes[$v.Arch] } else { "-" }
+            if ($v.StdlibCheck -eq 'FAIL') { $stdlibStr = "FAIL" }
+            Write-Host ("  {0,-16} {1,10} {2,-18} {3,10}" -f $archLabels[$v.Arch], (Format-Size $v.Size), $depStr, $stdlibStr) -ForegroundColor $color
         }
         Write-Host ""
     }
@@ -225,6 +233,10 @@ function Show-Summary {
 # ══════════════════════════════════════════════════════
 
 Write-Host "`n━━━ Oscan Test Suite ━━━`n" -ForegroundColor Cyan
+
+# Clean build directory
+if (Test-Path "tests\build") { Remove-Item "tests\build\*" -Recurse -Force -ErrorAction SilentlyContinue }
+else { New-Item -ItemType Directory -Path "tests\build" -Force | Out-Null }
 
 if (-not $SkipBuild) {
     Write-Phase "Building (release)"
