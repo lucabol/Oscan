@@ -262,6 +262,8 @@ Write-Host "`n━━━ Oscan Test Suite ━━━`n" -ForegroundColor Cyan
 # Clean build directory
 if (Test-Path "tests\build") { Remove-Item "tests\build\*" -Recurse -Force -ErrorAction SilentlyContinue }
 else { New-Item -ItemType Directory -Path "tests\build" -Force | Out-Null }
+# Clean compiled examples
+Get-ChildItem "examples\*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 if (-not $SkipBuild) {
     Write-Phase "Building (release)"
@@ -754,7 +756,7 @@ if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Examples compilation �
 $exPass = 0; $exFail = 0
 foreach ($exFile in Get-ChildItem "examples\*.osc") {
     $name = $exFile.BaseName
-    & $oscan $exFile.FullName -o "tests\build\${name}_ex.exe" 2>$null
+    & $oscan $exFile.FullName -o "examples\${name}.exe" 2>$null
     if ($LASTEXITCODE -eq 0) {
         Add-TestResult $name "win-x64" "examples" "PASS" ""
         $exPass++
