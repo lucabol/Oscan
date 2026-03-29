@@ -1,11 +1,13 @@
-// Test: Arena stress — many allocations to verify arena grows correctly
-// Exercises: large number of array pushes, many string concats, arena capacity growth
-// NOTE: Initializes arrays with first element to avoid empty-array elem_size bug
+// Test: Arena stress — push enough elements to force the arena allocator
+// past its 1 MB block boundary.  With i32 (4 bytes each), 300 000 elements
+// need ~1.14 MB of contiguous capacity after doublings, which exceeds the
+// default 1 MB arena block and forces a new block allocation.
+// Also exercises many string concats and i32_to_str calls.
 
 fn! main() {
-    // Stress test 1: Single large array with many pushes
+    // Stress test 1: Push 300 000 elements to cross the 1 MB arena boundary
     let mut big: [i32] = [0];
-    for i in 1..500 {
+    for i in 1..300000 {
         push(big, i);
     };
     print("big len: ");
@@ -14,13 +16,13 @@ fn! main() {
     print("big[0]: ");
     print_i32(big[0]);
     println("");
-    print("big[499]: ");
-    print_i32(big[499]);
+    print("big[299999]: ");
+    print_i32(big[299999]);
     println("");
 
-    // Verify sum to catch corruption: 0+1+2+...+499 = 124750
+    // Verify sum of first 1000 to catch corruption: 0+1+2+...+999 = 499500
     let mut sum: i32 = 0;
-    for i in 0..500 {
+    for i in 0..1000 {
         sum = sum + big[i];
     };
     print("big sum: ");

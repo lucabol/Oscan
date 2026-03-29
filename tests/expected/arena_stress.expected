@@ -1,7 +1,7 @@
-big len: 500
+big len: 300000
 big[0]: 0
-big[499]: 499
-big sum: 124750
+big[299999]: 299999
+big sum: 499500
 str len: 50
 99
 arena stress OK
