@@ -150,6 +150,12 @@ cd runtime && make test
 
 Oscan v0.1 is feature-complete for its initial scope: the full language compiles to C, all 116 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies. Recent additions include file I/O, string operations, bitwise operators, and command-line argument access.
 
+## Freestanding Runtime (`deps/laststanding`)
+
+Oscan's generated C code uses **laststanding** (`deps/laststanding/l_os.h`), a freestanding C library that provides OS primitives via direct syscalls — no libc required. This enables Oscan binaries to be truly self-contained.
+
+The laststanding library has been updated with many new primitives beyond what Oscan v0.1 currently exposes, including: sorting/searching (`l_qsort`, `l_bsearch`), random number generation (`l_rand`, `l_srand`), time (`l_time`), error reporting (`l_errno`, `l_strerror`), POSIX option parsing (`l_getopt`), symlink operations, formatted fd output (`l_dprintf`), process spawning, terminal control, and more. See **[Appendix A of the spec](docs/spec/oscan-spec.md#appendix-a-available-runtime-primitives-future-builtins)** for the full inventory of available primitives and their potential Oscan builtin mappings.
+
 ## Contributing
 
 This is a research project. The codebase is intentionally small and focused — contributions that align with the minimalist philosophy are welcome.

@@ -22,6 +22,9 @@
 10. [Standard Library (Micro-Lib)](#10-standard-library-micro-lib)
 11. [Example Programs](#11-example-programs)
 12. [Compiler Architecture Overview](#12-compiler-architecture-overview)
+- [Appendix A: Available Runtime Primitives (Future Builtins)](#appendix-a-available-runtime-primitives-future-builtins)
+- [Appendix B: Reserved for Future Consideration](#appendix-b-reserved-for-future-consideration)
+- [Appendix C: Design Rationale Summary](#appendix-c-design-rationale-summary)
 
 ---
 
@@ -1427,7 +1430,107 @@ cc output.c osc_runtime.c -o program  # Compile with C compiler
 
 ---
 
-## Appendix A: Reserved for Future Consideration
+## Appendix A: Available Runtime Primitives (Future Builtins)
+
+The `deps/laststanding` library (`l_os.h`) provides a freestanding C runtime with no libc dependency. Many functions already back existing Oscan builtins (e.g., `l_strlen` → `str_len`). The following **new** functions are available as potential future builtins but are not yet exposed in Oscan v0.1.
+
+> **Note:** This is a reference for future work, not a commitment to implement all of these.
+
+### Sorting & Searching
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_qsort(base, n, size, cmp)` | In-place Shell sort, no malloc/recursion | `sort(arr, cmp)` |
+| `l_bsearch(key, base, n, size, cmp)` | Binary search in sorted array | `binary_search(arr, key)` |
+
+### Random Number Generation
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_srand(seed)` | Seed xorshift32 PRNG | `seed_random(n)` |
+| `l_rand()` | Pseudo-random unsigned int | `random()` |
+
+### Math
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_abs(x)` / `l_labs(x)` | Absolute value (int / long) | `abs(n)` (already partially exposed) |
+| `L_MIN(a, b)` / `L_MAX(a, b)` | Numeric min/max macros | `min(a, b)` / `max(a, b)` |
+| `L_CLAMP(v, lo, hi)` | Clamp value to range | `clamp(v, lo, hi)` |
+
+### Time
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_time(t)` | Unix timestamp (seconds since epoch) | `time()` |
+| `l_sleep_ms(ms)` | Sleep for milliseconds | `sleep(ms)` |
+
+### String & Character Classification
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_strtok_r(str, delim, saveptr)` | Reentrant string tokenizer | `split(str, delim)` |
+| `l_strcasecmp(s1, s2)` | Case-insensitive comparison | `str_eq_ignore_case(a, b)` |
+| `l_isprint(c)` | Printable ASCII test | `is_printable(c)` |
+| `l_isxdigit(c)` | Hex digit test | `is_hex(c)` |
+| `l_basename(path)` / `l_dirname(path, buf, sz)` | Path component extraction | `basename(path)` / `dirname(path)` |
+
+### Error Reporting
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_errno()` | Last syscall error code | Better `Result<T, E>` error types |
+| `l_strerror(errnum)` | Human-readable error string | Richer error messages in `Result` |
+| `L_ENOENT`, `L_EACCES`, … | Cross-platform error code constants | Typed error enums |
+
+### I/O
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_read_line(fd, buf, bufsz)` | Read line from any fd (not just stdin) | Improve `read_line()` to accept fd |
+| `l_dprintf(fd, fmt, ...)` | Formatted output to fd | `fprintf(fd, fmt, ...)` |
+| `l_open_append(file)` / `l_open_trunc(file)` | Additional file open modes | `file_open_append` / `file_open_trunc` |
+| `l_read_nonblock(fd, buf, count)` | Non-blocking read | `try_read(fd)` |
+
+### CLI & Environment
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_getopt(argc, argv, optstring)` | POSIX-style option parsing | Enhanced arg parsing |
+| `l_getenv(name)` | Read environment variable | `env(name)` |
+| `l_find_executable(cmd, out, outsz)` | Search PATH for executable | `which(cmd)` |
+
+### File System
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_symlink(target, linkpath)` | Create symbolic link | `symlink(target, path)` |
+| `l_readlink(path, buf, bufsiz)` | Read symlink target | `readlink(path)` |
+| `l_realpath(path, resolved)` | Canonical absolute path | `realpath(path)` |
+| `l_stat(path, st)` / `l_fstat(fd, st)` | File metadata | `file_stat(path)` |
+| `l_opendir` / `l_readdir` / `l_closedir` | Directory listing | `list_dir(path)` |
+| `l_rename(old, new)` | Rename/move file | `file_rename(old, new)` |
+| `l_access(path, mode)` | Check file permissions | `file_exists(path)` |
+| `l_getcwd(buf, size)` / `l_chdir(path)` | Working directory | `cwd()` / `chdir(path)` |
+
+### Process Management
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_spawn(path, argv, envp)` | Spawn child process | `exec(cmd, args)` |
+| `l_wait(pid, exitcode)` | Wait for child | `wait(pid)` |
+| `l_pipe(fds)` / `l_dup2(old, new)` | Pipe and fd redirection | Pipeline support |
+
+### Terminal
+
+| `l_os.h` function | Description | Potential Oscan builtin |
+|--------------------|-------------|------------------------|
+| `l_term_raw()` / `l_term_restore(mode)` | Raw terminal mode | TUI / interactive input |
+| `l_term_size(rows, cols)` | Terminal dimensions | `term_size()` |
+
+---
+
+## Appendix B: Reserved for Future Consideration
 
 The following features are explicitly **NOT** in v0.1 but may be considered later:
 - User-defined generics
@@ -1440,7 +1543,7 @@ The following features are explicitly **NOT** in v0.1 but may be considered late
 
 These are documented here to confirm they are intentional omissions, not oversights.
 
-## Appendix B: Design Rationale Summary
+## Appendix C: Design Rationale Summary
 
 | Decision                         | Rationale                                                |
 |----------------------------------|----------------------------------------------------------|
