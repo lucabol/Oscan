@@ -21,7 +21,7 @@ The output is readable C99 that compiles on any platform with a C compiler.
 ### Prerequisites
 
 - **Rust** toolchain (to build the compiler)
-- **A C compiler** — GCC, Clang, or MSVC (the compiler auto-detects one)
+- **A C compiler** — GCC, Clang, or MSVC (the compiler auto-detects one). This is the only external dependency needed when running Oscan-generated binaries.
 
 ### Build
 
@@ -32,6 +32,10 @@ cargo build --release
 ```
 
 The binary is `target/release/oscan` (or `oscan.exe` on Windows).
+
+**Self-contained compiler:** The Oscan compiler embeds its runtime files (`osc_runtime.h`, `osc_runtime.c`, `l_os.h`) directly in the binary using Rust's `include_str!()`. This means the compiled binary is fully self-contained — you only need the `oscan` binary and a C compiler on the target machine. No need to distribute the `runtime/` or `deps/` directories.
+
+**Development mode:** If a `runtime/` directory exists next to the binary or in the current working directory during compilation, it takes precedence over the embedded files. This is useful for local development and testing of runtime changes.
 
 ### Hello World
 

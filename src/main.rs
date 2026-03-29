@@ -13,6 +13,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
+const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
+const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
+const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -316,24 +320,24 @@ fn find_c_compiler() -> Option<CCompiler> {
 
 /// Find the runtime directory, trying the exe's sibling `runtime/` first,
 /// then falling back to a `runtime/` in the current working directory.
-fn find_runtime_dir() -> PathBuf {
+/// Returns `None` when no on-disk runtime directory is found (embedded files
+/// will be used as a fallback).
+fn find_runtime_dir() -> Option<PathBuf> {
     // Try next to the executable first (for installed usage)
     if let Ok(exe) = env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let candidate = exe_dir.join("runtime");
             if candidate.exists() {
-                return candidate;
+                return Some(candidate);
             }
         }
     }
     // Fallback: cwd-relative (dev / project-root usage)
     let cwd = PathBuf::from("runtime");
     if cwd.exists() {
-        return cwd;
+        return Some(cwd);
     }
-    eprintln!("error: runtime directory not found");
-    eprintln!("make sure you're running from the project root or that runtime/ is next to the binary");
-    process::exit(1);
+    None
 }
 
 /// Discover extra include directories (e.g. git submodule deps).
@@ -364,19 +368,32 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
         process::exit(1);
     }
 
-    let runtime_dir = find_runtime_dir();
-    let runtime_c = runtime_dir.join("osc_runtime.c");
-    let runtime_h = runtime_dir.join("osc_runtime.h");
-    if !runtime_c.exists() || !runtime_h.exists() {
-        eprintln!("error: runtime files not found in {}", runtime_dir.display());
-        process::exit(1);
+    // Write embedded runtime files to temp dir (fallback for distribution mode)
+    for (name, content) in [
+        ("osc_runtime.h", EMBEDDED_RUNTIME_H),
+        ("osc_runtime.c", EMBEDDED_RUNTIME_C),
+        ("l_os.h", EMBEDDED_L_OS_H),
+    ] {
+        if let Err(e) = fs::write(temp_dir.join(name), content) {
+            eprintln!("error writing embedded runtime file {name}: {e}");
+            process::exit(1);
+        }
     }
-    let extra_includes = find_extra_include_dirs(&runtime_dir);
 
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &runtime_dir, &extra_includes, freestanding);
+    // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
+    let mut include_dirs: Vec<PathBuf> = Vec::new();
+    let runtime_c = if let Some(ref rd) = find_runtime_dir() {
+        include_dirs.push(rd.clone());
+        include_dirs.extend(find_extra_include_dirs(rd));
+        rd.join("osc_runtime.c")
+    } else {
+        temp_dir.join("osc_runtime.c")
+    };
+    include_dirs.push(temp_dir.clone());
+
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding);
     // Clean up temp files and directory
-    let _ = fs::remove_file(&c_file);
-    let _ = fs::remove_dir(&temp_dir);
+    let _ = fs::remove_dir_all(&temp_dir);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -399,22 +416,36 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
         process::exit(1);
     }
 
+    // Write embedded runtime files to temp dir (fallback for distribution mode)
+    for (name, content) in [
+        ("osc_runtime.h", EMBEDDED_RUNTIME_H),
+        ("osc_runtime.c", EMBEDDED_RUNTIME_C),
+        ("l_os.h", EMBEDDED_L_OS_H),
+    ] {
+        if let Err(e) = fs::write(temp_dir.join(name), content) {
+            eprintln!("error writing embedded runtime file {name}: {e}");
+            process::exit(1);
+        }
+    }
+
     let exe_file = if cfg!(windows) {
         temp_dir.join("program.exe")
     } else {
         temp_dir.join("program")
     };
 
-    let runtime_dir = find_runtime_dir();
-    let runtime_c = runtime_dir.join("osc_runtime.c");
-    let runtime_h = runtime_dir.join("osc_runtime.h");
-    if !runtime_c.exists() || !runtime_h.exists() {
-        eprintln!("error: runtime files not found in {}", runtime_dir.display());
-        process::exit(1);
-    }
-    let extra_includes = find_extra_include_dirs(&runtime_dir);
+    // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
+    let mut include_dirs: Vec<PathBuf> = Vec::new();
+    let runtime_c = if let Some(ref rd) = find_runtime_dir() {
+        include_dirs.push(rd.clone());
+        include_dirs.extend(find_extra_include_dirs(rd));
+        rd.join("osc_runtime.c")
+    } else {
+        temp_dir.join("osc_runtime.c")
+    };
+    include_dirs.push(temp_dir.clone());
 
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &runtime_dir, &extra_includes, freestanding);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -438,7 +469,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
 }
 
 /// Detect a C compiler and invoke it. Returns true on success.
-fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path, extra_includes: &[PathBuf], freestanding: bool) -> bool {
+fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, include_dirs: &[PathBuf], freestanding: bool) -> bool {
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
@@ -460,11 +491,11 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
             if freestanding && cfg!(windows) {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
-                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
                 }
             }
             eprintln!("Compiling with gcc{}...", if freestanding { " (freestanding)" } else { "" });
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
         CCompiler::Clang(cmd) => {
             // On Windows, clang from PATH (e.g. MSYS2) may lack MSVC compat;
@@ -472,11 +503,11 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
             if freestanding && cfg!(windows) {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
-                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
                 }
             }
             eprintln!("Compiling with clang{}...", if freestanding { " (freestanding)" } else { "" });
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding)
+            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
         CCompiler::Msvc { cl_path, vcvars } => {
             if freestanding {
@@ -484,21 +515,21 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_d
                 if cfg!(windows) {
                     if let Some(clang_path) = find_vs_clang() {
                         eprintln!("Compiling with clang (freestanding)...");
-                        return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, runtime_dir, extra_includes, freestanding);
+                        return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
                     }
                 }
                 eprintln!("note: freestanding mode requires GCC/Clang; falling back to libc mode for MSVC");
             }
             eprintln!("Compiling with MSVC cl.exe...");
             // MSVC always uses libc mode; pass OSC_NOFREESTANDING to select libc headers in dual-mode code
-            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, runtime_dir, extra_includes, false, freestanding)
+            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, include_dirs, false, freestanding)
         }
     }
 }
 
 fn compile_with_gcc_or_clang(
-    cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
-    extra_includes: &[PathBuf], freestanding: bool,
+    cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path,
+    include_dirs: &[PathBuf], freestanding: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -523,9 +554,11 @@ fn compile_with_gcc_or_clang(
                 .arg("-Wno-builtin-declaration-mismatch")
                 .arg("-Wl,--gc-sections,--build-id=none");
         }
+        command.arg(c_file);
+        for dir in include_dirs {
+            command.arg(format!("-I{}", dir.display()));
+        }
         command
-            .arg(c_file)
-            .arg(format!("-I{}", runtime_dir.display()))
             .arg("-o")
             .arg(exe_file);
     } else {
@@ -533,8 +566,11 @@ fn compile_with_gcc_or_clang(
         command
             .arg("-std=c99")
             .arg(c_file)
-            .arg(runtime_c)
-            .arg(format!("-I{}", runtime_dir.display()))
+            .arg(runtime_c);
+        for dir in include_dirs {
+            command.arg(format!("-I{}", dir.display()));
+        }
+        command
             .arg("-o")
             .arg(exe_file);
         // On Windows, math functions live in ucrt (no separate libm);
@@ -544,9 +580,6 @@ fn compile_with_gcc_or_clang(
         }
     }
 
-    for dir in extra_includes {
-        command.arg(format!("-I{}", dir.display()));
-    }
     let output = command.output();
 
     match output {
@@ -568,8 +601,8 @@ fn compile_with_gcc_or_clang(
 
 fn compile_with_msvc(
     cl_path: &str, vcvars: Option<&str>,
-    c_file: &Path, exe_file: &Path, runtime_c: &Path, runtime_dir: &Path,
-    extra_includes: &[PathBuf], freestanding: bool, needs_nofreestanding: bool,
+    c_file: &Path, exe_file: &Path, runtime_c: &Path,
+    include_dirs: &[PathBuf], freestanding: bool, needs_nofreestanding: bool,
 ) -> bool {
     // When codegen emitted dual-mode headers but we're compiling with MSVC (libc),
     // define OSC_NOFREESTANDING to select the libc path.
@@ -579,23 +612,23 @@ fn compile_with_msvc(
         // cl.exe was found outside PATH – use a temporary .bat file so that
         // vcvarsall.bat can set up the environment in the same cmd session.
         let bat_file = exe_file.with_extension("bat");
-        let extra_i: String = extra_includes.iter()
+        let all_includes: String = include_dirs.iter()
             .map(|d| format!(" /I\"{}\"", d.display()))
             .collect();
 
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS- /I\"{}\"{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
                 vcvars_path, cl_path,
-                runtime_dir.display(), extra_i, c_file.display(), exe_file.display(),
+                all_includes, c_file.display(), exe_file.display(),
             )
         } else {
             // libc mode: two TUs, default CRT
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11{} /I\"{}\"{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
                 vcvars_path, cl_path, nofree_flag,
-                runtime_dir.display(), extra_i, c_file.display(), runtime_c.display(), exe_file.display(),
+                all_includes, c_file.display(), runtime_c.display(), exe_file.display(),
             )
         };
 
@@ -630,9 +663,8 @@ fn compile_with_msvc(
                 .arg("/nologo")
                 .arg("/std:c11")
                 .arg("/Os")  // optimize for size
-                .arg("/GS-")
-                .arg(format!("/I{}", runtime_dir.display()));
-            for dir in extra_includes {
+                .arg("/GS-");
+            for dir in include_dirs {
                 command.arg(format!("/I{}", dir.display()));
             }
             command
@@ -648,8 +680,7 @@ fn compile_with_msvc(
             if needs_nofreestanding {
                 command.arg("/DOSC_NOFREESTANDING");
             }
-            command.arg(format!("/I{}", runtime_dir.display()));
-            for dir in extra_includes {
+            for dir in include_dirs {
                 command.arg(format!("/I{}", dir.display()));
             }
             command

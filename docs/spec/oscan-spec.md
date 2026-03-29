@@ -1058,6 +1058,10 @@ The compiler generates `#include` directives based on a pragma or configuration 
 - Additional C headers are specified via a build configuration file (not part of the language syntax).
 - The generated C file is compiled with a standard C compiler (gcc/clang) and linked with the Oscan runtime library and any user-specified C libraries.
 
+**Embedded runtime:** The Oscan compiler binary embeds the runtime files (`osc_runtime.h`, `osc_runtime.c`, and `l_os.h`) directly using Rust's `include_str!()`. This makes the compiler self-contained — no need to distribute `runtime/` or `deps/` directories. The only external dependency is a C compiler (clang preferred, but gcc and MSVC are also supported).
+
+For development or customization, if a `runtime/` directory exists next to the oscan binary or in the current working directory, it takes precedence over the embedded files.
+
 ---
 
 ## 10. Standard Library (Micro-Lib)
