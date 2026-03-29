@@ -746,6 +746,29 @@ if (-not $SkipARM) {
 }
 
 # ══════════════════════════════════════════════════════
+# ── Examples compilation check ───────────────────────
+# ══════════════════════════════════════════════════════
+
+Write-Phase "Examples"
+if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Examples compilation ──" -ForegroundColor Yellow }
+$exPass = 0; $exFail = 0
+foreach ($exFile in Get-ChildItem "examples\*.osc") {
+    $name = $exFile.BaseName
+    & $oscan $exFile.FullName -o "tests\build\${name}_ex.exe" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Add-TestResult $name "win-x64" "examples" "PASS" ""
+        $exPass++
+    } else {
+        Add-TestResult $name "win-x64" "examples" "FAIL" "compile error"
+        $exFail++
+    }
+}
+if (-not $VerboseOutput) {
+    $color = if ($exFail -gt 0) { "Red" } else { "Green" }
+    Write-PhaseResult "$exPass compiled, $exFail failed" $color
+}
+
+# ══════════════════════════════════════════════════════
 # ── Summary ──────────────────────────────────────────
 # ══════════════════════════════════════════════════════
 

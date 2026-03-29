@@ -171,6 +171,31 @@ jobs:
           echo "Negative: $PASS passed, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
 
+      - name: Compile examples (Linux, freestanding)
+        shell: bash
+        run: |
+          set -euo pipefail
+          oscan="./target/release/oscan"
+          PASS=0; FAIL=0; TOTAL=0
+          mkdir -p tests/build
+
+          echo "=== Example Compilation (Linux, compile-only) ==="
+          for osc_file in examples/*.osc; do
+            name=$(basename "$osc_file" .osc)
+            TOTAL=$((TOTAL + 1))
+            if ! "$oscan" "$osc_file" -o "tests/build/ex_${name}" 2>"tests/build/ex_${name}.err"; then
+              echo "FAIL: $name — compile error"
+              cat "tests/build/ex_${name}.err"
+              FAIL=$((FAIL + 1))
+            else
+              echo "PASS: $name"
+              PASS=$((PASS + 1))
+            fi
+          done
+          echo ""
+          echo "Examples: $PASS compiled, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (Windows)
   # ─────────────────────────────────────────────
@@ -343,6 +368,39 @@ jobs:
           if ($Fail -gt 0) { exit 1 }
           exit 0
 
+      - name: Compile examples (Windows)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $oscan = ".\target\release\oscan.exe"
+          $Pass = 0; $Fail = 0; $Total = 0
+
+          if (-not (Test-Path "tests\build")) {
+            New-Item -ItemType Directory -Path "tests\build" | Out-Null
+          }
+
+          Write-Host "=== Example Compilation (Windows, compile-only) ==="
+          foreach ($bcFile in Get-ChildItem "examples\*.osc") {
+            $name = $bcFile.BaseName
+            $Total++
+
+            & $oscan $bcFile.FullName -o "tests\build\ex_$name.exe" 2>"tests\build\ex_$name.err"
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "FAIL: $name - compile error"
+              if (Test-Path "tests\build\ex_$name.err") {
+                Get-Content "tests\build\ex_$name.err"
+              }
+              $Fail++
+            } else {
+              Write-Host "PASS: $name"
+              $Pass++
+            }
+          }
+
+          Write-Host ""
+          Write-Host "Examples: $Pass compiled, $Fail failed out of $Total"
+          if ($Fail -gt 0) { exit 1 }
+
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (macOS)
   # ─────────────────────────────────────────────
@@ -456,6 +514,31 @@ jobs:
 
           echo ""
           echo "Negative: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+      - name: Compile examples (macOS, libc)
+        shell: bash
+        run: |
+          set -euo pipefail
+          oscan="./target/release/oscan"
+          PASS=0; FAIL=0; TOTAL=0
+          mkdir -p tests/build
+
+          echo "=== Example Compilation (macOS, compile-only) ==="
+          for osc_file in examples/*.osc; do
+            name=$(basename "$osc_file" .osc)
+            TOTAL=$((TOTAL + 1))
+            if ! "$oscan" --libc "$osc_file" -o "tests/build/ex_${name}" 2>"tests/build/ex_${name}.err"; then
+              echo "FAIL: $name — compile error"
+              cat "tests/build/ex_${name}.err"
+              FAIL=$((FAIL + 1))
+            else
+              echo "PASS: $name"
+              PASS=$((PASS + 1))
+            fi
+          done
+          echo ""
+          echo "Examples: $PASS compiled, $FAIL failed out of $TOTAL"
           [ $FAIL -eq 0 ]
 
   # ─────────────────────────────────────────────

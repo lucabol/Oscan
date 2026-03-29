@@ -65,7 +65,7 @@ Options:
   --dump-ast       Print AST (debug).
 ```
 
-**Compiler discovery order:** gcc → clang → cl.exe (PATH) → cl.exe (Visual Studio installation via vswhere).
+**Compiler discovery order:** clang → gcc → cl.exe (PATH) → cl.exe (Visual Studio installation via vswhere).
 
 ## Language at a Glance
 
@@ -88,17 +88,28 @@ fn! main() {
 For a complete walkthrough, see the **[Language Guide](docs/guide.md)**.
 For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Oscan-spec.md)**.
 
+## Built-in Functions
+
+| Category | Functions |
+|----------|-----------|
+| **I/O** | `print_i32`, `print_str`, `println`, `read_line` |
+| **String** | `str_len`, `str_eq`, `str_concat`, `str_find`, `str_slice`, `s[i]` indexing |
+| **Bitwise** | `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` |
+| **Args** | `arg_count`, `arg_get` |
+| **File I/O** | `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` |
+| **Math** | `abs`, `min`, `max` |
+
 ## Building & Testing
 
 ```bash
 cargo build                     # debug build
 cargo build --release           # optimized build
-cargo test                      # 53 unit tests + 38 integration tests
+cargo test                      # 53 unit tests + 63 integration tests
 cargo test --lib                # unit tests only
 cargo test --test '*'           # integration tests only
 ```
 
-Tests run on Windows (MSVC), Linux (GCC), macOS (Clang), and ARM64 (QEMU) via CI.
+Tests run on Windows (Clang), Linux (GCC), macOS (Clang), and ARM64 (QEMU) via CI.
 
 The C runtime has its own test suite:
 
@@ -124,10 +135,10 @@ cd runtime && make test
 │   ├── osc_runtime.h     # Runtime header
 │   └── test_runtime.c   # Runtime unit tests
 ├── tests/
-│   ├── positive/        # 22 programs that must compile & produce expected output
-│   ├── negative/        # 16 programs that must be rejected by the compiler
+│   ├── positive/        # 42 programs that must compile & produce expected output
+│   ├── negative/        # 21 programs that must be rejected by the compiler
 │   └── integration.rs   # Test harness
-├── examples/            # hello.osc, fibonacci.osc, error_handling.osc
+├── examples/            # 12 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io
 ├── docs/
 │   ├── guide.md         # Concise language guide
 │   └── spec/
@@ -137,7 +148,7 @@ cd runtime && make test
 
 ## Status
 
-Oscan v0.1 is feature-complete for its initial scope: the full language compiles to C, all 91 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies.
+Oscan v0.1 is feature-complete for its initial scope: the full language compiles to C, all 116 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies. Recent additions include file I/O, string operations, bitwise operators, and command-line argument access.
 
 ## Contributing
 
