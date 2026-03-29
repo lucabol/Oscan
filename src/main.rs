@@ -289,12 +289,9 @@ fn find_msvc_cl() -> Option<(String, Option<String>)> {
 }
 
 /// Detect the first available C compiler in priority order:
-/// gcc → clang (PATH) → VS-bundled clang → cl.exe (PATH) → cl.exe (VS installation).
-/// Clang is preferred over MSVC because it compiles significantly faster.
+/// clang (PATH) → VS-bundled clang → gcc → cl.exe (PATH) → cl.exe (VS installation).
+/// Clang is preferred for smaller binaries and faster compilation.
 fn find_c_compiler() -> Option<CCompiler> {
-    if command_exists("gcc") {
-        return Some(CCompiler::Gcc("gcc".to_string()));
-    }
     if command_exists("clang") {
         return Some(CCompiler::Clang("clang".to_string()));
     }
@@ -302,6 +299,11 @@ fn find_c_compiler() -> Option<CCompiler> {
         if let Some(clang_path) = find_vs_clang() {
             return Some(CCompiler::Clang(clang_path));
         }
+    }
+    if command_exists("gcc") {
+        return Some(CCompiler::Gcc("gcc".to_string()));
+    }
+    if cfg!(windows) {
         if command_exists("cl.exe") {
             return Some(CCompiler::Msvc { cl_path: "cl.exe".to_string(), vcvars: None });
         }
