@@ -1,0 +1,19 @@
+h[0] = 104
+h[4] = 111
+abc < def: true
+def < abc: false
+abc < abc: false
+abc <= abc: true
+xyz > abc: true
+abc >= abc: true
+empty < a: true
+find world: 6
+find xyz: -1
+find empty: 0
+find aaa: 0
+from 42: 42
+from -1: -1
+from 0: 0
+slice hello: hello
+slice world: world
+round-trip: true

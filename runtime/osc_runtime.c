@@ -22,6 +22,10 @@
 /* Global arena pointer — set by generated main() */
 osc_arena *osc_global_arena = NULL;
 
+/* Global argc/argv — set by generated main() */
+int osc_global_argc = 0;
+char **osc_global_argv = NULL;
+
 /* ================================================================== */
 /*  Panic handler                                                      */
 /* ================================================================== */
@@ -503,6 +507,94 @@ osc_str osc_str_to_cstr(osc_arena *arena, osc_str s)
     return result;
 }
 
+int osc_str_compare(osc_str a, osc_str b)
+{
+    int32_t min_len = a.len < b.len ? a.len : b.len;
+    if (min_len > 0) {
+        int cmp = memcmp(a.data, b.data, (size_t)min_len);
+        if (cmp != 0) return cmp;
+    }
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
+}
+
+int32_t osc_str_find(osc_str haystack, osc_str needle)
+{
+    if (needle.len == 0) return 0;
+    if (needle.len > haystack.len) return -1;
+    int32_t limit = haystack.len - needle.len;
+    for (int32_t i = 0; i <= limit; i++) {
+        if (memcmp(haystack.data + i, needle.data, (size_t)needle.len) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+osc_str osc_str_from_i32(osc_arena *arena, int32_t n)
+{
+    /* -2147483648 is 11 chars + NUL */
+    char tmp[12];
+    int pos = 0;
+    uint32_t u;
+    osc_str result;
+    char *buf;
+
+    if (n < 0) {
+        tmp[pos++] = '-';
+        u = (uint32_t)(-(int64_t)n);
+    } else {
+        u = (uint32_t)n;
+    }
+    /* write digits in reverse into tmp */
+    {
+        int start = pos;
+        do {
+            tmp[pos++] = (char)('0' + (u % 10));
+            u /= 10;
+        } while (u > 0);
+        /* reverse the digit portion */
+        for (int i = start, j = pos - 1; i < j; i++, j--) {
+            char c = tmp[i]; tmp[i] = tmp[j]; tmp[j] = c;
+        }
+    }
+    buf = (char *)osc_arena_alloc(arena, (size_t)pos);
+    memcpy(buf, tmp, (size_t)pos);
+    result.data = buf;
+    result.len  = (int32_t)pos;
+    return result;
+}
+
+osc_str osc_str_slice(osc_arena *arena, osc_str s, int32_t start, int32_t end)
+{
+    osc_str result;
+    char *buf;
+    int32_t slice_len;
+
+    if (start < 0) start = 0;
+    if (end > s.len) end = s.len;
+    if (start >= end) {
+        result.data = "";
+        result.len  = 0;
+        return result;
+    }
+    slice_len = end - start;
+    buf = (char *)osc_arena_alloc(arena, (size_t)slice_len);
+    memcpy(buf, s.data + start, (size_t)slice_len);
+    result.data = buf;
+    result.len  = slice_len;
+    return result;
+}
+
+int32_t osc_str_check_index(osc_str s, int32_t idx)
+{
+    if (idx < 0 || idx >= s.len) {
+        OSC_PANIC("string index out of bounds");
+    }
+    return idx;
+}
+
 /* ================================================================== */
 /*  Micro-lib I/O                                                      */
 /* ================================================================== */
@@ -739,8 +831,156 @@ osc_result_str_str osc_read_line(osc_arena *arena)
 #endif /* OSC_FREESTANDING */
 
 /* ================================================================== */
-/*  Type-cast functions                                                */
+/*  File I/O                                                           */
 /* ================================================================== */
+
+/* Helper: null-terminate an osc_str into a stack buffer */
+static void osc_path_to_cstr(osc_str path, char *buf, size_t bufsz)
+{
+    size_t len = (size_t)path.len;
+    if (len >= bufsz) len = bufsz - 1;
+    {
+        size_t i;
+        for (i = 0; i < len; i++) buf[i] = path.data[i];
+    }
+    buf[len] = '\0';
+}
+
+#ifdef OSC_FREESTANDING
+
+int32_t osc_file_open_read(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    int32_t fd = (int32_t)open_read(buf);
+    return fd < 0 ? -1 : fd;
+}
+
+int32_t osc_file_open_write(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    int32_t fd = (int32_t)open_write(buf);
+    return fd < 0 ? -1 : fd;
+}
+
+int32_t osc_read_byte(int32_t fd)
+{
+    unsigned char c;
+    ssize_t n = read((L_FD)fd, &c, 1);
+    return n == 1 ? (int32_t)c : -1;
+}
+
+void osc_write_byte(int32_t fd, int32_t b)
+{
+    unsigned char c = (unsigned char)b;
+    write((L_FD)fd, &c, 1);
+}
+
+void osc_write_str(int32_t fd, osc_str s)
+{
+    if (s.len > 0) write((L_FD)fd, s.data, (size_t)s.len);
+}
+
+void osc_file_close(int32_t fd)
+{
+    close((L_FD)fd);
+}
+
+int32_t osc_file_delete(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    int32_t r = (int32_t)unlink(buf);
+    return r < 0 ? -1 : 0;
+}
+
+#else /* libc mode */
+
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#define OSC_OPEN   _open
+#define OSC_READ   _read
+#define OSC_WRITE  _write
+#define OSC_CLOSE  _close
+#define OSC_UNLINK _unlink
+#define OSC_O_RDONLY _O_RDONLY
+#define OSC_O_BINARY _O_BINARY
+#define OSC_O_WRONLY _O_WRONLY
+#define OSC_O_CREAT  _O_CREAT
+#define OSC_O_TRUNC  _O_TRUNC
+#define OSC_S_IREAD  _S_IREAD
+#define OSC_S_IWRITE _S_IWRITE
+#else
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#define OSC_OPEN   open
+#define OSC_READ   read
+#define OSC_WRITE  write
+#define OSC_CLOSE  close
+#define OSC_UNLINK unlink
+#define OSC_O_RDONLY O_RDONLY
+#define OSC_O_BINARY 0
+#define OSC_O_WRONLY O_WRONLY
+#define OSC_O_CREAT  O_CREAT
+#define OSC_O_TRUNC  O_TRUNC
+#define OSC_S_IREAD  (S_IRUSR | S_IRGRP | S_IROTH)
+#define OSC_S_IWRITE (S_IWUSR | S_IWGRP)
+#endif
+
+int32_t osc_file_open_read(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    return (int32_t)OSC_OPEN(buf, OSC_O_RDONLY | OSC_O_BINARY);
+}
+
+int32_t osc_file_open_write(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    return (int32_t)OSC_OPEN(buf, OSC_O_WRONLY | OSC_O_CREAT | OSC_O_TRUNC | OSC_O_BINARY,
+                             OSC_S_IREAD | OSC_S_IWRITE);
+}
+
+int32_t osc_read_byte(int32_t fd)
+{
+    unsigned char c;
+    int n = OSC_READ(fd, &c, 1);
+    return n == 1 ? (int32_t)c : -1;
+}
+
+void osc_write_byte(int32_t fd, int32_t b)
+{
+    unsigned char c = (unsigned char)b;
+    OSC_WRITE(fd, &c, 1);
+}
+
+void osc_write_str(int32_t fd, osc_str s)
+{
+    if (s.len > 0) OSC_WRITE(fd, s.data, (unsigned)s.len);
+}
+
+void osc_file_close(int32_t fd)
+{
+    OSC_CLOSE(fd);
+}
+
+int32_t osc_file_delete(osc_str path)
+{
+    char buf[4096];
+    osc_path_to_cstr(path, buf, sizeof(buf));
+    return (int32_t)OSC_UNLINK(buf);
+}
+
+#endif /* OSC_FREESTANDING — file I/O */
+
+/* ================================================================== */
+/*  Type-cast functions                                                */
+/* ==================================================================*/
 
 int64_t osc_i32_to_i64(int32_t n)
 {
@@ -835,4 +1075,22 @@ double osc_abs_f64(double n)
 #else
     return fabs(n);
 #endif
+}
+
+/* ================================================================== */
+/*  Command-line argument access                                       */
+/* ================================================================== */
+
+int32_t osc_arg_count(void)
+{
+    return (int32_t)osc_global_argc;
+}
+
+osc_str osc_arg_get(osc_arena *arena, int32_t i)
+{
+    (void)arena;
+    if (i < 0 || i >= (int32_t)osc_global_argc) {
+        OSC_PANIC("arg_get: index out of bounds");
+    }
+    return osc_str_from_cstr(osc_global_argv[i]);
 }

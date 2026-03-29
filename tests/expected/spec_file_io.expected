@@ -1,0 +1,19 @@
+open_write ok: true
+write_str done
+open_read ok: true
+byte H: 72
+byte i: 105
+byte !: 33
+eof: -1
+eof again: -1
+byte A: 65
+byte B: 66
+byte C: 67
+byte eof: -1
+byte 0: 0
+byte 255: 255
+byte 127: 127
+delete ok: 0
+open missing: -1
+delete missing failed: true
+all file_io tests passed

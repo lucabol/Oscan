@@ -1,0 +1,76 @@
+// Test: Bitwise functions — band, bor, bxor, bshl, bshr, bnot
+// All six functions take i32 operands and return i32.
+// Shift operations use unsigned semantics (logical shift).
+
+fn! main() {
+    // --- Basic operations with known values ---
+    print("band(12,10) = ");
+    print_i32(band(12, 10));
+    println("");
+
+    print("bor(12,10) = ");
+    print_i32(bor(12, 10));
+    println("");
+
+    print("bxor(12,10) = ");
+    print_i32(bxor(12, 10));
+    println("");
+
+    print("bshl(1,4) = ");
+    print_i32(bshl(1, 4));
+    println("");
+
+    print("bshr(16,2) = ");
+    print_i32(bshr(16, 2));
+    println("");
+
+    print("bnot(0) = ");
+    print_i32(bnot(0));
+    println("");
+
+    // --- Edge cases ---
+    print("band(0,255) = ");
+    print_i32(band(0, 255));
+    println("");
+
+    // bshr(-1, 1): unsigned right shift of 0xFFFFFFFF by 1 = 0x7FFFFFFF = 2147483647
+    print("bshr(-1,1) = ");
+    print_i32(bshr(-1, 1));
+    println("");
+
+    // Shift by 0 is identity
+    print("bshl(42,0) = ");
+    print_i32(bshl(42, 0));
+    println("");
+
+    // XOR self is always 0
+    print("bxor(42,42) = ");
+    print_i32(bxor(42, 42));
+    println("");
+
+    // --- Combined: masking pattern ---
+    // bor(band(0xFF, val), bshl(val, 8))
+    // val=0xAB (171): band(0xFF, 171)=171, bshl(171, 8)=43776
+    // bor(171, 43776) = 43947
+    let val: i32 = 171;
+    print("mask_pattern = ");
+    print_i32(bor(band(255, val), bshl(val, 8)));
+    println("");
+
+    // --- bnot identity: bnot(bnot(x)) == x ---
+    print("bnot(bnot(42)) = ");
+    print_i32(bnot(bnot(42)));
+    println("");
+
+    // --- bxor swap trick ---
+    let mut a: i32 = 100;
+    let mut b: i32 = 200;
+    a = bxor(a, b);
+    b = bxor(b, a);
+    a = bxor(a, b);
+    print("swap: a=");
+    print_i32(a);
+    print(" b=");
+    print_i32(b);
+    println("");
+}

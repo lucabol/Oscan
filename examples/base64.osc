@@ -1,0 +1,72 @@
+// Base64 — RFC 4648 base64 encoder for file contents
+// Usage: base64 <filename>
+
+// Base64 lookup: index 0-63 -> ASCII character
+fn b64_char(idx: i32) -> i32 {
+    if idx < 26 { idx + 65 }        // A-Z
+    else if idx < 52 { idx - 26 + 97 }  // a-z
+    else if idx < 62 { idx - 52 + 48 }  // 0-9
+    else if idx == 62 { 43 }        // +
+    else { 47 }                      // /
+}
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: base64 <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            let mut col: i32 = 0;
+            let mut done: bool = false;
+
+            while done == false {
+                let b0: i32 = read_byte(fd);
+                if b0 < 0 {
+                    done = true;
+                } else {
+                    let b1: i32 = read_byte(fd);
+                    let b2: i32 = if b1 >= 0 { read_byte(fd) } else { -1 };
+
+                    let i1: i32 = if b1 >= 0 { b1 } else { 0 };
+                    let i2: i32 = if b2 >= 0 { b2 } else { 0 };
+
+                    write_byte(1, b64_char(bshr(b0, 2)));
+                    write_byte(1, b64_char(bor(bshl(band(b0, 3), 4), bshr(i1, 4))));
+
+                    if b1 >= 0 {
+                        write_byte(1, b64_char(bor(bshl(band(i1, 15), 2), bshr(i2, 6))));
+                    } else {
+                        write_byte(1, 61); // '='
+                    };
+
+                    if b2 >= 0 {
+                        write_byte(1, b64_char(band(i2, 63)));
+                    } else {
+                        write_byte(1, 61); // '='
+                    };
+
+                    col = col + 4;
+                    if col >= 76 {
+                        write_byte(1, 10); // newline
+                        col = 0;
+                    };
+
+                    if b1 < 0 {
+                        done = true;
+                    } else if b2 < 0 {
+                        done = true;
+                    };
+                };
+            };
+
+            if col > 0 {
+                write_byte(1, 10); // trailing newline
+            };
+            file_close(fd);
+        };
+    };
+}

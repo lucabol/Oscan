@@ -1,0 +1,64 @@
+// File I/O Demo — write, read back, and delete a file
+// Demonstrates file_open_write, write_str, write_byte, file_close,
+// file_open_read, read_byte, file_delete
+
+fn! main() {
+    let filename: str = "_file_io_demo.txt";
+
+    // Write some content
+    let fd_w: i32 = file_open_write(filename);
+    if fd_w < 0 {
+        println("Error: cannot create file");
+    } else {
+        write_str(fd_w, "Hello, Oscan!");
+        write_byte(fd_w, 10); // newline
+        write_str(fd_w, "File I/O works!");
+        write_byte(fd_w, 10); // newline
+        file_close(fd_w);
+        println("Wrote file.");
+
+        // Read it back byte by byte and print to stdout
+        let fd_r: i32 = file_open_read(filename);
+        if fd_r < 0 {
+            println("Error: cannot read file");
+        } else {
+            print("Read back: ");
+            let mut b: i32 = read_byte(fd_r);
+            while b >= 0 {
+                write_byte(1, b);
+                b = read_byte(fd_r);
+            };
+            file_close(fd_r);
+
+            // Count bytes
+            let fd_r2: i32 = file_open_read(filename);
+            let mut count: i32 = 0;
+            let mut b2: i32 = read_byte(fd_r2);
+            while b2 >= 0 {
+                count = count + 1;
+                b2 = read_byte(fd_r2);
+            };
+            file_close(fd_r2);
+            print("Total bytes: ");
+            print_i32(count);
+            println("");
+
+            // Delete the file
+            let del: i32 = file_delete(filename);
+            if del == 0 {
+                println("File deleted successfully.");
+            } else {
+                println("Error: could not delete file.");
+            };
+
+            // Verify it's gone
+            let fd_gone: i32 = file_open_read(filename);
+            if fd_gone < 0 {
+                println("Confirmed: file no longer exists.");
+            } else {
+                println("Unexpected: file still exists!");
+                file_close(fd_gone);
+            };
+        };
+    };
+}

@@ -199,6 +199,9 @@ impl CodeGenerator {
             self.line("#include \"osc_runtime.h\"");
         }
         self.blank();
+        // Global argc/argv for command-line argument access
+        // osc_global_argc and osc_global_argv are declared in osc_runtime.h
+        // and defined in osc_runtime.c — no need to redefine here
     }
 
     // -----------------------------------------------------------------------
@@ -438,7 +441,8 @@ impl CodeGenerator {
     fn emit_main_wrapper(&mut self) {
         self.line("int main(int argc, char *argv[]) {");
         self.indent += 1;
-        self.line("(void)argc; (void)argv;");
+        self.line("osc_global_argc = argc;");
+        self.line("osc_global_argv = argv;");
         self.line("osc_arena* _arena = osc_arena_create(1048576);");
         self.line("osc_global_arena = _arena;");
 
@@ -674,12 +678,19 @@ impl CodeGenerator {
                 let arr_c = self.emit_expr(arr);
                 let idx_c = self.emit_expr(index);
                 let arr_ty = self.type_of(arr);
-                let elem_ty = match &arr_ty {
-                    BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
-                    _ => BcType::I32,
-                };
-                let elem_c = self.type_to_c(&elem_ty);
-                format!("(*({}*)osc_array_get({}, {}))", elem_c, arr_c, idx_c)
+                match &arr_ty {
+                    BcType::Str => {
+                        format!("((int32_t)(unsigned char)(({}).data[osc_str_check_index({}, {})]))", arr_c, arr_c, idx_c)
+                    }
+                    _ => {
+                        let elem_ty = match &arr_ty {
+                            BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
+                            _ => BcType::I32,
+                        };
+                        let elem_c = self.type_to_c(&elem_ty);
+                        format!("(*({}*)osc_array_get({}, {}))", elem_c, arr_c, idx_c)
+                    }
+                }
             }
 
             Expr::Block(block) => {
@@ -815,10 +826,22 @@ impl CodeGenerator {
                     _ => format!("({} != {})", lv, rv),
                 }
             }
-            BinOp::Lt => format!("({} < {})", lv, rv),
-            BinOp::Gt => format!("({} > {})", lv, rv),
-            BinOp::LtEq => format!("({} <= {})", lv, rv),
-            BinOp::GtEq => format!("({} >= {})", lv, rv),
+            BinOp::Lt => match ty {
+                BcType::Str => format!("(osc_str_compare({}, {}) < 0)", lv, rv),
+                _ => format!("({} < {})", lv, rv),
+            },
+            BinOp::Gt => match ty {
+                BcType::Str => format!("(osc_str_compare({}, {}) > 0)", lv, rv),
+                _ => format!("({} > {})", lv, rv),
+            },
+            BinOp::LtEq => match ty {
+                BcType::Str => format!("(osc_str_compare({}, {}) <= 0)", lv, rv),
+                _ => format!("({} <= {})", lv, rv),
+            },
+            BinOp::GtEq => match ty {
+                BcType::Str => format!("(osc_str_compare({}, {}) >= 0)", lv, rv),
+                _ => format!("({} >= {})", lv, rv),
+            },
             BinOp::And => format!("({} && {})", lv, rv),
             BinOp::Or => format!("({} || {})", lv, rv),
         }
@@ -859,11 +882,29 @@ impl CodeGenerator {
             "str_eq" => format!("osc_str_eq({}, {})", arg_strs[0], arg_strs[1]),
             "str_concat" => format!("osc_str_concat(_arena, {}, {})", arg_strs[0], arg_strs[1]),
             "str_to_cstr" => format!("osc_str_to_cstr(_arena, {})", arg_strs[0]),
+            "str_find" => format!("osc_str_find({}, {})", arg_strs[0], arg_strs[1]),
+            "str_from_i32" => format!("osc_str_from_i32(_arena, {})", arg_strs[0]),
+            "str_slice" => format!("osc_str_slice(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
             "abs_i32" => format!("osc_abs_i32({})", arg_strs[0]),
             "abs_f64" => format!("osc_abs_f64({})", arg_strs[0]),
             "mod_i32" => format!("osc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "band" => format!("((int32_t)((uint32_t)({}) & (uint32_t)({})))", arg_strs[0], arg_strs[1]),
+            "bor" => format!("((int32_t)((uint32_t)({}) | (uint32_t)({})))", arg_strs[0], arg_strs[1]),
+            "bxor" => format!("((int32_t)((uint32_t)({}) ^ (uint32_t)({})))", arg_strs[0], arg_strs[1]),
+            "bshl" => format!("((int32_t)((uint32_t)({}) << ({})))", arg_strs[0], arg_strs[1]),
+            "bshr" => format!("((int32_t)((uint32_t)({}) >> ({})))", arg_strs[0], arg_strs[1]),
+            "bnot" => format!("((int32_t)(~(uint32_t)({})))", arg_strs[0]),
             "i32_to_str" => format!("osc_i32_to_str(_arena, {})", arg_strs[0]),
             "arena_reset" => "osc_arena_reset_global()".to_string(),
+            "file_open_read" => format!("osc_file_open_read({})", arg_strs[0]),
+            "file_open_write" => format!("osc_file_open_write({})", arg_strs[0]),
+            "read_byte" => format!("osc_read_byte({})", arg_strs[0]),
+            "write_byte" => format!("osc_write_byte({}, {})", arg_strs[0], arg_strs[1]),
+            "write_str" => format!("osc_write_str({}, {})", arg_strs[0], arg_strs[1]),
+            "file_close" => format!("osc_file_close({})", arg_strs[0]),
+            "file_delete" => format!("osc_file_delete({})", arg_strs[0]),
+            "arg_count" => "osc_arg_count()".to_string(),
+            "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val

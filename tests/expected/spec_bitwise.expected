@@ -1,0 +1,13 @@
+band(12,10) = 8
+bor(12,10) = 14
+bxor(12,10) = 6
+bshl(1,4) = 16
+bshr(16,2) = 4
+bnot(0) = -1
+band(0,255) = 0
+bshr(-1,1) = 2147483647
+bshl(42,0) = 42
+bxor(42,42) = 0
+mask_pattern = 43947
+bnot(bnot(42)) = 42
+swap: a=200 b=100

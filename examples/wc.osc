@@ -1,0 +1,55 @@
+// Word Count — count lines, words, and bytes in a file
+// Usage: wc <filename>
+
+fn is_whitespace(c: i32) -> bool {
+    if c == 32 { true }
+    else if c == 9 { true }
+    else if c == 10 { true }
+    else if c == 13 { true }
+    else { false }
+}
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: wc <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            let mut lines: i32 = 0;
+            let mut words: i32 = 0;
+            let mut bytes: i32 = 0;
+            let mut in_word: bool = false;
+
+            let mut b: i32 = read_byte(fd);
+            while b >= 0 {
+                bytes = bytes + 1;
+                if b == 10 {
+                    lines = lines + 1;
+                };
+                if is_whitespace(b) {
+                    in_word = false;
+                } else {
+                    if in_word == false {
+                        in_word = true;
+                        words = words + 1;
+                    };
+                };
+                b = read_byte(fd);
+            };
+            file_close(fd);
+
+            print("  ");
+            print(i32_to_str(lines));
+            print("  ");
+            print(i32_to_str(words));
+            print("  ");
+            print(i32_to_str(bytes));
+            print(" ");
+            println(path);
+        };
+    };
+}

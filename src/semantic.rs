@@ -85,22 +85,46 @@ impl SemanticAnalyzer {
             false,
         ));
 
-        // String (pure except concat/to_cstr which allocate)
+        // String (pure except concat/to_cstr/slice/from_i32 which allocate)
         self.functions.insert("str_len".into(), builtin(vec![("s", BcType::Str)], BcType::I32, true));
         self.functions.insert("str_eq".into(), builtin(vec![("a", BcType::Str), ("b", BcType::Str)], BcType::Bool, true));
         self.functions.insert("str_concat".into(), builtin(vec![("a", BcType::Str), ("b", BcType::Str)], BcType::Str, false));
         self.functions.insert("str_to_cstr".into(), builtin(vec![("s", BcType::Str)], BcType::Str, false));
+        self.functions.insert("str_find".into(), builtin(vec![("haystack", BcType::Str), ("needle", BcType::Str)], BcType::I32, true));
+        self.functions.insert("str_from_i32".into(), builtin(vec![("n", BcType::I32)], BcType::Str, false));
+        self.functions.insert("str_slice".into(), builtin(vec![("s", BcType::Str), ("start", BcType::I32), ("end", BcType::I32)], BcType::Str, false));
 
         // Math (pure)
         self.functions.insert("abs_i32".into(), builtin(vec![("n", BcType::I32)], BcType::I32, true));
         self.functions.insert("abs_f64".into(), builtin(vec![("n", BcType::F64)], BcType::F64, true));
         self.functions.insert("mod_i32".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
 
+        // Bitwise (pure)
+        self.functions.insert("band".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
+        self.functions.insert("bor".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
+        self.functions.insert("bxor".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
+        self.functions.insert("bshl".into(), builtin(vec![("a", BcType::I32), ("n", BcType::I32)], BcType::I32, true));
+        self.functions.insert("bshr".into(), builtin(vec![("a", BcType::I32), ("n", BcType::I32)], BcType::I32, true));
+        self.functions.insert("bnot".into(), builtin(vec![("a", BcType::I32)], BcType::I32, true));
+
         // Conversion
         self.functions.insert("i32_to_str".into(), builtin(vec![("n", BcType::I32)], BcType::Str, false));
 
         // Memory
         self.functions.insert("arena_reset".into(), builtin(vec![], BcType::Unit, false));
+
+        // File I/O (fn!)
+        self.functions.insert("file_open_read".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("file_open_write".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("read_byte".into(), builtin(vec![("fd", BcType::I32)], BcType::I32, false));
+        self.functions.insert("write_byte".into(), builtin(vec![("fd", BcType::I32), ("b", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("write_str".into(), builtin(vec![("fd", BcType::I32), ("s", BcType::Str)], BcType::Unit, false));
+        self.functions.insert("file_close".into(), builtin(vec![("fd", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("file_delete".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+
+        // Command-line arguments (fn!)
+        self.functions.insert("arg_count".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("arg_get".into(), builtin(vec![("i", BcType::I32)], BcType::Str, false));
 
         // len and push are special-cased in check_call
     }
@@ -295,6 +319,10 @@ impl SemanticAnalyzer {
                             ty = self.field_type(&ty, fname, a.span)?;
                         }
                         PlaceAccessor::Index(idx_expr) => {
+                            if ty == BcType::Str {
+                                return Err(CompileError::new(a.span,
+                                    "cannot assign to string index: strings are immutable".to_string()));
+                            }
                             let idx_ty = self.check_expr(idx_expr, None)?;
                             if idx_ty != BcType::I32 {
                                 return Err(CompileError::new(a.span,
@@ -434,7 +462,7 @@ impl SemanticAnalyzer {
                                 format!("comparison type mismatch: {} vs {}", lt, rt)));
                         }
                         match &lt {
-                            BcType::I32 | BcType::I64 | BcType::F64 => Ok(BcType::Bool),
+                            BcType::I32 | BcType::I64 | BcType::F64 | BcType::Str => Ok(BcType::Bool),
                             _ => Err(CompileError::new(*span,
                                 format!("comparison not supported for {}", lt))),
                         }
@@ -506,7 +534,11 @@ impl SemanticAnalyzer {
                     return Err(CompileError::new(*span,
                         format!("array index must be i32, got {}", idx_ty)));
                 }
-                self.element_type(&arr_ty, *span)
+                if arr_ty == BcType::Str {
+                    Ok(BcType::I32)
+                } else {
+                    self.element_type(&arr_ty, *span)
+                }
             }
 
             Expr::Block(block) => {

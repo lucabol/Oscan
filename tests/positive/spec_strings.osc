@@ -1,0 +1,82 @@
+// Test: String indexing, comparison, str_find, str_from_i32, str_slice
+// Strings are byte sequences; indexing returns i32 (byte value).
+// Comparison is lexicographic. str_from_i32 and str_slice allocate on arena.
+
+fn! main() {
+    // --- String indexing ---
+    print("h[0] = ");
+    print_i32("hello"[0]);
+    println("");
+
+    print("h[4] = ");
+    print_i32("hello"[4]);
+    println("");
+
+    // --- String comparison ---
+    print("abc < def: ");
+    print_bool("abc" < "def");
+    println("");
+
+    print("def < abc: ");
+    print_bool("def" < "abc");
+    println("");
+
+    print("abc < abc: ");
+    print_bool("abc" < "abc");
+    println("");
+
+    print("abc <= abc: ");
+    print_bool("abc" <= "abc");
+    println("");
+
+    print("xyz > abc: ");
+    print_bool("xyz" > "abc");
+    println("");
+
+    print("abc >= abc: ");
+    print_bool("abc" >= "abc");
+    println("");
+
+    print("empty < a: ");
+    print_bool("" < "a");
+    println("");
+
+    // --- str_find ---
+    print("find world: ");
+    print_i32(str_find("hello world", "world"));
+    println("");
+
+    print("find xyz: ");
+    print_i32(str_find("hello world", "xyz"));
+    println("");
+
+    print("find empty: ");
+    print_i32(str_find("hello", ""));
+    println("");
+
+    print("find aaa: ");
+    print_i32(str_find("aaa", "aa"));
+    println("");
+
+    // --- str_from_i32 ---
+    print("from 42: ");
+    println(str_from_i32(42));
+
+    print("from -1: ");
+    println(str_from_i32(-1));
+
+    print("from 0: ");
+    println(str_from_i32(0));
+
+    // --- str_slice ---
+    print("slice hello: ");
+    println(str_slice("hello world", 0, 5));
+
+    print("slice world: ");
+    println(str_slice("hello world", 6, 11));
+
+    // --- str_eq with str_from_i32 round-trip ---
+    print("round-trip: ");
+    print_bool(str_eq(str_from_i32(99), "99"));
+    println("");
+}

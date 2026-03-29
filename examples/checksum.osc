@@ -1,0 +1,54 @@
+// Checksum — compute XOR and additive checksums of a file
+// Usage: checksum <filename>
+
+fn hex_digit(n: i32) -> i32 {
+    if n < 10 { n + 48 }
+    else { n - 10 + 97 }
+}
+
+fn! write_hex32(val: i32) {
+    // Print 8 hex digits for a 32-bit value
+    write_byte(1, hex_digit(band(bshr(val, 28), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 24), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 20), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 16), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 12), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 8), 15)));
+    write_byte(1, hex_digit(band(bshr(val, 4), 15)));
+    write_byte(1, hex_digit(band(val, 15)));
+}
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: checksum <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            let mut xor_sum: i32 = 0;
+            let mut add_sum: i32 = 0;
+            let mut total_bytes: i32 = 0;
+
+            let mut b: i32 = read_byte(fd);
+            while b >= 0 {
+                xor_sum = bxor(xor_sum, b);
+                add_sum = add_sum + b;
+                total_bytes = total_bytes + 1;
+                b = read_byte(fd);
+            };
+            file_close(fd);
+
+            print("XOR: ");
+            write_hex32(xor_sum);
+            print("  SUM: ");
+            write_hex32(add_sum);
+            print("  ");
+            print(i32_to_str(total_bytes));
+            print(" bytes  ");
+            println(path);
+        };
+    };
+}

@@ -607,14 +607,15 @@ All arithmetic is **checked for overflow** at runtime.
 |----------|---------------|-------------|
 | `==`     | All primitives, enums (tag only) | `bool` |
 | `!=`     | All primitives, enums (tag only) | `bool` |
-| `<`      | i32, i64, f64 | `bool`     |
-| `>`      | i32, i64, f64 | `bool`     |
-| `<=`     | i32, i64, f64 | `bool`     |
-| `>=`     | i32, i64, f64 | `bool`     |
+| `<`      | i32, i64, f64, str | `bool`     |
+| `>`      | i32, i64, f64, str | `bool`     |
+| `<=`     | i32, i64, f64, str | `bool`     |
+| `>=`     | i32, i64, f64, str | `bool`     |
 
 - Comparing different types is a compile error.
 - Structs cannot be compared with `==`; write a comparison function.
 - Enum equality (`==`, `!=`) compares only the variant tag, not payloads. For deep comparison, use `match`.
+- **String comparison** (`<`, `>`, `<=`, `>=`): lexicographic byte-by-byte comparison. `==` and `!=` for strings use `str_eq` semantics (byte-level equality). Two strings are equal if they have the same length and identical bytes.
 
 ### 5.3 Logical Expressions
 
@@ -768,6 +769,19 @@ let first: i32 = arr[0];
 
 - Index must be type `i32`.
 - Bounds-checked at runtime. Out-of-bounds access is a runtime panic.
+
+### 5.12.1 String Indexing
+
+```
+let byte: i32 = s[0];
+```
+
+- Array indexing syntax extends to `str` operands.
+- Returns `i32` — the byte value at the given position (0-based).
+- Index must be type `i32`.
+- Bounds-checked at runtime. Out-of-bounds access is a runtime panic.
+- **Read-only.** Strings are immutable; `s[0] = 65;` is a compile error.
+- Strings are byte sequences (not Unicode codepoints). `s[i]` returns the raw byte.
 
 ### 5.13 Struct Literals
 
@@ -1045,7 +1059,7 @@ The compiler generates `#include` directives based on a pragma or configuration 
 
 ## 10. Standard Library (Micro-Lib)
 
-The micro-lib is deliberately tiny: 18 functions. All I/O functions are `fn!`.
+The micro-lib is deliberately tiny: 36 functions. All I/O functions are `fn!`.
 
 ### 10.1 I/O Functions (7)
 
@@ -1059,24 +1073,35 @@ fn! print_bool(b: bool)                    // Print "true" or "false" to stdout
 fn! read_line() -> Result<str, str>        // Read line from stdin, may fail
 ```
 
-### 10.2 String Functions (4)
+### 10.2 String Functions (7)
 
 ```
 fn str_len(s: str) -> i32                  // Length in bytes (not chars)
 fn str_eq(a: str, b: str) -> bool          // Byte-level equality
 fn! str_concat(a: str, b: str) -> str      // Concatenate (allocates on arena, hence fn!)
 fn! str_to_cstr(s: str) -> str             // Null-terminate for C interop (allocates)
+fn str_find(haystack: str, needle: str) -> i32  // Index of first occurrence, or -1
+fn! str_from_i32(n: i32) -> str            // Integer to string representation (allocates)
+fn! str_slice(s: str, start: i32, end: i32) -> str  // Substring [start, end) (allocates)
 ```
 
-**Note:** `str_concat` and `str_to_cstr` are `fn!` because they allocate on the arena, which is a side effect (mutation of the arena).
+**Note:** `str_concat`, `str_to_cstr`, `str_from_i32`, and `str_slice` are `fn!` because they allocate on the arena, which is a side effect (mutation of the arena). `str_find` is pure — it only reads.
 
-### 10.3 Math Functions (3)
+### 10.3 Math & Bitwise Functions (9)
 
 ```
 fn abs_i32(n: i32) -> i32                  // Absolute value (panics on MIN_VALUE)
 fn abs_f64(n: f64) -> f64                  // Absolute value
 fn mod_i32(a: i32, b: i32) -> i32          // Modulo (same as %, included for clarity)
+fn band(a: i32, b: i32) -> i32             // Bitwise AND
+fn bor(a: i32, b: i32) -> i32              // Bitwise OR
+fn bxor(a: i32, b: i32) -> i32             // Bitwise XOR
+fn bshl(a: i32, n: i32) -> i32             // Shift left (unsigned semantics)
+fn bshr(a: i32, n: i32) -> i32             // Shift right (unsigned/logical)
+fn bnot(a: i32) -> i32                     // Bitwise NOT (complement)
 ```
+
+**Note:** Shift functions use unsigned semantics to avoid C undefined behavior. All bitwise functions take `i32` operands only.
 
 ### 10.4 Array Functions (2)
 
@@ -1101,7 +1126,38 @@ fn! i32_to_str(n: i32) -> str              // Convert integer to string represen
 fn! arena_reset()                          // Reset the program arena (frees all dynamic memory)
 ```
 
-**Total: 18 functions.**
+### 10.7 Command-Line Arguments (2)
+
+```
+fn! arg_count() -> i32                     // Number of command-line arguments (including program name)
+fn! arg_get(i: i32) -> str                 // Get argument at index i (0 = program name). Panics if out of bounds.
+```
+
+**Note:** These expose the underlying C `argc`/`argv`. `arg_get(0)` returns the program name.
+
+### 10.8 File I/O (7)
+
+```
+fn! file_open_read(path: str) -> i32       // Open file for reading, returns handle (-1 on error)
+fn! file_open_write(path: str) -> i32      // Open/create file for writing, returns handle (-1 on error)
+fn! read_byte(fd: i32) -> i32              // Read one byte, returns -1 on EOF
+fn! write_byte(fd: i32, b: i32)            // Write one byte
+fn! write_str(fd: i32, s: str)             // Write string to file handle
+fn! file_close(fd: i32)                    // Close file handle
+fn! file_delete(path: str) -> i32          // Delete file, returns 0 on success
+```
+
+**Constants** (module-level constants available without declaration):
+
+| Name     | Type  | Value | Description           |
+|----------|-------|-------|-----------------------|
+| `STDIN`  | `i32` | `0`   | Standard input handle  |
+| `STDOUT` | `i32` | `1`   | Standard output handle |
+| `STDERR` | `i32` | `2`   | Standard error handle  |
+
+**Note:** In freestanding mode, file I/O uses OS syscalls. In libc mode, it uses standard C stdio. Byte-at-a-time I/O avoids buffer management complexity.
+
+**Total: 36 functions** (7 I/O + 7 string + 9 math/bitwise + 2 array + 1 conversion + 1 memory + 2 args + 7 file I/O + 3 constants).
 
 ---
 

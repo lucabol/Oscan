@@ -1,0 +1,92 @@
+// Grep — search for a pattern in a file, print matching lines with line numbers
+// Usage: grep <pattern> <filename>
+// Uses byte-by-byte comparison since Oscan has no byte-to-string conversion.
+
+fn! check_and_print(bytes: [i32], start: i32, end: i32, pattern: str, line_num: i32) -> i32 {
+    let line_len: i32 = end - start;
+    let pat_len: i32 = str_len(pattern);
+    let mut found: bool = false;
+
+    if pat_len == 0 {
+        found = true;
+    } else {
+        let mut pos: i32 = 0;
+        while pos <= line_len - pat_len {
+            if found == false {
+                let mut ok: bool = true;
+                let mut k: i32 = 0;
+                while k < pat_len {
+                    if ok {
+                        if bytes[start + pos + k] != pattern[k] {
+                            ok = false;
+                        };
+                    };
+                    k = k + 1;
+                };
+                if ok {
+                    found = true;
+                };
+            };
+            pos = pos + 1;
+        };
+    };
+
+    if found {
+        print(i32_to_str(line_num));
+        print(":");
+        for bi in start..end {
+            write_byte(1, bytes[bi]);
+        };
+        write_byte(1, 10);
+        1
+    } else {
+        0
+    }
+}
+
+fn! main() {
+    if arg_count() < 3 {
+        println("Usage: grep <pattern> <filename>");
+    } else {
+        let pattern: str = arg_get(1);
+        let path: str = arg_get(2);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            // Read all bytes
+            let mut bytes: [i32] = [];
+            let mut b: i32 = read_byte(fd);
+            while b >= 0 {
+                push(bytes, b);
+                b = read_byte(fd);
+            };
+            file_close(fd);
+
+            // Process lines
+            let mut line_start: i32 = 0;
+            let mut line_num: i32 = 0;
+            let mut matches: i32 = 0;
+            let total: i32 = len(bytes);
+
+            for pos in 0..total {
+                if bytes[pos] == 10 {
+                    line_num = line_num + 1;
+                    matches = matches + check_and_print(bytes, line_start, pos, pattern, line_num);
+                    line_start = pos + 1;
+                };
+            };
+
+            // Handle last line without trailing newline
+            if line_start < total {
+                line_num = line_num + 1;
+                matches = matches + check_and_print(bytes, line_start, total, pattern, line_num);
+            };
+
+            if matches == 0 {
+                println("No matches found.");
+            };
+        };
+    };
+}

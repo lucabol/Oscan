@@ -63,6 +63,11 @@ osc_str   osc_str_concat(osc_arena *arena, osc_str a, osc_str b);
 int32_t  osc_str_len(osc_str s);
 uint8_t  osc_str_eq(osc_str a, osc_str b);
 osc_str   osc_str_to_cstr(osc_arena *arena, osc_str s);
+int       osc_str_compare(osc_str a, osc_str b);
+int32_t  osc_str_find(osc_str haystack, osc_str needle);
+osc_str   osc_str_from_i32(osc_arena *arena, int32_t n);
+osc_str   osc_str_slice(osc_arena *arena, osc_str s, int32_t start, int32_t end);
+int32_t  osc_str_check_index(osc_str s, int32_t idx);
 
 /* ------------------------------------------------------------------ */
 /*  Dynamic array (generic via void* + elem_size)                      */
@@ -153,6 +158,15 @@ void osc_print_f64(double n);
 void osc_print_bool(uint8_t b);
 osc_result_str_str osc_read_line(osc_arena *arena);
 
+/* File I/O */
+int32_t osc_file_open_read(osc_str path);
+int32_t osc_file_open_write(osc_str path);
+int32_t osc_read_byte(int32_t fd);
+void    osc_write_byte(int32_t fd, int32_t b);
+void    osc_write_str(int32_t fd, osc_str s);
+void    osc_file_close(int32_t fd);
+int32_t osc_file_delete(osc_str path);
+
 /* ------------------------------------------------------------------ */
 /*  Conversion functions                                               */
 /* ------------------------------------------------------------------ */
@@ -171,6 +185,17 @@ double  osc_abs_f64(double n);
 /* ------------------------------------------------------------------ */
 
 void osc_arena_reset_global(void);
+
+/* ------------------------------------------------------------------ */
+/*  Command-line argument access                                       */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_arg_count(void);
+osc_str osc_arg_get(osc_arena *arena, int32_t i);
+
+/* Global argc/argv — set by generated main */
+extern int osc_global_argc;
+extern char **osc_global_argv;
 
 /* Global arena — created by generated main, used by micro-lib fns */
 extern osc_arena *osc_global_arena;

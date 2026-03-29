@@ -1,0 +1,118 @@
+// Sort — sort lines of a file lexicographically
+// Usage: sort <filename>
+// Reads all bytes, sorts lines using insertion sort on byte arrays.
+
+// Compare two lines in the byte buffer, returns:
+//   -1 if line a < line b, 0 if equal, 1 if line a > line b
+fn compare_lines(bytes: [i32], a_start: i32, a_end: i32, b_start: i32, b_end: i32) -> i32 {
+    let a_len: i32 = a_end - a_start;
+    let b_len: i32 = b_end - b_start;
+    let mut min_len: i32 = a_len;
+    if b_len < min_len {
+        min_len = b_len;
+    };
+
+    let mut result: i32 = 0;
+    let mut k: i32 = 0;
+    while k < min_len {
+        if result == 0 {
+            let ca: i32 = bytes[a_start + k];
+            let cb: i32 = bytes[b_start + k];
+            if ca < cb {
+                result = 0 - 1;
+            } else if ca > cb {
+                result = 1;
+            };
+        };
+        k = k + 1;
+    };
+
+    if result == 0 {
+        if a_len < b_len {
+            0 - 1
+        } else if a_len > b_len {
+            1
+        } else {
+            0
+        }
+    } else {
+        result
+    }
+}
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: sort <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            // Read all bytes
+            let mut bytes: [i32] = [];
+            let mut b: i32 = read_byte(fd);
+            while b >= 0 {
+                push(bytes, b);
+                b = read_byte(fd);
+            };
+            file_close(fd);
+
+            let total: i32 = len(bytes);
+
+            // Build line starts and ends arrays
+            let mut starts: [i32] = [];
+            let mut ends: [i32] = [];
+
+            let mut line_start: i32 = 0;
+            for pos in 0..total {
+                if bytes[pos] == 10 {
+                    push(starts, line_start);
+                    push(ends, pos);
+                    line_start = pos + 1;
+                };
+            };
+            // Handle last line without trailing newline
+            if line_start < total {
+                push(starts, line_start);
+                push(ends, total);
+            };
+
+            let n: i32 = len(starts);
+
+            // Insertion sort on line indices
+            let mut idx: i32 = 1;
+            while idx < n {
+                let key_start: i32 = starts[idx];
+                let key_end: i32 = ends[idx];
+                let mut j: i32 = idx - 1;
+                let mut shifting: bool = true;
+                while shifting {
+                    if j >= 0 {
+                        if compare_lines(bytes, starts[j], ends[j], key_start, key_end) > 0 {
+                            starts[j + 1] = starts[j];
+                            ends[j + 1] = ends[j];
+                            j = j - 1;
+                        } else {
+                            shifting = false;
+                        };
+                    } else {
+                        shifting = false;
+                    };
+                };
+                starts[j + 1] = key_start;
+                ends[j + 1] = key_end;
+                idx = idx + 1;
+            };
+
+            // Print sorted lines
+            for li in 0..n {
+                for ci in starts[li]..ends[li] {
+                    write_byte(1, bytes[ci]);
+                };
+                write_byte(1, 10);
+            };
+        };
+    };
+}

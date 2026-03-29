@@ -1,0 +1,27 @@
+// Count Lines — count the number of newline characters in a file
+// Usage: countlines <filename>
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: countlines <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            let mut count: i32 = 0;
+            let mut b: i32 = read_byte(fd);
+            while b >= 0 {
+                if b == 10 {
+                    count = count + 1;
+                };
+                b = read_byte(fd);
+            };
+            file_close(fd);
+            print_i32(count);
+            println("");
+        };
+    };
+}

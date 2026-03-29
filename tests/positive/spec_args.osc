@@ -1,0 +1,17 @@
+// Test: Command-line argument functions — arg_count, arg_get
+// arg_count() returns at least 1 (program name always present).
+// arg_get(0) returns the executable path (non-empty string).
+
+fn! main() {
+    // arg_count >= 1 (program name is always present)
+    let count: i32 = arg_count();
+    print("has_args: ");
+    print_bool(count >= 1);
+    println("");
+
+    // arg_get(0) is the exe path — non-empty
+    let exe: str = arg_get(0);
+    print("exe_nonempty: ");
+    print_bool(str_len(exe) > 0);
+    println("");
+}

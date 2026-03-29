@@ -1,0 +1,104 @@
+// Hexdump — display file contents in hex + ASCII format
+// Usage: hexdump <filename>
+
+fn hex_digit(n: i32) -> i32 {
+    if n < 10 { n + 48 }
+    else { n - 10 + 97 }
+}
+
+fn! write_hex_byte(b: i32) {
+    write_byte(1, hex_digit(band(bshr(b, 4), 15)));
+    write_byte(1, hex_digit(band(b, 15)));
+    write_byte(1, 32); // space
+}
+
+fn! write_offset(off: i32) {
+    // Print 8-digit hex offset
+    write_byte(1, hex_digit(band(bshr(off, 28), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 24), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 20), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 16), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 12), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 8), 15)));
+    write_byte(1, hex_digit(band(bshr(off, 4), 15)));
+    write_byte(1, hex_digit(band(off, 15)));
+    write_byte(1, 32); // space
+}
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: hexdump <filename>");
+    } else {
+        let path: str = arg_get(1);
+        let fd: i32 = file_open_read(path);
+        if fd < 0 {
+            print("Error: cannot open ");
+            println(path);
+        } else {
+            let mut offset: i32 = 0;
+            let mut done: bool = false;
+
+            while done == false {
+                // Read up to 16 bytes into an array
+                let mut row: [i32] = [];
+                let mut ri: i32 = 0;
+                while ri < 16 {
+                    if done == false {
+                        let b: i32 = read_byte(fd);
+                        if b < 0 {
+                            done = true;
+                        } else {
+                            push(row, b);
+                        };
+                    };
+                    ri = ri + 1;
+                };
+
+                let n: i32 = len(row);
+                if n > 0 {
+                    write_offset(offset);
+
+                    // Hex section
+                    for col in 0..16 {
+                        if col == 8 {
+                            write_byte(1, 32);
+                        };
+                        if col < n {
+                            write_hex_byte(row[col]);
+                        } else {
+                            write_byte(1, 32);
+                            write_byte(1, 32);
+                            write_byte(1, 32);
+                        };
+                    };
+
+                    write_byte(1, 32); // space
+                    write_byte(1, 124); // |
+
+                    // ASCII section
+                    for ai in 0..n {
+                        let c: i32 = row[ai];
+                        if c >= 32 {
+                            if c <= 126 {
+                                write_byte(1, c);
+                            } else {
+                                write_byte(1, 46);
+                            };
+                        } else {
+                            write_byte(1, 46);
+                        };
+                    };
+
+                    write_byte(1, 124); // |
+                    write_byte(1, 10);  // newline
+                    offset = offset + n;
+                };
+            };
+
+            // Final offset line
+            write_offset(offset);
+            write_byte(1, 10);
+            file_close(fd);
+        };
+    };
+}

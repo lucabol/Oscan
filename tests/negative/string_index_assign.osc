@@ -1,0 +1,7 @@
+// EXPECT ERROR: String index assignment — strings are immutable
+// s[0] = 65 must be rejected at compile time.
+
+fn! main() {
+    let mut s: str = "hi";
+    s[0] = 65;
+}
