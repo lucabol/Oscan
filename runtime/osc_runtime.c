@@ -12,6 +12,9 @@
 #include "osc_runtime.h"
 
 #ifndef OSC_FREESTANDING
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1384,7 +1387,12 @@ void osc_sleep_ms(int32_t ms)
 #ifdef _WIN32
     Sleep((unsigned int)ms);
 #else
-    usleep((unsigned int)ms * 1000);
+    {
+        struct timespec ts;
+        ts.tv_sec = ms / 1000;
+        ts.tv_nsec = (ms % 1000) * 1000000L;
+        nanosleep(&ts, NULL);
+    }
 #endif
 #endif
 }
@@ -1515,7 +1523,8 @@ int32_t osc_file_open_append(osc_str path)
 #else
     FILE *f = fopen(buf, "a");
     if (!f) return -1;
-    return (int32_t)fileno(f);
+    fclose(f);
+    return 0;
 #endif
 }
 
