@@ -1,6 +1,6 @@
 # Oscan
 
-A minimalist programming language designed for LLM code generation, transpiling to C.
+A minimalist programming language designed for LLM code generation, transpiling to freestanding C.
 
 ## Why Oscan?
 
@@ -13,6 +13,7 @@ LLMs hallucinate less when the target language is small and unambiguous. Oscan g
 - **Anti-shadowing.** Re-declaring a name in a nested scope is a compile error.
 - **Arena memory.** One allocation model, no manual alloc/free, zero UB.
 - **Explicit everything.** No type inference, no implicit coercions, no operator overloading.
+- **No C Standard Library dependency.** Compiles down to direct syscalls (but you can use trusty old stdlibc).  
 
 The output is readable C99 that compiles on any platform with a C compiler.
 
