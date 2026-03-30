@@ -94,14 +94,25 @@ For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Osc
 
 ## Built-in Functions
 
-| Category | Functions |
-|----------|-----------|
-| **I/O** | `print_i32`, `print_str`, `println`, `read_line` |
-| **String** | `str_len`, `str_eq`, `str_concat`, `str_find`, `str_slice`, `s[i]` indexing |
-| **Bitwise** | `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` |
-| **Args** | `arg_count`, `arg_get` |
-| **File I/O** | `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` |
-| **Math** | `abs`, `min`, `max` |
+Oscan provides **81 builtin functions** across 8 categories (36 core + 45 new OS-level primitives):
+
+| Category | Functions | Count |
+|----------|-----------|-------|
+| **I/O** | `print_i32`, `print_str`, `println`, `read_line` | 7 |
+| **String (Core)** | `str_len`, `str_eq`, `str_concat`, `str_find`, `str_slice`, `s[i]` indexing | 7 |
+| **String (New)** | `str_contains`, `str_starts_with`, `str_ends_with`, `str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`, `str_compare` | 9 |
+| **Math & Bitwise** | `abs_i32`, `abs_f64`, `abs_i64`, `min`, `max`, `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` | 11 |
+| **Character Ops** | `char_is_alpha`, `char_is_digit`, `char_is_alnum`, `char_is_space`, `char_is_upper`, `char_is_lower`, `char_is_print`, `char_is_xdigit`, `char_to_upper`, `char_to_lower` | 10 |
+| **Parsing & Conversion** | `parse_i32`, `parse_i64`, `str_from_i64`, `str_from_f64`, `str_from_bool`, `i32_to_str` | 6 |
+| **Array & Memory** | `len`, `push`, `arena_reset` | 3 |
+| **Args** | `arg_count`, `arg_get` | 2 |
+| **File I/O (Core)** | `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` | 7 |
+| **File I/O (New)** | `file_rename`, `file_exists`, `file_size`, `file_open_append`, `dir_create`, `dir_remove`, `dir_current`, `dir_change`, `dir_list` | 8 |
+| **System** | `rand_seed`, `rand_i32`, `time_now`, `sleep_ms`, `exit`, `errno_get`, `errno_str`, `env_get` | 8 |
+| **Terminal** | `term_width`, `term_height` | 2 |
+| **Process** | `proc_run` | 1 |
+
+For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)**.
 
 ## Building & Testing
 

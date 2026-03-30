@@ -1,0 +1,29 @@
+fn! main() {
+    // parse_i32 success
+    match parse_i32("42") {
+        Result::Ok(n) => { print_i32(n); println(""); },
+        Result::Err(e) => { println(e); },
+    };
+
+    // parse_i32 failure
+    match parse_i32("abc") {
+        Result::Ok(n) => { print_i32(n); println(""); },
+        Result::Err(e) => { println(e); },
+    };
+
+    // parse_i32 negative
+    match parse_i32("-7") {
+        Result::Ok(n) => { print_i32(n); println(""); },
+        Result::Err(e) => { println(e); },
+    };
+
+    // parse_i64 success
+    match parse_i64("1000000") {
+        Result::Ok(n) => { print_i64(n); println(""); },
+        Result::Err(e) => { println(e); },
+    };
+
+    // str_from_bool
+    println(str_from_bool(true));
+    println(str_from_bool(false));
+}

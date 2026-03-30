@@ -1,0 +1,20 @@
+fn! main() {
+    // rand_seed + rand_i32 (just test it returns an int, exact value varies)
+    rand_seed(42);
+    let r1: i32 = rand_i32();
+    let r2: i32 = rand_i32();
+    // They should exist and be non-negative
+    print_bool(r1 >= 0);
+    println("");
+    // Two calls should generally differ (not guaranteed but very likely with seed 42)
+    print_bool(r1 != r2);
+    println("");
+
+    // time_now returns a positive number (unix timestamp)
+    let t: i64 = time_now();
+    print_bool(t > 0 as i64);
+    println("");
+
+    // exit is tested separately (would terminate the program)
+    println("system_ok");
+}

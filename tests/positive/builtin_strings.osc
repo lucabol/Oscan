@@ -1,0 +1,43 @@
+fn! main() {
+    // str_contains
+    print_bool(str_contains("hello world", "world"));
+    println("");
+    print_bool(str_contains("hello world", "xyz"));
+    println("");
+
+    // str_starts_with
+    print_bool(str_starts_with("hello world", "hello"));
+    println("");
+    print_bool(str_starts_with("hello world", "world"));
+    println("");
+
+    // str_ends_with
+    print_bool(str_ends_with("hello world", "world"));
+    println("");
+    print_bool(str_ends_with("hello world", "hello"));
+    println("");
+
+    // str_to_upper / str_to_lower
+    println(str_to_upper("hello"));
+    println(str_to_lower("HELLO"));
+
+    // str_trim
+    println(str_trim("  hello  "));
+
+    // str_compare
+    print_i32(str_compare("abc", "abc"));
+    println("");
+    print_bool(str_compare("abc", "def") < 0);
+    println("");
+
+    // str_replace
+    println(str_replace("hello world", "world", "oscan"));
+
+    // str_split
+    let parts: [str] = str_split("a,b,c", ",");
+    print_i32(len(parts));
+    println("");
+    println(parts[0]);
+    println(parts[1]);
+    println(parts[2]);
+}

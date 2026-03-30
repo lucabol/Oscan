@@ -46,3 +46,14 @@
 - Test adjusted to 60K elements to stay within 1MB arena so it passes, but the underlying bug is a time bomb for any program allocating >1MB
 - Recommended fix: linked-list arena blocks (never free existing blocks) or offset-based allocation
 - All 53 cargo tests pass with the new test added
+
+### Bitwise, Strings & Args Test Coverage (2025-07-17)
+- Created 3 positive test files + 1 negative test file covering 3 new feature groups
+- **spec_bitwise.osc**: All 6 bitwise ops (band/bor/bxor/bshl/bshr/bnot), edge cases (bshr(-1,1)=2147483647 unsigned shift, shift-by-0 identity, xor-self=0), combined masking pattern, bnot double-inversion, xor swap trick — 13 assertions total
+- **spec_strings.osc**: String indexing (byte values), all 6 comparison operators on str (<,>,<=,>=), empty string comparison, str_find (found/not found/empty needle/overlapping), str_from_i32 (positive/negative/zero), str_slice, str_eq round-trip — 18 assertions total
+- **spec_args.osc**: arg_count()>=1 and arg_get(0) non-empty — verifies command-line arg plumbing without needing test runner arg passing
+- **string_index_assign.osc** (negative): Confirms `s[0] = 65` on str is rejected with "cannot assign to string index: strings are immutable"
+- Both `str_from_i32` and `i32_to_str` exist as separate builtins (different codegen paths: `osc_str_from_i32` vs `osc_i32_to_str`)
+- Bitwise functions are all pure (`fn`), string functions split: str_find/str_eq are pure, str_from_i32/str_slice are impure (arena allocation)
+- arg_count and arg_get are impure (arg_get allocates on arena)
+- Full suite: 41 positive, 21 negative — all passing

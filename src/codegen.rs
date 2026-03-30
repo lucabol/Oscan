@@ -211,7 +211,10 @@ impl CodeGenerator {
     fn emit_result_typedefs(&mut self) {
         for (ok, err) in &self.result_types.clone() {
             let name = self.result_type_name(ok, err);
-            if name == "osc_result_str_str" {
+            if name == "osc_result_str_str"
+                || name == "osc_result_i32_str"
+                || name == "osc_result_i64_str"
+            {
                 continue; // Already in runtime
             }
             let ok_c = self.type_to_c(ok);
@@ -443,6 +446,11 @@ impl CodeGenerator {
         self.indent += 1;
         self.line("osc_global_argc = argc;");
         self.line("osc_global_argv = argv;");
+        if self.freestanding {
+            self.line("#ifdef OSC_FREESTANDING");
+            self.line("l_getenv_init(argc, argv);");
+            self.line("#endif");
+        }
         self.line("osc_arena* _arena = osc_arena_create(1048576);");
         self.line("osc_global_arena = _arena;");
 
@@ -905,6 +913,58 @@ impl CodeGenerator {
             "file_delete" => format!("osc_file_delete({})", arg_strs[0]),
             "arg_count" => "osc_arg_count()".to_string(),
             "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
+            // Tier 1: Character classification
+            "char_is_alpha" => format!("osc_char_is_alpha({})", arg_strs[0]),
+            "char_is_digit" => format!("osc_char_is_digit({})", arg_strs[0]),
+            "char_is_alnum" => format!("osc_char_is_alnum({})", arg_strs[0]),
+            "char_is_space" => format!("osc_char_is_space({})", arg_strs[0]),
+            "char_is_upper" => format!("osc_char_is_upper({})", arg_strs[0]),
+            "char_is_lower" => format!("osc_char_is_lower({})", arg_strs[0]),
+            "char_is_print" => format!("osc_char_is_print({})", arg_strs[0]),
+            "char_is_xdigit" => format!("osc_char_is_xdigit({})", arg_strs[0]),
+            "char_to_upper" => format!("osc_char_to_upper({})", arg_strs[0]),
+            "char_to_lower" => format!("osc_char_to_lower({})", arg_strs[0]),
+            "abs_i64" => format!("osc_abs_i64({})", arg_strs[0]),
+            // Tier 2: Number parsing & conversion
+            "parse_i32" => format!("osc_parse_i32({})", arg_strs[0]),
+            "parse_i64" => format!("osc_parse_i64({})", arg_strs[0]),
+            "str_from_i64" => format!("osc_str_from_i64(_arena, {})", arg_strs[0]),
+            "str_from_f64" => format!("osc_str_from_f64(_arena, {})", arg_strs[0]),
+            "str_from_bool" => format!("osc_str_from_bool({})", arg_strs[0]),
+            // Tier 3: Random, time, sleep, exit
+            "rand_seed" => format!("osc_rand_seed({})", arg_strs[0]),
+            "rand_i32" => "osc_rand_i32()".to_string(),
+            "time_now" => "osc_time_now()".to_string(),
+            "sleep_ms" => format!("osc_sleep_ms({})", arg_strs[0]),
+            "exit" => format!("osc_exit({})", arg_strs[0]),
+            // Tier 4: Environment & error
+            "env_get" => format!("osc_env_get(_arena, {})", arg_strs[0]),
+            "errno_get" => "osc_errno_get()".to_string(),
+            "errno_str" => format!("osc_errno_str({})", arg_strs[0]),
+            // Tier 5: Filesystem operations
+            "file_rename" => format!("osc_file_rename({}, {})", arg_strs[0], arg_strs[1]),
+            "file_exists" => format!("osc_file_exists({})", arg_strs[0]),
+            "dir_create" => format!("osc_dir_create({})", arg_strs[0]),
+            "dir_remove" => format!("osc_dir_remove({})", arg_strs[0]),
+            "dir_current" => "osc_dir_current(_arena)".to_string(),
+            "dir_change" => format!("osc_dir_change({})", arg_strs[0]),
+            "file_open_append" => format!("osc_file_open_append({})", arg_strs[0]),
+            "file_size" => format!("osc_file_size({})", arg_strs[0]),
+            // Tier 6: String operations
+            "str_contains" => format!("osc_str_contains({}, {})", arg_strs[0], arg_strs[1]),
+            "str_starts_with" => format!("osc_str_starts_with({}, {})", arg_strs[0], arg_strs[1]),
+            "str_ends_with" => format!("osc_str_ends_with({}, {})", arg_strs[0], arg_strs[1]),
+            "str_trim" => format!("osc_str_trim(_arena, {})", arg_strs[0]),
+            "str_split" => format!("osc_str_split(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "str_to_upper" => format!("osc_str_to_upper(_arena, {})", arg_strs[0]),
+            "str_to_lower" => format!("osc_str_to_lower(_arena, {})", arg_strs[0]),
+            "str_replace" => format!("osc_str_replace(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "str_compare" => format!("osc_str_compare({}, {})", arg_strs[0], arg_strs[1]),
+            // Tier 7: Directory listing & process control
+            "dir_list" => format!("osc_dir_list(_arena, {})", arg_strs[0]),
+            "proc_run" => format!("osc_proc_run({}, {})", arg_strs[0], arg_strs[1]),
+            "term_width" => "osc_term_width()".to_string(),
+            "term_height" => "osc_term_height()".to_string(),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val

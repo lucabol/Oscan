@@ -1,0 +1,45 @@
+fn! main() {
+    // file_exists on self (this test file should "exist" but we test something we know)
+    // Create a temp file, check it exists, rename it, check the new name exists, delete
+    let fd: i32 = file_open_write("_oscan_test_fs.tmp");
+    write_str(fd, "hello");
+    file_close(fd);
+
+    // file_exists
+    print_bool(file_exists("_oscan_test_fs.tmp"));
+    println("");
+
+    // file_size
+    let sz: i64 = file_size("_oscan_test_fs.tmp");
+    print_i64(sz);
+    println("");
+
+    // file_rename
+    let r: i32 = file_rename("_oscan_test_fs.tmp", "_oscan_test_fs2.tmp");
+    print_bool(r == 0);
+    println("");
+
+    // Check new name exists, old gone
+    print_bool(file_exists("_oscan_test_fs2.tmp"));
+    println("");
+    print_bool(file_exists("_oscan_test_fs.tmp"));
+    println("");
+
+    // dir_create and dir_remove
+    let r2: i32 = dir_create("_oscan_test_dir");
+    print_bool(r2 == 0);
+    println("");
+    let r3: i32 = dir_remove("_oscan_test_dir");
+    print_bool(r3 == 0);
+    println("");
+
+    // Cleanup
+    file_delete("_oscan_test_fs2.tmp");
+
+    // dir_current returns non-empty
+    let cwd: str = dir_current();
+    print_bool(str_len(cwd) > 0);
+    println("");
+
+    println("fs_ok");
+}

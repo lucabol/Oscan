@@ -1164,7 +1164,119 @@ fn! file_delete(path: str) -> i32          // Delete file, returns 0 on success
 
 **Note:** In freestanding mode, file I/O uses OS syscalls. In libc mode, it uses standard C stdio. Byte-at-a-time I/O avoids buffer management complexity.
 
-**Total: 36 functions** (7 I/O + 7 string + 9 math/bitwise + 2 array + 1 conversion + 1 memory + 2 args + 7 file I/O + 3 constants).
+### 10.9 Tier 1: Character Classification (11)
+
+All pure functions (`fn`).
+
+```
+fn char_is_alpha(c: i32) -> bool             // True if c is alphabetic (a-z, A-Z)
+fn char_is_digit(c: i32) -> bool             // True if c is digit (0-9)
+fn char_is_alnum(c: i32) -> bool             // True if c is alphanumeric (a-z, A-Z, 0-9)
+fn char_is_space(c: i32) -> bool             // True if c is whitespace (space, tab, newline, etc.)
+fn char_is_upper(c: i32) -> bool             // True if c is uppercase (A-Z)
+fn char_is_lower(c: i32) -> bool             // True if c is lowercase (a-z)
+fn char_is_print(c: i32) -> bool             // True if c is printable (ASCII 32-126)
+fn char_is_xdigit(c: i32) -> bool            // True if c is hexadecimal digit (0-9, a-f, A-F)
+fn char_to_upper(c: i32) -> i32              // Convert character to uppercase (returns uppercase equivalent or unchanged)
+fn char_to_lower(c: i32) -> i32              // Convert character to lowercase (returns lowercase equivalent or unchanged)
+fn abs_i64(n: i64) -> i64                    // Absolute value of 64-bit integer
+```
+
+**Note:** Character classification functions treat the i32 as a Unicode code point or ASCII value. Input values should be in the range 0-127 for ASCII, or valid Unicode code points for extended use.
+
+### 10.10 Tier 2: Number Parsing & Conversion (5)
+
+```
+fn parse_i32(s: str) -> Result<i32, str>     // Parse string to i32; returns error message on failure
+fn parse_i64(s: str) -> Result<i64, str>     // Parse string to i64; returns error message on failure
+fn! str_from_i64(n: i64) -> str              // Convert i64 to string (allocates on arena)
+fn! str_from_f64(n: f64) -> str              // Convert f64 to string (allocates on arena)
+fn str_from_bool(b: bool) -> str             // Convert bool to "true" or "false" (static strings, no allocation)
+```
+
+**Note:** Parsing functions use standard C number parsing rules. `str_from_i64` and `str_from_f64` allocate on the arena, so they are `fn!`. `str_from_bool` returns static string literals and is pure.
+
+### 10.11 Tier 3: System Functions (5) — `fn!`
+
+```
+fn! rand_seed(seed: i32)                     // Seed the random number generator
+fn! rand_i32() -> i32                        // Generate a random 32-bit integer
+fn! time_now() -> i64                        // Return current Unix time (seconds since epoch)
+fn! sleep_ms(ms: i32)                        // Sleep for specified milliseconds
+fn! exit(code: i32)                          // Exit the process with given exit code
+```
+
+**Note:** `rand_seed` must be called before using `rand_i32` (otherwise RNG behavior is undefined). `time_now` returns seconds since January 1, 1970 UTC.
+
+### 10.12 Tier 4: Environment & Error (3) — `fn!`
+
+```
+fn! env_get(name: str) -> Result<str, str>   // Get environment variable; returns error if not found
+fn! errno_get() -> i32                       // Get the value of errno from the last OS call
+fn! errno_str(code: i32) -> str              // Convert errno code to human-readable error message
+```
+
+**Note:** `env_get` returns a string from the environment (must be copied to the arena if you need it to persist). `errno_get` and `errno_str` are useful for debugging OS-level errors.
+
+### 10.13 Tier 5: Filesystem Operations (8) — `fn!`
+
+```
+fn! file_rename(old: str, new: str) -> i32   // Rename file; returns 0 on success, -1 on error
+fn! file_exists(path: str) -> bool           // Check if file exists at path
+fn! file_size(path: str) -> i64              // Get file size in bytes; returns -1 on error
+fn! file_open_append(path: str) -> i32       // Open file for appending; returns handle (-1 on error)
+fn! dir_create(path: str) -> i32             // Create directory; returns 0 on success, -1 on error
+fn! dir_remove(path: str) -> i32             // Remove empty directory; returns 0 on success, -1 on error
+fn! dir_current() -> str                     // Get current working directory as string (allocates on arena)
+fn! dir_change(path: str) -> i32             // Change current working directory; returns 0 on success, -1 on error
+```
+
+**Note:** File operations use OS-level syscalls (or libc equivalents). File handles are the same format as those returned by `file_open_read`/`file_open_write`. `dir_current()` returns a newly allocated string on the arena with the CWD path.
+
+### 10.14 Tier 6: String Operations (9)
+
+Most are pure (`fn`); allocation functions are `fn!`.
+
+```
+fn str_contains(s: str, sub: str) -> bool    // Check if string contains substring
+fn str_starts_with(s: str, prefix: str) -> bool  // Check if string starts with prefix
+fn str_ends_with(s: str, suffix: str) -> bool    // Check if string ends with suffix
+fn! str_trim(s: str) -> str                  // Return new string with leading/trailing whitespace removed (allocates)
+fn! str_split(s: str, delim: str) -> [str]   // Split string by delimiter; returns array of substrings (allocates)
+fn! str_to_upper(s: str) -> str              // Convert string to uppercase (allocates on arena)
+fn! str_to_lower(s: str) -> str              // Convert string to lowercase (allocates on arena)
+fn! str_replace(s: str, old: str, new: str) -> str  // Replace all occurrences of old with new (allocates)
+fn str_compare(a: str, b: str) -> i32        // Lexicographic comparison: -1 (a<b), 0 (a==b), 1 (a>b)
+```
+
+**Note:** All string functions that create new strings (`str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`) are `fn!` because they allocate on the arena.
+
+### 10.15 Tier 7: Directory Listing & Process Control (4) — `fn!`
+
+```
+fn! dir_list(path: str) -> [str]             // List directory entries (returns array of names, allocates)
+fn! proc_run(cmd: str, args: [str]) -> i32   // Run external process; returns exit code
+fn! term_width() -> i32                      // Get terminal width in columns (0 if not a terminal)
+fn! term_height() -> i32                     // Get terminal height in rows (0 if not a terminal)
+```
+
+**Note:** `proc_run` executes an external command synchronously and returns its exit code. `term_width()` and `term_height()` return 0 if output is not connected to a terminal (useful for detecting interactive vs. piped execution).
+
+---
+
+**Extended Library Summary:**
+
+The original 36 core functions are now extended with **45 new OS-level builtins** organized in 7 tiers:
+
+- **Tier 1:** Character classification (11 functions)
+- **Tier 2:** Number parsing & conversion (5 functions)
+- **Tier 3:** System functions (5 functions)
+- **Tier 4:** Environment & error (3 functions)
+- **Tier 5:** Filesystem operations (8 functions)
+- **Tier 6:** String operations (9 functions)
+- **Tier 7:** Directory & process control (4 functions)
+
+**Total library: 81 functions** (36 core + 45 new).
 
 ---
 

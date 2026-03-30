@@ -1,0 +1,23 @@
+fn! main() {
+    // env_get success (PATH exists on all platforms)
+    match env_get("PATH") {
+        Result::Ok(val) => {
+            // PATH is always non-empty
+            print_bool(str_len(val) > 0);
+            println("");
+        },
+        Result::Err(e) => { println(e); },
+    };
+
+    // env_get failure (unlikely env var)
+    match env_get("OSC_NONEXISTENT_VAR_12345") {
+        Result::Ok(val) => { println(val); },
+        Result::Err(e) => { println(e); },
+    };
+
+    // errno_get (should be 0 initially or after success)
+    // We just test it returns an integer
+    let e: i32 = errno_get();
+    print_bool(e >= 0);
+    println("");
+}

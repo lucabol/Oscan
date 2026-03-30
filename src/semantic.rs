@@ -126,6 +126,77 @@ impl SemanticAnalyzer {
         self.functions.insert("arg_count".into(), builtin(vec![], BcType::I32, false));
         self.functions.insert("arg_get".into(), builtin(vec![("i", BcType::I32)], BcType::Str, false));
 
+        // Tier 1: Character classification (pure)
+        self.functions.insert("char_is_alpha".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_digit".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_alnum".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_space".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_upper".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_lower".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_print".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_is_xdigit".into(), builtin(vec![("c", BcType::I32)], BcType::Bool, true));
+        self.functions.insert("char_to_upper".into(), builtin(vec![("c", BcType::I32)], BcType::I32, true));
+        self.functions.insert("char_to_lower".into(), builtin(vec![("c", BcType::I32)], BcType::I32, true));
+        self.functions.insert("abs_i64".into(), builtin(vec![("n", BcType::I64)], BcType::I64, true));
+
+        // Tier 2: Number parsing & conversion
+        self.functions.insert("parse_i32".into(), builtin(
+            vec![("s", BcType::Str)],
+            BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+            true,
+        ));
+        self.functions.insert("parse_i64".into(), builtin(
+            vec![("s", BcType::Str)],
+            BcType::Result(Box::new(BcType::I64), Box::new(BcType::Str)),
+            true,
+        ));
+        self.functions.insert("str_from_i64".into(), builtin(vec![("n", BcType::I64)], BcType::Str, false));
+        self.functions.insert("str_from_f64".into(), builtin(vec![("n", BcType::F64)], BcType::Str, false));
+        self.functions.insert("str_from_bool".into(), builtin(vec![("b", BcType::Bool)], BcType::Str, true));
+
+        // Tier 3: Random, time, sleep, exit (fn!)
+        self.functions.insert("rand_seed".into(), builtin(vec![("seed", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("rand_i32".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("time_now".into(), builtin(vec![], BcType::I64, false));
+        self.functions.insert("sleep_ms".into(), builtin(vec![("ms", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("exit".into(), builtin(vec![("code", BcType::I32)], BcType::Unit, false));
+
+        // Tier 4: Environment & error (fn!)
+        self.functions.insert("env_get".into(), builtin(
+            vec![("name", BcType::Str)],
+            BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+            false,
+        ));
+        self.functions.insert("errno_get".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("errno_str".into(), builtin(vec![("code", BcType::I32)], BcType::Str, false));
+
+        // Tier 5: Filesystem operations (fn!)
+        self.functions.insert("file_rename".into(), builtin(vec![("old", BcType::Str), ("new_path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("file_exists".into(), builtin(vec![("path", BcType::Str)], BcType::Bool, false));
+        self.functions.insert("dir_create".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("dir_remove".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("dir_current".into(), builtin(vec![], BcType::Str, false));
+        self.functions.insert("dir_change".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("file_open_append".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+        self.functions.insert("file_size".into(), builtin(vec![("path", BcType::Str)], BcType::I64, false));
+
+        // Tier 6: String operations
+        self.functions.insert("str_contains".into(), builtin(vec![("s", BcType::Str), ("sub", BcType::Str)], BcType::Bool, true));
+        self.functions.insert("str_starts_with".into(), builtin(vec![("s", BcType::Str), ("prefix", BcType::Str)], BcType::Bool, true));
+        self.functions.insert("str_ends_with".into(), builtin(vec![("s", BcType::Str), ("suffix", BcType::Str)], BcType::Bool, true));
+        self.functions.insert("str_trim".into(), builtin(vec![("s", BcType::Str)], BcType::Str, false));
+        self.functions.insert("str_split".into(), builtin(vec![("s", BcType::Str), ("delim", BcType::Str)], BcType::Array(Box::new(BcType::Str)), false));
+        self.functions.insert("str_to_upper".into(), builtin(vec![("s", BcType::Str)], BcType::Str, false));
+        self.functions.insert("str_to_lower".into(), builtin(vec![("s", BcType::Str)], BcType::Str, false));
+        self.functions.insert("str_replace".into(), builtin(vec![("s", BcType::Str), ("old", BcType::Str), ("new_s", BcType::Str)], BcType::Str, false));
+        self.functions.insert("str_compare".into(), builtin(vec![("a", BcType::Str), ("b", BcType::Str)], BcType::I32, true));
+
+        // Tier 7: Directory listing & process control (fn!)
+        self.functions.insert("dir_list".into(), builtin(vec![("path", BcType::Str)], BcType::Array(Box::new(BcType::Str)), false));
+        self.functions.insert("proc_run".into(), builtin(vec![("cmd", BcType::Str), ("args", BcType::Array(Box::new(BcType::Str)))], BcType::I32, false));
+        self.functions.insert("term_width".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("term_height".into(), builtin(vec![], BcType::I32, false));
+
         // len and push are special-cased in check_call
     }
 

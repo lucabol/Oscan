@@ -1,0 +1,43 @@
+fn! main() {
+    // char_is_alpha
+    print_bool(char_is_alpha(65));
+    println("");
+    print_bool(char_is_alpha(48));
+    println("");
+
+    // char_is_digit
+    print_bool(char_is_digit(48));
+    println("");
+    print_bool(char_is_digit(65));
+    println("");
+
+    // char_is_alnum
+    print_bool(char_is_alnum(65));
+    println("");
+    print_bool(char_is_alnum(32));
+    println("");
+
+    // char_is_space
+    print_bool(char_is_space(32));
+    println("");
+    print_bool(char_is_space(65));
+    println("");
+
+    // char_is_upper / char_is_lower
+    print_bool(char_is_upper(65));
+    println("");
+    print_bool(char_is_lower(97));
+    println("");
+
+    // char_to_upper / char_to_lower
+    print_i32(char_to_upper(97));
+    println("");
+    print_i32(char_to_lower(65));
+    println("");
+
+    // abs_i64
+    print_i64(abs_i64(42 as i64));
+    println("");
+    print_i64(abs_i64(-100 as i64));
+    println("");
+}

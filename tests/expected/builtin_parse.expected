@@ -1,0 +1,6 @@
+42
+parse_i32: invalid integer string
+-7
+1000000
+true
+false

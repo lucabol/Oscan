@@ -50,3 +50,11 @@
   - Forward struct reference in function signatures: `fn foo() -> LaterStruct` where `LaterStruct` is defined after the function fails with "undefined type". Forward references work for types used in main/other positions, just not function return type annotations.
   - `Result<T, CustomEnum>`: codegen emits `OSC_RESULT_DECL` before the enum typedef, causing C compilation error. Custom error enums in Result not usable.
   - Anti-shadowing is strict: pattern bindings in match arms shadow outer variables with same name, triggering error. Use different binding names when outer scope has conflicting names.
+- **New built-in functions added (Phase 5):** 11 new built-in functions across 3 groups:
+  - **Bitwise (6 pure):** `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` — emitted as inline C with unsigned casts to prevent UB.
+  - **String (3):** `str_find` (pure), `str_from_i32` (fn!), `str_slice` (fn!) — call runtime `osc_str_*` functions.
+  - **CLI args (2 fn!):** `arg_count`, `arg_get` — call `osc_arg_count()`/`osc_arg_get()` using globals set by main wrapper.
+- **String indexing (`s[i]`):** Extended `Expr::Index` and `element_type` to allow `BcType::Str`, returning `i32` (byte value). Immutability enforced — `PlaceAccessor::Index` on str is a compile error. Codegen emits bounds-checked byte access via `osc_str_check_index`.
+- **String comparison operators:** `<`, `>`, `<=`, `>=` now work on `str` types. Codegen emits `osc_str_compare(a, b) <op> 0` calls.
+- **Main wrapper updated:** `emit_main_wrapper` now stores `argc`/`argv` into `osc_global_argc`/`osc_global_argv` instead of discarding them. Static globals emitted at top of every generated C file.
+- **Runtime extended:** Added 8 C functions to `osc_runtime.h`/`.c`: `osc_str_compare`, `osc_str_find`, `osc_str_from_i32`, `osc_str_slice`, `osc_str_check_index`, `osc_arg_count`, `osc_arg_get`, plus global `osc_global_argc`/`osc_global_argv`. All 53 unit tests pass.

@@ -1,0 +1,27 @@
+fn! main() {
+    // dir_list
+    dir_create("_oscan_test_ls");
+    let fd1: i32 = file_open_write("_oscan_test_ls/a.txt");
+    file_close(fd1);
+    let fd2: i32 = file_open_write("_oscan_test_ls/b.txt");
+    file_close(fd2);
+
+    let files: [str] = dir_list("_oscan_test_ls");
+    print_bool(len(files) >= 2);
+    println("");
+
+    // Cleanup
+    file_delete("_oscan_test_ls/a.txt");
+    file_delete("_oscan_test_ls/b.txt");
+    dir_remove("_oscan_test_ls");
+
+    // term_width and term_height return positive (or 0 if not a tty)
+    let w: i32 = term_width();
+    let h: i32 = term_height();
+    print_bool(w >= 0);
+    println("");
+    print_bool(h >= 0);
+    println("");
+
+    println("dir_proc_ok");
+}

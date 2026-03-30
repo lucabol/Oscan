@@ -179,6 +179,88 @@ osc_str osc_i32_to_str(osc_arena *arena, int32_t n);
 
 int32_t osc_abs_i32(int32_t n);
 double  osc_abs_f64(double n);
+int64_t osc_abs_i64(int64_t n);
+
+/* ------------------------------------------------------------------ */
+/*  Character classification & conversion                              */
+/* ------------------------------------------------------------------ */
+
+uint8_t osc_char_is_alpha(int32_t c);
+uint8_t osc_char_is_digit(int32_t c);
+uint8_t osc_char_is_alnum(int32_t c);
+uint8_t osc_char_is_space(int32_t c);
+uint8_t osc_char_is_upper(int32_t c);
+uint8_t osc_char_is_lower(int32_t c);
+uint8_t osc_char_is_print(int32_t c);
+uint8_t osc_char_is_xdigit(int32_t c);
+int32_t osc_char_to_upper(int32_t c);
+int32_t osc_char_to_lower(int32_t c);
+
+/* ------------------------------------------------------------------ */
+/*  Number parsing & conversion                                        */
+/* ------------------------------------------------------------------ */
+
+OSC_RESULT_DECL(int32_t, osc_str, osc_result_i32_str);
+OSC_RESULT_DECL(int64_t, osc_str, osc_result_i64_str);
+
+osc_result_i32_str osc_parse_i32(osc_str s);
+osc_result_i64_str osc_parse_i64(osc_str s);
+osc_str osc_str_from_i64(osc_arena *arena, int64_t n);
+osc_str osc_str_from_f64(osc_arena *arena, double n);
+osc_str osc_str_from_bool(uint8_t b);
+
+/* ------------------------------------------------------------------ */
+/*  Environment & error                                                */
+/* ------------------------------------------------------------------ */
+
+osc_result_str_str osc_env_get(osc_arena *arena, osc_str name);
+int32_t osc_errno_get(void);
+osc_str osc_errno_str(int32_t code);
+
+/* ------------------------------------------------------------------ */
+/*  System: random, time, sleep, exit                                  */
+/* ------------------------------------------------------------------ */
+
+void    osc_rand_seed(int32_t seed);
+int32_t osc_rand_i32(void);
+int64_t osc_time_now(void);
+void    osc_sleep_ms(int32_t ms);
+void    osc_exit(int32_t code);
+
+/* ------------------------------------------------------------------ */
+/*  Filesystem operations                                              */
+/* ------------------------------------------------------------------ */
+
+int32_t  osc_file_rename(osc_str old_path, osc_str new_path);
+uint8_t  osc_file_exists(osc_str path);
+int32_t  osc_dir_create(osc_str path);
+int32_t  osc_dir_remove(osc_str path);
+osc_str  osc_dir_current(osc_arena *arena);
+int32_t  osc_dir_change(osc_str path);
+int32_t  osc_file_open_append(osc_str path);
+int64_t  osc_file_size(osc_str path);
+
+/* ------------------------------------------------------------------ */
+/*  String operations                                                  */
+/* ------------------------------------------------------------------ */
+
+uint8_t   osc_str_contains(osc_str s, osc_str sub);
+uint8_t   osc_str_starts_with(osc_str s, osc_str prefix);
+uint8_t   osc_str_ends_with(osc_str s, osc_str suffix);
+osc_str   osc_str_trim(osc_arena *arena, osc_str s);
+osc_array *osc_str_split(osc_arena *arena, osc_str s, osc_str delim);
+osc_str   osc_str_to_upper(osc_arena *arena, osc_str s);
+osc_str   osc_str_to_lower(osc_arena *arena, osc_str s);
+osc_str   osc_str_replace(osc_arena *arena, osc_str s, osc_str old_s, osc_str new_s);
+
+/* ------------------------------------------------------------------ */
+/*  Directory listing & process control                                */
+/* ------------------------------------------------------------------ */
+
+osc_array *osc_dir_list(osc_arena *arena, osc_str path);
+int32_t    osc_proc_run(osc_str cmd, osc_array *args);
+int32_t    osc_term_width(void);
+int32_t    osc_term_height(void);
 
 /* ------------------------------------------------------------------ */
 /*  Arena reset (micro-lib convenience)                                */

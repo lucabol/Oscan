@@ -17,6 +17,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <ctype.h>
+#include <time.h>
+#include <errno.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <direct.h>
+#include <io.h>
+#else
+#include <unistd.h>
+#include <dirent.h>
+#include <sys/wait.h>
+#include <sys/ioctl.h>
+#endif
 #endif
 
 /* Global arena pointer — set by generated main() */
@@ -1093,4 +1107,778 @@ osc_str osc_arg_get(osc_arena *arena, int32_t i)
         OSC_PANIC("arg_get: index out of bounds");
     }
     return osc_str_from_cstr(osc_global_argv[i]);
+}
+
+/* ================================================================== */
+/*  Character classification & conversion                              */
+/* ================================================================== */
+
+#ifdef OSC_FREESTANDING
+uint8_t osc_char_is_alpha(int32_t c)  { return l_isalpha(c) ? 1 : 0; }
+uint8_t osc_char_is_digit(int32_t c)  { return l_isdigit(c) ? 1 : 0; }
+uint8_t osc_char_is_alnum(int32_t c)  { return l_isalnum(c) ? 1 : 0; }
+uint8_t osc_char_is_space(int32_t c)  { return l_isspace(c) ? 1 : 0; }
+uint8_t osc_char_is_upper(int32_t c)  { return l_isupper(c) ? 1 : 0; }
+uint8_t osc_char_is_lower(int32_t c)  { return l_islower(c) ? 1 : 0; }
+uint8_t osc_char_is_print(int32_t c)  { return l_isprint(c) ? 1 : 0; }
+uint8_t osc_char_is_xdigit(int32_t c) { return l_isxdigit(c) ? 1 : 0; }
+int32_t osc_char_to_upper(int32_t c)  { return (int32_t)l_toupper(c); }
+int32_t osc_char_to_lower(int32_t c)  { return (int32_t)l_tolower(c); }
+#else
+#include <ctype.h>
+uint8_t osc_char_is_alpha(int32_t c)  { return isalpha(c) ? 1 : 0; }
+uint8_t osc_char_is_digit(int32_t c)  { return isdigit(c) ? 1 : 0; }
+uint8_t osc_char_is_alnum(int32_t c)  { return isalnum(c) ? 1 : 0; }
+uint8_t osc_char_is_space(int32_t c)  { return isspace(c) ? 1 : 0; }
+uint8_t osc_char_is_upper(int32_t c)  { return isupper(c) ? 1 : 0; }
+uint8_t osc_char_is_lower(int32_t c)  { return islower(c) ? 1 : 0; }
+uint8_t osc_char_is_print(int32_t c)  { return isprint(c) ? 1 : 0; }
+uint8_t osc_char_is_xdigit(int32_t c) { return isxdigit(c) ? 1 : 0; }
+int32_t osc_char_to_upper(int32_t c)  { return (int32_t)toupper(c); }
+int32_t osc_char_to_lower(int32_t c)  { return (int32_t)tolower(c); }
+#endif
+
+/* ================================================================== */
+/*  abs_i64                                                            */
+/* ================================================================== */
+
+int64_t osc_abs_i64(int64_t n)
+{
+    if (n == INT64_MIN) {
+        OSC_PANIC("abs_i64: MIN_VALUE has no positive counterpart");
+    }
+    return n < 0 ? -n : n;
+}
+
+/* ================================================================== */
+/*  Number parsing                                                     */
+/* ================================================================== */
+
+osc_result_i32_str osc_parse_i32(osc_str s)
+{
+    osc_result_i32_str result;
+    char buf[64];
+    int32_t len = s.len < 63 ? s.len : 63;
+    int i;
+    int sign = 0;
+    int32_t val = 0;
+    
+    /* Copy to null-terminated buffer */
+    for (i = 0; i < len; i++) buf[i] = s.data[i];
+    buf[len] = '\0';
+
+    i = 0;
+    /* Skip whitespace */
+    while (i < len && osc_char_is_space((int32_t)(unsigned char)buf[i])) i++;
+    if (i == len) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("parse_i32: empty or whitespace-only string");
+        return result;
+    }
+    /* Sign */
+    if (buf[i] == '-') { sign = 1; i++; }
+    else if (buf[i] == '+') { i++; }
+    
+    if (i == len || !osc_char_is_digit((int32_t)(unsigned char)buf[i])) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("parse_i32: invalid integer string");
+        return result;
+    }
+    
+    while (i < len && osc_char_is_digit((int32_t)(unsigned char)buf[i])) {
+        int32_t digit = buf[i] - '0';
+        if (val > (INT32_MAX - digit) / 10) {
+            result.is_ok = 0;
+            result.value.err = osc_str_from_cstr("parse_i32: overflow");
+            return result;
+        }
+        val = val * 10 + digit;
+        i++;
+    }
+    
+    result.is_ok = 1;
+    result.value.ok = sign ? -val : val;
+    return result;
+}
+
+osc_result_i64_str osc_parse_i64(osc_str s)
+{
+    osc_result_i64_str result;
+    char buf[64];
+    int32_t len = s.len < 63 ? s.len : 63;
+    int i;
+    int sign = 0;
+    int64_t val = 0;
+    
+    for (i = 0; i < len; i++) buf[i] = s.data[i];
+    buf[len] = '\0';
+
+    i = 0;
+    while (i < len && osc_char_is_space((int32_t)(unsigned char)buf[i])) i++;
+    if (i == len) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("parse_i64: empty or whitespace-only string");
+        return result;
+    }
+    if (buf[i] == '-') { sign = 1; i++; }
+    else if (buf[i] == '+') { i++; }
+    
+    if (i == len || !osc_char_is_digit((int32_t)(unsigned char)buf[i])) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("parse_i64: invalid integer string");
+        return result;
+    }
+    
+    while (i < len && osc_char_is_digit((int32_t)(unsigned char)buf[i])) {
+        int64_t digit = buf[i] - '0';
+        if (val > (INT64_MAX - digit) / 10) {
+            result.is_ok = 0;
+            result.value.err = osc_str_from_cstr("parse_i64: overflow");
+            return result;
+        }
+        val = val * 10 + digit;
+        i++;
+    }
+    
+    result.is_ok = 1;
+    result.value.ok = sign ? -val : val;
+    return result;
+}
+
+osc_str osc_str_from_i64(osc_arena *arena, int64_t n)
+{
+    char buf[32];
+#ifdef OSC_FREESTANDING
+    int len = l_snprintf(buf, sizeof(buf), "%lld", (long long)n);
+#else
+    int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
+#endif
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    for (int i = 0; i <= len; i++) copy[i] = buf[i];
+    osc_str result;
+    result.data = copy;
+    result.len = (int32_t)len;
+    return result;
+}
+
+osc_str osc_str_from_f64(osc_arena *arena, double n)
+{
+    char buf[64];
+#ifdef OSC_FREESTANDING
+    int len = l_snprintf(buf, sizeof(buf), "%.6f", n);
+    char *dot = l_strchr(buf, '.');
+#else
+    int len = snprintf(buf, sizeof(buf), "%.6f", n);
+    char *dot = strchr(buf, '.');
+#endif
+    if (dot) {
+        while (len > 1 && buf[len - 1] == '0') len--;
+        if (len > 0 && buf[len - 1] == '.') len--;
+    }
+    buf[len] = '\0';
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    for (int i = 0; i <= len; i++) copy[i] = buf[i];
+    osc_str result;
+    result.data = copy;
+    result.len = (int32_t)len;
+    return result;
+}
+
+osc_str osc_str_from_bool(uint8_t b)
+{
+    return b ? osc_str_from_cstr("true") : osc_str_from_cstr("false");
+}
+
+/* ================================================================== */
+/*  Environment & error                                                */
+/* ================================================================== */
+
+osc_result_str_str osc_env_get(osc_arena *arena, osc_str name)
+{
+    osc_result_str_str result;
+    char buf[256];
+    int32_t len = name.len < 255 ? name.len : 255;
+    int i;
+    char *val;
+    
+    for (i = 0; i < len; i++) buf[i] = name.data[i];
+    buf[len] = '\0';
+    
+#ifdef OSC_FREESTANDING
+    val = l_getenv(buf);
+#else
+    val = getenv(buf);
+#endif
+    if (!val) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("env_get: variable not found");
+        return result;
+    }
+    
+    {
+        int32_t vlen = (int32_t)strlen(val);
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)vlen + 1);
+        for (i = 0; i < vlen; i++) copy[i] = val[i];
+        copy[vlen] = '\0';
+        result.is_ok = 1;
+        result.value.ok.data = copy;
+        result.value.ok.len = vlen;
+    }
+    return result;
+}
+
+int32_t osc_errno_get(void)
+{
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_errno();
+#else
+    return (int32_t)errno;
+#endif
+}
+
+osc_str osc_errno_str(int32_t code)
+{
+#ifdef OSC_FREESTANDING
+    return osc_str_from_cstr((char *)l_strerror(code));
+#else
+    return osc_str_from_cstr(strerror(code));
+#endif
+}
+
+/* ================================================================== */
+/*  System: random, time, sleep, exit                                  */
+/* ================================================================== */
+
+void osc_rand_seed(int32_t seed)
+{
+#ifdef OSC_FREESTANDING
+    l_srand((unsigned int)seed);
+#else
+    srand((unsigned int)seed);
+#endif
+}
+
+int32_t osc_rand_i32(void)
+{
+#ifdef OSC_FREESTANDING
+    return (int32_t)(l_rand() & 0x7FFFFFFF);
+#else
+    return (int32_t)(rand() & 0x7FFFFFFF);
+#endif
+}
+
+int64_t osc_time_now(void)
+{
+#ifdef OSC_FREESTANDING
+    return (int64_t)l_time(0);
+#else
+    return (int64_t)time(0);
+#endif
+}
+
+void osc_sleep_ms(int32_t ms)
+{
+#ifdef OSC_FREESTANDING
+    l_sleep_ms((unsigned int)ms);
+#else
+#ifdef _WIN32
+    Sleep((unsigned int)ms);
+#else
+    usleep((unsigned int)ms * 1000);
+#endif
+#endif
+}
+
+void osc_exit(int32_t code)
+{
+#ifdef OSC_FREESTANDING
+    l_exit(code);
+#else
+    exit(code);
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 5: Filesystem operations                                      */
+/* ================================================================== */
+
+static void osc_str_to_cstr_buf(osc_str s, char *buf, int32_t bufsz)
+{
+    int32_t len = s.len < (bufsz - 1) ? s.len : (bufsz - 1);
+    int i;
+    for (i = 0; i < len; i++) buf[i] = s.data[i];
+    buf[len] = '\0';
+}
+
+int32_t osc_file_rename(osc_str old_path, osc_str new_path)
+{
+    char obuf[1024], nbuf[1024];
+    osc_str_to_cstr_buf(old_path, obuf, 1024);
+    osc_str_to_cstr_buf(new_path, nbuf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_rename(obuf, nbuf);
+#else
+    return rename(obuf, nbuf);
+#endif
+}
+
+uint8_t osc_file_exists(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_access(buf, 0) == 0 ? 1 : 0;
+#else
+#ifdef _WIN32
+    return _access(buf, 0) == 0 ? 1 : 0;
+#else
+    return access(buf, 0) == 0 ? 1 : 0;
+#endif
+#endif
+}
+
+int32_t osc_dir_create(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_mkdir(buf, 0755);
+#else
+#ifdef _WIN32
+    return _mkdir(buf);
+#else
+    return mkdir(buf, 0755);
+#endif
+#endif
+}
+
+int32_t osc_dir_remove(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_rmdir(buf);
+#else
+#ifdef _WIN32
+    return _rmdir(buf);
+#else
+    return rmdir(buf);
+#endif
+#endif
+}
+
+osc_str osc_dir_current(osc_arena *arena)
+{
+    char buf[1024];
+#ifdef OSC_FREESTANDING
+    if (!l_getcwd(buf, sizeof(buf))) {
+#else
+#ifdef _WIN32
+    if (!_getcwd(buf, (int)sizeof(buf))) {
+#else
+    if (!getcwd(buf, sizeof(buf))) {
+#endif
+#endif
+        return osc_str_from_cstr("");
+    }
+    int32_t len = (int32_t)strlen(buf);
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    int i;
+    for (i = 0; i <= len; i++) copy[i] = buf[i];
+    osc_str result;
+    result.data = copy;
+    result.len = len;
+    return result;
+}
+
+int32_t osc_dir_change(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_chdir(buf);
+#else
+#ifdef _WIN32
+    return _chdir(buf);
+#else
+    return chdir(buf);
+#endif
+#endif
+}
+
+int32_t osc_file_open_append(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_open_append(buf);
+#else
+    FILE *f = fopen(buf, "a");
+    if (!f) return -1;
+    return (int32_t)fileno(f);
+#endif
+}
+
+int64_t osc_file_size(osc_str path)
+{
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    L_Stat st;
+    if (l_stat(buf, &st) != 0) return -1;
+    return (int64_t)st.st_size;
+#else
+    struct stat st;
+    if (stat(buf, &st) != 0) return -1;
+    return (int64_t)st.st_size;
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 6: String operations                                          */
+/* ================================================================== */
+
+uint8_t osc_str_contains(osc_str s, osc_str sub)
+{
+    if (sub.len == 0) return 1;
+    if (sub.len > s.len) return 0;
+    int32_t i, j;
+    for (i = 0; i <= s.len - sub.len; i++) {
+        for (j = 0; j < sub.len; j++) {
+            if (s.data[i + j] != sub.data[j]) break;
+        }
+        if (j == sub.len) return 1;
+    }
+    return 0;
+}
+
+uint8_t osc_str_starts_with(osc_str s, osc_str prefix)
+{
+    if (prefix.len > s.len) return 0;
+    int32_t i;
+    for (i = 0; i < prefix.len; i++) {
+        if (s.data[i] != prefix.data[i]) return 0;
+    }
+    return 1;
+}
+
+uint8_t osc_str_ends_with(osc_str s, osc_str suffix)
+{
+    if (suffix.len > s.len) return 0;
+    int32_t offset = s.len - suffix.len;
+    int32_t i;
+    for (i = 0; i < suffix.len; i++) {
+        if (s.data[offset + i] != suffix.data[i]) return 0;
+    }
+    return 1;
+}
+
+osc_str osc_str_trim(osc_arena *arena, osc_str s)
+{
+    int32_t start = 0, end = s.len;
+    while (start < end && osc_char_is_space((int32_t)(unsigned char)s.data[start])) start++;
+    while (end > start && osc_char_is_space((int32_t)(unsigned char)s.data[end - 1])) end--;
+    int32_t len = end - start;
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    int32_t i;
+    for (i = 0; i < len; i++) copy[i] = s.data[start + i];
+    copy[len] = '\0';
+    osc_str result;
+    result.data = copy;
+    result.len = len;
+    return result;
+}
+
+osc_array *osc_str_split(osc_arena *arena, osc_str s, osc_str delim)
+{
+    osc_array *arr = osc_array_new(arena, sizeof(osc_str), 4);
+    if (delim.len == 0 || s.len == 0) {
+        osc_str copy;
+        copy.data = s.data;
+        copy.len = s.len;
+        osc_array_push(arena, arr, &copy);
+        return arr;
+    }
+    int32_t start = 0;
+    int32_t i;
+    for (i = 0; i <= s.len - delim.len; i++) {
+        int32_t j;
+        int match = 1;
+        for (j = 0; j < delim.len; j++) {
+            if (s.data[i + j] != delim.data[j]) { match = 0; break; }
+        }
+        if (match) {
+            int32_t len = i - start;
+            char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+            int32_t k;
+            for (k = 0; k < len; k++) copy[k] = s.data[start + k];
+            copy[len] = '\0';
+            osc_str part;
+            part.data = copy;
+            part.len = len;
+            osc_array_push(arena, arr, &part);
+            start = i + delim.len;
+            i = start - 1; /* loop will increment */
+        }
+    }
+    /* Last segment */
+    {
+        int32_t len = s.len - start;
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+        int32_t k;
+        for (k = 0; k < len; k++) copy[k] = s.data[start + k];
+        copy[len] = '\0';
+        osc_str part;
+        part.data = copy;
+        part.len = len;
+        osc_array_push(arena, arr, &part);
+    }
+    return arr;
+}
+
+osc_str osc_str_to_upper(osc_arena *arena, osc_str s)
+{
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)s.len + 1);
+    int32_t i;
+    for (i = 0; i < s.len; i++) copy[i] = (char)osc_char_to_upper((int32_t)(unsigned char)s.data[i]);
+    copy[s.len] = '\0';
+    osc_str result;
+    result.data = copy;
+    result.len = s.len;
+    return result;
+}
+
+osc_str osc_str_to_lower(osc_arena *arena, osc_str s)
+{
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)s.len + 1);
+    int32_t i;
+    for (i = 0; i < s.len; i++) copy[i] = (char)osc_char_to_lower((int32_t)(unsigned char)s.data[i]);
+    copy[s.len] = '\0';
+    osc_str result;
+    result.data = copy;
+    result.len = s.len;
+    return result;
+}
+
+osc_str osc_str_replace(osc_arena *arena, osc_str s, osc_str old_s, osc_str new_s)
+{
+    if (old_s.len == 0) {
+        /* Return copy */
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)s.len + 1);
+        int32_t i;
+        for (i = 0; i < s.len; i++) copy[i] = s.data[i];
+        copy[s.len] = '\0';
+        osc_str result;
+        result.data = copy;
+        result.len = s.len;
+        return result;
+    }
+    /* Count occurrences to compute output size */
+    int32_t count = 0;
+    int32_t i;
+    for (i = 0; i <= s.len - old_s.len; i++) {
+        int32_t j;
+        int match = 1;
+        for (j = 0; j < old_s.len; j++) {
+            if (s.data[i + j] != old_s.data[j]) { match = 0; break; }
+        }
+        if (match) { count++; i += old_s.len - 1; }
+    }
+    int32_t new_len = s.len + count * (new_s.len - old_s.len);
+    char *out = (char *)osc_arena_alloc(arena, (size_t)new_len + 1);
+    int32_t oi = 0;
+    for (i = 0; i < s.len; ) {
+        if (i <= s.len - old_s.len) {
+            int32_t j;
+            int match = 1;
+            for (j = 0; j < old_s.len; j++) {
+                if (s.data[i + j] != old_s.data[j]) { match = 0; break; }
+            }
+            if (match) {
+                int32_t k;
+                for (k = 0; k < new_s.len; k++) out[oi++] = new_s.data[k];
+                i += old_s.len;
+                continue;
+            }
+        }
+        out[oi++] = s.data[i++];
+    }
+    out[oi] = '\0';
+    osc_str result;
+    result.data = out;
+    result.len = oi;
+    return result;
+}
+
+
+/* ================================================================== */
+/*  Tier 7: Directory listing & process control                        */
+/* ================================================================== */
+
+osc_array *osc_dir_list(osc_arena *arena, osc_str path)
+{
+    osc_array *arr = osc_array_new(arena, sizeof(osc_str), 8);
+    char buf[1024];
+    osc_str_to_cstr_buf(path, buf, 1024);
+#ifdef OSC_FREESTANDING
+    L_Dir dir;
+    L_DirEntry *ent;
+    if (l_opendir(buf, &dir) != 0) return arr;
+    while ((ent = l_readdir(&dir)) != 0) {
+        const char *name = ent->d_name;
+        if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
+            continue;
+        int32_t elen = (int32_t)l_strlen(name);
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)elen + 1);
+        int i;
+        for (i = 0; i <= elen; i++) copy[i] = name[i];
+        osc_str aentry;
+        aentry.data = copy;
+        aentry.len = elen;
+        osc_array_push(arena, arr, &aentry);
+    }
+    l_closedir(&dir);
+#else
+#ifdef _WIN32
+    char pattern[1040];
+    WIN32_FIND_DATAA fd;
+    HANDLE hFind;
+    snprintf(pattern, sizeof(pattern), "%s\\*", buf);
+    hFind = FindFirstFileA(pattern, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) return arr;
+    do {
+        const char *name = fd.cFileName;
+        if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
+            continue;
+        {
+            int32_t elen = (int32_t)strlen(name);
+            char *copy = (char *)osc_arena_alloc(arena, (size_t)elen + 1);
+            int i;
+            for (i = 0; i <= elen; i++) copy[i] = name[i];
+            {
+                osc_str aentry;
+                aentry.data = copy;
+                aentry.len = elen;
+                osc_array_push(arena, arr, &aentry);
+            }
+        }
+    } while (FindNextFileA(hFind, &fd));
+    FindClose(hFind);
+#else
+    {
+        DIR *d = opendir(buf);
+        struct dirent *ent;
+        if (!d) return arr;
+        while ((ent = readdir(d)) != NULL) {
+            const char *name = ent->d_name;
+            if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0')))
+                continue;
+            {
+                int32_t elen = (int32_t)strlen(name);
+                char *copy = (char *)osc_arena_alloc(arena, (size_t)elen + 1);
+                int i;
+                for (i = 0; i <= elen; i++) copy[i] = name[i];
+                {
+                    osc_str aentry;
+                    aentry.data = copy;
+                    aentry.len = elen;
+                    osc_array_push(arena, arr, &aentry);
+                }
+            }
+        }
+        closedir(d);
+    }
+#endif
+#endif
+    return arr;
+}
+
+int32_t osc_proc_run(osc_str cmd, osc_array *args)
+{
+    char cbuf[1024];
+    osc_str_to_cstr_buf(cmd, cbuf, 1024);
+    int32_t nargs = args->len;
+    char *argv_ptrs[66];
+    static char abuf[64][256];
+    int32_t max_args = nargs < 64 ? nargs : 64;
+    int32_t i;
+
+    argv_ptrs[0] = cbuf;
+    for (i = 0; i < max_args; i++) {
+        osc_str *s = (osc_str *)((char *)args->data + (size_t)i * sizeof(osc_str));
+        osc_str_to_cstr_buf(*s, abuf[i], 256);
+        argv_ptrs[i + 1] = abuf[i];
+    }
+    argv_ptrs[max_args + 1] = 0;
+
+#ifdef OSC_FREESTANDING
+    {
+        L_PID pid = l_spawn(cbuf, argv_ptrs, 0);
+        int exitcode = 0;
+        if (pid < 0) return -1;
+        l_wait(pid, &exitcode);
+        return (int32_t)exitcode;
+    }
+#else
+#ifdef _WIN32
+    (void)argv_ptrs;
+    return (int32_t)system(cbuf);
+#else
+    {
+        pid_t pid = fork();
+        int status = 0;
+        if (pid < 0) return -1;
+        if (pid == 0) {
+            execvp(cbuf, argv_ptrs);
+            _exit(127);
+        }
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+#endif
+#endif
+}
+
+int32_t osc_term_width(void)
+{
+#ifdef OSC_FREESTANDING
+    int rows = 0, cols = 0;
+    l_term_size(&rows, &cols);
+    return (int32_t)cols;
+#else
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+        return (int32_t)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+    return 0;
+#else
+    {
+        struct winsize ws;
+        if (ioctl(1, TIOCGWINSZ, &ws) == 0) return (int32_t)ws.ws_col;
+        return 0;
+    }
+#endif
+#endif
+}
+
+int32_t osc_term_height(void)
+{
+#ifdef OSC_FREESTANDING
+    int rows = 0, cols = 0;
+    l_term_size(&rows, &cols);
+    return (int32_t)rows;
+#else
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi))
+        return (int32_t)(csbi.srWindow.Bottom - csbi.srWindow.Top + 1);
+    return 0;
+#else
+    {
+        struct winsize ws;
+        if (ioctl(1, TIOCGWINSZ, &ws) == 0) return (int32_t)ws.ws_row;
+        return 0;
+    }
+#endif
+#endif
 }

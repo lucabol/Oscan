@@ -40,3 +40,11 @@
 - **Naming:** All runtime symbols renamed from `bc_` prefix to `osc_` prefix for consistency with project rename.
 - **Tests added:** 2 new C tests (pointer validity after growth, multi-block reset) + `arena_stress_200k.osc` integration test (200K pushes, ~1.6MB, forces multiple blocks).
 - **Verified:** 53 Rust tests, 78 C runtime tests, 48 integration tests (32 positive + 16 negative) — all passing. WSL/GCC 200K push test passes with exit code 0.
+
+### File I/O Built-in Functions
+- **Files:** `runtime/osc_runtime.h`, `runtime/osc_runtime.c`, `src/semantic.rs`, `src/codegen.rs`
+- **7 new built-ins:** `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` — all impure (`fn!`)
+- **Runtime dual-mode:** Freestanding uses `open_read()`/`read()`/`write()`/`close()`/`unlink()` from l_os.h. Libc mode uses POSIX fd APIs (`open`/`read`/`write`/`close`/`unlink` on Unix, `_open`/`_read`/`_write`/`_close`/`_unlink` on Windows via `<io.h>`/`<fcntl.h>`).
+- **Design choice:** File descriptors as `int32_t` (not `FILE*`) — works on all platforms since fd values are small ints. Avoids 64-bit pointer truncation.
+- **Path handling:** `osc_path_to_cstr()` helper does byte-by-byte copy (no `memcpy` dependency in freestanding), null-terminates into a 4096-byte stack buffer.
+- **Verified:** 53 Rust unit tests pass, 38 positive + 21 negative integration tests pass (Win x64), smoke test writes/reads/deletes a file successfully.
