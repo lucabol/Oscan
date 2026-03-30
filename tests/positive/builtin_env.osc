@@ -1,12 +1,30 @@
 fn! main() {
-    // env_get success (PATH exists on all platforms)
-    match env_get("PATH") {
+    // env_get success — try SYSTEMROOT (Windows) then PATH then HOME
+    match env_get("SYSTEMROOT") {
         Result::Ok(val) => {
-            // PATH is always non-empty
             print_bool(str_len(val) > 0);
             println("");
         },
-        Result::Err(e) => { println(e); },
+        Result::Err(e1) => {
+            match env_get("PATH") {
+                Result::Ok(val2) => {
+                    print_bool(str_len(val2) > 0);
+                    println("");
+                },
+                Result::Err(e2) => {
+                    match env_get("HOME") {
+                        Result::Ok(val3) => {
+                            print_bool(str_len(val3) > 0);
+                            println("");
+                        },
+                        Result::Err(e3) => {
+                            print_bool(false);
+                            println("");
+                        },
+                    };
+                },
+            };
+        },
     };
 
     // env_get failure (unlikely env var)
@@ -15,8 +33,7 @@ fn! main() {
         Result::Err(e) => { println(e); },
     };
 
-    // errno_get (should be 0 initially or after success)
-    // We just test it returns an integer
+    // errno_get (should be >= 0)
     let e: i32 = errno_get();
     print_bool(e >= 0);
     println("");
