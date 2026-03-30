@@ -9,12 +9,17 @@
  *   - libc mode (default): uses standard C library headers.
  */
 
-#include "osc_runtime.h"
-
+/* _POSIX_C_SOURCE must be defined before ANY includes so that glibc's
+   <features.h> (pulled in by <stdint.h> etc.) sees it on first pass. */
 #ifndef OSC_FREESTANDING
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
+#endif
+
+#include "osc_runtime.h"
+
+#ifndef OSC_FREESTANDING
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
