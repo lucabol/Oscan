@@ -42,6 +42,8 @@ pub enum TokenKind {
     Not,
     True,
     False,
+    Break,
+    Continue,
 
     // Literals
     IntLit(i64),
@@ -57,6 +59,11 @@ pub enum TokenKind {
     Star,       // *
     Slash,      // /
     Percent,    // %
+    PlusEq,     // +=
+    MinusEq,    // -=
+    StarEq,     // *=
+    SlashEq,    // /=
+    PercentEq,  // %=
     EqEq,      // ==
     BangEq,    // !=
     Lt,        // <
@@ -110,6 +117,8 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Not => write!(f, "not"),
             TokenKind::True => write!(f, "true"),
             TokenKind::False => write!(f, "false"),
+            TokenKind::Break => write!(f, "break"),
+            TokenKind::Continue => write!(f, "continue"),
             TokenKind::IntLit(v) => write!(f, "{v}"),
             TokenKind::FloatLit(v) => write!(f, "{v}"),
             TokenKind::StringLit(s) => write!(f, "\"{s}\""),
@@ -119,6 +128,11 @@ impl std::fmt::Display for TokenKind {
             TokenKind::Star => write!(f, "*"),
             TokenKind::Slash => write!(f, "/"),
             TokenKind::Percent => write!(f, "%"),
+            TokenKind::PlusEq => write!(f, "+="),
+            TokenKind::MinusEq => write!(f, "-="),
+            TokenKind::StarEq => write!(f, "*="),
+            TokenKind::SlashEq => write!(f, "/="),
+            TokenKind::PercentEq => write!(f, "%="),
             TokenKind::EqEq => write!(f, "=="),
             TokenKind::BangEq => write!(f, "!="),
             TokenKind::Lt => write!(f, "<"),

@@ -1,0 +1,76 @@
+// Test: Compound assignment operators +=, -=, *=, /=, %=
+// Exercises: all five operators on i32, += on f64,
+//            compound assign in loop, compound assign on array element
+
+fn! main() {
+    // += on i32
+    let mut a: i32 = 10;
+    a += 5;
+    print("+=: ");
+    print_i32(a);
+    println("");
+
+    // -= on i32
+    let mut b: i32 = 20;
+    b -= 8;
+    print("-=: ");
+    print_i32(b);
+    println("");
+
+    // *= on i32
+    let mut c: i32 = 6;
+    c *= 7;
+    print("*=: ");
+    print_i32(c);
+    println("");
+
+    // /= on i32
+    let mut d: i32 = 100;
+    d /= 4;
+    print("/=: ");
+    print_i32(d);
+    println("");
+
+    // %= on i32
+    let mut e: i32 = 17;
+    e %= 5;
+    print("%=: ");
+    print_i32(e);
+    println("");
+
+    // += on f64 (use 1.5 + 1.5 = 3.0 to get non-integer)
+    let mut f: f64 = 1.5;
+    f += 1.5;
+    print("f64 +=: ");
+    // Compare result to expected value
+    if f > 2.9 {
+        if f < 3.1 {
+            println("3")
+        } else {
+            println("fail")
+        }
+    } else {
+        println("fail")
+    };
+
+    // Compound assign in a loop(accumulator)
+    let mut sum: i32 = 0;
+    for i in 1..11 {
+        sum += i;
+    };
+    print("sum 1..10: ");
+    print_i32(sum);
+    println("");
+
+    // += on array element
+    let mut arr: [i32] = [10, 20, 30];
+    arr[0] += 5;
+    arr[1] -= 10;
+    arr[2] *= 2;
+    print("arr: ");
+    for x in arr {
+        print_i32(x);
+        print(" ");
+    };
+    println("");
+}

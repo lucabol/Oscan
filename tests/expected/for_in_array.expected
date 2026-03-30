@@ -1,0 +1,5 @@
+i32: 10 20 30 40 
+str: hello world oscan 
+empty ok
+break at 3: 1 2 
+nested: 10 20 20 40 30 60 

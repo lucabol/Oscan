@@ -1,0 +1,52 @@
+// Test: for-in iteration over arrays
+// Exercises: for-in over i32 array, str array, empty array,
+//            for-in with break, nested for-in
+
+fn! main() {
+    // for-in over dynamic array of i32
+    let nums: [i32] = [10, 20, 30, 40];
+    print("i32: ");
+    for n in nums {
+        print_i32(n);
+        print(" ");
+    };
+    println("");
+
+    // for-in over dynamic array of str
+    let words: [str] = ["hello", "world", "oscan"];
+    print("str: ");
+    for w in words {
+        print(w);
+        print(" ");
+    };
+    println("");
+
+    // for-in over empty array (should not execute body)
+    let empty: [i32] = [];
+    for x in empty {
+        println("should not print");
+    };
+    println("empty ok");
+
+    // for-in with break
+    let arr: [i32] = [1, 2, 3, 4, 5];
+    print("break at 3: ");
+    for v in arr {
+        if v == 3 { break; };
+        print_i32(v);
+        print(" ");
+    };
+    println("");
+
+    // nested for-in
+    let rows: [i32] = [1, 2, 3];
+    let cols: [i32] = [10, 20];
+    print("nested: ");
+    for r in rows {
+        for c in cols {
+            print_i32(r * c);
+            print(" ");
+        };
+    };
+    println("");
+}

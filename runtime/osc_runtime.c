@@ -28,11 +28,14 @@
 #include <windows.h>
 #include <direct.h>
 #include <io.h>
+#include <conio.h>
 #else
 #include <unistd.h>
 #include <dirent.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <termios.h>
+#include <fcntl.h>
 #endif
 #endif
 
@@ -1890,4 +1893,476 @@ int32_t osc_term_height(void)
     }
 #endif
 #endif
+}
+
+/* ================================================================== */
+/*  Tier 8: Raw terminal I/O                                           */
+/* ================================================================== */
+
+#ifdef OSC_FREESTANDING
+static unsigned long osc_saved_term_mode = 0;
+#else
+#ifdef _WIN32
+static DWORD osc_saved_console_mode = 0;
+#else
+static struct termios osc_saved_termios;
+static int osc_termios_saved = 0;
+#endif
+#endif
+
+int32_t osc_term_raw(void)
+{
+#ifdef OSC_FREESTANDING
+    osc_saved_term_mode = l_term_raw();
+    return 0;
+#else
+#ifdef _WIN32
+    {
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == INVALID_HANDLE_VALUE) return -1;
+        if (!GetConsoleMode(h, &osc_saved_console_mode)) return -1;
+        if (!SetConsoleMode(h, ENABLE_PROCESSED_INPUT)) return -1;
+        return 0;
+    }
+#else
+    {
+        struct termios raw;
+        if (tcgetattr(STDIN_FILENO, &osc_saved_termios) < 0) return -1;
+        osc_termios_saved = 1;
+        raw = osc_saved_termios;
+        raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | ISIG | IEXTEN);
+        raw.c_iflag &= (tcflag_t)~(IXON | ICRNL | BRKINT | INPCK | ISTRIP);
+        raw.c_oflag &= (tcflag_t)~(OPOST);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 0;
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) return -1;
+        return 0;
+    }
+#endif
+#endif
+}
+
+int32_t osc_term_restore(void)
+{
+#ifdef OSC_FREESTANDING
+    l_term_restore(osc_saved_term_mode);
+    return 0;
+#else
+#ifdef _WIN32
+    {
+        HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+        if (h == INVALID_HANDLE_VALUE) return -1;
+        if (!SetConsoleMode(h, osc_saved_console_mode)) return -1;
+        return 0;
+    }
+#else
+    {
+        if (!osc_termios_saved) return -1;
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &osc_saved_termios) < 0) return -1;
+        return 0;
+    }
+#endif
+#endif
+}
+
+int32_t osc_read_nonblock(void)
+{
+#ifdef OSC_FREESTANDING
+    {
+        char buf[1];
+        long n = l_read_nonblock(L_STDIN, buf, 1);
+        if (n <= 0) return -1;
+        return (int32_t)(unsigned char)buf[0];
+    }
+#else
+#ifdef _WIN32
+    {
+        if (_kbhit()) return (int32_t)_getch();
+        return -1;
+    }
+#else
+    {
+        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+        char buf[1];
+        ssize_t n;
+        if (flags < 0) return -1;
+        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+        n = read(STDIN_FILENO, buf, 1);
+        fcntl(STDIN_FILENO, F_SETFL, flags);
+        if (n <= 0) return -1;
+        return (int32_t)(unsigned char)buf[0];
+    }
+#endif
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 9: Environment iteration                                      */
+/* ================================================================== */
+
+#ifndef OSC_FREESTANDING
+#ifndef _WIN32
+extern char **environ;
+#endif
+#endif
+
+int32_t osc_env_count(void)
+{
+#ifdef OSC_FREESTANDING
+    {
+        int32_t count = 0;
+        void *handle = l_env_start();
+        void *iter = handle;
+        char buf[4096];
+        while (l_env_next(&iter, buf, sizeof(buf)) != NULL) {
+            count++;
+        }
+        l_env_end(handle);
+        return count;
+    }
+#else
+#ifdef _WIN32
+    {
+        int32_t count = 0;
+        LPCH env = GetEnvironmentStringsA();
+        LPCH p;
+        if (!env) return 0;
+        p = env;
+        while (*p) {
+            count++;
+            while (*p) p++;
+            p++;
+        }
+        FreeEnvironmentStringsA(env);
+        return count;
+    }
+#else
+    {
+        int32_t count = 0;
+        char **e = environ;
+        if (!e) return 0;
+        while (*e) { count++; e++; }
+        return count;
+    }
+#endif
+#endif
+}
+
+osc_str osc_env_key(osc_arena *arena, int32_t i)
+{
+#ifdef OSC_FREESTANDING
+    {
+        void *handle = l_env_start();
+        void *iter = handle;
+        char buf[4096];
+        int32_t idx = 0;
+        const char *entry;
+        while ((entry = l_env_next(&iter, buf, sizeof(buf))) != NULL) {
+            if (idx == i) {
+                const char *eq = entry;
+                int32_t klen;
+                char *copy;
+                osc_str result;
+                while (*eq && *eq != '=') eq++;
+                klen = (int32_t)(eq - entry);
+                copy = (char *)osc_arena_alloc(arena, (size_t)klen + 1);
+                for (int32_t j = 0; j < klen; j++) copy[j] = entry[j];
+                copy[klen] = '\0';
+                result.data = copy;
+                result.len = klen;
+                l_env_end(handle);
+                return result;
+            }
+            idx++;
+        }
+        l_env_end(handle);
+        return osc_str_from_cstr("");
+    }
+#else
+    {
+        const char *entry = NULL;
+#ifdef _WIN32
+        {
+            LPCH env = GetEnvironmentStringsA();
+            LPCH p;
+            int32_t idx = 0;
+            if (!env) return osc_str_from_cstr("");
+            p = env;
+            while (*p) {
+                if (idx == i) { entry = p; break; }
+                idx++;
+                while (*p) p++;
+                p++;
+            }
+            if (entry) {
+                const char *eq = entry;
+                int32_t klen;
+                char *copy;
+                osc_str result;
+                while (*eq && *eq != '=') eq++;
+                klen = (int32_t)(eq - entry);
+                copy = (char *)osc_arena_alloc(arena, (size_t)klen + 1);
+                for (int32_t j = 0; j < klen; j++) copy[j] = entry[j];
+                copy[klen] = '\0';
+                result.data = copy;
+                result.len = klen;
+                FreeEnvironmentStringsA(env);
+                return result;
+            }
+            FreeEnvironmentStringsA(env);
+            return osc_str_from_cstr("");
+        }
+#else
+        if (environ && i >= 0) {
+            int32_t idx = 0;
+            char **e = environ;
+            while (*e) {
+                if (idx == i) { entry = *e; break; }
+                idx++; e++;
+            }
+        }
+        if (entry) {
+            const char *eq = entry;
+            int32_t klen;
+            char *copy;
+            osc_str result;
+            while (*eq && *eq != '=') eq++;
+            klen = (int32_t)(eq - entry);
+            copy = (char *)osc_arena_alloc(arena, (size_t)klen + 1);
+            for (int32_t j = 0; j < klen; j++) copy[j] = entry[j];
+            copy[klen] = '\0';
+            result.data = copy;
+            result.len = klen;
+            return result;
+        }
+        return osc_str_from_cstr("");
+#endif
+    }
+#endif
+}
+
+osc_str osc_env_value(osc_arena *arena, int32_t i)
+{
+#ifdef OSC_FREESTANDING
+    {
+        void *handle = l_env_start();
+        void *iter = handle;
+        char buf[4096];
+        int32_t idx = 0;
+        const char *entry;
+        while ((entry = l_env_next(&iter, buf, sizeof(buf))) != NULL) {
+            if (idx == i) {
+                const char *eq = entry;
+                const char *val;
+                int32_t vlen;
+                char *copy;
+                osc_str result;
+                while (*eq && *eq != '=') eq++;
+                val = (*eq == '=') ? eq + 1 : eq;
+                vlen = (int32_t)strlen(val);
+                copy = (char *)osc_arena_alloc(arena, (size_t)vlen + 1);
+                for (int32_t j = 0; j < vlen; j++) copy[j] = val[j];
+                copy[vlen] = '\0';
+                result.data = copy;
+                result.len = vlen;
+                l_env_end(handle);
+                return result;
+            }
+            idx++;
+        }
+        l_env_end(handle);
+        return osc_str_from_cstr("");
+    }
+#else
+    {
+        const char *entry = NULL;
+#ifdef _WIN32
+        {
+            LPCH env = GetEnvironmentStringsA();
+            LPCH p;
+            int32_t idx = 0;
+            if (!env) return osc_str_from_cstr("");
+            p = env;
+            while (*p) {
+                if (idx == i) { entry = p; break; }
+                idx++;
+                while (*p) p++;
+                p++;
+            }
+            if (entry) {
+                const char *eq = entry;
+                const char *val;
+                int32_t vlen;
+                char *copy;
+                osc_str result;
+                while (*eq && *eq != '=') eq++;
+                val = (*eq == '=') ? eq + 1 : eq;
+                vlen = (int32_t)strlen(val);
+                copy = (char *)osc_arena_alloc(arena, (size_t)vlen + 1);
+                for (int32_t j = 0; j < vlen; j++) copy[j] = val[j];
+                copy[vlen] = '\0';
+                result.data = copy;
+                result.len = vlen;
+                FreeEnvironmentStringsA(env);
+                return result;
+            }
+            FreeEnvironmentStringsA(env);
+            return osc_str_from_cstr("");
+        }
+#else
+        if (environ && i >= 0) {
+            int32_t idx = 0;
+            char **e = environ;
+            while (*e) {
+                if (idx == i) { entry = *e; break; }
+                idx++; e++;
+            }
+        }
+        if (entry) {
+            const char *eq = entry;
+            const char *val;
+            int32_t vlen;
+            char *copy;
+            osc_str result;
+            while (*eq && *eq != '=') eq++;
+            val = (*eq == '=') ? eq + 1 : eq;
+            vlen = (int32_t)strlen(val);
+            copy = (char *)osc_arena_alloc(arena, (size_t)vlen + 1);
+            for (int32_t j = 0; j < vlen; j++) copy[j] = val[j];
+            copy[vlen] = '\0';
+            result.data = copy;
+            result.len = vlen;
+            return result;
+        }
+        return osc_str_from_cstr("");
+#endif
+    }
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 10: Hex formatting                                            */
+/* ================================================================== */
+
+osc_str osc_str_from_i32_hex(osc_arena *arena, int32_t n)
+{
+    char buf[16];
+#ifdef OSC_FREESTANDING
+    int len = l_snprintf(buf, sizeof(buf), "%x", (unsigned int)(uint32_t)n);
+#else
+    int len = snprintf(buf, sizeof(buf), "%x", (unsigned int)(uint32_t)n);
+#endif
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    int i;
+    for (i = 0; i <= len; i++) copy[i] = buf[i];
+    osc_str result;
+    result.data = copy;
+    result.len = (int32_t)len;
+    return result;
+}
+
+osc_str osc_str_from_i64_hex(osc_arena *arena, int64_t n)
+{
+    char buf[32];
+#ifdef OSC_FREESTANDING
+    int len = l_snprintf(buf, sizeof(buf), "%llx", (unsigned long long)(uint64_t)n);
+#else
+    int len = snprintf(buf, sizeof(buf), "%llx", (unsigned long long)(uint64_t)n);
+#endif
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    int i;
+    for (i = 0; i <= len; i++) copy[i] = buf[i];
+    osc_str result;
+    result.data = copy;
+    result.len = (int32_t)len;
+    return result;
+}
+
+/* ================================================================== */
+/*  Tier 11: Array sort (shellsort — no function pointers)             */
+/* ================================================================== */
+
+void osc_sort_i32(osc_array *arr)
+{
+    int32_t *d;
+    int32_t n, gap, i, j;
+    int32_t tmp;
+    if (!arr) OSC_PANIC("sort_i32: array is NULL");
+    d = (int32_t *)arr->data;
+    n = arr->len;
+    for (gap = n / 2; gap > 0; gap /= 2) {
+        for (i = gap; i < n; i++) {
+            tmp = d[i];
+            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
+                d[j] = d[j - gap];
+            d[j] = tmp;
+        }
+    }
+}
+
+void osc_sort_i64(osc_array *arr)
+{
+    int64_t *d;
+    int32_t n, gap, i, j;
+    int64_t tmp;
+    if (!arr) OSC_PANIC("sort_i64: array is NULL");
+    d = (int64_t *)arr->data;
+    n = arr->len;
+    for (gap = n / 2; gap > 0; gap /= 2) {
+        for (i = gap; i < n; i++) {
+            tmp = d[i];
+            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
+                d[j] = d[j - gap];
+            d[j] = tmp;
+        }
+    }
+}
+
+void osc_sort_f64(osc_array *arr)
+{
+    double *d;
+    int32_t n, gap, i, j;
+    double tmp;
+    if (!arr) OSC_PANIC("sort_f64: array is NULL");
+    d = (double *)arr->data;
+    n = arr->len;
+    for (gap = n / 2; gap > 0; gap /= 2) {
+        for (i = gap; i < n; i++) {
+            tmp = d[i];
+            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
+                d[j] = d[j - gap];
+            d[j] = tmp;
+        }
+    }
+}
+
+static int osc_str_cmp(osc_str a, osc_str b)
+{
+    int32_t min_len = a.len < b.len ? a.len : b.len;
+    int32_t i;
+    for (i = 0; i < min_len; i++) {
+        if ((unsigned char)a.data[i] < (unsigned char)b.data[i]) return -1;
+        if ((unsigned char)a.data[i] > (unsigned char)b.data[i]) return 1;
+    }
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
+}
+
+void osc_sort_str(osc_array *arr)
+{
+    osc_str *d;
+    int32_t n, gap, i, j;
+    osc_str tmp;
+    if (!arr) OSC_PANIC("sort_str: array is NULL");
+    d = (osc_str *)arr->data;
+    n = arr->len;
+    for (gap = n / 2; gap > 0; gap /= 2) {
+        for (i = gap; i < n; i++) {
+            tmp = d[i];
+            for (j = i; j >= gap && osc_str_cmp(d[j - gap], tmp) > 0; j -= gap)
+                d[j] = d[j - gap];
+            d[j] = tmp;
+        }
+    }
 }

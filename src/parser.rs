@@ -481,6 +481,7 @@ impl Parser {
         matches!(
             self.peek(),
             TokenKind::Let | TokenKind::While | TokenKind::For | TokenKind::Return
+            | TokenKind::Break | TokenKind::Continue
         ) || self.is_at_assign()
     }
 
@@ -517,8 +518,8 @@ impl Parser {
                         i += 1;
                     }
                 }
-                TokenKind::Eq => {
-                    // Make sure it's `=` not `==`
+                TokenKind::Eq | TokenKind::PlusEq | TokenKind::MinusEq
+                | TokenKind::StarEq | TokenKind::SlashEq | TokenKind::PercentEq => {
                     return true;
                 }
                 _ => return false,
@@ -534,6 +535,18 @@ impl Parser {
             TokenKind::While => self.parse_while_stmt(),
             TokenKind::For => self.parse_for_stmt(),
             TokenKind::Return => self.parse_return_stmt(),
+            TokenKind::Break => {
+                let span = self.peek_span();
+                self.advance();
+                self.expect(&TokenKind::Semicolon)?;
+                Ok(Stmt::Break(span))
+            }
+            TokenKind::Continue => {
+                let span = self.peek_span();
+                self.advance();
+                self.expect(&TokenKind::Semicolon)?;
+                Ok(Stmt::Continue(span))
+            }
             _ if self.is_at_assign() => self.parse_assign_stmt(),
             _ => {
                 let expr = self.parse_expr()?;
@@ -571,14 +584,35 @@ impl Parser {
     fn parse_assign_stmt(&mut self) -> Result<Stmt, CompileError> {
         let span = self.peek_span();
         let target = self.parse_place()?;
-        self.expect(&TokenKind::Eq)?;
-        let value = self.parse_expr()?;
-        self.expect(&TokenKind::Semicolon)?;
-        Ok(Stmt::Assign(AssignStmt {
-            target,
-            value,
-            span,
-        }))
+        // Check for compound assignment operators
+        let compound_op = match self.peek() {
+            TokenKind::PlusEq => Some(BinOp::Add),
+            TokenKind::MinusEq => Some(BinOp::Sub),
+            TokenKind::StarEq => Some(BinOp::Mul),
+            TokenKind::SlashEq => Some(BinOp::Div),
+            TokenKind::PercentEq => Some(BinOp::Mod),
+            _ => None,
+        };
+        if let Some(op) = compound_op {
+            self.advance();
+            let value = self.parse_expr()?;
+            self.expect(&TokenKind::Semicolon)?;
+            Ok(Stmt::CompoundAssign(CompoundAssignStmt {
+                target,
+                op,
+                value,
+                span,
+            }))
+        } else {
+            self.expect(&TokenKind::Eq)?;
+            let value = self.parse_expr()?;
+            self.expect(&TokenKind::Semicolon)?;
+            Ok(Stmt::Assign(AssignStmt {
+                target,
+                value,
+                span,
+            }))
+        }
     }
 
     fn parse_place(&mut self) -> Result<Place, CompileError> {
@@ -627,20 +661,34 @@ impl Parser {
         let (var, _) = self.expect_ident()?;
         self.expect(&TokenKind::In)?;
         let start = self.parse_expr()?;
-        self.expect(&TokenKind::DotDot)?;
-        let end = self.parse_expr()?;
-        let body = self.parse_block()?;
-        // Consume optional trailing semicolon (e.g. `for x in 0..5 { ... };`)
-        if self.at(&TokenKind::Semicolon) {
+        // Distinguish range `start..end` from array iteration
+        if self.at(&TokenKind::DotDot) {
             self.advance();
+            let end = self.parse_expr()?;
+            let body = self.parse_block()?;
+            if self.at(&TokenKind::Semicolon) {
+                self.advance();
+            }
+            Ok(Stmt::For(ForStmt {
+                var,
+                start,
+                end,
+                body,
+                span,
+            }))
+        } else {
+            // for x in arr { body }
+            let body = self.parse_block()?;
+            if self.at(&TokenKind::Semicolon) {
+                self.advance();
+            }
+            Ok(Stmt::ForIn(ForInStmt {
+                var,
+                iterable: start,
+                body,
+                span,
+            }))
         }
-        Ok(Stmt::For(ForStmt {
-            var,
-            start,
-            end,
-            body,
-            span,
-        }))
     }
 
     fn parse_return_stmt(&mut self) -> Result<Stmt, CompileError> {

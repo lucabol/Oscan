@@ -107,10 +107,14 @@ pub struct Block {
 pub enum Stmt {
     Let(LetStmt),
     Assign(AssignStmt),
+    CompoundAssign(CompoundAssignStmt),
     Expr(ExprStmt),
     While(WhileStmt),
     For(ForStmt),
+    ForIn(ForInStmt),
     Return(ReturnStmt),
+    Break(Span),
+    Continue(Span),
 }
 
 /// Local let binding.
@@ -174,6 +178,24 @@ pub struct ForStmt {
 #[derive(Debug)]
 pub struct ReturnStmt {
     pub value: Option<Expr>,
+    pub span: Span,
+}
+
+/// Compound assignment statement: `x += expr;`
+#[derive(Debug)]
+pub struct CompoundAssignStmt {
+    pub target: Place,
+    pub op: BinOp,
+    pub value: Expr,
+    pub span: Span,
+}
+
+/// For-in loop over an array: `for x in arr { body }`
+#[derive(Debug)]
+pub struct ForInStmt {
+    pub var: String,
+    pub iterable: Expr,
+    pub body: Block,
     pub span: Span,
 }
 

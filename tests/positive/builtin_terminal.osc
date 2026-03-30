@@ -1,0 +1,12 @@
+// Test: Terminal builtins (term_width, term_height)
+// Exercises: verify term_width() and term_height() return non-negative values
+
+fn! main() {
+    let w: i32 = term_width();
+    let h: i32 = term_height();
+    print_bool(w >= 0);
+    println("");
+    print_bool(h >= 0);
+    println("");
+    println("terminal ok");
+}

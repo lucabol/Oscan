@@ -1,0 +1,15 @@
+// Test: Hex formatting builtins
+// Exercises: str_from_i32_hex, str_from_i64_hex
+
+fn! main() {
+    // str_from_i32_hex
+    println(str_from_i32_hex(255));
+    println(str_from_i32_hex(0));
+    println(str_from_i32_hex(16));
+    println(str_from_i32_hex(256));
+
+    // str_from_i64_hex
+    println(str_from_i64_hex(65535 as i64));
+    println(str_from_i64_hex(0 as i64));
+    println(str_from_i64_hex(1048576 as i64));
+}

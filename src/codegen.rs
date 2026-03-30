@@ -124,6 +124,7 @@ impl CodeGenerator {
                     self.collect_result_types_from_ast_type(&ls.ty, seen);
                 }
                 Stmt::For(f) => self.collect_result_types_block(&f.body, seen),
+                Stmt::ForIn(fi) => self.collect_result_types_block(&fi.body, seen),
                 Stmt::While(w) => self.collect_result_types_block(&w.body, seen),
                 _ => {}
             }
@@ -538,6 +539,23 @@ impl CodeGenerator {
                     self.line(&format!("{} = {};", target, val));
                 }
             }
+            Stmt::CompoundAssign(ca) => {
+                let c_op = match ca.op {
+                    BinOp::Add => "+=",
+                    BinOp::Sub => "-=",
+                    BinOp::Mul => "*=",
+                    BinOp::Div => "/=",
+                    BinOp::Mod => "%=",
+                    _ => unreachable!(),
+                };
+                let val = self.emit_expr(&ca.value);
+                if ca.target.accessors.is_empty() {
+                    self.line(&format!("{} {} {};", ca.target.name, c_op, val));
+                } else {
+                    let target = self.emit_place(&ca.target);
+                    self.line(&format!("{} {} {};", target, c_op, val));
+                }
+            }
             Stmt::Expr(es) => {
                 let val = self.emit_expr(&es.expr);
                 if val != "(void)0" {
@@ -582,6 +600,53 @@ impl CodeGenerator {
                 self.pop_scope();
                 self.indent -= 1;
                 self.line("}");
+            }
+            Stmt::ForIn(fi) => {
+                let iter_idx = self.fresh_tmp();
+                let arr_expr = self.emit_expr(&fi.iterable);
+                // Determine array element type from the iterable
+                let arr_ty = self.type_of(&fi.iterable);
+                let (elem_ty, is_fixed, fixed_size) = match &arr_ty {
+                    BcType::FixedArray(e, n) => ((**e).clone(), true, *n),
+                    BcType::Array(e) => ((**e).clone(), false, 0),
+                    _ => (BcType::I32, false, 0),
+                };
+                let c_elem_ty = self.type_to_c(&elem_ty);
+                if is_fixed {
+                    self.line(&format!("for (int32_t {} = 0; {} < {}; {}++) {{",
+                        iter_idx, iter_idx, fixed_size, iter_idx));
+                    self.indent += 1;
+                    self.push_scope();
+                    self.scopes.last_mut().unwrap().insert(fi.var.clone(), elem_ty);
+                    self.line(&format!("const {} {} = {}[{}];",
+                        c_elem_ty, fi.var, arr_expr, iter_idx));
+                } else {
+                    self.line(&format!("for (int32_t {} = 0; {} < {}->len; {}++) {{",
+                        iter_idx, iter_idx, arr_expr, iter_idx));
+                    self.indent += 1;
+                    self.push_scope();
+                    self.scopes.last_mut().unwrap().insert(fi.var.clone(), elem_ty);
+                    self.line(&format!("const {} {} = (({}*){}->data)[{}];",
+                        c_elem_ty, fi.var, c_elem_ty, arr_expr, iter_idx));
+                }
+                for s in &fi.body.stmts {
+                    self.emit_stmt(s);
+                }
+                if let Some(tail) = &fi.body.tail_expr {
+                    let v = self.emit_expr(tail);
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
+                }
+                self.pop_scope();
+                self.indent -= 1;
+                self.line("}");
+            }
+            Stmt::Break(_) => {
+                self.line("break;");
+            }
+            Stmt::Continue(_) => {
+                self.line("continue;");
             }
             Stmt::Return(r) => {
                 if let Some(val) = &r.value {
@@ -965,6 +1030,22 @@ impl CodeGenerator {
             "proc_run" => format!("osc_proc_run({}, {})", arg_strs[0], arg_strs[1]),
             "term_width" => "osc_term_width()".to_string(),
             "term_height" => "osc_term_height()".to_string(),
+            // Tier 8: Raw terminal I/O
+            "term_raw" => "osc_term_raw()".to_string(),
+            "term_restore" => "osc_term_restore()".to_string(),
+            "read_nonblock" => "osc_read_nonblock()".to_string(),
+            // Tier 9: Environment iteration
+            "env_count" => "osc_env_count()".to_string(),
+            "env_key" => format!("osc_env_key(_arena, {})", arg_strs[0]),
+            "env_value" => format!("osc_env_value(_arena, {})", arg_strs[0]),
+            // Tier 10: Hex formatting
+            "str_from_i32_hex" => format!("osc_str_from_i32_hex(_arena, {})", arg_strs[0]),
+            "str_from_i64_hex" => format!("osc_str_from_i64_hex(_arena, {})", arg_strs[0]),
+            // Tier 11: Array sort
+            "sort_i32" => format!("osc_sort_i32({})", arg_strs[0]),
+            "sort_i64" => format!("osc_sort_i64({})", arg_strs[0]),
+            "sort_str" => format!("osc_sort_str({})", arg_strs[0]),
+            "sort_f64" => format!("osc_sort_f64({})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val

@@ -1,0 +1,52 @@
+// Test: break and continue in while and for loops
+// Exercises: break in while, continue in while, break in for,
+//            continue in for, nested loops with break
+
+fn! main() {
+    // while loop with break — find first value > 5
+    let mut i: i32 = 0;
+    while i < 100 {
+        if i > 5 { break; };
+        i += 1;
+    };
+    print("first > 5: ");
+    print_i32(i);
+    println("");
+
+    // while loop with continue — skip even numbers, print odd 1..9
+    let mut j: i32 = 0;
+    while j < 10 {
+        j += 1;
+        if j % 2 == 0 { continue; };
+        print_i32(j);
+        print(" ");
+    };
+    println("");
+
+    // for loop with break — stop at 4
+    for k in 0..10 {
+        if k == 4 { break; };
+        print_i32(k);
+        print(" ");
+    };
+    println("");
+
+    // for loop with continue — skip multiples of 3
+    for m in 0..10 {
+        if m % 3 == 0 { continue; };
+        print_i32(m);
+        print(" ");
+    };
+    println("");
+
+    // nested loops with break — only breaks inner loop
+    for outer in 0..3 {
+        for inner in 0..5 {
+            if inner == 2 { break; };
+            print_i32(inner);
+            print(" ");
+        };
+        print("| ");
+    };
+    println("");
+}

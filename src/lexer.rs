@@ -229,6 +229,8 @@ impl Lexer {
             "not" => TokenKind::Not,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             "_" => TokenKind::Underscore,
             _ => TokenKind::Ident(ident),
         };
@@ -253,6 +255,10 @@ impl Lexer {
                         self.advance();
                         self.skip_block_comment()?;
                         continue;
+                    } else if self.peek_ahead(1) == Some('=') {
+                        self.advance();
+                        self.advance();
+                        return Ok(Token::new(TokenKind::SlashEq, span));
                     } else {
                         self.advance();
                         return Ok(Token::new(TokenKind::Slash, span));
@@ -270,6 +276,10 @@ impl Lexer {
                 }
                 Some('+') => {
                     self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        return Ok(Token::new(TokenKind::PlusEq, span));
+                    }
                     return Ok(Token::new(TokenKind::Plus, span));
                 }
                 Some('-') => {
@@ -278,14 +288,26 @@ impl Lexer {
                         self.advance();
                         return Ok(Token::new(TokenKind::Arrow, span));
                     }
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        return Ok(Token::new(TokenKind::MinusEq, span));
+                    }
                     return Ok(Token::new(TokenKind::Minus, span));
                 }
                 Some('*') => {
                     self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        return Ok(Token::new(TokenKind::StarEq, span));
+                    }
                     return Ok(Token::new(TokenKind::Star, span));
                 }
                 Some('%') => {
                     self.advance();
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        return Ok(Token::new(TokenKind::PercentEq, span));
+                    }
                     return Ok(Token::new(TokenKind::Percent, span));
                 }
                 Some('=') => {

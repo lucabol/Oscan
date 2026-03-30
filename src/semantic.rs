@@ -27,6 +27,7 @@ pub struct SemanticAnalyzer {
     scopes: Vec<HashMap<String, BindingInfo>>,
     current_fn_return_type: Option<BcType>,
     in_pure_fn: bool,
+    loop_depth: usize,
 }
 
 impl SemanticAnalyzer {
@@ -39,6 +40,7 @@ impl SemanticAnalyzer {
             scopes: Vec::new(),
             current_fn_return_type: None,
             in_pure_fn: false,
+            loop_depth: 0,
         };
         sa.register_builtins();
 
@@ -196,6 +198,26 @@ impl SemanticAnalyzer {
         self.functions.insert("proc_run".into(), builtin(vec![("cmd", BcType::Str), ("args", BcType::Array(Box::new(BcType::Str)))], BcType::I32, false));
         self.functions.insert("term_width".into(), builtin(vec![], BcType::I32, false));
         self.functions.insert("term_height".into(), builtin(vec![], BcType::I32, false));
+
+        // Tier 8: Raw terminal I/O (fn!)
+        self.functions.insert("term_raw".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("term_restore".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("read_nonblock".into(), builtin(vec![], BcType::I32, false));
+
+        // Tier 9: Environment iteration (fn!)
+        self.functions.insert("env_count".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("env_key".into(), builtin(vec![("i", BcType::I32)], BcType::Str, false));
+        self.functions.insert("env_value".into(), builtin(vec![("i", BcType::I32)], BcType::Str, false));
+
+        // Tier 10: Hex formatting (fn! — allocates)
+        self.functions.insert("str_from_i32_hex".into(), builtin(vec![("n", BcType::I32)], BcType::Str, false));
+        self.functions.insert("str_from_i64_hex".into(), builtin(vec![("n", BcType::I64)], BcType::Str, false));
+
+        // Tier 11: Array sort (fn! — mutates)
+        self.functions.insert("sort_i32".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::I32)))], BcType::Unit, false));
+        self.functions.insert("sort_i64".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::I64)))], BcType::Unit, false));
+        self.functions.insert("sort_str".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::Str)))], BcType::Unit, false));
+        self.functions.insert("sort_f64".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::F64)))], BcType::Unit, false));
 
         // len and push are special-cased in check_call
     }
@@ -421,7 +443,9 @@ impl SemanticAnalyzer {
                     return Err(CompileError::new(w.span,
                         format!("while condition must be bool, got {}", cond_ty)));
                 }
+                self.loop_depth += 1;
                 self.check_block(&w.body, None)?;
+                self.loop_depth -= 1;
                 Ok(())
             }
             Stmt::For(f) => {
@@ -438,6 +462,7 @@ impl SemanticAnalyzer {
                 // Create scope for loop variable + body
                 self.push_scope();
                 self.add_binding(&f.var, BcType::I32, false, f.span)?;
+                self.loop_depth += 1;
                 // Check body in a nested scope
                 for stmt in &f.body.stmts {
                     self.check_stmt(stmt)?;
@@ -445,7 +470,77 @@ impl SemanticAnalyzer {
                 if let Some(tail) = &f.body.tail_expr {
                     self.check_expr(tail, None)?;
                 }
+                self.loop_depth -= 1;
                 self.pop_scope();
+                Ok(())
+            }
+            Stmt::ForIn(fi) => {
+                let arr_ty = self.check_expr(&fi.iterable, None)?;
+                let elem_ty = match &arr_ty {
+                    BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
+                    _ => return Err(CompileError::new(fi.span,
+                        format!("for-in requires an array type, got {}", arr_ty))),
+                };
+                self.push_scope();
+                self.add_binding(&fi.var, elem_ty, false, fi.span)?;
+                self.loop_depth += 1;
+                for stmt in &fi.body.stmts {
+                    self.check_stmt(stmt)?;
+                }
+                if let Some(tail) = &fi.body.tail_expr {
+                    self.check_expr(tail, None)?;
+                }
+                self.loop_depth -= 1;
+                self.pop_scope();
+                Ok(())
+            }
+            Stmt::Break(span) => {
+                if self.loop_depth == 0 {
+                    return Err(CompileError::new(*span,
+                        "break used outside of a loop".to_string()));
+                }
+                Ok(())
+            }
+            Stmt::Continue(span) => {
+                if self.loop_depth == 0 {
+                    return Err(CompileError::new(*span,
+                        "continue used outside of a loop".to_string()));
+                }
+                Ok(())
+            }
+            Stmt::CompoundAssign(ca) => {
+                // Check target is mutable
+                let target_info = self.lookup_var(&ca.target.name)
+                    .ok_or_else(|| CompileError::new(ca.span,
+                        format!("undefined variable '{}'", ca.target.name)))?
+                    .clone();
+                if !target_info.is_mut {
+                    return Err(CompileError::new(ca.span,
+                        format!("cannot assign to immutable variable '{}'", ca.target.name)));
+                }
+
+                // Walk through accessors to find the target type
+                let mut ty = target_info.ty.clone();
+                for acc in &ca.target.accessors {
+                    match acc {
+                        PlaceAccessor::Field(fname) => {
+                            ty = self.field_type(&ty, fname, ca.span)?;
+                        }
+                        PlaceAccessor::Index(idx_expr) => {
+                            let idx_ty = self.check_expr(idx_expr, None)?;
+                            if idx_ty != BcType::I32 {
+                                return Err(CompileError::new(ca.span,
+                                    format!("array index must be i32, got {}", idx_ty)));
+                            }
+                            ty = self.element_type(&ty, ca.span)?;
+                        }
+                    }
+                }
+
+                // Type-check the RHS value
+                let val_ty = self.check_expr(&ca.value, Some(&ty))?;
+                // Check that the operation is valid for these types
+                self.check_binary_op_types(ca.op, &ty, &val_ty, ca.span)?;
                 Ok(())
             }
             Stmt::Return(r) => {
@@ -1150,6 +1245,35 @@ impl SemanticAnalyzer {
 
     fn pop_scope(&mut self) {
         self.scopes.pop();
+    }
+
+    fn check_binary_op_types(&self, op: BinOp, lt: &BcType, rt: &BcType, span: Span) -> Result<BcType, CompileError> {
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div => {
+                if lt != rt {
+                    return Err(CompileError::new(span,
+                        format!("binary op type mismatch: {} vs {}", lt, rt)));
+                }
+                match lt {
+                    BcType::I32 | BcType::I64 | BcType::F64 => Ok(lt.clone()),
+                    _ => Err(CompileError::new(span,
+                        format!("arithmetic not supported for {}", lt))),
+                }
+            }
+            BinOp::Mod => {
+                if lt != rt {
+                    return Err(CompileError::new(span,
+                        format!("modulo type mismatch: {} vs {}", lt, rt)));
+                }
+                match lt {
+                    BcType::I32 | BcType::I64 => Ok(lt.clone()),
+                    _ => Err(CompileError::new(span,
+                        format!("modulo not supported for {}", lt))),
+                }
+            }
+            _ => Err(CompileError::new(span,
+                format!("compound assignment not supported for operator {:?}", op))),
+        }
     }
 
     fn add_binding(&mut self, name: &str, ty: BcType, is_mut: bool, span: Span) -> Result<(), CompileError> {

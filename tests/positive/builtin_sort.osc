@@ -1,0 +1,41 @@
+// Test: Sort builtins
+// Exercises: sort_i32, sort_str, sort on empty array, sort idempotent
+
+fn! main() {
+    // sort_i32
+    let mut nums: [i32] = [3, 1, 4, 1, 5, 2];
+    sort_i32(nums);
+    print("sorted i32: ");
+    for x in nums {
+        print_i32(x);
+        print(" ");
+    };
+    println("");
+
+    // sort_str
+    let mut words: [str] = ["banana", "apple", "cherry", "date"];
+    sort_str(words);
+    print("sorted str: ");
+    for w in words {
+        print(w);
+        print(" ");
+    };
+    println("");
+
+    // sort on empty array (should not crash)
+    let mut empty: [i32] = [];
+    sort_i32(empty);
+    print("empty len: ");
+    print_i32(len(empty));
+    println("");
+
+    // sort on already-sorted array (idempotent)
+    let mut sorted: [i32] = [1, 2, 3, 4, 5];
+    sort_i32(sorted);
+    print("idempotent: ");
+    for v in sorted {
+        print_i32(v);
+        print(" ");
+    };
+    println("");
+}

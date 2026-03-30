@@ -1,0 +1,21 @@
+// Test: Environment variable iteration builtins
+// Exercises: env_count(), env_key(), env_value()
+
+fn! main() {
+    // env_count() should return > 0 (there are always env vars)
+    let count: i32 = env_count();
+    print_bool(count > 0);
+    println("");
+
+    // env_key(0) should return a non-empty string
+    let key: str = env_key(0);
+    print_bool(str_len(key) > 0);
+    println("");
+
+    // env_value(0) returns something (may be empty, but should not crash)
+    let val: str = env_value(0);
+    print_bool(str_len(val) >= 0);
+    println("");
+
+    println("env_iter ok");
+}

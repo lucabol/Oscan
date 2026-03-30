@@ -263,6 +263,38 @@ int32_t    osc_term_width(void);
 int32_t    osc_term_height(void);
 
 /* ------------------------------------------------------------------ */
+/*  Raw terminal I/O                                                   */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_term_raw(void);
+int32_t osc_term_restore(void);
+int32_t osc_read_nonblock(void);
+
+/* ------------------------------------------------------------------ */
+/*  Environment iteration                                              */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_env_count(void);
+osc_str osc_env_key(osc_arena *arena, int32_t i);
+osc_str osc_env_value(osc_arena *arena, int32_t i);
+
+/* ------------------------------------------------------------------ */
+/*  Hex formatting                                                     */
+/* ------------------------------------------------------------------ */
+
+osc_str osc_str_from_i32_hex(osc_arena *arena, int32_t n);
+osc_str osc_str_from_i64_hex(osc_arena *arena, int64_t n);
+
+/* ------------------------------------------------------------------ */
+/*  Array sort                                                         */
+/* ------------------------------------------------------------------ */
+
+void osc_sort_i32(osc_array *arr);
+void osc_sort_i64(osc_array *arr);
+void osc_sort_str(osc_array *arr);
+void osc_sort_f64(osc_array *arr);
+
+/* ------------------------------------------------------------------ */
 /*  Arena reset (micro-lib convenience)                                */
 /* ------------------------------------------------------------------ */
 
