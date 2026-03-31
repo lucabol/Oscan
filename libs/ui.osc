@@ -146,3 +146,51 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
         value
     }
 }
+
+// Textbox: single-line text input with keyboard handling.
+// buf is a mutable [i32] array of character codes.
+// Returns new focused state (true if clicked on this textbox).
+fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32) -> bool {
+    let h: i32 = 20;
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, w, h);
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+    let clicked_outside: bool = not hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    // Draw background (darker when focused)
+    let bg: i32 = if focused { UI_BG_ACTIVE } else { UI_BG };
+    gfx_fill_rect(x, y, w, h, bg);
+
+    // Draw border (accent when focused)
+    gfx_rect(x, y, w, h, if focused { UI_ACCENT } else { UI_BORDER });
+
+    // Handle keyboard input when focused
+    if focused {
+        let key: i32 = canvas_key();
+        if key >= 32 and key <= 126 {
+            push(buf, key);
+        };
+        if key == 8 and len(buf) > 0 {
+            pop(buf);
+        };
+    };
+
+    // Convert buffer to string and draw text
+    let text: str = str_from_chars(buf);
+    let pad: i32 = 4;
+    let text_y: i32 = y + (h - 8) / 2;
+    gfx_draw_text(x + pad, text_y, text, UI_FG);
+
+    // Draw cursor when focused (thin rect after last character)
+    if focused {
+        let cursor_x: i32 = x + pad + len(buf) * 6;
+        gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
+    };
+
+    // Return new focus state
+    if clicked { true }
+    else if clicked_outside { false }
+    else { focused }
+}

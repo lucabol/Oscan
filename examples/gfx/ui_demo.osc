@@ -12,7 +12,7 @@
 use "../../libs/ui.osc"
 
 let WIN_W: i32 = 400;
-let WIN_H: i32 = 300;
+let WIN_H: i32 = 360;
 
 fn! main() {
     canvas_open(WIN_W, WIN_H, "Oscan UI Demo");
@@ -21,10 +21,15 @@ fn! main() {
     let mut checked: bool = false;
     let mut volume: i32 = 50;
     let mut prev_btn: i32 = 0;
+    let mut text_buf: [i32] = [];
+    let mut text_focused: bool = false;
 
     while canvas_alive() {
-        let key: i32 = canvas_key();
-        if key == 27 { break; };
+        // Only consume keys for ESC when textbox doesn't have focus
+        if not text_focused {
+            let key: i32 = canvas_key();
+            if key == 27 { break; };
+        };
 
         canvas_clear(rgb(30, 30, 34));
 
@@ -61,6 +66,16 @@ fn! main() {
         ui_label(30, 178, str_concat("Clicks: ", i32_to_str(click_count)));
         ui_label(30, 194, str_concat("Checkbox: ", if checked { "ON" } else { "OFF" }));
         ui_label(30, 210, str_concat("Volume: ", i32_to_str(volume)));
+
+        // Separator before textbox section
+        ui_separator(30, 230, WIN_W - 80);
+
+        // Textbox
+        ui_label(30, 242, "Type here:");
+        text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn);
+
+        // Display typed text
+        ui_label(30, 286, str_concat("Typed: ", str_from_chars(text_buf)));
 
         // Save button state for next frame transition detection
         prev_btn = canvas_mouse_btn();

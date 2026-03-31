@@ -445,6 +445,18 @@ void osc_array_push(osc_arena *arena, osc_array *arr, void *value)
     arr->len++;
 }
 
+void* osc_array_pop(osc_array *arr)
+{
+    if (!arr) {
+        OSC_PANIC("array is NULL");
+    }
+    if (arr->len <= 0) {
+        OSC_PANIC("pop on empty array");
+    }
+    arr->len--;
+    return (char*)arr->data + (size_t)arr->len * (size_t)arr->elem_size;
+}
+
 int32_t osc_array_len(osc_array *arr)
 {
     if (!arr) {
@@ -1725,6 +1737,35 @@ osc_str osc_str_replace(osc_arena *arena, osc_str s, osc_str old_s, osc_str new_
     result.data = out;
     result.len = oi;
     return result;
+}
+
+osc_str osc_str_from_chars(osc_arena *arena, osc_array *arr)
+{
+    if (!arr) {
+        OSC_PANIC("str_from_chars: array is NULL");
+    }
+    char *buf = (char *)osc_arena_alloc(arena, (size_t)arr->len + 1);
+    int32_t i;
+    for (i = 0; i < arr->len; i++) {
+        int32_t ch = *(int32_t *)osc_array_get(arr, i);
+        buf[i] = (char)(unsigned char)ch;
+    }
+    buf[arr->len] = '\0';
+    osc_str result;
+    result.data = buf;
+    result.len = arr->len;
+    return result;
+}
+
+osc_array *osc_str_to_chars(osc_arena *arena, osc_str s)
+{
+    osc_array *arr = osc_array_new(arena, sizeof(int32_t), s.len > 0 ? s.len : 1);
+    int32_t i;
+    for (i = 0; i < s.len; i++) {
+        int32_t ch = (int32_t)(unsigned char)s.data[i];
+        osc_array_push(arena, arr, &ch);
+    }
+    return arr;
 }
 
 

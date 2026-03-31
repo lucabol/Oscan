@@ -1083,6 +1083,17 @@ impl CodeGenerator {
                 self.line(&format!("{} {} = {};", elem_c, tmp, arg_strs[1]));
                 format!("osc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
             }
+            "pop" => {
+                let arr_ty = self.type_of(&args[0]);
+                let elem_ty = match &arr_ty {
+                    BcType::Array(e) => (**e).clone(),
+                    _ => BcType::I32,
+                };
+                let elem_c = self.type_to_c(&elem_ty);
+                format!("(*({}*)osc_array_pop({}))", elem_c, arg_strs[0])
+            }
+            "str_from_chars" => format!("osc_str_from_chars(_arena, {})", arg_strs[0]),
+            "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
             _ => {
                 // User-defined or extern function
                 let fi = self.functions.get(name).cloned();

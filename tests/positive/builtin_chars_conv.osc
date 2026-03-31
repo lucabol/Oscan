@@ -1,0 +1,37 @@
+fn! main() {
+    // Test pop
+    let mut arr: [i32] = [1, 2, 3];
+    let v: i32 = pop(arr);
+    print_i32(v);
+    println("");
+    print_i32(len(arr));
+    println("");
+
+    // Test pop again
+    let v2: i32 = pop(arr);
+    print_i32(v2);
+    println("");
+    print_i32(len(arr));
+    println("");
+
+    // Test str_to_chars
+    let chars: [i32] = str_to_chars("ABC");
+    print_i32(len(chars));
+    println("");
+    print_i32(chars[0]);
+    println("");
+    print_i32(chars[1]);
+    println("");
+    print_i32(chars[2]);
+    println("");
+
+    // Test str_from_chars
+    let s: str = str_from_chars(chars);
+    println(s);
+
+    // Round-trip
+    let original: str = "hello";
+    let c2: [i32] = str_to_chars(original);
+    let back: str = str_from_chars(c2);
+    println(back);
+}

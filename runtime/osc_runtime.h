@@ -85,6 +85,7 @@ osc_array *osc_array_new(osc_arena *arena, int32_t elem_size,
 void     *osc_array_get(osc_array *arr, int32_t index);
 void      osc_array_set(osc_array *arr, int32_t index, void *value);
 void      osc_array_push(osc_arena *arena, osc_array *arr, void *value);
+void     *osc_array_pop(osc_array *arr);
 int32_t   osc_array_len(osc_array *arr);
 
 /* ------------------------------------------------------------------ */
@@ -252,6 +253,8 @@ osc_array *osc_str_split(osc_arena *arena, osc_str s, osc_str delim);
 osc_str   osc_str_to_upper(osc_arena *arena, osc_str s);
 osc_str   osc_str_to_lower(osc_arena *arena, osc_str s);
 osc_str   osc_str_replace(osc_arena *arena, osc_str s, osc_str old_s, osc_str new_s);
+osc_str   osc_str_from_chars(osc_arena *arena, osc_array *arr);
+osc_array *osc_str_to_chars(osc_arena *arena, osc_str s);
 
 /* ------------------------------------------------------------------ */
 /*  Directory listing & process control                                */

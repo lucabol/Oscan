@@ -219,6 +219,10 @@ impl SemanticAnalyzer {
         self.functions.insert("sort_str".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::Str)))], BcType::Unit, false));
         self.functions.insert("sort_f64".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::F64)))], BcType::Unit, false));
 
+        // Tier 12: String <-> char array conversions
+        self.functions.insert("str_from_chars".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::I32)))], BcType::Str, false));
+        self.functions.insert("str_to_chars".into(), builtin(vec![("s", BcType::Str)], BcType::Array(Box::new(BcType::I32)), false));
+
         // Graphics: Canvas Lifecycle (fn!)
         self.functions.insert("canvas_open".into(), builtin(vec![("width", BcType::I32), ("height", BcType::I32), ("title", BcType::Str)], BcType::I32, false));
         self.functions.insert("canvas_close".into(), builtin(vec![], BcType::Unit, false));
@@ -924,6 +928,22 @@ impl SemanticAnalyzer {
                     format!("push element type mismatch: expected {}, got {}", elem_ty, val_ty)));
             }
             Ok(BcType::Unit)
+        }
+        // Special: pop(arr)
+        else if name == "pop" {
+            if self.in_pure_fn {
+                return Err(CompileError::new(span,
+                    "pure function cannot call 'pop'"));
+            }
+            if args.len() != 1 {
+                return Err(CompileError::new(span, "pop() takes 1 argument"));
+            }
+            let arr_ty = self.check_expr(&args[0], None)?;
+            match &arr_ty {
+                BcType::Array(elem) => Ok((**elem).clone()),
+                _ => Err(CompileError::new(span,
+                    format!("pop() expects dynamic array, got {}", arr_ty))),
+            }
         }
         else {
             let func = self.functions.get(&name)
