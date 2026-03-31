@@ -161,6 +161,28 @@ Six example programs in `examples/gfx/` demonstrate graphics capabilities:
 - **`plasma.osc`** — Sine wave plasma effect using procedural color blending
 - **`life.osc`** — Conway's Game of Life cellular automaton
 - **`ui_demo.osc`** — UI widget showcase using `libs/ui.osc`
+- **`spirograph.osc`** — Animated spirograph using trigonometric parametric curves
+
+## CLI Examples
+
+Beyond the graphics examples, Oscan includes ~17 CLI utility programs in `examples/` demonstrating language features:
+
+- **`hello.osc`** — Hello World
+- **`fibonacci.osc`** — Recursive fibonacci
+- **`error_handling.osc`** — Result type and pattern matching
+- **`countlines.osc`** — Count lines in files
+- **`upper.osc`** — Convert text to uppercase
+- **`wc.osc`** — Word count (like Unix wc)
+- **`grep.osc`** — Pattern matching in files
+- **`checksum.osc`** — MD5 checksums (legacy)
+- **`hexdump.osc`** — Hex dump utility
+- **`base64.osc`** — Base64 encode/decode
+- **`sort.osc`** — Sort lines from files
+- **`file_io.osc`** — Basic file I/O operations
+- **`word_freq.osc`** — Word frequency counter (map, str_split, for-in)
+- **`http_client.osc`** — Simple HTTP GET client (TCP sockets)
+- **`file_checksum.osc`** — SHA-256 file hasher (sha256, path_ext, file_size)
+- **`env_info.osc`** — System info tool (datetime, is_tty, glob_match, env_get)
 
 ## Building & Testing
 
@@ -201,7 +223,7 @@ cd runtime && make test
 │   ├── positive/        # 61 programs that must compile & produce expected output
 │   ├── negative/        # 20 programs that must be rejected by the compiler
 │   └── integration.rs   # Test harness
-├── examples/            # 18 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io, + 6 graphics demos
+├── examples/            # ~24 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io, word_freq, http_client, file_checksum, env_info, + 7 graphics demos
 ├── docs/
 │   ├── guide.md         # Concise language guide
 │   └── spec/
