@@ -1,0 +1,66 @@
+// Word Frequency Counter
+// Reads a file, splits into words, counts frequencies using a map, prints results.
+// Usage: word_freq <filename>
+// Shows: map, str_split, str_to_lower, for-in, file I/O
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: word_freq <filename>");
+        exit(1);
+    };
+
+    let path: str = arg_get(1);
+    let fd: i32 = file_open_read(path);
+    if fd < 0 {
+        println(str_concat("Error: cannot open ", path));
+        exit(1);
+    };
+
+    // Read entire file into bytes
+    let mut bytes: [i32] = [];
+    let mut b: i32 = read_byte(fd);
+    while b >= 0 {
+        push(bytes, b);
+        b = read_byte(fd);
+    };
+    file_close(fd);
+
+    // Convert to string and split into lines
+    let text: str = str_from_chars(bytes);
+    let lines: [str] = str_split(text, "\n");
+
+    let mut counts: map = map_new();
+    let mut words_seen: [str] = [];
+    let mut total: i32 = 0;
+
+    for line in lines {
+        let words: [str] = str_split(line, " ");
+        for word in words {
+            let w: str = str_to_lower(str_trim(word));
+            if str_len(w) > 0 {
+                if map_has(counts, w) {
+                    match parse_i32(map_get(counts, w)) {
+                        Result::Ok(cur) => {
+                            map_set(counts, w, i32_to_str(cur + 1));
+                        },
+                        Result::Err(_) => {},
+                    };
+                } else {
+                    map_set(counts, w, "1");
+                    push(words_seen, w);
+                };
+                total += 1;
+            };
+        };
+    };
+
+    // Print results
+    println(str_concat("Total words: ", i32_to_str(total)));
+    println(str_concat("Unique words: ", i32_to_str(map_len(counts))));
+    println("");
+    for w in words_seen {
+        print(w);
+        print(": ");
+        println(map_get(counts, w));
+    };
+}

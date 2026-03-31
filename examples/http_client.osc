@@ -1,0 +1,43 @@
+// Simple HTTP Client
+// Connects to a server and sends an HTTP GET request, prints the response.
+// Shows TCP socket usage in Oscan.
+// Usage: http_client
+// (Expects a web server listening on 127.0.0.1:8080)
+
+fn! main() {
+    let sock: i32 = socket_tcp();
+    if sock < 0 {
+        println("Error: failed to create socket");
+        exit(1);
+    };
+
+    // Connect to localhost:8080 (change to your server)
+    let result: i32 = socket_connect(sock, "127.0.0.1", 8080);
+    if result < 0 {
+        println("Error: failed to connect to 127.0.0.1:8080");
+        socket_close(sock);
+        exit(1);
+    };
+
+    // Send HTTP GET request
+    let request: str = "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    let sent: i32 = socket_send(sock, request);
+    if sent < 0 {
+        println("Error: failed to send request");
+        socket_close(sock);
+        exit(1);
+    };
+
+    // Read response in chunks until empty
+    let mut done: bool = false;
+    while done == false {
+        let chunk: str = socket_recv(sock, 4096);
+        if str_len(chunk) > 0 {
+            print(chunk);
+        } else {
+            done = true;
+        };
+    };
+
+    socket_close(sock);
+}

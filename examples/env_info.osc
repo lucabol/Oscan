@@ -1,0 +1,66 @@
+// System Info — Shows system information using builtins
+//
+// Demonstrates: time_now, time_utc_*, is_tty, env_get, dir_current,
+//               glob_match, for-in array, Result matching
+//
+// To run:
+//   oscan env_info.osc --run
+
+fn! main() {
+    println("=== Oscan System Info ===");
+    println("");
+
+    // Current time
+    let now: i64 = time_now();
+    println(str_concat("Timestamp: ", str_from_i64(now)));
+
+    // Time components
+    let year: i32 = time_utc_year(now);
+    let month: i32 = time_utc_month(now);
+    let day: i32 = time_utc_day(now);
+    let hour: i32 = time_utc_hour(now);
+    let min: i32 = time_utc_min(now);
+    let sec: i32 = time_utc_sec(now);
+    println(str_concat("Date (UTC): ", str_concat(i32_to_str(year), str_concat("-", str_concat(i32_to_str(month), str_concat("-", i32_to_str(day)))))));
+    println(str_concat("Time (UTC): ", str_concat(i32_to_str(hour), str_concat(":", str_concat(i32_to_str(min), str_concat(":", i32_to_str(sec)))))));
+
+    // Terminal detection
+    print("Terminal: ");
+    if is_tty() { println("yes (interactive)"); }
+    else { println("no (piped/redirected)"); };
+
+    // Working directory
+    println(str_concat("Directory: ", dir_current()));
+
+    // Arguments
+    println(str_concat("Arguments: ", i32_to_str(arg_count())));
+
+    // Environment variables
+    println("");
+    println("=== Environment ===");
+
+    let vars: [str] = ["PATH", "HOME", "USER", "COMPUTERNAME", "SHELL"];
+    for name in vars {
+        let result: Result<str, str> = env_get(name);
+        match result {
+            Result::Ok(val) => {
+                if str_len(val) > 60 {
+                    println(str_concat(name, str_concat("=", str_concat(str_slice(val, 0, 60), "..."))));
+                } else {
+                    println(str_concat(name, str_concat("=", val)));
+                };
+            },
+            Result::Err(_) => {},
+        };
+    };
+
+    // Glob matching demo
+    println("");
+    println("=== Glob Matching ===");
+    print_bool(glob_match("*.txt", "hello.txt"));
+    println(" *.txt matches hello.txt");
+    print_bool(glob_match("*.osc", "main.rs"));
+    println(" *.osc matches main.rs");
+    print_bool(glob_match("hello*", "hello_world"));
+    println(" hello* matches hello_world");
+}

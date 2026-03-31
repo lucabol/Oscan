@@ -1,0 +1,58 @@
+// Spirograph — Animated parametric curves using trig
+//
+// Draws hypotrochoid curves using nested circles:
+//   x = (R-r)*cos(t) + d*cos((R-r)/r * t)
+//   y = (R-r)*sin(t) + d*sin((R-r)/r * t)
+// Press Escape to quit.
+//
+// To run:
+//   oscan spirograph.osc --run
+
+fn! main() {
+    let W: i32 = 400;
+    let H: i32 = 400;
+    canvas_open(W, H, "Oscan Spirograph");
+
+    let R: f64 = 100.0;
+    let r: f64 = 40.0;
+    let d: f64 = 80.0;
+
+    let mut t: f64 = 0.0;
+    let dt: f64 = 0.02;
+    let cx: f64 = 200.0;
+    let cy: f64 = 200.0;
+
+    canvas_clear(rgb(0, 0, 0));
+
+    while canvas_alive() {
+        if canvas_key() == 27 { break; };
+
+        // Draw many points per frame for smooth curves
+        let mut i: i32 = 0;
+        while i < 100 {
+            let diff: f64 = R - r;
+            let ratio: f64 = diff / r;
+            let x: f64 = cx + diff * math_cos(t) + d * math_cos(ratio * t);
+            let y: f64 = cy + diff * math_sin(t) + d * math_sin(ratio * t);
+
+            // Color cycles based on angle
+            let red: i32 = 128 + (127.0 * math_sin(t * 0.1)) as i32;
+            let green: i32 = 128 + (127.0 * math_sin(t * 0.1 + 2.0)) as i32;
+            let blue: i32 = 128 + (127.0 * math_sin(t * 0.1 + 4.0)) as i32;
+
+            let px: i32 = x as i32;
+            let py: i32 = y as i32;
+            if px >= 0 and px < W and py >= 0 and py < H {
+                gfx_pixel(px, py, rgb(red, green, blue));
+            };
+
+            t = t + dt;
+            i += 1;
+        };
+
+        canvas_flush();
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

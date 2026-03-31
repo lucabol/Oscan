@@ -1,0 +1,40 @@
+// File Checksum (SHA-256)
+// Computes the SHA-256 hash of a file.
+// Usage: file_checksum <filename>
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: file_checksum <filename>");
+        exit(1);
+    };
+
+    let path: str = arg_get(1);
+
+    if file_exists(path) == false {
+        println(str_concat("Error: file not found: ", path));
+        exit(1);
+    };
+
+    // Read file contents byte-by-byte
+    let fd: i32 = file_open_read(path);
+    if fd < 0 {
+        println(str_concat("Error: cannot open ", path));
+        exit(1);
+    };
+    let mut content: [i32] = [];
+    let mut b: i32 = read_byte(fd);
+    while b >= 0 {
+        push(content, b);
+        b = read_byte(fd);
+    };
+    file_close(fd);
+
+    let text: str = str_from_chars(content);
+    let hash: str = sha256(text);
+    let sz: i64 = file_size(path);
+
+    println(str_concat("File:      ", path));
+    println(str_concat("Extension: ", path_ext(path)));
+    println(str_concat("Size:      ", str_concat(str_from_i64(sz), " bytes")));
+    println(str_concat("SHA-256:   ", hash));
+}
