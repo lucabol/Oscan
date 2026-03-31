@@ -1262,11 +1262,56 @@ fn! term_height() -> i32                     // Get terminal height in rows (0 i
 
 **Note:** `proc_run` executes an external command synchronously and returns its exit code. `term_width()` and `term_height()` return 0 if output is not connected to a terminal (useful for detecting interactive vs. piped execution).
 
+### 10.16 Tier 8: Graphics Builtins (19) — `fn!` / `fn`
+
+Graphics builtins are available in freestanding mode only and use `l_gfx.h` from the laststanding library.
+
+#### Canvas Lifecycle (all `fn!`)
+
+```
+fn! canvas_open(width: i32, height: i32, title: str) -> i32   // Opens a graphics window. Returns 0 on success, -1 on error. Pass width/height ≤ 0 for fullscreen.
+fn! canvas_close() -> unit                                     // Closes the graphics window and frees resources.
+fn! canvas_alive() -> bool                                     // Returns true if the window is still open (not closed by user).
+fn! canvas_flush() -> unit                                     // Updates the display, blitting the pixel buffer to screen.
+fn! canvas_clear(color: i32) -> unit                           // Fills the entire canvas with a solid color.
+```
+
+#### Drawing Primitives (all `fn!`)
+
+```
+fn! gfx_pixel(x: i32, y: i32, color: i32) -> unit             // Sets a single pixel. No-op if out of bounds.
+fn! gfx_get_pixel(x: i32, y: i32) -> i32                      // Returns the color at (x,y), or 0 if out of bounds.
+fn! gfx_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32) -> unit  // Draws a line using Bresenham's algorithm.
+fn! gfx_rect(x: i32, y: i32, w: i32, h: i32, color: i32) -> unit     // Draws an outline rectangle.
+fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32) -> unit // Draws a filled rectangle.
+fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32) -> unit   // Draws an outline circle.
+fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32) -> unit // Draws a filled circle.
+fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32) -> unit  // Draws text using built-in 8x8 bitmap font.
+```
+
+#### Input (all `fn!`)
+
+```
+fn! canvas_key() -> i32                                        // Returns next key press (non-blocking), or 0 if none. Key codes: 32-126 (ASCII), 27 (Esc), 1001-1004 (arrows).
+fn! canvas_mouse_x() -> i32                                    // Returns current mouse X position.
+fn! canvas_mouse_y() -> i32                                    // Returns current mouse Y position.
+fn! canvas_mouse_btn() -> i32                                  // Returns mouse button bitmask (1=left, 2=right, 4=middle).
+```
+
+#### Color (pure `fn`)
+
+```
+fn rgb(r: i32, g: i32, b: i32) -> i32                         // Creates an ARGB color with full opacity. Parameters 0-255.
+fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32                // Creates an ARGB color with custom alpha.
+```
+
+**Note:** All graphics functions operate on a single global canvas (no handle parameter needed). Color format is 32-bit ARGB (alpha in high byte, then red, green, blue). The built-in font is 8x8 pixels per character, covering ASCII 32-126.
+
 ---
 
 **Extended Library Summary:**
 
-The original 36 core functions are now extended with **45 new OS-level builtins** organized in 7 tiers:
+The original 36 core functions are now extended with **64 new OS-level and graphics builtins** organized in 8 tiers:
 
 - **Tier 1:** Character classification (11 functions)
 - **Tier 2:** Number parsing & conversion (5 functions)
@@ -1275,8 +1320,9 @@ The original 36 core functions are now extended with **45 new OS-level builtins*
 - **Tier 5:** Filesystem operations (8 functions)
 - **Tier 6:** String operations (9 functions)
 - **Tier 7:** Directory & process control (4 functions)
+- **Tier 8:** Graphics builtins (19 functions)
 
-**Total library: 81 functions** (36 core + 45 new).
+**Total library: 100 functions** (36 core + 64 new).
 
 ---
 

@@ -95,7 +95,7 @@ For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Osc
 
 ## Built-in Functions
 
-Oscan provides **81 builtin functions** across 8 categories (36 core + 45 new OS-level primitives):
+Oscan provides **~100 builtin functions** across 9 categories (36 core + 45 new OS-level primitives + 19 graphics):
 
 | Category | Functions | Count |
 |----------|-----------|-------|
@@ -112,8 +112,31 @@ Oscan provides **81 builtin functions** across 8 categories (36 core + 45 new OS
 | **System** | `rand_seed`, `rand_i32`, `time_now`, `sleep_ms`, `exit`, `errno_get`, `errno_str`, `env_get` | 8 |
 | **Terminal** | `term_width`, `term_height` | 2 |
 | **Process** | `proc_run` | 1 |
+| **Graphics** | `gfx_init`, `gfx_clear`, `gfx_present`, `gfx_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_text`, `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`, `rgb`, `rgba` | 19 |
 
 For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)**.
+
+## Graphics
+
+Oscan supports creating graphical applications using a unified graphics API built on **laststanding**'s `l_gfx.h` library (GDI on Windows, framebuffer on Linux). Graphics are available in **freestanding mode only**.
+
+### Key Features
+
+- **Single global canvas** — no handle or resource management needed
+- **Drawing primitives**: `gfx_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_text`
+- **Input handling**: `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`
+- **Color helpers**: `rgb(r, g, b)`, `rgba(r, g, b, a)` for color construction
+- **Frame control**: `gfx_init`, `gfx_clear`, `gfx_present`
+
+### Examples
+
+Five example programs in `examples/gfx/` demonstrate graphics capabilities:
+
+- **`bounce.osc`** — Bouncing ball animation with collision detection
+- **`gfx_demo.osc`** — Shape and text rendering showcase
+- **`starfield.osc`** — 3D perspective starfield scrolling effect
+- **`plasma.osc`** — Sine wave plasma effect using procedural color blending
+- **`life.osc`** — Conway's Game of Life cellular automaton
 
 ## Building & Testing
 
@@ -154,7 +177,7 @@ cd runtime && make test
 │   ├── positive/        # 42 programs that must compile & produce expected output
 │   ├── negative/        # 21 programs that must be rejected by the compiler
 │   └── integration.rs   # Test harness
-├── examples/            # 12 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io
+├── examples/            # 17 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io, + 5 graphics demos
 ├── docs/
 │   ├── guide.md         # Concise language guide
 │   └── spec/
@@ -164,7 +187,7 @@ cd runtime && make test
 
 ## Status
 
-Oscan v0.1 is feature-complete for its initial scope: the full language compiles to C, all 116 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies. Recent additions include file I/O, string operations, bitwise operators, and command-line argument access.
+Oscan v0.1+ now includes graphics capabilities alongside the original feature-complete implementation. The compiler supports the full language plus new graphics primitives, all 116 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies. Recent additions include file I/O, string operations, bitwise operators, command-line argument access, and graphics support via laststanding's GDI/framebuffer abstraction.
 
 ## Freestanding Runtime (`deps/laststanding`)
 
