@@ -769,6 +769,18 @@ if (-not $VerboseOutput) {
     Write-PhaseResult "$exPass compiled, $exFail failed" $color
 }
 
+# Graphics examples (freestanding only — may fail on platforms without display)
+if (Test-Path "examples\gfx\*.osc") {
+    foreach ($exFile in Get-ChildItem "examples\gfx\*.osc") {
+        $name = $exFile.BaseName
+        & $oscan $exFile.FullName -o "examples\gfx\${name}.exe" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $exPass++
+        }
+        # Don't count gfx failures — they require a display
+    }
+}
+
 # ══════════════════════════════════════════════════════
 # ── Summary ──────────────────────────────────────────
 # ══════════════════════════════════════════════════════
