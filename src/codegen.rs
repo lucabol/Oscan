@@ -190,8 +190,6 @@ impl CodeGenerator {
             self.line("#include <stdio.h>");
             self.line("#include <stdlib.h>");
             self.line("#include <math.h>");
-            self.line("#include \"l_gfx.h\"");
-            self.line("#define OSC_HAS_GFX");
             self.line("#include \"osc_runtime.h\"");
             self.line("#endif");
         } else {
@@ -200,7 +198,6 @@ impl CodeGenerator {
             self.line("#include <stdio.h>");
             self.line("#include <stdlib.h>");
             self.line("#include <math.h>");
-            self.line("#include \"l_gfx.h\"");
             self.line("#include \"osc_runtime.h\"");
         }
         self.blank();
