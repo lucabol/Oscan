@@ -31,33 +31,36 @@
 
 ## 1. Keywords & Tokens
 
-### 1.1 Reserved Words (21 total)
+### 1.1 Reserved Words (24 total)
 
-| Keyword   | Purpose                                      |
-|-----------|----------------------------------------------|
-| `fn`      | Pure function declaration                    |
-| `fn!`     | Side-effecting function declaration          |
-| `let`     | Immutable binding                            |
-| `mut`     | Mutable modifier (used with `let`)           |
-| `struct`  | Nominal struct type declaration              |
-| `enum`    | Tagged union declaration                     |
-| `if`      | Conditional expression                       |
-| `else`    | Else branch of conditional                   |
-| `while`   | While loop                                   |
-| `for`     | For-in loop                                  |
-| `in`      | Range iteration binding                      |
-| `match`   | Pattern match expression                     |
-| `return`  | Early return from function                   |
-| `try`     | Error propagation                            |
-| `extern`  | C-FFI declaration block                      |
-| `as`      | Explicit type cast                           |
-| `and`     | Logical AND                                  |
-| `or`      | Logical OR                                   |
-| `not`     | Logical NOT                                  |
-| `true`    | Boolean literal                              |
-| `false`   | Boolean literal                              |
+| Keyword    | Purpose                                      |
+|------------|----------------------------------------------|
+| `fn`       | Pure function declaration                    |
+| `fn!`      | Side-effecting function declaration          |
+| `let`      | Immutable binding                            |
+| `mut`      | Mutable modifier (used with `let`)           |
+| `struct`   | Nominal struct type declaration              |
+| `enum`     | Tagged union declaration                     |
+| `if`       | Conditional expression                       |
+| `else`     | Else branch of conditional                   |
+| `while`    | While loop                                   |
+| `for`      | For-in loop                                  |
+| `in`       | Range/array iteration binding                |
+| `match`    | Pattern match expression                     |
+| `return`   | Early return from function                   |
+| `break`    | Exit the nearest enclosing loop              |
+| `continue` | Skip to next iteration of nearest loop       |
+| `try`      | Error propagation                            |
+| `use`      | Import declarations from another file        |
+| `extern`   | C-FFI declaration block                      |
+| `as`       | Explicit type cast                           |
+| `and`      | Logical AND                                  |
+| `or`       | Logical OR                                   |
+| `not`      | Logical NOT                                  |
+| `true`     | Boolean literal                              |
+| `false`    | Boolean literal                              |
 
-**Note:** The table above lists 21 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
+**Note:** The table above lists 24 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
 
 ### 1.2 Operators and Precedence
 
@@ -79,6 +82,7 @@ Precedence from **highest** (tightest binding) to **lowest**:
 | 3    | `and`                 | Left          | Logical AND (short-circuit)    |
 | 2    | `or`                  | Left          | Logical OR (short-circuit)     |
 | 1    | `=`                   | Right         | Assignment (statement only)    |
+| 1    | `+=` `-=` `*=` `/=` `%=` | Right     | Compound assignment (statement only) |
 
 **Comparison chaining is forbidden.** `a < b < c` is a compile error. Write `a < b and b < c`.
 
@@ -242,17 +246,24 @@ block            = '{' stmt* expr? '}' ;
 
 stmt             = let_stmt
                  | assign_stmt
+                 | compound_assign_stmt
                  | expr_stmt
                  | while_stmt
                  | for_stmt
-                 | return_stmt ;
+                 | return_stmt
+                 | break_stmt
+                 | continue_stmt ;
 
 let_stmt         = 'let' 'mut'? IDENT ':' type '=' expr ';' ;
 assign_stmt      = place '=' expr ';' ;
+compound_assign_stmt = place ('+=' | '-=' | '*=' | '/=' | '%=') expr ';' ;
 expr_stmt        = expr ';' ;
 while_stmt       = 'while' expr block ';'? ;
-for_stmt         = 'for' IDENT 'in' expr '..' expr block ';'? ;
+for_stmt         = 'for' IDENT 'in' expr '..' expr block ';'?
+                 | 'for' IDENT 'in' expr block ';'? ;
 return_stmt      = 'return' expr? ';' ;
+break_stmt       = 'break' ';' ;
+continue_stmt    = 'continue' ';' ;
 
 place            = IDENT ( '.' IDENT | '[' expr ']' )* ;
 
@@ -640,8 +651,31 @@ counter = counter + 1;
 
 - Only valid for `let mut` bindings.
 - Assigning to an immutable binding is a compile error.
-- There is no compound assignment (`+=`, `-=`, etc.). Write it out explicitly.
 - Assignment is a statement, not an expression. `x = y = 5` is a compile error.
+
+#### Compound Assignment
+
+```
+counter += 1;
+counter -= 5;
+counter *= 2;
+counter /= 4;
+counter %= 3;
+```
+
+The compound assignment operators `+=`, `-=`, `*=`, `/=`, and `%=` are syntactic sugar. `x += e` is equivalent to `x = x + e`. They follow the same rules as regular assignment:
+
+- Only valid for `let mut` bindings (or mutable array elements).
+- The left-hand side and right-hand side must have the same type.
+- Works with `i32`, `i64`, and `f64` operands (integer overflow is checked at runtime).
+- Works on array element targets: `arr[i] += 1;`.
+
+```
+let mut sum: i32 = 0;
+for i in 1..11 {
+    sum += i;
+}
+```
 
 ### 5.5 Block Expressions
 
@@ -694,7 +728,34 @@ while condition {
 - The condition must be `bool`.
 - The body is a block.
 - `while` is a statement that produces `unit`.
-- There is no `break` or `continue`. Use a mutable boolean flag if needed.
+- Supports `break` and `continue` statements (see §5.7.1).
+
+### 5.7.1 Break and Continue
+
+`break` exits the nearest enclosing `while` or `for` loop immediately. `continue` skips the rest of the current iteration and proceeds to the next iteration of the nearest enclosing loop.
+
+```
+// break: find first value > 5
+let mut i: i32 = 0;
+while i < 100 {
+    if i > 5 { break; };
+    i += 1;
+}
+
+// continue: skip even numbers, print odd 1..9
+let mut j: i32 = 0;
+while j < 10 {
+    j += 1;
+    if j % 2 == 0 { continue; };
+    print_i32(j);
+}
+```
+
+Rules:
+- `break` and `continue` must appear inside a `while` or `for` loop. Using them outside a loop is a compile error.
+- In nested loops, `break` and `continue` apply only to the **innermost** enclosing loop.
+- Both are statements terminated by a semicolon: `break;` and `continue;`.
+- There are no labeled loops or labeled break/continue.
 
 ### 5.8 For-In Loop
 
@@ -709,7 +770,44 @@ for i in 0..10 {
 - The loop variable `i` is immutable within the body and has type `i32`.
 - The loop variable is scoped to the loop body.
 - `for` is a statement that produces `unit`.
-- There is no iteration over arrays directly. Use `for i in 0..len(arr) { ... arr[i] ... }`.
+- Supports `break` and `continue` (see §5.7.1).
+
+#### Array Iteration
+
+`for` also supports direct iteration over arrays:
+
+```
+for item in array_expr {
+    body;
+}
+```
+
+- The iterable expression must be an array type (`[T]` or `[T; N]`).
+- The loop variable has the element type `T` and is immutable within the body.
+- Works with any element type: `[i32]`, `[str]`, `[MyStruct]`, etc.
+- Supports `break` and `continue`.
+
+```
+let nums: [i32] = [10, 20, 30, 40];
+for n in nums {
+    print_i32(n);
+    print(" ");
+}
+
+let words: [str] = ["hello", "world", "oscan"];
+for w in words {
+    println(w);
+}
+
+// for-in with break
+let arr: [i32] = [1, 2, 3, 4, 5];
+for v in arr {
+    if v == 3 { break; };
+    print_i32(v);
+}
+```
+
+The parser distinguishes range iteration from array iteration by checking for the `..` token after the first expression. If `..` is present, it is a range loop; otherwise, it is an array iteration loop.
 
 ### 5.9 Match Expression
 
@@ -1067,7 +1165,7 @@ For development or customization, if a `runtime/` directory exists next to the o
 
 ## 10. Standard Library (Micro-Lib)
 
-The micro-lib is deliberately tiny: 36 functions. All I/O functions are `fn!`.
+The micro-lib provides built-in functions organized by category. All I/O functions are `fn!`.
 
 ### 10.1 I/O Functions (7)
 
@@ -1081,7 +1179,7 @@ fn! print_bool(b: bool)                    // Print "true" or "false" to stdout
 fn! read_line() -> Result<str, str>        // Read line from stdin, may fail
 ```
 
-### 10.2 String Functions (7)
+### 10.2 String Functions (9)
 
 ```
 fn str_len(s: str) -> i32                  // Length in bytes (not chars)
@@ -1091,6 +1189,8 @@ fn! str_to_cstr(s: str) -> str             // Null-terminate for C interop (allo
 fn str_find(haystack: str, needle: str) -> i32  // Index of first occurrence, or -1
 fn! str_from_i32(n: i32) -> str            // Integer to string representation (allocates)
 fn! str_slice(s: str, start: i32, end: i32) -> str  // Substring [start, end) (allocates)
+fn! str_from_chars(arr: [i32]) -> str      // Create string from array of character codes (allocates)
+fn! str_to_chars(s: str) -> [i32]          // Convert string to array of byte values (allocates)
 ```
 
 **Note:** `str_concat`, `str_to_cstr`, `str_from_i32`, and `str_slice` are `fn!` because they allocate on the arena, which is a side effect (mutation of the arena). `str_find` is pure — it only reads.
@@ -1111,19 +1211,22 @@ fn bnot(a: i32) -> i32                     // Bitwise NOT (complement)
 
 **Note:** Shift functions use unsigned semantics to avoid C undefined behavior. All bitwise functions take `i32` operands only.
 
-### 10.4 Array Functions (2)
+### 10.4 Array Functions (3)
 
 ```
 fn len(arr: [i32]) -> i32                  // Array length (generic over element type in implementation)
 fn! push(arr: [i32], val: i32)             // Append to dynamic array (generic in implementation)
+fn! pop(arr: [i32]) -> i32                 // Remove and return last element (generic in implementation; panics if empty)
 ```
 
-**Note:** `len` and `push` are compiler-special-cased to work with any element type `T`. They appear as if monomorphic in documentation but the compiler handles them generically. The LLM writes `len(my_array)` and `push(my_array, value)` regardless of element type.
+**Note:** `len`, `push`, and `pop` are compiler-special-cased to work with any element type `T`. They appear as if monomorphic in documentation but the compiler handles them generically. The LLM writes `len(my_array)`, `push(my_array, value)`, and `pop(my_array)` regardless of element type.
 
-### 10.5 Conversion Functions (1)
+### 10.5 Conversion Functions (3)
 
 ```
 fn! i32_to_str(n: i32) -> str              // Convert integer to string representation (allocates on arena)
+fn! str_from_i32_hex(n: i32) -> str        // Convert i32 to hexadecimal string representation (allocates)
+fn! str_from_i64_hex(n: i64) -> str        // Convert i64 to hexadecimal string representation (allocates)
 ```
 
 **Note:** `i32_to_str` is `fn!` because it returns a `str`, which requires arena allocation. By the same logic as `str_concat`, any function that allocates on the arena is side-effecting.
@@ -1209,15 +1312,18 @@ fn! exit(code: i32)                          // Exit the process with given exit
 
 **Note:** `rand_seed` must be called before using `rand_i32` (otherwise RNG behavior is undefined). `time_now` returns seconds since January 1, 1970 UTC.
 
-### 10.12 Tier 4: Environment & Error (3) — `fn!`
+### 10.12 Tier 4: Environment & Error (6) — `fn!`
 
 ```
 fn! env_get(name: str) -> Result<str, str>   // Get environment variable; returns error if not found
+fn! env_count() -> i32                       // Get the number of environment variables
+fn! env_key(i: i32) -> str                   // Get the name of the i-th environment variable (0-based)
+fn! env_value(i: i32) -> str                 // Get the value of the i-th environment variable (0-based)
 fn! errno_get() -> i32                       // Get the value of errno from the last OS call
 fn! errno_str(code: i32) -> str              // Convert errno code to human-readable error message
 ```
 
-**Note:** `env_get` returns a string from the environment (must be copied to the arena if you need it to persist). `errno_get` and `errno_str` are useful for debugging OS-level errors.
+**Note:** `env_get` returns a string from the environment (must be copied to the arena if you need it to persist). `env_count`, `env_key`, and `env_value` allow iterating over all environment variables by index. `errno_get` and `errno_str` are useful for debugging OS-level errors.
 
 ### 10.13 Tier 5: Filesystem Operations (8) — `fn!`
 
@@ -1252,18 +1358,127 @@ fn str_compare(a: str, b: str) -> i32        // Lexicographic comparison: -1 (a<
 
 **Note:** All string functions that create new strings (`str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`) are `fn!` because they allocate on the arena.
 
-### 10.15 Tier 7: Directory Listing & Process Control (4) — `fn!`
+### 10.15 Tier 7: Directory Listing, Process Control & Terminal (7) — `fn!`
 
 ```
 fn! dir_list(path: str) -> [str]             // List directory entries (returns array of names, allocates)
 fn! proc_run(cmd: str, args: [str]) -> i32   // Run external process; returns exit code
 fn! term_width() -> i32                      // Get terminal width in columns (0 if not a terminal)
 fn! term_height() -> i32                     // Get terminal height in rows (0 if not a terminal)
+fn! term_raw() -> i32                        // Enable raw terminal mode (no line buffering, no echo); returns 0 on success
+fn! term_restore() -> i32                    // Restore terminal to normal (cooked) mode; returns 0 on success
+fn! read_nonblock() -> i32                   // Non-blocking read of a single byte from stdin; returns -1 if no data available
 ```
 
-**Note:** `proc_run` executes an external command synchronously and returns its exit code. `term_width()` and `term_height()` return 0 if output is not connected to a terminal (useful for detecting interactive vs. piped execution).
+**Note:** `proc_run` executes an external command synchronously and returns its exit code. `term_width()` and `term_height()` return 0 if output is not connected to a terminal (useful for detecting interactive vs. piped execution). `term_raw()` and `term_restore()` are used in pairs for interactive TUI applications; always call `term_restore()` before program exit. `read_nonblock()` is useful in raw mode for polling keyboard input without blocking.
 
-### 10.16 Tier 8: Graphics Builtins (19) — `fn!` / `fn`
+### 10.16 Tier 8: Math Functions (15) — `fn`
+
+All math functions are pure (`fn`). They operate on `f64` values and delegate to the C math library (`<math.h>`).
+
+#### Trigonometric & Exponential
+
+```
+fn math_sin(x: f64) -> f64                  // Sine (x in radians)
+fn math_cos(x: f64) -> f64                  // Cosine (x in radians)
+fn math_atan2(y: f64, x: f64) -> f64        // Two-argument arctangent (radians)
+fn math_exp(x: f64) -> f64                  // e raised to the power x
+fn math_log(x: f64) -> f64                  // Natural logarithm (base e)
+fn math_pow(base: f64, exp: f64) -> f64     // base raised to the power exp
+fn math_sqrt(x: f64) -> f64                 // Square root
+```
+
+#### Rounding & Remainder
+
+```
+fn math_floor(x: f64) -> f64                // Floor (largest integer ≤ x)
+fn math_ceil(x: f64) -> f64                 // Ceiling (smallest integer ≥ x)
+fn math_fmod(x: f64, y: f64) -> f64         // Floating-point remainder of x / y
+fn math_abs(x: f64) -> f64                  // Absolute value
+```
+
+#### Constants
+
+```
+fn math_pi() -> f64                          // π ≈ 3.14159265358979
+fn math_e() -> f64                           // Euler's number e ≈ 2.71828182845905
+fn math_ln2() -> f64                         // ln(2) ≈ 0.693147180559945
+fn math_sqrt2() -> f64                       // √2 ≈ 1.41421356237310
+```
+
+**Note:** Math constants are zero-argument pure functions, not global variables. Call them as `math_pi()`, not `math_pi`.
+
+### 10.17 Tier 9: Socket Networking (8) — `fn!`
+
+Socket builtins provide TCP networking. All are side-effecting (`fn!`).
+
+```
+fn! socket_tcp() -> i32                      // Create a TCP socket; returns socket descriptor (-1 on error)
+fn! socket_connect(sock: i32, addr: str, port: i32) -> i32  // Connect to remote address; returns 0 on success, -1 on error
+fn! socket_bind(sock: i32, port: i32) -> i32               // Bind socket to local port; returns 0 on success, -1 on error
+fn! socket_listen(sock: i32, backlog: i32) -> i32          // Listen for incoming connections; returns 0 on success, -1 on error
+fn! socket_accept(sock: i32) -> i32          // Accept incoming connection; returns client socket descriptor (-1 on error)
+fn! socket_send(sock: i32, data: str) -> i32 // Send data over socket; returns number of bytes sent (-1 on error)
+fn! socket_recv(sock: i32, max_len: i32) -> str  // Receive data from socket; returns received data as string
+fn! socket_close(sock: i32)                  // Close socket
+```
+
+**Example — Simple TCP client:**
+
+```
+fn! main() {
+    let sock: i32 = socket_tcp();
+    let status: i32 = socket_connect(sock, "127.0.0.1", 8080);
+    if status == 0 {
+        socket_send(sock, "Hello, server!");
+        let response: str = socket_recv(sock, 1024);
+        println(response);
+    };
+    socket_close(sock);
+}
+```
+
+**Note:** Socket operations use OS-level syscalls. Error handling follows the C convention of returning -1 on failure; use `errno_get()` for detailed error information.
+
+### 10.18 Tier 10: Path Utilities (4) — mixed purity
+
+```
+fn path_ext(path: str) -> str                // Extract file extension (e.g., "foo.txt" → ".txt"); pure
+fn! path_join(dir: str, file: str) -> str    // Join directory and filename with path separator (allocates)
+fn! path_exists(path: str) -> bool           // Check if a path exists on the filesystem
+fn! path_is_dir(path: str) -> bool           // Check if a path is a directory
+```
+
+**Note:** `path_ext` is pure — it only inspects the string. `path_join` allocates a new string on the arena. `path_exists` and `path_is_dir` perform filesystem checks and are side-effecting.
+
+### 10.19 Tier 11: Array Sorting (4) — `fn!`
+
+Sort builtins sort dynamic arrays in-place. All are `fn!` because they mutate the array.
+
+```
+fn! sort_i32(arr: [i32])                     // Sort array of i32 in ascending order (in-place)
+fn! sort_i64(arr: [i64])                     // Sort array of i64 in ascending order (in-place)
+fn! sort_f64(arr: [f64])                     // Sort array of f64 in ascending order (in-place)
+fn! sort_str(arr: [str])                     // Sort array of strings lexicographically (in-place)
+```
+
+**Example:**
+
+```
+fn! main() {
+    let mut nums: [i32] = [3, 1, 4, 1, 5, 9];
+    sort_i32(nums);
+    for n in nums {
+        print_i32(n);
+        print(" ");
+    }
+    println("");
+}
+```
+
+**Note:** Sorting uses an in-place algorithm (Shell sort) with no additional heap allocation. There are separate functions per type because Oscan does not support user-defined generics.
+
+### 10.20 Tier 12: Graphics Builtins (19) — `fn!` / `fn`
 
 Graphics builtins are available in freestanding mode only and use `l_gfx.h` from the laststanding library.
 
@@ -1312,18 +1527,21 @@ fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32                // Creates an ARGB
 
 **Extended Library Summary:**
 
-The original 36 core functions are now extended with **64 new OS-level and graphics builtins** organized in 8 tiers:
+The library is organized into 12 tiers:
 
+- **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), Memory (1), CLI args (2), File I/O (7)
 - **Tier 1:** Character classification (11 functions)
 - **Tier 2:** Number parsing & conversion (5 functions)
 - **Tier 3:** System functions (5 functions)
-- **Tier 4:** Environment & error (3 functions)
+- **Tier 4:** Environment & error (6 functions)
 - **Tier 5:** Filesystem operations (8 functions)
 - **Tier 6:** String operations (9 functions)
-- **Tier 7:** Directory & process control (4 functions)
-- **Tier 8:** Graphics builtins (19 functions)
-
-**Total library: 100 functions** (36 core + 64 new).
+- **Tier 7:** Directory, process control & terminal (7 functions)
+- **Tier 8:** Math functions (15 functions)
+- **Tier 9:** Socket networking (8 functions)
+- **Tier 10:** Path utilities (4 functions)
+- **Tier 11:** Array sorting (4 functions)
+- **Tier 12:** Graphics builtins (19 functions)
 
 ---
 
@@ -1342,7 +1560,8 @@ use "path/to/file.osc"
 **Rules:**
 
 - **Paths are relative** to the importing file's directory. For example, if `src/main.osc` contains `use "libs/math.osc"`, the compiler looks for `src/libs/math.osc`.
-- **Circular imports are silently skipped.** If file A imports file B, and file B imports file A (directly or indirectly), the circular import is detected and the redundant import is ignored without error.
+- **Textual inclusion before lexing.** Import resolution happens before lexing and parsing. The compiler recursively resolves all `use` statements, inlining the imported file's source text into the importing file. The result is a single combined source text that is then lexed and parsed as one unit.
+- **Circular imports are silently skipped.** If file A imports file B, and file B imports file A (directly or indirectly), the circular import is detected via a set of already-visited canonical paths, and the redundant import is ignored without error.
 - **All declarations are available.** After a `use` statement, all structs, enums, functions, and constants from the imported file are in scope.
 - **Declaration order does not matter across files.** Oscan uses two-phase semantic analysis, so you can call a function from an imported file even if it is defined after the `use` statement (or in a file that was imported later in the compilation order).
 - **`use` at top level only.** Import statements must appear at the top level of a file, not inside function bodies or nested blocks.
@@ -1754,7 +1973,6 @@ The `deps/laststanding` library (`l_os.h`) provides a freestanding C runtime wit
 
 The following features are explicitly **NOT** in v0.1 but may be considered later:
 - User-defined generics
-- Modules / imports (multi-file programs)
 - Closures / first-class functions
 - Traits / interfaces
 - Pattern matching on structs
@@ -1770,8 +1988,6 @@ These are documented here to confirm they are intentional omissions, not oversig
 | No type inference                | LLMs benefit from seeing every type explicitly            |
 | No methods / no OOP             | One way to call functions — maximizes uniformity          |
 | `and`/`or`/`not` as keywords    | Clearer token boundaries for LLM tokenizers              |
-| No `break`/`continue`           | Minimalism; use boolean flags or restructure logic        |
-| No compound assignment           | One way to assign; explicit is better for LLMs           |
 | Arena allocation                 | Uniform, simple, no lifetime tracking needed             |
 | No closures                      | Eliminates capture semantics, keeps functions simple      |
 | Mandatory type annotations       | Every binding is self-documenting                        |
