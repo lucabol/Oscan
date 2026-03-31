@@ -181,7 +181,8 @@ impl CodeGenerator {
             self.line("#define OSC_FREESTANDING");
             self.line("#define L_MAINFILE");
             self.line("#define L_WITHSNPRINTF");
-            self.line("#include \"l_os.h\"");
+            self.line("#include \"l_gfx.h\"");
+            self.line("#define OSC_HAS_GFX");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");
             self.line("#else");
@@ -189,6 +190,8 @@ impl CodeGenerator {
             self.line("#include <stdio.h>");
             self.line("#include <stdlib.h>");
             self.line("#include <math.h>");
+            self.line("#include \"l_gfx.h\"");
+            self.line("#define OSC_HAS_GFX");
             self.line("#include \"osc_runtime.h\"");
             self.line("#endif");
         } else {
@@ -197,6 +200,7 @@ impl CodeGenerator {
             self.line("#include <stdio.h>");
             self.line("#include <stdlib.h>");
             self.line("#include <math.h>");
+            self.line("#include \"l_gfx.h\"");
             self.line("#include \"osc_runtime.h\"");
         }
         self.blank();
@@ -1041,6 +1045,29 @@ impl CodeGenerator {
             // Tier 10: Hex formatting
             "str_from_i32_hex" => format!("osc_str_from_i32_hex(_arena, {})", arg_strs[0]),
             "str_from_i64_hex" => format!("osc_str_from_i64_hex(_arena, {})", arg_strs[0]),
+            // Graphics: Canvas Lifecycle
+            "canvas_open" => format!("osc_canvas_open({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "canvas_close" => "osc_canvas_close()".to_string(),
+            "canvas_alive" => "osc_canvas_alive()".to_string(),
+            "canvas_flush" => "osc_canvas_flush()".to_string(),
+            "canvas_clear" => format!("osc_canvas_clear({})", arg_strs[0]),
+            // Graphics: Drawing Primitives
+            "gfx_pixel" => format!("osc_gfx_pixel({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "gfx_get_pixel" => format!("osc_gfx_get_pixel({}, {})", arg_strs[0], arg_strs[1]),
+            "gfx_line" => format!("osc_gfx_line({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
+            "gfx_rect" => format!("osc_gfx_rect({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
+            "gfx_fill_rect" => format!("osc_gfx_fill_rect({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
+            "gfx_circle" => format!("osc_gfx_circle({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            "gfx_fill_circle" => format!("osc_gfx_fill_circle({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            "gfx_draw_text" => format!("osc_gfx_draw_text({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            // Graphics: Input
+            "canvas_key" => "osc_canvas_key()".to_string(),
+            "canvas_mouse_x" => "osc_canvas_mouse_x()".to_string(),
+            "canvas_mouse_y" => "osc_canvas_mouse_y()".to_string(),
+            "canvas_mouse_btn" => "osc_canvas_mouse_btn()".to_string(),
+            // Graphics: Color
+            "rgb" => format!("osc_rgb({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "rgba" => format!("osc_rgba({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
             // Tier 11: Array sort
             "sort_i32" => format!("osc_sort_i32({})", arg_strs[0]),
             "sort_i64" => format!("osc_sort_i64({})", arg_strs[0]),

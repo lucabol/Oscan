@@ -16,6 +16,7 @@ use std::process::{self, Command};
 const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
 const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
 const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
+const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -373,6 +374,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
         ("osc_runtime.h", EMBEDDED_RUNTIME_H),
         ("osc_runtime.c", EMBEDDED_RUNTIME_C),
         ("l_os.h", EMBEDDED_L_OS_H),
+        ("l_gfx.h", EMBEDDED_L_GFX_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
@@ -421,6 +423,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
         ("osc_runtime.h", EMBEDDED_RUNTIME_H),
         ("osc_runtime.c", EMBEDDED_RUNTIME_C),
         ("l_os.h", EMBEDDED_L_OS_H),
+        ("l_gfx.h", EMBEDDED_L_GFX_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");

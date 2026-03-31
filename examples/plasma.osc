@@ -1,0 +1,65 @@
+// Plasma Effect
+//
+// Port of deps/laststanding/test/plasma.c
+// Classic plasma effect using wave functions and a rainbow palette.
+// Press Escape to quit.
+//
+// To run:
+//   oscan plasma.osc --run
+
+let W: i32 = 320;
+let H: i32 = 240;
+
+// Triangular wave approximation of sine, values 0..255
+fn wave(x: i32) -> i32 {
+    let phase: i32 = band(x, 255);
+    if phase < 128 { phase * 2 } else { (255 - phase) * 2 }
+}
+
+// 6-segment HSV rainbow palette
+fn palette_color(idx: i32) -> i32 {
+    let phase: i32 = band(idx, 255);
+    let seg: i32 = phase / 43;
+    let frac: i32 = (phase % 43) * 6;
+    if seg == 0 { rgb(255, frac, 0) }
+    else if seg == 1 { rgb(255 - frac, 255, 0) }
+    else if seg == 2 { rgb(0, 255, frac) }
+    else if seg == 3 { rgb(0, 255 - frac, 255) }
+    else if seg == 4 { rgb(frac, 0, 255) }
+    else { rgb(255, 0, 255 - frac) }
+}
+
+fn! main() {
+    canvas_open(W, H, "Plasma");
+
+    // Precompute palette into an array for fast lookup
+    let mut pal: [i32] = [];
+    for i in 0..256 {
+        push(pal, palette_color(i));
+    };
+
+    let mut t: i32 = 0;
+
+    while canvas_alive() {
+        if canvas_key() == 27 { break; };
+
+        for y in 0..H {
+            for x in 0..W {
+                // Combine several wave functions at different frequencies
+                let v1: i32 = wave(x + t);
+                let v2: i32 = wave(bshr(y * 3 + t * 2, 1));
+                let v3: i32 = wave(bshr(x + y + t, 1));
+                let v4: i32 = wave(bshr(x * 2 - y + t * 3, 2));
+                let idx: i32 = band(bshr(v1 + v2 + v3 + v4, 2), 255);
+                gfx_pixel(x, y, pal[idx]);
+            };
+        };
+
+        gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0));
+        canvas_flush();
+        sleep_ms(16);
+        t = t + 1;
+    };
+
+    canvas_close()
+}

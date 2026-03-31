@@ -219,6 +219,33 @@ impl SemanticAnalyzer {
         self.functions.insert("sort_str".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::Str)))], BcType::Unit, false));
         self.functions.insert("sort_f64".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::F64)))], BcType::Unit, false));
 
+        // Graphics: Canvas Lifecycle (fn!)
+        self.functions.insert("canvas_open".into(), builtin(vec![("width", BcType::I32), ("height", BcType::I32), ("title", BcType::Str)], BcType::I32, false));
+        self.functions.insert("canvas_close".into(), builtin(vec![], BcType::Unit, false));
+        self.functions.insert("canvas_alive".into(), builtin(vec![], BcType::Bool, false));
+        self.functions.insert("canvas_flush".into(), builtin(vec![], BcType::Unit, false));
+        self.functions.insert("canvas_clear".into(), builtin(vec![("color", BcType::I32)], BcType::Unit, false));
+
+        // Graphics: Drawing Primitives (fn!)
+        self.functions.insert("gfx_pixel".into(), builtin(vec![("x", BcType::I32), ("y", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_get_pixel".into(), builtin(vec![("x", BcType::I32), ("y", BcType::I32)], BcType::I32, false));
+        self.functions.insert("gfx_line".into(), builtin(vec![("x0", BcType::I32), ("y0", BcType::I32), ("x1", BcType::I32), ("y1", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_rect".into(), builtin(vec![("x", BcType::I32), ("y", BcType::I32), ("w", BcType::I32), ("h", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_fill_rect".into(), builtin(vec![("x", BcType::I32), ("y", BcType::I32), ("w", BcType::I32), ("h", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_circle".into(), builtin(vec![("cx", BcType::I32), ("cy", BcType::I32), ("r", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_fill_circle".into(), builtin(vec![("cx", BcType::I32), ("cy", BcType::I32), ("r", BcType::I32), ("color", BcType::I32)], BcType::Unit, false));
+        self.functions.insert("gfx_draw_text".into(), builtin(vec![("x", BcType::I32), ("y", BcType::I32), ("text", BcType::Str), ("color", BcType::I32)], BcType::Unit, false));
+
+        // Graphics: Input (fn!)
+        self.functions.insert("canvas_key".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("canvas_mouse_x".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("canvas_mouse_y".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("canvas_mouse_btn".into(), builtin(vec![], BcType::I32, false));
+
+        // Graphics: Color (pure)
+        self.functions.insert("rgb".into(), builtin(vec![("r", BcType::I32), ("g", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
+        self.functions.insert("rgba".into(), builtin(vec![("r", BcType::I32), ("g", BcType::I32), ("b", BcType::I32), ("a", BcType::I32)], BcType::I32, true));
+
         // len and push are special-cased in check_call
     }
 
@@ -394,12 +421,13 @@ impl SemanticAnalyzer {
                 Ok(())
             }
             Stmt::Assign(a) => {
-                // Check target is mutable
+                // Check target is mutable (skip for array element access — arrays are references)
                 let target_info = self.lookup_var(&a.target.name)
                     .ok_or_else(|| CompileError::new(a.span,
                         format!("undefined variable '{}'", a.target.name)))?
                     .clone();
-                if !target_info.is_mut {
+                let has_index = a.target.accessors.iter().any(|acc| matches!(acc, PlaceAccessor::Index(_)));
+                if !target_info.is_mut && !has_index {
                     return Err(CompileError::new(a.span,
                         format!("cannot assign to immutable variable '{}'", a.target.name)));
                 }
@@ -509,12 +537,13 @@ impl SemanticAnalyzer {
                 Ok(())
             }
             Stmt::CompoundAssign(ca) => {
-                // Check target is mutable
+                // Check target is mutable (skip for array element access — arrays are references)
                 let target_info = self.lookup_var(&ca.target.name)
                     .ok_or_else(|| CompileError::new(ca.span,
                         format!("undefined variable '{}'", ca.target.name)))?
                     .clone();
-                if !target_info.is_mut {
+                let has_index = ca.target.accessors.iter().any(|acc| matches!(acc, PlaceAccessor::Index(_)));
+                if !target_info.is_mut && !has_index {
                     return Err(CompileError::new(ca.span,
                         format!("cannot assign to immutable variable '{}'", ca.target.name)));
                 }

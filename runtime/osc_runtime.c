@@ -2371,3 +2371,46 @@ void osc_sort_str(osc_array *arr)
         }
     }
 }
+
+/* ================================================================== */
+/*  Graphics wrappers (requires l_gfx.h)                               */
+/* ================================================================== */
+
+#ifdef OSC_HAS_GFX
+
+static L_Canvas osc_gfx_canvas;
+
+int32_t osc_canvas_open(int32_t width, int32_t height, osc_str title) {
+    char buf[256];
+    osc_str_to_cstr_buf(title, buf, 256);
+    return (int32_t)l_canvas_open(&osc_gfx_canvas, width, height, buf);
+}
+
+void osc_canvas_close(void) { l_canvas_close(&osc_gfx_canvas); }
+uint8_t osc_canvas_alive(void) { return l_canvas_alive(&osc_gfx_canvas) ? 1 : 0; }
+void osc_canvas_flush(void) { l_canvas_flush(&osc_gfx_canvas); }
+void osc_canvas_clear(int32_t color) { l_canvas_clear(&osc_gfx_canvas, (uint32_t)color); }
+
+void osc_gfx_pixel(int32_t x, int32_t y, int32_t color) { l_pixel(&osc_gfx_canvas, x, y, (uint32_t)color); }
+int32_t osc_gfx_get_pixel(int32_t x, int32_t y) { return (int32_t)l_get_pixel(&osc_gfx_canvas, x, y); }
+void osc_gfx_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t color) { l_line(&osc_gfx_canvas, x0, y0, x1, y1, (uint32_t)color); }
+void osc_gfx_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) { l_rect(&osc_gfx_canvas, x, y, w, h, (uint32_t)color); }
+void osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) { l_fill_rect(&osc_gfx_canvas, x, y, w, h, (uint32_t)color); }
+void osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_circle(&osc_gfx_canvas, cx, cy, r, (uint32_t)color); }
+void osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_fill_circle(&osc_gfx_canvas, cx, cy, r, (uint32_t)color); }
+
+void osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) {
+    char buf[1024];
+    osc_str_to_cstr_buf(text, buf, 1024);
+    l_draw_text(&osc_gfx_canvas, x, y, buf, (uint32_t)color);
+}
+
+int32_t osc_canvas_key(void) { return (int32_t)l_canvas_key(&osc_gfx_canvas); }
+int32_t osc_canvas_mouse_x(void) { return (int32_t)osc_gfx_canvas.mouse_x; }
+int32_t osc_canvas_mouse_y(void) { return (int32_t)osc_gfx_canvas.mouse_y; }
+int32_t osc_canvas_mouse_btn(void) { return (int32_t)osc_gfx_canvas.mouse_btn; }
+
+int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)L_RGB(r, g, b); }
+int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L_RGBA(r, g, b, a); }
+
+#endif /* OSC_HAS_GFX */

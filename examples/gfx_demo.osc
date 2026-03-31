@@ -1,0 +1,43 @@
+// Static Shapes Demo
+//
+// Port of deps/laststanding/test/gfx_demo.c
+// Draws rectangles, circles, lines, and text in various colors.
+// Press Escape to quit.
+//
+// To run:
+//   oscan gfx_demo.osc --run
+
+fn! main() {
+    canvas_open(320, 240, "GFX Demo");
+
+    canvas_clear(rgb(0, 0, 0));
+
+    // Filled rectangle
+    gfx_fill_rect(50, 50, 100, 80, rgb(255, 0, 0));
+
+    // Circle outline
+    gfx_circle(200, 120, 60, rgb(0, 255, 0));
+
+    // Filled circle
+    gfx_fill_circle(260, 60, 30, rgb(0, 100, 255));
+
+    // Diagonal lines
+    gfx_line(10, 10, 310, 230, rgb(255, 255, 0));
+    gfx_line(310, 10, 10, 230, rgb(255, 0, 255));
+
+    // Rectangle outline
+    gfx_rect(20, 20, 280, 200, rgb(255, 255, 255));
+
+    // Text labels
+    gfx_draw_text(60, 85, "Hello!", rgb(255, 255, 255));
+    gfx_draw_text(10, 225, "Press ESC to quit", rgb(128, 128, 128));
+
+    canvas_flush();
+
+    while canvas_alive() {
+        if canvas_key() == 27 { break; };
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

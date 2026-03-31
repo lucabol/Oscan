@@ -1,0 +1,94 @@
+// 3D Starfield
+//
+// Port of deps/laststanding/test/starfield.c
+// Stars fly toward the viewer with perspective projection.
+// +/- to change speed, Escape to quit.
+//
+// To run:
+//   oscan starfield.osc --run
+
+let W: i32 = 320;
+let H: i32 = 240;
+let CENTER_X: i32 = 160;
+let CENTER_Y: i32 = 120;
+let NUM_STARS: i32 = 200;
+let Z_FAR: i32 = 1024;
+let Z_NEAR: i32 = 2;
+
+fn! rand_range(lo: i32, hi: i32) -> i32 {
+    let range: i32 = hi - lo + 1;
+    let mut r: i32 = rand_i32() % range;
+    if r < 0 { r = r + range; };
+    lo + r
+}
+
+fn! main() {
+    canvas_open(W, H, "Starfield");
+
+    let mut star_x: [i32] = [];
+    let mut star_y: [i32] = [];
+    let mut star_z: [i32] = [];
+
+    for i in 0..NUM_STARS {
+        push(star_x, rand_range(0 - (CENTER_X * 4), CENTER_X * 4));
+        push(star_y, rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4));
+        push(star_z, rand_range(Z_NEAR + 1, Z_FAR));
+    };
+
+    let mut speed: i32 = 4;
+
+    while canvas_alive() {
+        let key: i32 = canvas_key();
+        if key == 27 { break; };
+        // '+' = 43, '=' = 61
+        if key == 43 or key == 61 { if speed < 16 { speed = speed + 1; }; };
+        // '-' = 45, '_' = 95
+        if key == 45 or key == 95 { if speed > 1 { speed = speed - 1; }; };
+
+        canvas_clear(rgb(0, 0, 0));
+
+        for i in 0..NUM_STARS {
+            star_z[i] = star_z[i] - speed;
+
+            let mut visible: bool = true;
+
+            if star_z[i] <= Z_NEAR {
+                star_x[i] = rand_range(0 - (CENTER_X * 4), CENTER_X * 4);
+                star_y[i] = rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4);
+                star_z[i] = rand_range(Z_NEAR + 1, Z_FAR);
+                visible = false;
+            };
+
+            if visible {
+                let px: i32 = (star_x[i] * 256) / star_z[i] + CENTER_X;
+                let py: i32 = (star_y[i] * 256) / star_z[i] + CENTER_Y;
+
+                if px < 0 or px >= W or py < 0 or py >= H {
+                    star_x[i] = rand_range(0 - (CENTER_X * 4), CENTER_X * 4);
+                    star_y[i] = rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4);
+                    star_z[i] = rand_range(Z_NEAR + 1, Z_FAR);
+                    visible = false;
+                };
+
+                if visible {
+                    let mut bright: i32 = 255 - (star_z[i] * 255 / Z_FAR);
+                    if bright < 40 { bright = 40; };
+                    if bright > 255 { bright = 255; };
+                    let color: i32 = rgb(bright, bright, bright);
+
+                    if star_z[i] < Z_FAR / 4 {
+                        gfx_fill_rect(px, py, 2, 2, color);
+                    } else {
+                        gfx_pixel(px, py, color);
+                    };
+                };
+            };
+        };
+
+        gfx_draw_text(2, H - 10, "+/-:speed ESC:quit", rgb(100, 100, 100));
+        canvas_flush();
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

@@ -1,0 +1,38 @@
+// Bouncing Ball
+//
+// Port of deps/laststanding/test/bounce.c
+// A filled circle bounces around a 320x240 canvas.
+// Press Escape to quit.
+//
+// To run:
+//   oscan bounce.osc --run
+
+let W: i32 = 320;
+let H: i32 = 240;
+let R: i32 = 10;
+
+fn! main() {
+    canvas_open(W, H, "Bounce");
+
+    let mut x: i32 = W / 2;
+    let mut y: i32 = H / 2;
+    let mut dx: i32 = 2;
+    let mut dy: i32 = 1;
+
+    while canvas_alive() {
+        if canvas_key() == 27 { break; };
+
+        canvas_clear(rgb(0, 0, 0));
+        gfx_fill_circle(x, y, R, rgb(255, 0, 0));
+        canvas_flush();
+
+        x = x + dx;
+        y = y + dy;
+        if x <= R or x >= W - R { dx = 0 - dx; };
+        if y <= R or y >= H - R { dy = 0 - dy; };
+
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

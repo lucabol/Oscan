@@ -314,6 +314,45 @@ extern char **osc_global_argv;
 /* Global arena — created by generated main, used by micro-lib fns */
 extern osc_arena *osc_global_arena;
 
+/* ------------------------------------------------------------------ */
+/*  Graphics — Canvas lifecycle                                        */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_canvas_open(int32_t width, int32_t height, osc_str title);
+void    osc_canvas_close(void);
+uint8_t osc_canvas_alive(void);
+void    osc_canvas_flush(void);
+void    osc_canvas_clear(int32_t color);
+
+/* ------------------------------------------------------------------ */
+/*  Graphics — Drawing primitives                                      */
+/* ------------------------------------------------------------------ */
+
+void    osc_gfx_pixel(int32_t x, int32_t y, int32_t color);
+int32_t osc_gfx_get_pixel(int32_t x, int32_t y);
+void    osc_gfx_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t color);
+void    osc_gfx_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
+void    osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
+void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
+void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
+void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color);
+
+/* ------------------------------------------------------------------ */
+/*  Graphics — Input                                                   */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_canvas_key(void);
+int32_t osc_canvas_mouse_x(void);
+int32_t osc_canvas_mouse_y(void);
+int32_t osc_canvas_mouse_btn(void);
+
+/* ------------------------------------------------------------------ */
+/*  Graphics — Color                                                   */
+/* ------------------------------------------------------------------ */
+
+int32_t osc_rgb(int32_t r, int32_t g, int32_t b);
+int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a);
+
 #ifdef __cplusplus
 }
 #endif

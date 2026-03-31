@@ -1,0 +1,118 @@
+// Conway's Game of Life
+//
+// Port of deps/laststanding/test/life.c
+// 80x60 grid with 4x4 pixel cells on a 320x240 canvas.
+// Space=pause, R=randomize, C=clear, Escape=quit.
+//
+// To run:
+//   oscan life.osc --run
+
+let W: i32 = 320;
+let H: i32 = 240;
+let GW: i32 = 80;
+let GH: i32 = 60;
+let CELL: i32 = 4;
+
+// Count live neighbors with toroidal wrapping
+fn count_neighbors(grid: [i32], cx: i32, cy: i32) -> i32 {
+    let mut n: i32 = 0;
+    for dy_idx in 0..3 {
+        for dx_idx in 0..3 {
+            let dy: i32 = dy_idx - 1;
+            let dx: i32 = dx_idx - 1;
+            if dx != 0 or dy != 0 {
+                let nx: i32 = (cx + dx + GW) % GW;
+                let ny: i32 = (cy + dy + GH) % GH;
+                n = n + grid[ny * GW + nx];
+            };
+        };
+    };
+    n
+}
+
+fn! randomize(grid: [i32]) {
+    let size: i32 = GW * GH;
+    for i in 0..size {
+        if band(rand_i32(), 3) == 0 {
+            grid[i] = 1;
+        } else {
+            grid[i] = 0;
+        };
+    }
+}
+
+fn! main() {
+    canvas_open(W, H, "Game of Life");
+    rand_seed(42);
+
+    let size: i32 = GW * GH;
+
+    // Flat arrays for current and next generation
+    let mut grid: [i32] = [];
+    let mut next: [i32] = [];
+    for i in 0..size {
+        push(grid, 0);
+        push(next, 0);
+    };
+
+    // Initial random state
+    randomize(grid);
+
+    let mut paused: bool = false;
+
+    while canvas_alive() {
+        let key: i32 = canvas_key();
+        if key == 27 { break; };                     // ESC
+        if key == 32 { paused = not paused; };          // Space
+        if key == 114 or key == 82 {                // 'r' or 'R'
+            randomize(grid);
+        };
+        if key == 99 or key == 67 {                 // 'c' or 'C'
+            for i in 0..size {
+                grid[i] = 0;
+            };
+        };
+
+        // Step simulation
+        if not paused {
+            for y in 0..GH {
+                for x in 0..GW {
+                    let n: i32 = count_neighbors(grid, x, y);
+                    let idx: i32 = y * GW + x;
+                    if grid[idx] == 1 {
+                        if n == 2 or n == 3 {
+                            next[idx] = 1;
+                        } else {
+                            next[idx] = 0;
+                        };
+                    } else {
+                        if n == 3 {
+                            next[idx] = 1;
+                        } else {
+                            next[idx] = 0;
+                        };
+                    };
+                };
+            };
+            for i in 0..size {
+                grid[i] = next[i];
+            };
+        };
+
+        // Draw
+        canvas_clear(rgb(0, 0, 0));
+        for y in 0..GH {
+            for x in 0..GW {
+                if grid[y * GW + x] == 1 {
+                    gfx_fill_rect(x * CELL, y * CELL, CELL, CELL, rgb(0, 255, 0));
+                };
+            };
+        };
+        gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128));
+        canvas_flush();
+
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}
