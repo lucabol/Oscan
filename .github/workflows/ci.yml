@@ -297,38 +297,24 @@ jobs:
         run: |
           $ErrorActionPreference = "Continue"
           Write-Host "=== Freestanding Verification (Windows) ==="
+
+          # Source verification functions from test.ps1 (single source of truth)
+          . .\test.ps1 -SourceOnly
+
           $VPass = 0; $VFail = 0
 
           foreach ($exe in Get-ChildItem "tests\build\*.exe") {
             $name = $exe.BaseName
             if ($name -match '^ffi') { continue }
 
-            $size = $exe.Length
-            $depOk = "PASS"; $stdlibOk = "PASS"
-
-            # Check dependencies with dumpbin (socket tests may use WS2_32.dll)
-            $raw = & dumpbin /nologo /dependents $exe.FullName 2>$null
-            $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-            $allowPattern = if ($name -match 'socket') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
-            $badDeps = $deps | Where-Object { $_ -notmatch $allowPattern }
-            if ($badDeps) {
-              $depOk = "FAIL"
-              Write-Host "  Bad deps for ${name}: $($badDeps -join ', ')"
-            }
-
-            # Check for stdlib strings in binary
-            $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
-            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-            $patterns = @('msvcrt', 'ucrt', 'vcruntime', 'api-ms-win-crt')
-            $found = $patterns | Where-Object { $text -match $_ }
-            if ($found) { $stdlibOk = "FAIL" }
-
-            $depsStr = ($deps -join ", ")
-            if ($depOk -eq "PASS" -and $stdlibOk -eq "PASS") {
-              Write-Host "  PASS: $name ($size bytes, deps=[$depsStr], no stdlib)"
+            $r = Test-WindowsFreestanding $exe.FullName
+            $depsStr = $r.DepDetail
+            if (($r.DepCheck -ne 'FAIL') -and ($r.StdlibCheck -ne 'FAIL')) {
+              Write-Host "  PASS: $name ($($r.Size) bytes, deps=[$depsStr], no stdlib)"
               $VPass++
             } else {
-              Write-Host "  FAIL: $name (deps=$depOk stdlib=$stdlibOk)"
+              Write-Host "  FAIL: $name (deps=$($r.DepCheck) stdlib=$($r.StdlibCheck))"
+              if ($r.DepCheck -eq 'FAIL') { Write-Host "    Bad deps: $depsStr" }
               $VFail++
             }
           }

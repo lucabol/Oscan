@@ -9,7 +9,8 @@ param(
     [switch]$SkipWSL,
     [switch]$SkipARM,
     [switch]$SkipLibc,
-    [switch]$VerboseOutput
+    [switch]$VerboseOutput,
+    [switch]$SourceOnly  # When set, only define functions (for dot-sourcing by CI)
 )
 
 $ErrorActionPreference = "Continue"
@@ -260,6 +261,9 @@ function Show-Summary {
 # ══════════════════════════════════════════════════════
 # ── Build ─────────────────────────────────────────────
 # ══════════════════════════════════════════════════════
+
+# When SourceOnly is set, stop here — only function definitions were needed
+if ($SourceOnly) { return }
 
 Write-Host "`n━━━ Oscan Test Suite ━━━`n" -ForegroundColor Cyan
 
