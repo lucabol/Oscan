@@ -101,11 +101,15 @@ function Test-WindowsFreestanding($exePath) {
     $size = (Get-Item $exePath).Length
     $depCheck = "SKIP"; $depDetail = "no tool"; $stdlibCheck = "SKIP"
 
+    # Socket tests legitimately need WS2_32.dll
+    $testName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
+    $allowPattern = if ($testName -match 'socket') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
+
     $dumpbin = Find-Dumpbin
     if ($dumpbin) {
         $raw = & $dumpbin /nologo /dependents $exePath 2>$null
         $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-        $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)(KERNEL32|WS2_32)\.dll$' }
+        $badDeps = $deps | Where-Object { $_ -notmatch $allowPattern }
         if ($badDeps) {
             $depCheck = "FAIL"; $depDetail = ($badDeps -join ", ")
         } else {
