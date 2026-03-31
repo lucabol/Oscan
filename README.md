@@ -6,7 +6,7 @@ A minimalist programming language designed for LLM code generation, transpiling 
 
 LLMs hallucinate less when the target language is small and unambiguous. Oscan gives them:
 
-- **21 reserved words.** One way to do everything — no syntax to argue about.
+- **25 reserved words.** One way to do everything — no syntax to argue about.
 - **Module system.** `use "file.osc"` imports declarations from other files; circular imports are silently skipped.
 - **`fn` / `fn!` purity split.** Side effects are visible in the signature.
 - **`Result<T, E>` errors as values.** No exceptions, no hidden control flow.
@@ -16,6 +16,8 @@ LLMs hallucinate less when the target language is small and unambiguous. Oscan g
 - **Explicit everything.** No type inference, no implicit coercions, no operator overloading.
 - **No C Standard Library dependency.** Compiles down to direct syscalls (but you can use trusty old stdlibc).
 - **Built-in graphics.** Canvas, drawing primitives, and input — write graphical demos with zero external dependencies.
+- **Socket networking.** TCP client/server builtins for network programming.
+- **Math library.** Trig, logarithms, powers, and constants — all built in.
 
 The output is readable C99 that compiles on any platform with a C compiler.
 
@@ -97,24 +99,35 @@ For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Osc
 
 ## Built-in Functions
 
-Oscan provides **~100 builtin functions** across 9 categories (36 core + 45 new OS-level primitives + 19 graphics):
+Oscan provides **~142 builtin functions** across these categories:
 
 | Category | Functions | Count |
 |----------|-----------|-------|
-| **I/O** | `print_i32`, `print_str`, `println`, `read_line` | 7 |
-| **String (Core)** | `str_len`, `str_eq`, `str_concat`, `str_find`, `str_slice`, `s[i]` indexing | 7 |
-| **String (New)** | `str_contains`, `str_starts_with`, `str_ends_with`, `str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`, `str_compare` | 9 |
-| **Math & Bitwise** | `abs_i32`, `abs_f64`, `abs_i64`, `min`, `max`, `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` | 11 |
+| **I/O** | `print`, `println`, `print_i32`, `print_i64`, `print_f64`, `print_bool`, `read_line` | 7 |
+| **String (Core)** | `str_len`, `str_eq`, `str_concat`, `str_to_cstr`, `str_find`, `str_from_i32`, `str_slice`, `s[i]` indexing | 7 |
+| **String (Extended)** | `str_contains`, `str_starts_with`, `str_ends_with`, `str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`, `str_compare` | 9 |
+| **String ↔ Chars** | `str_from_chars`, `str_to_chars` | 2 |
+| **Math (Core)** | `abs_i32`, `abs_f64`, `abs_i64`, `mod_i32` | 4 |
+| **Math Functions** | `math_sin`, `math_cos`, `math_sqrt`, `math_pow`, `math_exp`, `math_log`, `math_atan2`, `math_floor`, `math_ceil`, `math_fmod`, `math_abs` | 11 |
+| **Math Constants** | `math_pi`, `math_e`, `math_ln2`, `math_sqrt2` | 4 |
+| **Bitwise** | `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` | 6 |
 | **Character Ops** | `char_is_alpha`, `char_is_digit`, `char_is_alnum`, `char_is_space`, `char_is_upper`, `char_is_lower`, `char_is_print`, `char_is_xdigit`, `char_to_upper`, `char_to_lower` | 10 |
-| **Parsing & Conversion** | `parse_i32`, `parse_i64`, `str_from_i64`, `str_from_f64`, `str_from_bool`, `i32_to_str` | 6 |
-| **Array & Memory** | `len`, `push`, `arena_reset` | 3 |
+| **Parsing & Conversion** | `parse_i32`, `parse_i64`, `str_from_i64`, `str_from_f64`, `str_from_bool`, `i32_to_str`, `str_from_i32_hex`, `str_from_i64_hex` | 8 |
+| **Array & Memory** | `len`, `push`, `pop`, `arena_reset` | 4 |
+| **Sorting** | `sort_i32`, `sort_i64`, `sort_str`, `sort_f64` | 4 |
 | **Args** | `arg_count`, `arg_get` | 2 |
-| **File I/O (Core)** | `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` | 7 |
-| **File I/O (New)** | `file_rename`, `file_exists`, `file_size`, `file_open_append`, `dir_create`, `dir_remove`, `dir_current`, `dir_change`, `dir_list` | 8 |
+| **File I/O (Core)** | `file_open_read`, `file_open_write`, `file_open_append`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` | 8 |
+| **File I/O (Extended)** | `file_rename`, `file_exists`, `file_size`, `dir_create`, `dir_remove`, `dir_current`, `dir_change`, `dir_list` | 8 |
+| **Path Utilities** | `path_join`, `path_ext`, `path_exists`, `path_is_dir` | 4 |
+| **Socket Networking** | `socket_tcp`, `socket_connect`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_send`, `socket_recv`, `socket_close` | 8 |
 | **System** | `rand_seed`, `rand_i32`, `time_now`, `sleep_ms`, `exit`, `errno_get`, `errno_str`, `env_get` | 8 |
-| **Terminal** | `term_width`, `term_height` | 2 |
+| **Environment** | `env_count`, `env_key`, `env_value` | 3 |
+| **Terminal** | `term_width`, `term_height`, `term_raw`, `term_restore`, `read_nonblock` | 5 |
 | **Process** | `proc_run` | 1 |
-| **Graphics** | `gfx_init`, `gfx_clear`, `gfx_present`, `gfx_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_text`, `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`, `rgb`, `rgba` | 19 |
+| **Graphics (Canvas)** | `canvas_open`, `canvas_close`, `canvas_alive`, `canvas_flush`, `canvas_clear` | 5 |
+| **Graphics (Drawing)** | `gfx_pixel`, `gfx_get_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_draw_text` | 8 |
+| **Graphics (Input)** | `canvas_key`, `canvas_mouse_x`, `canvas_mouse_y`, `canvas_mouse_btn` | 4 |
+| **Graphics (Color)** | `rgb`, `rgba` | 2 |
 
 For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)** and **[§11 (Imports)](docs/spec/oscan-spec.md#11-imports)**.
 
@@ -125,28 +138,29 @@ Oscan supports creating graphical applications using a unified graphics API buil
 ### Key Features
 
 - **Single global canvas** — no handle or resource management needed
-- **Drawing primitives**: `gfx_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_text`
-- **Input handling**: `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`
+- **Drawing primitives**: `gfx_pixel`, `gfx_get_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_draw_text`
+- **Input handling**: `canvas_key`, `canvas_mouse_x`, `canvas_mouse_y`, `canvas_mouse_btn`
 - **Color helpers**: `rgb(r, g, b)`, `rgba(r, g, b, a)` for color construction
-- **Frame control**: `gfx_init`, `gfx_clear`, `gfx_present`
+- **Frame control**: `canvas_open`, `canvas_close`, `canvas_alive`, `canvas_clear`, `canvas_flush`
 - **Pure-Oscan UI library:** `libs/ui.osc` provides reusable widgets (button, checkbox, slider, panel, label, separator) built entirely in Oscan using graphics builtins. Import with `use "libs/ui.osc"`.
 
 ### Examples
 
-Five example programs in `examples/gfx/` demonstrate graphics capabilities:
+Six example programs in `examples/gfx/` demonstrate graphics capabilities:
 
 - **`bounce.osc`** — Bouncing ball animation with collision detection
 - **`gfx_demo.osc`** — Shape and text rendering showcase
 - **`starfield.osc`** — 3D perspective starfield scrolling effect
 - **`plasma.osc`** — Sine wave plasma effect using procedural color blending
 - **`life.osc`** — Conway's Game of Life cellular automaton
+- **`ui_demo.osc`** — UI widget showcase using `libs/ui.osc`
 
 ## Building & Testing
 
 ```bash
 cargo build                     # debug build
 cargo build --release           # optimized build
-cargo test                      # 53 unit tests + 63 integration tests
+cargo test                      # unit tests + 81 integration tests
 cargo test --lib                # unit tests only
 cargo test --test '*'           # integration tests only
 ```
@@ -177,10 +191,10 @@ cd runtime && make test
 │   ├── osc_runtime.h     # Runtime header
 │   └── test_runtime.c   # Runtime unit tests
 ├── tests/
-│   ├── positive/        # 42 programs that must compile & produce expected output
-│   ├── negative/        # 21 programs that must be rejected by the compiler
+│   ├── positive/        # 61 programs that must compile & produce expected output
+│   ├── negative/        # 20 programs that must be rejected by the compiler
 │   └── integration.rs   # Test harness
-├── examples/            # 17 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io, + 5 graphics demos
+├── examples/            # 18 programs: hello, fibonacci, error_handling, countlines, upper, wc, grep, checksum, hexdump, base64, sort, file_io, + 6 graphics demos
 ├── docs/
 │   ├── guide.md         # Concise language guide
 │   └── spec/
@@ -190,7 +204,7 @@ cd runtime && make test
 
 ## Status
 
-Oscan v0.1+ now includes graphics capabilities alongside the original feature-complete implementation. The compiler supports the full language plus new graphics primitives, all 116 tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. The compiler is ~4,500 lines of Rust with zero dependencies. Recent additions include file I/O, string operations, bitwise operators, command-line argument access, and graphics support via laststanding's GDI/framebuffer abstraction.
+Oscan v0.1+ now includes graphics capabilities alongside the original feature-complete implementation. The compiler supports the full language plus graphics, socket networking, math functions, and path utilities. All tests pass across four platforms, and the CLI supports compile-to-exe, transpile-to-C, and run modes. Recent additions include socket networking, math builtins, sorting, path utilities, and a pure-Oscan UI library.
 
 ## Freestanding Runtime (`deps/laststanding`)
 
