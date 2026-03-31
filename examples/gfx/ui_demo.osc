@@ -1,0 +1,73 @@
+// UI Demo
+//
+// Port of deps/laststanding/test/ui_demo.c
+// Showcases the Oscan UI widget library: panel, labels, buttons,
+// checkbox, slider, and separator.
+// Press Escape to quit.
+//
+// To compile and run:
+//   oscan compile examples/gfx/ui_demo.osc -o ui_demo.exe
+//   ./ui_demo.exe
+
+use "../../libs/ui.osc"
+
+let WIN_W: i32 = 400;
+let WIN_H: i32 = 300;
+
+fn! main() {
+    canvas_open(WIN_W, WIN_H, "Oscan UI Demo");
+
+    let mut click_count: i32 = 0;
+    let mut checked: bool = false;
+    let mut volume: i32 = 50;
+    let mut prev_btn: i32 = 0;
+
+    while canvas_alive() {
+        let key: i32 = canvas_key();
+        if key == 27 { break; };
+
+        canvas_clear(rgb(30, 30, 34));
+
+        // Background panel
+        ui_panel(10, 10, WIN_W - 20, WIN_H - 20);
+
+        // Title
+        gfx_draw_text(24, 20, "UI Widget Demo", UI_ACCENT);
+
+        // Label
+        ui_label(30, 50, "A simple label");
+
+        // Buttons row
+        if ui_button(30, 68, 100, 24, "Click Me", prev_btn) {
+            click_count = click_count + 1;
+        };
+        if ui_button(140, 68, 100, 24, "Reset", prev_btn) {
+            click_count = 0;
+            checked = false;
+            volume = 50;
+        };
+
+        // Checkbox
+        checked = ui_checkbox(30, 102, "Enable feature", checked, prev_btn);
+
+        // Slider with label
+        ui_label(30, 124, "Volume:");
+        volume = ui_slider(30, 140, 200, volume, 0, 100);
+
+        // Separator
+        ui_separator(30, 166, WIN_W - 80);
+
+        // Status display
+        ui_label(30, 178, str_concat("Clicks: ", i32_to_str(click_count)));
+        ui_label(30, 194, str_concat("Checkbox: ", if checked { "ON" } else { "OFF" }));
+        ui_label(30, 210, str_concat("Volume: ", i32_to_str(volume)));
+
+        // Save button state for next frame transition detection
+        prev_btn = canvas_mouse_btn();
+
+        canvas_flush();
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

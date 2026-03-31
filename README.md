@@ -7,6 +7,7 @@ A minimalist programming language designed for LLM code generation, transpiling 
 LLMs hallucinate less when the target language is small and unambiguous. Oscan gives them:
 
 - **21 reserved words.** One way to do everything — no syntax to argue about.
+- **Module system.** `use "file.osc"` imports declarations from other files; circular imports are silently skipped.
 - **`fn` / `fn!` purity split.** Side effects are visible in the signature.
 - **`Result<T, E>` errors as values.** No exceptions, no hidden control flow.
 - **Immutable by default.** `let` is immutable; `let mut` opts in to mutation.
@@ -115,7 +116,7 @@ Oscan provides **~100 builtin functions** across 9 categories (36 core + 45 new 
 | **Process** | `proc_run` | 1 |
 | **Graphics** | `gfx_init`, `gfx_clear`, `gfx_present`, `gfx_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_text`, `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`, `rgb`, `rgba` | 19 |
 
-For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)**.
+For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)** and **[§11 (Imports)](docs/spec/oscan-spec.md#11-imports)**.
 
 ## Graphics
 
@@ -128,6 +129,7 @@ Oscan supports creating graphical applications using a unified graphics API buil
 - **Input handling**: `key_pressed`, `mouse_x`, `mouse_y`, `mouse_pressed`
 - **Color helpers**: `rgb(r, g, b)`, `rgba(r, g, b, a)` for color construction
 - **Frame control**: `gfx_init`, `gfx_clear`, `gfx_present`
+- **Pure-Oscan UI library:** `libs/ui.osc` provides reusable widgets (button, checkbox, slider, panel, label, separator) built entirely in Oscan using graphics builtins. Import with `use "libs/ui.osc"`.
 
 ### Examples
 

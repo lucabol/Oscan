@@ -20,8 +20,9 @@
 8. [Memory Model](#8-memory-model)
 9. [C-FFI](#9-c-ffi)
 10. [Standard Library (Micro-Lib)](#10-standard-library-micro-lib)
-11. [Example Programs](#11-example-programs)
-12. [Compiler Architecture Overview](#12-compiler-architecture-overview)
+11. [Imports](#11-imports)
+12. [Example Programs](#12-example-programs)
+13. [Compiler Architecture Overview](#13-compiler-architecture-overview)
 - [Appendix A: Available Runtime Primitives (Future Builtins)](#appendix-a-available-runtime-primitives-future-builtins)
 - [Appendix B: Reserved for Future Consideration](#appendix-b-reserved-for-future-consideration)
 - [Appendix C: Design Rationale Summary](#appendix-c-design-rationale-summary)
@@ -1326,9 +1327,66 @@ The original 36 core functions are now extended with **64 new OS-level and graph
 
 ---
 
-## 11. Example Programs
+## 11. Imports
 
-### 11.1 Hello World
+### 11.1 The `use` Statement
+
+Oscan supports source code modularity via the `use` statement, which imports declarations from other Oscan files.
+
+**Syntax:**
+
+```
+use "path/to/file.osc"
+```
+
+**Rules:**
+
+- **Paths are relative** to the importing file's directory. For example, if `src/main.osc` contains `use "libs/math.osc"`, the compiler looks for `src/libs/math.osc`.
+- **Circular imports are silently skipped.** If file A imports file B, and file B imports file A (directly or indirectly), the circular import is detected and the redundant import is ignored without error.
+- **All declarations are available.** After a `use` statement, all structs, enums, functions, and constants from the imported file are in scope.
+- **Declaration order does not matter across files.** Oscan uses two-phase semantic analysis, so you can call a function from an imported file even if it is defined after the `use` statement (or in a file that was imported later in the compilation order).
+- **`use` at top level only.** Import statements must appear at the top level of a file, not inside function bodies or nested blocks.
+
+### 11.2 Example
+
+Consider two files:
+
+**libs/math.osc:**
+```
+fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn multiply(a: i32, b: i32) -> i32 {
+    a * b
+}
+```
+
+**main.osc:**
+```
+use "libs/math.osc"
+
+fn! main() {
+    let result = add(3, 4);
+    println(str_from_i32(result));
+}
+```
+
+When `main.osc` is compiled, the `add` and `multiply` functions from `libs/math.osc` are available for use. The output is `7`.
+
+### 11.3 Standard Library
+
+The standard library includes a pure-Oscan UI widget library at `libs/ui.osc`, which provides reusable UI components:
+
+- **Widgets:** `button`, `checkbox`, `slider`, `panel`, `label`, `separator`
+- **Implementation:** Built entirely in Oscan using the graphics builtins (§10.8), with no C dependencies.
+- **Usage:** Import with `use "libs/ui.osc"` to access pre-built UI components for graphical applications.
+
+---
+
+## 12. Example Programs
+
+### 12.1 Hello World
 
 ```
 fn! main() {
@@ -1336,7 +1394,7 @@ fn! main() {
 }
 ```
 
-### 11.2 Fibonacci (Recursion, If/Else)
+### 12.2 Fibonacci (Recursion, If/Else)
 
 ```
 fn fib(n: i32) -> i32 {
@@ -1355,7 +1413,7 @@ fn! main() {
 }
 ```
 
-### 11.3 Structs, Enums, and Match
+### 12.3 Structs, Enums, and Match
 
 ```
 struct Point {
@@ -1404,7 +1462,7 @@ fn! main() {
 }
 ```
 
-### 11.4 Error Handling with Result
+### 12.4 Error Handling with Result
 
 ```
 fn divide(a: i32, b: i32) -> Result<i32, str> {
@@ -1458,9 +1516,9 @@ Error: division by zero
 
 ---
 
-## 12. Compiler Architecture Overview
+## 13. Compiler Architecture Overview
 
-### 12.1 Pipeline
+### 13.1 Pipeline
 
 ```
 Source Code (.osc)
@@ -1498,7 +1556,7 @@ Source Code (.osc)
 └──────────────────┘
 ```
 
-### 12.2 Lexer
+### 13.2 Lexer
 
 - Input: UTF-8 source file.
 - Output: Stream of tokens.
@@ -1506,7 +1564,7 @@ Source Code (.osc)
 - The lexer is context-free. No lexer modes or state.
 - `fn!` is tokenized as a single `FN_BANG` token by checking if `fn` is immediately followed by `!`.
 
-### 12.3 Parser
+### 13.3 Parser
 
 - Input: Token stream.
 - Output: Untyped AST.
@@ -1514,7 +1572,7 @@ Source Code (.osc)
 - No backtracking needed.
 - Struct literal ambiguity: When the parser sees `IDENT {`, it checks if the identifier is a known type name (from the name collection pass, or via a pre-scan of top-level declarations). If yes, parse as struct literal; otherwise, parse as block expression. **Implementation note:** Since we do two passes anyway, the parser can run after name collection. Alternatively, the parser can do a quick pre-scan of top-level `struct` declarations before full parsing.
 
-### 12.4 Name Collection (Pass 1)
+### 13.4 Name Collection (Pass 1)
 
 Walk the top-level declarations and build a symbol table of:
 - All struct names and their fields
@@ -1524,7 +1582,7 @@ Walk the top-level declarations and build a symbol table of:
 
 This enables order-independent references.
 
-### 12.5 Name Resolution & Type Checking (Pass 2)
+### 13.5 Name Resolution & Type Checking (Pass 2)
 
 Walk the full AST:
 1. **Resolve names:** Every identifier reference maps to a declaration. Unresolved names are compile errors.
@@ -1536,7 +1594,7 @@ Walk the full AST:
 
 Output: A typed AST where every expression node carries its resolved type.
 
-### 12.6 C Code Generator
+### 13.6 C Code Generator
 
 Transforms the typed AST into C99 source code:
 
@@ -1578,12 +1636,12 @@ int main(void) {
 }
 ```
 
-### 12.7 File Extension
+### 13.7 File Extension
 
 - Oscan source files use the `.osc` extension.
 - Generated C files use the `.c` extension with the same base name.
 
-### 12.8 Compilation Command
+### 13.8 Compilation Command
 
 ```bash
 oscan input.osc -o output.c    # Transpile to C

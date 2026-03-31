@@ -1,0 +1,148 @@
+// ui.osc — Reusable UI widget library for Oscan
+//
+// Provides panel, label, separator, button, checkbox, and slider widgets.
+// Each widget draws itself and returns interaction state.
+//
+// Usage:
+//   use "path/to/ui.osc"
+//
+// Mouse click detection uses prev_btn parameter to detect
+// button-down transitions (pressed this frame, not last frame).
+
+// ─── Theme Colors ────────────────────────────────────────
+// Computed as r * 65536 + g * 256 + b (same as rgb())
+
+let UI_BG: i32 = 45 * 65536 + 45 * 256 + 48;
+let UI_BG_HOVER: i32 = 62 * 65536 + 62 * 256 + 66;
+let UI_BG_ACTIVE: i32 = 37 * 65536 + 37 * 256 + 38;
+let UI_FG: i32 = 220 * 65536 + 220 * 256 + 220;
+let UI_FG_DIM: i32 = 150 * 65536 + 150 * 256 + 150;
+let UI_BORDER: i32 = 80 * 65536 + 80 * 256 + 85;
+let UI_ACCENT: i32 = 0 * 65536 + 122 * 256 + 204;
+
+// ─── Helpers ─────────────────────────────────────────────
+
+// Point-in-rect hit test (pure)
+fn ui_in_rect(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32) -> bool {
+    mx >= x and mx < x + w and my >= y and my < y + h
+}
+
+// ─── Widgets ─────────────────────────────────────────────
+
+// Panel: filled rect with border
+fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
+    gfx_fill_rect(x, y, w, h, UI_BG);
+    gfx_rect(x, y, w, h, UI_BORDER)
+}
+
+// Label: draws text in foreground color
+fn! ui_label(x: i32, y: i32, text: str) {
+    gfx_draw_text(x, y, text, UI_FG)
+}
+
+// Separator: horizontal line in border color
+fn! ui_separator(x: i32, y: i32, w: i32) {
+    gfx_line(x, y, x + w, y, UI_BORDER)
+}
+
+// Button: clickable rectangle with label.
+// Returns true on the frame the mouse button is first pressed inside.
+fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool {
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, w, h);
+    let pressed: bool = hover and band(btn, 1) == 1;
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    // Choose background color based on state
+    let bg: i32 = if pressed { UI_BG_ACTIVE }
+                  else if hover { UI_BG_HOVER }
+                  else { UI_BG };
+
+    gfx_fill_rect(x, y, w, h, bg);
+    gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
+
+    // Center the label text (approximate: 6px per char)
+    let text_w: i32 = str_len(label) * 6;
+    let tx: i32 = x + (w - text_w) / 2;
+    let ty: i32 = y + (h - 8) / 2;
+    gfx_draw_text(tx, ty, label, UI_FG);
+
+    clicked
+}
+
+// Checkbox: toggling box with label.
+// Returns the new checked state (toggled on click).
+fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> bool {
+    let box_size: i32 = 12;
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, box_size, box_size);
+    let clicked: bool = hover and band(btn, 1) == 1 and band(prev_btn, 1) == 0;
+
+    // Draw the checkbox box
+    let bg: i32 = if hover { UI_BG_HOVER } else { UI_BG };
+    gfx_fill_rect(x, y, box_size, box_size, bg);
+    gfx_rect(x, y, box_size, box_size, if hover { UI_ACCENT } else { UI_BORDER });
+
+    // Draw checkmark if checked
+    if checked {
+        gfx_line(x + 2, y + 6, x + 5, y + 9, UI_ACCENT);
+        gfx_line(x + 5, y + 9, x + 10, y + 2, UI_ACCENT);
+    };
+
+    // Draw label
+    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG);
+
+    // Toggle on click
+    if clicked { not checked } else { checked }
+}
+
+// Slider: horizontal slider with drag support.
+// Returns the new value based on mouse position when dragging.
+fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) -> i32 {
+    let h: i32 = 12;
+    let thumb_w: i32 = 8;
+    let mx: i32 = canvas_mouse_x();
+    let my: i32 = canvas_mouse_y();
+    let btn: i32 = canvas_mouse_btn();
+    let hover: bool = ui_in_rect(mx, my, x, y, w, h);
+    let dragging: bool = hover and band(btn, 1) == 1;
+
+    // Draw track background
+    gfx_fill_rect(x, y, w, h, UI_BG_ACTIVE);
+    gfx_rect(x, y, w, h, UI_BORDER);
+
+    // Calculate thumb position from value
+    let range: i32 = max_val - min_val;
+    let usable: i32 = w - thumb_w;
+    let mut thumb_x: i32 = x;
+    if range > 0 {
+        thumb_x = x + (value - min_val) * usable / range;
+    };
+
+    // Draw filled portion
+    if thumb_x > x {
+        gfx_fill_rect(x + 1, y + 1, thumb_x - x, h - 2, UI_ACCENT);
+    };
+
+    // Draw thumb
+    let thumb_color: i32 = if hover { UI_FG } else { UI_FG_DIM };
+    gfx_fill_rect(thumb_x, y, thumb_w, h, thumb_color);
+
+    // Compute new value if dragging
+    if dragging {
+        let mut new_val: i32 = min_val;
+        if usable > 0 {
+            new_val = min_val + (mx - x - thumb_w / 2) * range / usable;
+        };
+        // Clamp
+        if new_val < min_val { new_val = min_val; };
+        if new_val > max_val { new_val = max_val; };
+        new_val
+    } else {
+        value
+    }
+}
