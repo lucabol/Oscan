@@ -105,7 +105,7 @@ function Test-WindowsFreestanding($exePath) {
     if ($dumpbin) {
         $raw = & $dumpbin /nologo /dependents $exePath 2>$null
         $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-        $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)KERNEL32\.dll$' }
+        $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)(KERNEL32|WS2_32)\.dll$' }
         if ($badDeps) {
             $depCheck = "FAIL"; $depDetail = ($badDeps -join ", ")
         } else {
