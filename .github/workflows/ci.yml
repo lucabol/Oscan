@@ -306,10 +306,11 @@ jobs:
             $size = $exe.Length
             $depOk = "PASS"; $stdlibOk = "PASS"
 
-            # Check dependencies with dumpbin
+            # Check dependencies with dumpbin (socket tests may use WS2_32.dll)
             $raw = & dumpbin /nologo /dependents $exe.FullName 2>$null
             $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
-            $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)KERNEL32\.dll$' }
+            $allowPattern = if ($name -match 'socket') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
+            $badDeps = $deps | Where-Object { $_ -notmatch $allowPattern }
             if ($badDeps) {
               $depOk = "FAIL"
               Write-Host "  Bad deps for ${name}: $($badDeps -join ', ')"
