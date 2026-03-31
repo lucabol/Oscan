@@ -13,7 +13,8 @@ LLMs hallucinate less when the target language is small and unambiguous. Oscan g
 - **Anti-shadowing.** Re-declaring a name in a nested scope is a compile error.
 - **Arena memory.** One allocation model, no manual alloc/free, zero UB.
 - **Explicit everything.** No type inference, no implicit coercions, no operator overloading.
-- **No C Standard Library dependency.** Compiles down to direct syscalls (but you can use trusty old stdlibc).  
+- **No C Standard Library dependency.** Compiles down to direct syscalls (but you can use trusty old stdlibc).
+- **Built-in graphics.** Canvas, drawing primitives, and input — write graphical demos with zero external dependencies.
 
 The output is readable C99 that compiles on any platform with a C compiler.
 
