@@ -100,6 +100,21 @@ impl SemanticAnalyzer {
         self.functions.insert("abs_i32".into(), builtin(vec![("n", BcType::I32)], BcType::I32, true));
         self.functions.insert("abs_f64".into(), builtin(vec![("n", BcType::F64)], BcType::F64, true));
         self.functions.insert("mod_i32".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
+        self.functions.insert("math_sin".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_cos".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_sqrt".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_pow".into(), builtin(vec![("base", BcType::F64), ("exp", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_exp".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_log".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_atan2".into(), builtin(vec![("y", BcType::F64), ("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_floor".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_ceil".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_fmod".into(), builtin(vec![("x", BcType::F64), ("y", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_abs".into(), builtin(vec![("x", BcType::F64)], BcType::F64, true));
+        self.functions.insert("math_pi".into(), builtin(vec![], BcType::F64, true));
+        self.functions.insert("math_e".into(), builtin(vec![], BcType::F64, true));
+        self.functions.insert("math_ln2".into(), builtin(vec![], BcType::F64, true));
+        self.functions.insert("math_sqrt2".into(), builtin(vec![], BcType::F64, true));
 
         // Bitwise (pure)
         self.functions.insert("band".into(), builtin(vec![("a", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
@@ -123,6 +138,16 @@ impl SemanticAnalyzer {
         self.functions.insert("write_str".into(), builtin(vec![("fd", BcType::I32), ("s", BcType::Str)], BcType::Unit, false));
         self.functions.insert("file_close".into(), builtin(vec![("fd", BcType::I32)], BcType::Unit, false));
         self.functions.insert("file_delete".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
+
+        // Socket I/O (fn!)
+        self.functions.insert("socket_tcp".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("socket_connect".into(), builtin(vec![("sock", BcType::I32), ("addr", BcType::Str), ("port", BcType::I32)], BcType::I32, false));
+        self.functions.insert("socket_bind".into(), builtin(vec![("sock", BcType::I32), ("port", BcType::I32)], BcType::I32, false));
+        self.functions.insert("socket_listen".into(), builtin(vec![("sock", BcType::I32), ("backlog", BcType::I32)], BcType::I32, false));
+        self.functions.insert("socket_accept".into(), builtin(vec![("sock", BcType::I32)], BcType::I32, false));
+        self.functions.insert("socket_send".into(), builtin(vec![("sock", BcType::I32), ("data", BcType::Str)], BcType::I32, false));
+        self.functions.insert("socket_recv".into(), builtin(vec![("sock", BcType::I32), ("max_len", BcType::I32)], BcType::Str, false));
+        self.functions.insert("socket_close".into(), builtin(vec![("sock", BcType::I32)], BcType::Unit, false));
 
         // Command-line arguments (fn!)
         self.functions.insert("arg_count".into(), builtin(vec![], BcType::I32, false));
@@ -181,6 +206,12 @@ impl SemanticAnalyzer {
         self.functions.insert("dir_change".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
         self.functions.insert("file_open_append".into(), builtin(vec![("path", BcType::Str)], BcType::I32, false));
         self.functions.insert("file_size".into(), builtin(vec![("path", BcType::Str)], BcType::I64, false));
+
+        // Path utilities
+        self.functions.insert("path_join".into(), builtin(vec![("dir", BcType::Str), ("file", BcType::Str)], BcType::Str, false));
+        self.functions.insert("path_ext".into(), builtin(vec![("path", BcType::Str)], BcType::Str, true));
+        self.functions.insert("path_exists".into(), builtin(vec![("path", BcType::Str)], BcType::Bool, false));
+        self.functions.insert("path_is_dir".into(), builtin(vec![("path", BcType::Str)], BcType::Bool, false));
 
         // Tier 6: String operations
         self.functions.insert("str_contains".into(), builtin(vec![("s", BcType::Str), ("sub", BcType::Str)], BcType::Bool, true));

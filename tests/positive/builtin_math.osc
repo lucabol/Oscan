@@ -1,0 +1,22 @@
+// Test: Math builtins
+// Exercises: math_sin, math_cos, math_sqrt, math_pow, math_exp, math_log,
+//            math_atan2, math_floor, math_ceil, math_fmod, math_abs,
+//            math_pi, math_e, math_ln2, math_sqrt2
+
+fn! main() {
+    println(str_from_f64(math_sin(0.0)));
+    println(str_from_f64(math_cos(0.0)));
+    println(str_from_f64(math_sqrt(4.0)));
+    println(str_from_f64(math_pow(2.0, 10.0)));
+    println(str_from_f64(math_exp(0.0)));
+    println(str_from_f64(math_log(1.0)));
+    println(str_from_f64(math_atan2(0.0, 1.0)));
+    println(str_from_f64(math_floor(3.7)));
+    println(str_from_f64(math_ceil(3.2)));
+    println(str_from_f64(math_fmod(10.0, 3.0)));
+    println(str_from_f64(math_abs(-5.5)));
+    println(str_from_f64(math_pi()));
+    println(str_from_f64(math_e()));
+    println(str_from_f64(math_ln2()));
+    println(str_from_f64(math_sqrt2()));
+}

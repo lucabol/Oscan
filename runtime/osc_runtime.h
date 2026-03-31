@@ -168,6 +168,16 @@ void    osc_write_str(int32_t fd, osc_str s);
 void    osc_file_close(int32_t fd);
 int32_t osc_file_delete(osc_str path);
 
+/* Socket I/O */
+int32_t osc_socket_tcp(void);
+int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port);
+int32_t osc_socket_bind(int32_t sock, int32_t port);
+int32_t osc_socket_listen(int32_t sock, int32_t backlog);
+int32_t osc_socket_accept(int32_t sock);
+int32_t osc_socket_send(int32_t sock, osc_str data);
+osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len);
+void    osc_socket_close(int32_t sock);
+
 /* ------------------------------------------------------------------ */
 /*  Conversion functions                                               */
 /* ------------------------------------------------------------------ */
@@ -181,6 +191,22 @@ osc_str osc_i32_to_str(osc_arena *arena, int32_t n);
 int32_t osc_abs_i32(int32_t n);
 double  osc_abs_f64(double n);
 int64_t osc_abs_i64(int64_t n);
+
+double osc_math_sin(double x);
+double osc_math_cos(double x);
+double osc_math_sqrt(double x);
+double osc_math_pow(double base, double exponent);
+double osc_math_exp(double x);
+double osc_math_log(double x);
+double osc_math_atan2(double y, double x);
+double osc_math_floor(double x);
+double osc_math_ceil(double x);
+double osc_math_fmod(double x, double y);
+double osc_math_abs(double x);
+double osc_math_pi(void);
+double osc_math_e(void);
+double osc_math_ln2(void);
+double osc_math_sqrt2(void);
 
 /* ------------------------------------------------------------------ */
 /*  Character classification & conversion                              */
@@ -240,6 +266,15 @@ osc_str  osc_dir_current(osc_arena *arena);
 int32_t  osc_dir_change(osc_str path);
 int32_t  osc_file_open_append(osc_str path);
 int64_t  osc_file_size(osc_str path);
+
+/* ------------------------------------------------------------------ */
+/*  Path utilities                                                     */
+/* ------------------------------------------------------------------ */
+
+osc_str   osc_path_join(osc_arena *arena, osc_str dir, osc_str file);
+osc_str   osc_path_ext(osc_str path);
+uint8_t   osc_path_exists(osc_str path);
+uint8_t   osc_path_is_dir(osc_str path);
 
 /* ------------------------------------------------------------------ */
 /*  String operations                                                  */

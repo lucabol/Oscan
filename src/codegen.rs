@@ -181,8 +181,10 @@ impl CodeGenerator {
             self.line("#define OSC_FREESTANDING");
             self.line("#define L_MAINFILE");
             self.line("#define L_WITHSNPRINTF");
+            self.line("#define L_WITHSOCKETS");
             self.line("#include \"l_gfx.h\"");
             self.line("#define OSC_HAS_GFX");
+            self.line("#define OSC_HAS_SOCKETS");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");
             self.line("#else");
@@ -962,6 +964,21 @@ impl CodeGenerator {
             "abs_i32" => format!("osc_abs_i32({})", arg_strs[0]),
             "abs_f64" => format!("osc_abs_f64({})", arg_strs[0]),
             "mod_i32" => format!("osc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "math_sin" => format!("osc_math_sin({})", arg_strs[0]),
+            "math_cos" => format!("osc_math_cos({})", arg_strs[0]),
+            "math_sqrt" => format!("osc_math_sqrt({})", arg_strs[0]),
+            "math_pow" => format!("osc_math_pow({}, {})", arg_strs[0], arg_strs[1]),
+            "math_exp" => format!("osc_math_exp({})", arg_strs[0]),
+            "math_log" => format!("osc_math_log({})", arg_strs[0]),
+            "math_atan2" => format!("osc_math_atan2({}, {})", arg_strs[0], arg_strs[1]),
+            "math_floor" => format!("osc_math_floor({})", arg_strs[0]),
+            "math_ceil" => format!("osc_math_ceil({})", arg_strs[0]),
+            "math_fmod" => format!("osc_math_fmod({}, {})", arg_strs[0], arg_strs[1]),
+            "math_abs" => format!("osc_math_abs({})", arg_strs[0]),
+            "math_pi" => "osc_math_pi()".to_string(),
+            "math_e" => "osc_math_e()".to_string(),
+            "math_ln2" => "osc_math_ln2()".to_string(),
+            "math_sqrt2" => "osc_math_sqrt2()".to_string(),
             "band" => format!("((int32_t)((uint32_t)({}) & (uint32_t)({})))", arg_strs[0], arg_strs[1]),
             "bor" => format!("((int32_t)((uint32_t)({}) | (uint32_t)({})))", arg_strs[0], arg_strs[1]),
             "bxor" => format!("((int32_t)((uint32_t)({}) ^ (uint32_t)({})))", arg_strs[0], arg_strs[1]),
@@ -977,6 +994,15 @@ impl CodeGenerator {
             "write_str" => format!("osc_write_str({}, {})", arg_strs[0], arg_strs[1]),
             "file_close" => format!("osc_file_close({})", arg_strs[0]),
             "file_delete" => format!("osc_file_delete({})", arg_strs[0]),
+            // Socket I/O
+            "socket_tcp" => "osc_socket_tcp()".to_string(),
+            "socket_connect" => format!("osc_socket_connect({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "socket_bind" => format!("osc_socket_bind({}, {})", arg_strs[0], arg_strs[1]),
+            "socket_listen" => format!("osc_socket_listen({}, {})", arg_strs[0], arg_strs[1]),
+            "socket_accept" => format!("osc_socket_accept({})", arg_strs[0]),
+            "socket_send" => format!("osc_socket_send({}, {})", arg_strs[0], arg_strs[1]),
+            "socket_recv" => format!("osc_socket_recv(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "socket_close" => format!("osc_socket_close({})", arg_strs[0]),
             "arg_count" => "osc_arg_count()".to_string(),
             "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
             // Tier 1: Character classification
@@ -1016,6 +1042,11 @@ impl CodeGenerator {
             "dir_change" => format!("osc_dir_change({})", arg_strs[0]),
             "file_open_append" => format!("osc_file_open_append({})", arg_strs[0]),
             "file_size" => format!("osc_file_size({})", arg_strs[0]),
+            // Path utilities
+            "path_join" => format!("osc_path_join(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "path_ext" => format!("osc_path_ext({})", arg_strs[0]),
+            "path_exists" => format!("osc_path_exists({})", arg_strs[0]),
+            "path_is_dir" => format!("osc_path_is_dir({})", arg_strs[0]),
             // Tier 6: String operations
             "str_contains" => format!("osc_str_contains({}, {})", arg_strs[0], arg_strs[1]),
             "str_starts_with" => format!("osc_str_starts_with({}, {})", arg_strs[0], arg_strs[1]),

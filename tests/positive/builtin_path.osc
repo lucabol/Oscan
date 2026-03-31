@@ -1,0 +1,16 @@
+fn! main() {
+    // path_join
+    println(path_join("foo", "bar.txt"));
+
+    // path_ext
+    println(path_ext("hello.txt"));
+    println(path_ext("noext"));
+
+    // path_exists
+    print_bool(path_exists("."));
+    println("");
+
+    // path_is_dir
+    print_bool(path_is_dir("."));
+    println("");
+}

@@ -30,6 +30,9 @@
 #include <errno.h>
 #include <sys/stat.h>
 #ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
 #include <windows.h>
 #include <direct.h>
 #include <io.h>
@@ -1114,6 +1117,195 @@ double osc_abs_f64(double n)
 #endif
 }
 
+double osc_math_sin(double x)
+{
+#ifdef OSC_FREESTANDING
+    static const double PI  = 3.14159265358979323846;
+    static const double PI2 = 6.28318530717958647692;
+    int neg = 0;
+    x = x - PI2 * (double)(int)(x / PI2);
+    if (x < -PI) x += PI2;
+    if (x >  PI) x -= PI2;
+    if (x < 0) { x = -x; neg = 1; }
+    if (x > PI) { x -= PI; neg = !neg; }
+    double x2 = x * x;
+    double r = x;
+    double term = x;
+    int i;
+    for (i = 1; i <= 8; i++) {
+        term *= -x2 / (double)(2*i * (2*i + 1));
+        r += term;
+    }
+    return neg ? -r : r;
+#else
+    return sin(x);
+#endif
+}
+
+double osc_math_cos(double x)
+{
+#ifdef OSC_FREESTANDING
+    static const double PI_2 = 1.57079632679489661923;
+    return osc_math_sin(x + PI_2);
+#else
+    return cos(x);
+#endif
+}
+
+double osc_math_sqrt(double x)
+{
+#ifdef OSC_FREESTANDING
+    if (x < 0.0) return 0.0 / 0.0;
+    if (x == 0.0) return 0.0;
+    double g = x * 0.5;
+    int i;
+    for (i = 0; i < 60; i++) {
+        g = 0.5 * (g + x / g);
+    }
+    return g;
+#else
+    return sqrt(x);
+#endif
+}
+
+double osc_math_pow(double base, double exponent)
+{
+#ifdef OSC_FREESTANDING
+    if (exponent == 0.0) return 1.0;
+    if (base == 0.0) return 0.0;
+    if (exponent == (double)(int)exponent && exponent > 0 && exponent < 1024) {
+        double r = 1.0;
+        int n = (int)exponent;
+        double b = base;
+        while (n > 0) {
+            if (n & 1) r *= b;
+            b *= b;
+            n >>= 1;
+        }
+        return r;
+    }
+    return osc_math_exp(exponent * osc_math_log(base));
+#else
+    return pow(base, exponent);
+#endif
+}
+
+double osc_math_exp(double x)
+{
+#ifdef OSC_FREESTANDING
+    static const double LN2 = 0.69314718055994530942;
+    if (x > 709.0) return 1.0 / 0.0;
+    if (x < -709.0) return 0.0;
+    int k = (int)(x / LN2 + (x >= 0 ? 0.5 : -0.5));
+    double r = x - (double)k * LN2;
+    double sum = 1.0, term = 1.0;
+    int i;
+    for (i = 1; i <= 20; i++) {
+        term *= r / (double)i;
+        sum += term;
+    }
+    while (k > 0) { sum *= 2.0; k--; }
+    while (k < 0) { sum *= 0.5; k++; }
+    return sum;
+#else
+    return exp(x);
+#endif
+}
+
+double osc_math_log(double x)
+{
+#ifdef OSC_FREESTANDING
+    if (x <= 0.0) return -1.0 / 0.0;
+    static const double LN2 = 0.69314718055994530942;
+    int exp2 = 0;
+    while (x >= 2.0) { x *= 0.5; exp2++; }
+    while (x <  0.5) { x *= 2.0; exp2--; }
+    double y = (x - 1.0) / (x + 1.0);
+    double y2 = y * y;
+    double sum = 0.0, term = y;
+    int i;
+    for (i = 0; i < 30; i++) {
+        sum += term / (double)(2 * i + 1);
+        term *= y2;
+    }
+    return 2.0 * sum + (double)exp2 * LN2;
+#else
+    return log(x);
+#endif
+}
+
+double osc_math_atan2(double y, double x)
+{
+#ifdef OSC_FREESTANDING
+    static const double PI   = 3.14159265358979323846;
+    static const double PI_2 = 1.57079632679489661923;
+    if (x == 0.0 && y == 0.0) return 0.0;
+    if (x == 0.0) return y > 0.0 ? PI_2 : -PI_2;
+    double t = y / x;
+    int flip = 0;
+    if (t < 0) { t = -t; flip = 1; }
+    int inv = 0;
+    if (t > 1.0) { t = 1.0 / t; inv = 1; }
+    double t2 = t * t;
+    double sum = 0.0, term = t;
+    int i;
+    for (i = 0; i < 30; i++) {
+        sum += (i % 2 == 0 ? 1.0 : -1.0) * term / (double)(2 * i + 1);
+        term *= t2;
+    }
+    if (inv) sum = PI_2 - sum;
+    if (flip) sum = -sum;
+    if (x < 0.0) sum += (y >= 0.0 ? PI : -PI);
+    return sum;
+#else
+    return atan2(y, x);
+#endif
+}
+
+double osc_math_floor(double x)
+{
+#ifdef OSC_FREESTANDING
+    double i = (double)(long long)x;
+    return (x < i) ? i - 1.0 : i;
+#else
+    return floor(x);
+#endif
+}
+
+double osc_math_ceil(double x)
+{
+#ifdef OSC_FREESTANDING
+    double i = (double)(long long)x;
+    return (x > i) ? i + 1.0 : i;
+#else
+    return ceil(x);
+#endif
+}
+
+double osc_math_fmod(double x, double y)
+{
+#ifdef OSC_FREESTANDING
+    if (y == 0.0) return 0.0 / 0.0;
+    return x - (double)(long long)(x / y) * y;
+#else
+    return fmod(x, y);
+#endif
+}
+
+double osc_math_abs(double x)
+{
+#ifdef OSC_FREESTANDING
+    return x < 0.0 ? -x : x;
+#else
+    return fabs(x);
+#endif
+}
+
+double osc_math_pi(void)  { return 3.14159265358979323846; }
+double osc_math_e(void)   { return 2.71828182845904523536; }
+double osc_math_ln2(void) { return 0.69314718055994530942; }
+double osc_math_sqrt2(void) { return 1.41421356237309504880; }
+
 /* ================================================================== */
 /*  Command-line argument access                                       */
 /* ================================================================== */
@@ -1560,6 +1752,86 @@ int64_t osc_file_size(osc_str path)
     struct stat st;
     if (stat(buf, &st) != 0) return -1;
     return (int64_t)st.st_size;
+#endif
+}
+
+/* ================================================================== */
+/*  Path utilities                                                     */
+/* ================================================================== */
+
+osc_str osc_path_join(osc_arena *arena, osc_str dir, osc_str file)
+{
+    char buf[4096];
+    char dir_buf[4096], file_buf[4096];
+    int32_t len;
+    char *copy;
+    osc_str result;
+
+    osc_str_to_cstr_buf(dir, dir_buf, 4096);
+    osc_str_to_cstr_buf(file, file_buf, 4096);
+
+#ifdef OSC_FREESTANDING
+    l_path_join(buf, sizeof(buf), dir_buf, file_buf);
+#else
+    snprintf(buf, sizeof(buf), "%s/%s", dir_buf, file_buf);
+#endif
+
+    len = (int32_t)strlen(buf);
+    copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+    memcpy(copy, buf, (size_t)len + 1);
+    result.data = copy;
+    result.len = len;
+    return result;
+}
+
+osc_str osc_path_ext(osc_str path)
+{
+    int32_t i;
+    int32_t last_dot = -1;
+    int32_t last_sep = -1;
+    osc_str result;
+
+    for (i = 0; i < path.len; i++) {
+        if (path.data[i] == '/' || path.data[i] == '\\') last_sep = i;
+        if (path.data[i] == '.') last_dot = i;
+    }
+    /* No dot, or dot before last separator, or dot is first char of basename */
+    if (last_dot <= 0 || last_dot <= last_sep || last_dot == last_sep + 1) {
+        result.data = "";
+        result.len = 0;
+        return result;
+    }
+    result.data = path.data + last_dot;
+    result.len = path.len - last_dot;
+    return result;
+}
+
+uint8_t osc_path_exists(osc_str path)
+{
+    char buf[4096];
+    osc_str_to_cstr_buf(path, buf, 4096);
+#ifdef OSC_FREESTANDING
+    return l_path_exists(buf) ? 1 : 0;
+#else
+    struct stat st;
+    return stat(buf, &st) == 0 ? 1 : 0;
+#endif
+}
+
+uint8_t osc_path_is_dir(osc_str path)
+{
+    char buf[4096];
+    osc_str_to_cstr_buf(path, buf, 4096);
+#ifdef OSC_FREESTANDING
+    return l_path_isdir(buf) ? 1 : 0;
+#else
+    struct stat st;
+    if (stat(buf, &st) != 0) return 0;
+#ifdef _WIN32
+    return (st.st_mode & _S_IFDIR) ? 1 : 0;
+#else
+    return S_ISDIR(st.st_mode) ? 1 : 0;
+#endif
 #endif
 }
 
@@ -2455,3 +2727,218 @@ int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)L_RGB(r, g, b
 int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L_RGBA(r, g, b, a); }
 
 #endif /* OSC_HAS_GFX */
+
+/* ================================================================== */
+/*  Socket wrappers                                                    */
+/* ================================================================== */
+
+#ifdef OSC_HAS_SOCKETS
+
+int32_t osc_socket_tcp(void)
+{
+    return (int32_t)l_socket_tcp();
+}
+
+int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+{
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    return (int32_t)l_socket_connect((L_SOCKET)sock, buf, (int)port);
+}
+
+int32_t osc_socket_bind(int32_t sock, int32_t port)
+{
+    return (int32_t)l_socket_bind((L_SOCKET)sock, (int)port);
+}
+
+int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+{
+    return (int32_t)l_socket_listen((L_SOCKET)sock, (int)backlog);
+}
+
+int32_t osc_socket_accept(int32_t sock)
+{
+    return (int32_t)l_socket_accept((L_SOCKET)sock);
+}
+
+int32_t osc_socket_send(int32_t sock, osc_str data)
+{
+    return (int32_t)l_socket_send((L_SOCKET)sock, data.data, (size_t)data.len);
+}
+
+osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    ptrdiff_t n;
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = l_socket_recv((L_SOCKET)sock, buf, (size_t)max_len);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
+}
+
+void osc_socket_close(int32_t sock)
+{
+    l_socket_close((L_SOCKET)sock);
+}
+
+#elif defined(_WIN32) /* Windows libc mode */
+
+#pragma comment(lib, "ws2_32.lib")
+
+static void osc_wsa_init(void)
+{
+    static int done = 0;
+    if (!done) {
+        WSADATA wsa;
+        WSAStartup(MAKEWORD(2, 2), &wsa);
+        done = 1;
+    }
+}
+
+int32_t osc_socket_tcp(void)
+{
+    osc_wsa_init();
+    SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
+    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+}
+
+int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+{
+    struct sockaddr_in sa;
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    sa.sin_addr.s_addr = inet_addr(buf);
+    return connect((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_bind(int32_t sock, int32_t port)
+{
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    sa.sin_addr.s_addr = INADDR_ANY;
+    return bind((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+{
+    return listen((SOCKET)sock, (int)backlog) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_accept(int32_t sock)
+{
+    SOCKET s = accept((SOCKET)sock, NULL, NULL);
+    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+}
+
+int32_t osc_socket_send(int32_t sock, osc_str data)
+{
+    return (int32_t)send((SOCKET)sock, data.data, data.len, 0);
+}
+
+osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    int n;
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = recv((SOCKET)sock, buf, max_len, 0);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
+}
+
+void osc_socket_close(int32_t sock)
+{
+    closesocket((SOCKET)sock);
+}
+
+#else /* POSIX libc */
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
+int32_t osc_socket_tcp(void)
+{
+    return (int32_t)socket(AF_INET, SOCK_STREAM, 0);
+}
+
+int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+{
+    struct sockaddr_in sa;
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    inet_pton(AF_INET, buf, &sa.sin_addr);
+    return connect(sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_bind(int32_t sock, int32_t port)
+{
+    struct sockaddr_in sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    sa.sin_addr.s_addr = INADDR_ANY;
+    return bind(sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+{
+    return listen(sock, (int)backlog) == 0 ? 0 : -1;
+}
+
+int32_t osc_socket_accept(int32_t sock)
+{
+    return (int32_t)accept(sock, NULL, NULL);
+}
+
+int32_t osc_socket_send(int32_t sock, osc_str data)
+{
+    return (int32_t)send(sock, data.data, (size_t)data.len, 0);
+}
+
+osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    ssize_t n;
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = recv(sock, buf, (size_t)max_len, 0);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
+}
+
+void osc_socket_close(int32_t sock)
+{
+    close(sock);
+}
+
+#endif /* OSC_HAS_SOCKETS / _WIN32 / POSIX */

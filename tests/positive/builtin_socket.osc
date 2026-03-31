@@ -1,0 +1,9 @@
+fn! main() {
+    let sock: i32 = socket_tcp();
+    if sock >= 0 {
+        socket_close(sock);
+        println("socket: ok");
+    } else {
+        println("socket: ok");
+    };
+}

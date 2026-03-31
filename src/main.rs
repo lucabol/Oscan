@@ -583,8 +583,8 @@ fn compile_with_gcc_or_clang(
             .arg("-fdata-sections")
             .arg("-s");  // strip symbols
         if cfg!(windows) {
-            // Windows: link kernel32 for Win32 API (VirtualAlloc, WriteFile, etc.)
-            command.arg("-lkernel32");
+            // Windows: link kernel32 for Win32 API and ws2_32 for sockets
+            command.arg("-lkernel32").arg("-lws2_32");
         } else {
             // Unix: fully standalone, no system libraries
             command.arg("-nostdlib").arg("-static")
@@ -656,7 +656,7 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
                 vcvars_path, cl_path,
                 all_includes, c_file.display(), exe_file.display(),
             )
@@ -709,7 +709,8 @@ fn compile_with_msvc(
                 .arg(format!("/Fe:{}", exe_file.display()))
                 .arg("/link")
                 .arg("/NODEFAULTLIB")
-                .arg("kernel32.lib");
+                .arg("kernel32.lib")
+                .arg("ws2_32.lib");
         } else {
             command
                 .arg("/nologo")
