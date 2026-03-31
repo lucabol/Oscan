@@ -63,8 +63,8 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool
     gfx_fill_rect(x, y, w, h, bg);
     gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
 
-    // Center the label text (approximate: 6px per char)
-    let text_w: i32 = str_len(label) * 6;
+    // Center the label text (8px per char — matches 8x8 bitmap font)
+    let text_w: i32 = str_len(label) * 8;
     let tx: i32 = x + (w - text_w) / 2;
     let ty: i32 = y + (h - 8) / 2;
     gfx_draw_text(tx, ty, label, UI_FG);
@@ -149,8 +149,9 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 
 // Textbox: single-line text input with keyboard handling.
 // buf is a mutable [i32] array of character codes.
+// key is the current frame's key from canvas_key() (caller must poll).
 // Returns new focused state (true if clicked on this textbox).
-fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32) -> bool {
+fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32) -> bool {
     let h: i32 = 20;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
@@ -168,7 +169,6 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32)
 
     // Handle keyboard input when focused
     if focused {
-        let key: i32 = canvas_key();
         if key >= 32 and key <= 126 {
             push(buf, key);
         };
@@ -183,9 +183,9 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32)
     let text_y: i32 = y + (h - 8) / 2;
     gfx_draw_text(x + pad, text_y, text, UI_FG);
 
-    // Draw cursor when focused (thin rect after last character)
+    // Draw cursor when focused (thin rect after last character, 8px font)
     if focused {
-        let cursor_x: i32 = x + pad + len(buf) * 6;
+        let cursor_x: i32 = x + pad + len(buf) * 8;
         gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
     };
 

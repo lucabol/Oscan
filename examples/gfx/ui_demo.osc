@@ -25,9 +25,9 @@ fn! main() {
     let mut text_focused: bool = false;
 
     while canvas_alive() {
-        // Only consume keys for ESC when textbox doesn't have focus
+        // Always poll key to pump the event queue (updates mouse state too)
+        let key: i32 = canvas_key();
         if not text_focused {
-            let key: i32 = canvas_key();
             if key == 27 { break; };
         };
 
@@ -72,7 +72,7 @@ fn! main() {
 
         // Textbox
         ui_label(30, 242, "Type here:");
-        text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn);
+        text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn, key);
 
         // Display typed text
         ui_label(30, 286, str_concat("Typed: ", str_from_chars(text_buf)));
