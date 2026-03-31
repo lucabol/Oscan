@@ -262,8 +262,7 @@ Write-Host "`n━━━ Oscan Test Suite ━━━`n" -ForegroundColor Cyan
 # Clean build directory
 if (Test-Path "tests\build") { Remove-Item "tests\build\*" -Recurse -Force -ErrorAction SilentlyContinue }
 else { New-Item -ItemType Directory -Path "tests\build" -Force | Out-Null }
-# Clean compiled examples
-Get-ChildItem "examples\*.exe" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+# Keep compiled examples in examples\ for manual testing
 
 if (-not $SkipBuild) {
     Write-Phase "Building (release)"
