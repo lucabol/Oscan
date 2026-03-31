@@ -1,0 +1,7 @@
+use "libs/use_import_lib.osc"
+
+fn! main() {
+    let x: i32 = add_numbers(3, 4);
+    print_i32(x);
+    println("");
+}

@@ -127,12 +127,29 @@ impl Parser {
             TokenKind::Enum => Ok(TopDecl::Enum(self.parse_enum_decl()?)),
             TokenKind::Let => Ok(TopDecl::Let(self.parse_top_let_decl()?)),
             TokenKind::Extern => Ok(TopDecl::Extern(self.parse_extern_block()?)),
+            TokenKind::Use => self.parse_use_decl(),
             _ => Err(CompileError::new(
                 self.peek_span(),
                 format!(
-                    "expected top-level declaration (fn, struct, enum, let, extern), found '{}'",
+                    "expected top-level declaration (fn, struct, enum, let, extern, use), found '{}'",
                     self.peek()
                 ),
+            )),
+        }
+    }
+
+    fn parse_use_decl(&mut self) -> Result<TopDecl, CompileError> {
+        self.advance(); // consume `use`
+        let span = self.peek_span();
+        match self.peek().clone() {
+            TokenKind::StringLit(path) => {
+                let path = path.clone();
+                self.advance();
+                Ok(TopDecl::Use(path))
+            }
+            _ => Err(CompileError::new(
+                span,
+                format!("expected string literal after 'use', found '{}'", self.peek()),
             )),
         }
     }

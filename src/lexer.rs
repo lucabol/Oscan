@@ -231,6 +231,7 @@ impl Lexer {
             "false" => TokenKind::False,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "use" => TokenKind::Use,
             "_" => TokenKind::Underscore,
             _ => TokenKind::Ident(ident),
         };

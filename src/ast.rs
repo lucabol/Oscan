@@ -16,6 +16,7 @@ pub enum TopDecl {
     Enum(EnumDecl),
     Let(LetDecl),
     Extern(ExternBlock),
+    Use(String),
 }
 
 /// Function declaration (both `fn` and `fn!`).

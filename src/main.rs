@@ -7,6 +7,7 @@ mod semantic;
 mod token;
 mod types;
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -17,6 +18,35 @@ const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
 const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
 const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
+
+fn resolve_imports(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String, String> {
+    let canonical = path.canonicalize().map_err(|e| format!("cannot resolve {}: {}", path.display(), e))?;
+    if !visited.insert(canonical.clone()) {
+        return Ok(String::new());
+    }
+    let source = fs::read_to_string(&canonical)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+
+    let mut result = String::new();
+    let base_dir = canonical.parent().unwrap_or(Path::new("."));
+
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("use \"") {
+            if let Some(end) = trimmed[5..].find('"') {
+                let import_path = &trimmed[5..5 + end];
+                let full_path = base_dir.join(import_path);
+                let imported = resolve_imports(&full_path, visited)?;
+                result.push_str(&imported);
+                result.push('\n');
+                continue;
+            }
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    Ok(result)
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -63,11 +93,15 @@ fn main() {
         }
     };
 
-    let source = match fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error reading {path}: {e}");
-            process::exit(1);
+    let source = {
+        let file_path_buf = PathBuf::from(&path);
+        let mut visited = HashSet::new();
+        match resolve_imports(&file_path_buf, &mut visited) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }
         }
     };
 

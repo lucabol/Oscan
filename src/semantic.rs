@@ -326,6 +326,7 @@ impl SemanticAnalyzer {
                     });
                 }
             }
+            TopDecl::Use(_) => {}
         }
         Ok(())
     }

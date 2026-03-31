@@ -44,6 +44,7 @@ pub enum TokenKind {
     False,
     Break,
     Continue,
+    Use,
 
     // Literals
     IntLit(i64),
@@ -119,6 +120,7 @@ impl std::fmt::Display for TokenKind {
             TokenKind::False => write!(f, "false"),
             TokenKind::Break => write!(f, "break"),
             TokenKind::Continue => write!(f, "continue"),
+            TokenKind::Use => write!(f, "use"),
             TokenKind::IntLit(v) => write!(f, "{v}"),
             TokenKind::FloatLit(v) => write!(f, "{v}"),
             TokenKind::StringLit(s) => write!(f, "\"{s}\""),
