@@ -401,6 +401,10 @@ impl Parser {
                         self.advance();
                         Ok(Type::Primitive(PrimitiveType::Unit, span))
                     }
+                    "map" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::Map, span))
+                    }
                     "Result" => {
                         self.advance();
                         self.expect(&TokenKind::Lt)?;

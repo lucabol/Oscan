@@ -149,6 +149,11 @@ impl SemanticAnalyzer {
         self.functions.insert("socket_recv".into(), builtin(vec![("sock", BcType::I32), ("max_len", BcType::I32)], BcType::Str, false));
         self.functions.insert("socket_close".into(), builtin(vec![("sock", BcType::I32)], BcType::Unit, false));
 
+        // UDP Socket I/O (fn!)
+        self.functions.insert("socket_udp".into(), builtin(vec![], BcType::I32, false));
+        self.functions.insert("socket_sendto".into(), builtin(vec![("sock", BcType::I32), ("data", BcType::Str), ("addr", BcType::Str), ("port", BcType::I32)], BcType::I32, false));
+        self.functions.insert("socket_recvfrom".into(), builtin(vec![("sock", BcType::I32), ("max_len", BcType::I32)], BcType::Str, false));
+
         // Command-line arguments (fn!)
         self.functions.insert("arg_count".into(), builtin(vec![], BcType::I32, false));
         self.functions.insert("arg_get".into(), builtin(vec![("i", BcType::I32)], BcType::Str, false));
@@ -254,6 +259,28 @@ impl SemanticAnalyzer {
         self.functions.insert("str_from_chars".into(), builtin(vec![("arr", BcType::Array(Box::new(BcType::I32)))], BcType::Str, false));
         self.functions.insert("str_to_chars".into(), builtin(vec![("s", BcType::Str)], BcType::Array(Box::new(BcType::I32)), false));
 
+        // Tier 13: Date/Time (fn! — allocates / reads system state)
+        self.functions.insert("time_format".into(), builtin(vec![("timestamp", BcType::I64), ("fmt", BcType::Str)], BcType::Str, false));
+        self.functions.insert("time_utc_year".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+        self.functions.insert("time_utc_month".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+        self.functions.insert("time_utc_day".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+        self.functions.insert("time_utc_hour".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+        self.functions.insert("time_utc_min".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+        self.functions.insert("time_utc_sec".into(), builtin(vec![("timestamp", BcType::I64)], BcType::I32, false));
+
+        // Tier 13: Glob matching (pure)
+        self.functions.insert("glob_match".into(), builtin(vec![("pattern", BcType::Str), ("text", BcType::Str)], BcType::Bool, true));
+
+        // Tier 13: SHA-256 (fn! — allocates)
+        self.functions.insert("sha256".into(), builtin(vec![("data", BcType::Str)], BcType::Str, false));
+
+        // Tier 13: Terminal detection (pure-ish)
+        self.functions.insert("is_tty".into(), builtin(vec![], BcType::Bool, true));
+
+        // Tier 13: Environment modification (fn!)
+        self.functions.insert("env_set".into(), builtin(vec![("name", BcType::Str), ("value", BcType::Str)], BcType::I32, false));
+        self.functions.insert("env_delete".into(), builtin(vec![("name", BcType::Str)], BcType::I32, false));
+
         // Graphics: Canvas Lifecycle (fn!)
         self.functions.insert("canvas_open".into(), builtin(vec![("width", BcType::I32), ("height", BcType::I32), ("title", BcType::Str)], BcType::I32, false));
         self.functions.insert("canvas_close".into(), builtin(vec![], BcType::Unit, false));
@@ -280,6 +307,14 @@ impl SemanticAnalyzer {
         // Graphics: Color (pure)
         self.functions.insert("rgb".into(), builtin(vec![("r", BcType::I32), ("g", BcType::I32), ("b", BcType::I32)], BcType::I32, true));
         self.functions.insert("rgba".into(), builtin(vec![("r", BcType::I32), ("g", BcType::I32), ("b", BcType::I32), ("a", BcType::I32)], BcType::I32, true));
+
+        // HashMap builtins (fn! except map_has and map_len which are pure reads)
+        self.functions.insert("map_new".into(), builtin(vec![], BcType::Map, false));
+        self.functions.insert("map_set".into(), builtin(vec![("m", BcType::Map), ("key", BcType::Str), ("value", BcType::Str)], BcType::Unit, false));
+        self.functions.insert("map_get".into(), builtin(vec![("m", BcType::Map), ("key", BcType::Str)], BcType::Str, false));
+        self.functions.insert("map_has".into(), builtin(vec![("m", BcType::Map), ("key", BcType::Str)], BcType::Bool, true));
+        self.functions.insert("map_delete".into(), builtin(vec![("m", BcType::Map), ("key", BcType::Str)], BcType::Unit, false));
+        self.functions.insert("map_len".into(), builtin(vec![("m", BcType::Map)], BcType::I32, true));
 
         // len and push are special-cased in check_call
     }
@@ -1294,6 +1329,7 @@ impl SemanticAnalyzer {
                 PrimitiveType::Bool => BcType::Bool,
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
+                PrimitiveType::Map => BcType::Map,
             }),
             Type::Named(name, span) => {
                 if self.structs.contains_key(name) {

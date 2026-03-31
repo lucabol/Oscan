@@ -523,7 +523,7 @@ impl CodeGenerator {
                 } else {
                     // For structs/enums/arrays, skip const qualifier to avoid C issues
                     match &ty {
-                        BcType::Struct(_) | BcType::Enum(_) | BcType::Array(_) | BcType::FixedArray(_, _) | BcType::Result(_, _) => {
+                        BcType::Struct(_) | BcType::Enum(_) | BcType::Array(_) | BcType::FixedArray(_, _) | BcType::Result(_, _) | BcType::Map => {
                             self.line(&format!("{} {} = {};", c_ty, ls.name, val));
                         }
                         _ => {
@@ -1003,6 +1003,10 @@ impl CodeGenerator {
             "socket_send" => format!("osc_socket_send({}, {})", arg_strs[0], arg_strs[1]),
             "socket_recv" => format!("osc_socket_recv(_arena, {}, {})", arg_strs[0], arg_strs[1]),
             "socket_close" => format!("osc_socket_close({})", arg_strs[0]),
+            // UDP Socket I/O
+            "socket_udp" => "osc_socket_udp()".to_string(),
+            "socket_sendto" => format!("osc_socket_sendto({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            "socket_recvfrom" => format!("osc_socket_recvfrom(_arena, {}, {})", arg_strs[0], arg_strs[1]),
             "arg_count" => "osc_arg_count()".to_string(),
             "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
             // Tier 1: Character classification
@@ -1073,6 +1077,23 @@ impl CodeGenerator {
             // Tier 10: Hex formatting
             "str_from_i32_hex" => format!("osc_str_from_i32_hex(_arena, {})", arg_strs[0]),
             "str_from_i64_hex" => format!("osc_str_from_i64_hex(_arena, {})", arg_strs[0]),
+            // Tier 13: Date/Time
+            "time_format" => format!("osc_time_format(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "time_utc_year" => format!("osc_time_utc_year({})", arg_strs[0]),
+            "time_utc_month" => format!("osc_time_utc_month({})", arg_strs[0]),
+            "time_utc_day" => format!("osc_time_utc_day({})", arg_strs[0]),
+            "time_utc_hour" => format!("osc_time_utc_hour({})", arg_strs[0]),
+            "time_utc_min" => format!("osc_time_utc_min({})", arg_strs[0]),
+            "time_utc_sec" => format!("osc_time_utc_sec({})", arg_strs[0]),
+            // Tier 13: Glob matching
+            "glob_match" => format!("osc_glob_match({}, {})", arg_strs[0], arg_strs[1]),
+            // Tier 13: SHA-256
+            "sha256" => format!("osc_sha256(_arena, {})", arg_strs[0]),
+            // Tier 13: Terminal detection
+            "is_tty" => "osc_is_tty()".to_string(),
+            // Tier 13: Environment modification
+            "env_set" => format!("osc_env_set({}, {})", arg_strs[0], arg_strs[1]),
+            "env_delete" => format!("osc_env_delete({})", arg_strs[0]),
             // Graphics: Canvas Lifecycle
             "canvas_open" => format!("osc_canvas_open({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
             "canvas_close" => "osc_canvas_close()".to_string(),
@@ -1101,6 +1122,13 @@ impl CodeGenerator {
             "sort_i64" => format!("osc_sort_i64({})", arg_strs[0]),
             "sort_str" => format!("osc_sort_str({})", arg_strs[0]),
             "sort_f64" => format!("osc_sort_f64({})", arg_strs[0]),
+            // HashMap builtins
+            "map_new" => "osc_map_new(_arena)".to_string(),
+            "map_set" => format!("osc_map_set(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "map_get" => format!("osc_map_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_has" => format!("osc_map_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_delete" => format!("osc_map_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_len" => format!("osc_map_len({})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val
@@ -1834,6 +1862,7 @@ impl CodeGenerator {
             BcType::Bool => "uint8_t".to_string(),
             BcType::Str => "osc_str".to_string(),
             BcType::Unit => "void".to_string(),
+            BcType::Map => "osc_map*".to_string(),
             BcType::Struct(name) => name.clone(),
             BcType::Enum(name) => name.clone(),
             BcType::Array(_) | BcType::FixedArray(_, _) => "osc_array*".to_string(),
@@ -1853,6 +1882,7 @@ impl CodeGenerator {
             BcType::Bool => "bool".to_string(),
             BcType::Str => "str".to_string(),
             BcType::Unit => "unit".to_string(),
+            BcType::Map => "map".to_string(),
             BcType::Struct(name) => name.to_lowercase(),
             BcType::Enum(name) => name.to_lowercase(),
             BcType::Array(e) => format!("arr_{}", self.type_tag(e)),
@@ -1868,6 +1898,7 @@ impl CodeGenerator {
             BcType::F64 => "sizeof(double)".to_string(),
             BcType::Bool => "sizeof(uint8_t)".to_string(),
             BcType::Str => "sizeof(osc_str)".to_string(),
+            BcType::Map => "sizeof(osc_map*)".to_string(),
             BcType::Struct(name) => format!("sizeof({})", name),
             BcType::Enum(name) => format!("sizeof({})", name),
             BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(osc_array*)".to_string(),
@@ -1885,6 +1916,7 @@ impl CodeGenerator {
                 PrimitiveType::Bool => BcType::Bool,
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
+                PrimitiveType::Map => BcType::Map,
             },
             Type::Named(name, _) => {
                 if self.structs.contains_key(name) {

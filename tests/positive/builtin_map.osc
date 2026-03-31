@@ -1,0 +1,18 @@
+// Test: HashMap builtins
+// Exercises: map_new, map_set, map_get, map_has, map_delete, map_len
+
+fn! main() {
+    let mut m: map = map_new();
+    map_set(m, "name", "Alice");
+    map_set(m, "age", "30");
+    println(map_get(m, "name"));
+    println(map_get(m, "age"));
+    print_bool(map_has(m, "name")); println("");
+    print_bool(map_has(m, "missing")); println("");
+    print_i32(map_len(m)); println("");
+    map_delete(m, "age");
+    print_i32(map_len(m)); println("");
+    // Overwrite existing key
+    map_set(m, "name", "Bob");
+    println(map_get(m, "name"));
+}

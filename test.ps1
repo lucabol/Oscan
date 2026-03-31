@@ -102,9 +102,9 @@ function Test-WindowsFreestanding($exePath) {
     $size = (Get-Item $exePath).Length
     $depCheck = "SKIP"; $depDetail = "no tool"; $stdlibCheck = "SKIP"
 
-    # Socket tests legitimately need WS2_32.dll
+    # Socket/UDP tests legitimately need WS2_32.dll
     $testName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
-    $allowPattern = if ($testName -match 'socket') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
+    $allowPattern = if ($testName -match 'socket|udp') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
 
     $dumpbin = Find-Dumpbin
     if ($dumpbin) {

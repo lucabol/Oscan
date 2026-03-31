@@ -178,6 +178,11 @@ int32_t osc_socket_send(int32_t sock, osc_str data);
 osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len);
 void    osc_socket_close(int32_t sock);
 
+/* UDP Socket I/O */
+int32_t osc_socket_udp(void);
+int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port);
+osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len);
+
 /* ------------------------------------------------------------------ */
 /*  Conversion functions                                               */
 /* ------------------------------------------------------------------ */
@@ -324,6 +329,43 @@ osc_str osc_str_from_i32_hex(osc_arena *arena, int32_t n);
 osc_str osc_str_from_i64_hex(osc_arena *arena, int64_t n);
 
 /* ------------------------------------------------------------------ */
+/*  Date/Time                                                          */
+/* ------------------------------------------------------------------ */
+
+osc_str   osc_time_format(osc_arena *arena, int64_t timestamp, osc_str fmt);
+int32_t   osc_time_utc_year(int64_t timestamp);
+int32_t   osc_time_utc_month(int64_t timestamp);
+int32_t   osc_time_utc_day(int64_t timestamp);
+int32_t   osc_time_utc_hour(int64_t timestamp);
+int32_t   osc_time_utc_min(int64_t timestamp);
+int32_t   osc_time_utc_sec(int64_t timestamp);
+
+/* ------------------------------------------------------------------ */
+/*  Glob matching                                                      */
+/* ------------------------------------------------------------------ */
+
+uint8_t   osc_glob_match(osc_str pattern, osc_str text);
+
+/* ------------------------------------------------------------------ */
+/*  SHA-256                                                            */
+/* ------------------------------------------------------------------ */
+
+osc_str   osc_sha256(osc_arena *arena, osc_str data);
+
+/* ------------------------------------------------------------------ */
+/*  Terminal detection                                                 */
+/* ------------------------------------------------------------------ */
+
+uint8_t   osc_is_tty(void);
+
+/* ------------------------------------------------------------------ */
+/*  Environment modification                                           */
+/* ------------------------------------------------------------------ */
+
+int32_t   osc_env_set(osc_str name, osc_str value);
+int32_t   osc_env_delete(osc_str name);
+
+/* ------------------------------------------------------------------ */
 /*  Array sort                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -331,6 +373,19 @@ void osc_sort_i32(osc_array *arr);
 void osc_sort_i64(osc_array *arr);
 void osc_sort_str(osc_array *arr);
 void osc_sort_f64(osc_array *arr);
+
+/* ------------------------------------------------------------------ */
+/*  Hash map (string→string)                                           */
+/* ------------------------------------------------------------------ */
+
+typedef struct osc_map osc_map;
+
+osc_map  *osc_map_new(osc_arena *arena);
+void      osc_map_set(osc_arena *arena, osc_map *m, osc_str key, osc_str value);
+osc_str   osc_map_get(osc_map *m, osc_str key);
+uint8_t   osc_map_has(osc_map *m, osc_str key);
+void      osc_map_delete(osc_map *m, osc_str key);
+int32_t   osc_map_len(osc_map *m);
 
 /* ------------------------------------------------------------------ */
 /*  Arena reset (micro-lib convenience)                                */

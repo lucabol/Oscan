@@ -17,6 +17,7 @@ LLMs hallucinate less when the target language is small and unambiguous. Oscan g
 - **No C Standard Library dependency.** Compiles down to direct syscalls (but you can use trusty old stdlibc).
 - **Built-in graphics.** Canvas, drawing primitives, and input — write graphical demos with zero external dependencies.
 - **Socket networking.** TCP client/server builtins for network programming.
+- **Hash maps.** Built-in string→string hash maps with `map_new`, `map_set`, `map_get`, `map_has`, `map_delete`, `map_len`.
 - **Math library.** Trig, logarithms, powers, and constants — all built in.
 
 The output is readable C99 that compiles on any platform with a C compiler.
@@ -99,7 +100,7 @@ For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Osc
 
 ## Built-in Functions
 
-Oscan provides **~142 builtin functions** across these categories:
+Oscan provides **~156 builtin functions** across these categories:
 
 | Category | Functions | Count |
 |----------|-----------|-------|
@@ -115,11 +116,12 @@ Oscan provides **~142 builtin functions** across these categories:
 | **Parsing & Conversion** | `parse_i32`, `parse_i64`, `str_from_i64`, `str_from_f64`, `str_from_bool`, `i32_to_str`, `str_from_i32_hex`, `str_from_i64_hex` | 8 |
 | **Array & Memory** | `len`, `push`, `pop`, `arena_reset` | 4 |
 | **Sorting** | `sort_i32`, `sort_i64`, `sort_str`, `sort_f64` | 4 |
+| **Hash Map** | `map_new`, `map_set`, `map_get`, `map_has`, `map_delete`, `map_len` | 6 |
 | **Args** | `arg_count`, `arg_get` | 2 |
 | **File I/O (Core)** | `file_open_read`, `file_open_write`, `file_open_append`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete` | 8 |
 | **File I/O (Extended)** | `file_rename`, `file_exists`, `file_size`, `dir_create`, `dir_remove`, `dir_current`, `dir_change`, `dir_list` | 8 |
 | **Path Utilities** | `path_join`, `path_ext`, `path_exists`, `path_is_dir` | 4 |
-| **Socket Networking** | `socket_tcp`, `socket_connect`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_send`, `socket_recv`, `socket_close` | 8 |
+| **Socket Networking** | `socket_tcp`, `socket_connect`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_send`, `socket_recv`, `socket_close`, `socket_udp`, `socket_sendto`, `socket_recvfrom` | 11 |
 | **System** | `rand_seed`, `rand_i32`, `time_now`, `sleep_ms`, `exit`, `errno_get`, `errno_str`, `env_get` | 8 |
 | **Environment** | `env_count`, `env_key`, `env_value` | 3 |
 | **Terminal** | `term_width`, `term_height`, `term_raw`, `term_restore`, `read_nonblock` | 5 |
@@ -128,6 +130,11 @@ Oscan provides **~142 builtin functions** across these categories:
 | **Graphics (Drawing)** | `gfx_pixel`, `gfx_get_pixel`, `gfx_line`, `gfx_rect`, `gfx_fill_rect`, `gfx_circle`, `gfx_fill_circle`, `gfx_draw_text` | 8 |
 | **Graphics (Input)** | `canvas_key`, `canvas_mouse_x`, `canvas_mouse_y`, `canvas_mouse_btn` | 4 |
 | **Graphics (Color)** | `rgb`, `rgba` | 2 |
+| **Date/Time** | `time_format`, `time_utc_year`, `time_utc_month`, `time_utc_day`, `time_utc_hour`, `time_utc_min`, `time_utc_sec` | 7 |
+| **Glob Matching** | `glob_match` | 1 |
+| **SHA-256** | `sha256` | 1 |
+| **Terminal Detection** | `is_tty` | 1 |
+| **Environment Mod** | `env_set`, `env_delete` | 2 |
 
 For a detailed reference with descriptions and type signatures, see **[§10 of the spec](docs/spec/oscan-spec.md#10-standard-library-micro-lib)** and **[§11 (Imports)](docs/spec/oscan-spec.md#11-imports)**.
 

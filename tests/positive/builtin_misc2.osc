@@ -1,0 +1,97 @@
+fn! main() {
+    // --- Date/Time builtins ---
+    // Use a known timestamp: 1700000000 = 2023-11-14 22:13:20 UTC
+    let ts: i64 = 1700000000 as i64;
+
+    // time_utc_year
+    print_i32(time_utc_year(ts));
+    println("");
+
+    // time_utc_month
+    print_i32(time_utc_month(ts));
+    println("");
+
+    // time_utc_day
+    print_i32(time_utc_day(ts));
+    println("");
+
+    // time_utc_hour
+    print_i32(time_utc_hour(ts));
+    println("");
+
+    // time_utc_min
+    print_i32(time_utc_min(ts));
+    println("");
+
+    // time_utc_sec
+    print_i32(time_utc_sec(ts));
+    println("");
+
+    // time_format
+    let fmt_result: str = time_format(ts, "%Y");
+    println(fmt_result);
+
+    // --- Glob matching ---
+    print_bool(glob_match("*.txt", "hello.txt"));
+    println("");
+
+    print_bool(glob_match("*.txt", "hello.rs"));
+    println("");
+
+    print_bool(glob_match("hello*", "hello_world"));
+    println("");
+
+    print_bool(glob_match("?oo", "foo"));
+    println("");
+
+    print_bool(glob_match("?oo", "foop"));
+    println("");
+
+    // --- SHA-256 ---
+    // sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+    let hash_empty: str = sha256("");
+    println(hash_empty);
+
+    // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+    let hash_hello: str = sha256("hello");
+    println(hash_hello);
+
+    // --- Terminal detection ---
+    // is_tty() returns bool — during tests output is piped so expect false
+    let tty: bool = is_tty();
+    // Just verify it returns a bool (true or false)
+    print_bool(tty == true or tty == false);
+    println("");
+
+    // --- Environment modification ---
+    let set_result: i32 = env_set("OSC_TEST_VAR_XYZ", "hello_oscan");
+    print_i32(set_result);
+    println("");
+
+    // Verify the set variable
+    match env_get("OSC_TEST_VAR_XYZ") {
+        Result::Ok(val) => {
+            println(val);
+        },
+        Result::Err(e) => {
+            println(e);
+        },
+    };
+
+    // Delete it
+    let del_result: i32 = env_delete("OSC_TEST_VAR_XYZ");
+    print_i32(del_result);
+    println("");
+
+    // Verify deletion
+    match env_get("OSC_TEST_VAR_XYZ") {
+        Result::Ok(val) => {
+            println("still_exists");
+        },
+        Result::Err(e) => {
+            println("deleted_ok");
+        },
+    };
+
+    println("all_done");
+}

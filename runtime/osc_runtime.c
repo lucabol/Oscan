@@ -44,6 +44,7 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #endif
 #endif
 
@@ -2686,6 +2687,543 @@ void osc_sort_str(osc_array *arr)
 }
 
 /* ================================================================== */
+/*  Hash map (string→string, open addressing, FNV-1a)                  */
+/* ================================================================== */
+
+typedef struct {
+    osc_str   key;
+    osc_str   value;
+    uint32_t  hash;
+    int8_t    state;  /* 0=empty, 1=occupied, 2=tombstone */
+} osc_map_slot;
+
+struct osc_map {
+    osc_map_slot *slots;
+    int32_t       cap;
+    int32_t       len;
+    osc_arena    *arena;
+};
+
+static uint32_t osc_map_fnv(const char *data, int32_t len)
+{
+    uint32_t h = 2166136261u;
+    int32_t i;
+    for (i = 0; i < len; i++) {
+        h ^= (unsigned char)data[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static int osc_map_keys_eq(osc_str a, const char *bdata, int32_t blen)
+{
+    int32_t i;
+    if (a.len != blen) return 0;
+    for (i = 0; i < blen; i++) {
+        if (a.data[i] != bdata[i]) return 0;
+    }
+    return 1;
+}
+
+static void osc_map_grow(osc_arena *arena, osc_map *m)
+{
+    int32_t old_cap = m->cap;
+    osc_map_slot *old_slots = m->slots;
+    int32_t new_cap = old_cap * 2;
+    int32_t i;
+    uint32_t mask;
+
+    m->cap = new_cap;
+    m->len = 0;
+    m->slots = (osc_map_slot *)osc_arena_alloc(arena,
+                    (size_t)new_cap * sizeof(osc_map_slot));
+    memset(m->slots, 0, (size_t)new_cap * sizeof(osc_map_slot));
+    mask = (uint32_t)(new_cap - 1);
+
+    for (i = 0; i < old_cap; i++) {
+        if (old_slots[i].state == 1) {
+            uint32_t idx = old_slots[i].hash & mask;
+            while (m->slots[idx].state != 0)
+                idx = (idx + 1) & mask;
+            m->slots[idx] = old_slots[i];
+            m->len++;
+        }
+    }
+}
+
+osc_map *osc_map_new(osc_arena *arena)
+{
+    osc_map *m = (osc_map *)osc_arena_alloc(arena, sizeof(osc_map));
+    m->arena = arena;
+    m->cap = 16;
+    m->len = 0;
+    m->slots = (osc_map_slot *)osc_arena_alloc(arena,
+                    (size_t)m->cap * sizeof(osc_map_slot));
+    memset(m->slots, 0, (size_t)m->cap * sizeof(osc_map_slot));
+    return m;
+}
+
+void osc_map_set(osc_arena *arena, osc_map *m, osc_str key, osc_str value)
+{
+    uint32_t h, mask, idx, first_tomb;
+    int tomb_found = 0;
+
+    if (!m) OSC_PANIC("map_set: map is NULL");
+
+    /* Grow if >75% full */
+    if (m->len * 4 >= m->cap * 3)
+        osc_map_grow(arena, m);
+
+    h = osc_map_fnv(key.data, key.len);
+    mask = (uint32_t)(m->cap - 1);
+    idx = h & mask;
+    first_tomb = 0;
+
+    {
+        uint32_t i;
+        for (i = 0; i < (uint32_t)m->cap; i++) {
+            uint32_t si = (idx + i) & mask;
+            osc_map_slot *s = &m->slots[si];
+            if (s->state == 0) {
+                uint32_t target = tomb_found ? first_tomb : si;
+                osc_map_slot *t = &m->slots[target];
+                t->key = key;
+                t->value = value;
+                t->hash = h;
+                t->state = 1;
+                m->len++;
+                return;
+            }
+            if (s->state == 2 && !tomb_found) {
+                first_tomb = si;
+                tomb_found = 1;
+            }
+            if (s->state == 1 && s->hash == h &&
+                osc_map_keys_eq(s->key, key.data, key.len)) {
+                s->value = value;
+                return;
+            }
+        }
+    }
+    OSC_PANIC("map_set: map is full");
+}
+
+osc_str osc_map_get(osc_map *m, osc_str key)
+{
+    uint32_t h, mask, idx;
+    osc_str empty;
+
+    if (!m) OSC_PANIC("map_get: map is NULL");
+
+    h = osc_map_fnv(key.data, key.len);
+    mask = (uint32_t)(m->cap - 1);
+    idx = h & mask;
+
+    {
+        uint32_t i;
+        for (i = 0; i < (uint32_t)m->cap; i++) {
+            uint32_t si = (idx + i) & mask;
+            osc_map_slot *s = &m->slots[si];
+            if (s->state == 0) break;
+            if (s->state == 1 && s->hash == h &&
+                osc_map_keys_eq(s->key, key.data, key.len))
+                return s->value;
+        }
+    }
+    empty.data = ""; empty.len = 0;
+    OSC_PANIC("map_get: key not found");
+    return empty;
+}
+
+uint8_t osc_map_has(osc_map *m, osc_str key)
+{
+    uint32_t h, mask, idx;
+
+    if (!m) return 0;
+
+    h = osc_map_fnv(key.data, key.len);
+    mask = (uint32_t)(m->cap - 1);
+    idx = h & mask;
+
+    {
+        uint32_t i;
+        for (i = 0; i < (uint32_t)m->cap; i++) {
+            uint32_t si = (idx + i) & mask;
+            osc_map_slot *s = &m->slots[si];
+            if (s->state == 0) return 0;
+            if (s->state == 1 && s->hash == h &&
+                osc_map_keys_eq(s->key, key.data, key.len))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+void osc_map_delete(osc_map *m, osc_str key)
+{
+    uint32_t h, mask, idx;
+
+    if (!m) OSC_PANIC("map_delete: map is NULL");
+
+    h = osc_map_fnv(key.data, key.len);
+    mask = (uint32_t)(m->cap - 1);
+    idx = h & mask;
+
+    {
+        uint32_t i;
+        for (i = 0; i < (uint32_t)m->cap; i++) {
+            uint32_t si = (idx + i) & mask;
+            osc_map_slot *s = &m->slots[si];
+            if (s->state == 0) return;
+            if (s->state == 1 && s->hash == h &&
+                osc_map_keys_eq(s->key, key.data, key.len)) {
+                s->state = 2;
+                m->len--;
+                return;
+            }
+        }
+    }
+}
+
+int32_t osc_map_len(osc_map *m)
+{
+    if (!m) return 0;
+    return m->len;
+}
+
+/* ================================================================== */
+/*  Tier 13: Date/Time                                                 */
+/* ================================================================== */
+
+osc_str osc_time_format(osc_arena *arena, int64_t timestamp, osc_str fmt)
+{
+    osc_str result;
+    char fmtbuf[256];
+    char buf[256];
+    int len;
+
+    osc_str_to_cstr_buf(fmt, fmtbuf, 256);
+
+#ifdef OSC_FREESTANDING
+    {
+        L_Tm tm = l_gmtime((long long)timestamp);
+        len = l_strftime(buf, sizeof(buf), fmtbuf, &tm);
+    }
+#else
+    {
+        time_t t = (time_t)timestamp;
+        struct tm *tm;
+#ifdef _WIN32
+        struct tm tm_buf;
+        gmtime_s(&tm_buf, &t);
+        tm = &tm_buf;
+#else
+        tm = gmtime(&t);
+#endif
+        len = (int)strftime(buf, sizeof(buf), fmtbuf, tm);
+    }
+#endif
+    if (len <= 0) { result.data = ""; result.len = 0; return result; }
+    {
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+        int i;
+        for (i = 0; i <= len; i++) copy[i] = buf[i];
+        result.data = copy;
+        result.len = (int32_t)len;
+    }
+    return result;
+}
+
+int32_t osc_time_utc_year(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)(tm.year + 1900);
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)(tm->tm_year + 1900);
+#endif
+}
+
+int32_t osc_time_utc_month(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)(tm.mon + 1);
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)(tm->tm_mon + 1);
+#endif
+}
+
+int32_t osc_time_utc_day(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)tm.mday;
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)tm->tm_mday;
+#endif
+}
+
+int32_t osc_time_utc_hour(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)tm.hour;
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)tm->tm_hour;
+#endif
+}
+
+int32_t osc_time_utc_min(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)tm.min;
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)tm->tm_min;
+#endif
+}
+
+int32_t osc_time_utc_sec(int64_t timestamp)
+{
+#ifdef OSC_FREESTANDING
+    L_Tm tm = l_gmtime((long long)timestamp);
+    return (int32_t)tm.sec;
+#else
+    time_t t = (time_t)timestamp;
+    struct tm *tm;
+#ifdef _WIN32
+    struct tm tm_buf;
+    gmtime_s(&tm_buf, &t);
+    tm = &tm_buf;
+#else
+    tm = gmtime(&t);
+#endif
+    return (int32_t)tm->tm_sec;
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 13: Glob matching                                             */
+/* ================================================================== */
+
+uint8_t osc_glob_match(osc_str pattern, osc_str text)
+{
+    char pbuf[1024], tbuf[1024];
+    osc_str_to_cstr_buf(pattern, pbuf, 1024);
+    osc_str_to_cstr_buf(text, tbuf, 1024);
+#ifdef OSC_FREESTANDING
+    return l_fnmatch(pbuf, tbuf) == 0 ? 1 : 0;
+#else
+#ifdef _WIN32
+    /* Minimal glob match for libc mode on Windows */
+    {
+        const char *p = pbuf, *t = tbuf;
+        const char *star_p = NULL, *star_t = NULL;
+        while (*t) {
+            if (*p == *t || *p == '?') { p++; t++; }
+            else if (*p == '*') { star_p = p++; star_t = t; }
+            else if (star_p) { p = star_p + 1; t = ++star_t; }
+            else return 0;
+        }
+        while (*p == '*') p++;
+        return *p == '\0' ? 1 : 0;
+    }
+#else
+    {
+        return fnmatch(pbuf, tbuf, 0) == 0 ? 1 : 0;
+    }
+#endif
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 13: SHA-256                                                   */
+/* ================================================================== */
+
+osc_str osc_sha256(osc_arena *arena, osc_str data)
+{
+    osc_str result;
+    unsigned char hash[32];
+    char *hex;
+    int i;
+    static const char hexchars[] = "0123456789abcdef";
+
+#ifdef OSC_FREESTANDING
+    l_sha256(data.data, (size_t)data.len, hash);
+#else
+    /* Self-contained SHA-256 for libc mode */
+    {
+        static const unsigned int sha256_k[64] = {
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+        };
+        unsigned int h0=0x6a09e667, h1=0xbb67ae85, h2=0x3c6ef372, h3=0xa54ff53a;
+        unsigned int h4=0x510e527f, h5=0x9b05688c, h6=0x1f83d9ab, h7=0x5be0cd19;
+        unsigned long long total_bits = (unsigned long long)data.len * 8;
+        const unsigned char *msg = (const unsigned char *)data.data;
+        size_t msg_len = (size_t)data.len;
+        /* Process message in 64-byte chunks including padding */
+        size_t padded_len = ((msg_len + 8) / 64 + 1) * 64;
+        unsigned char *padded = (unsigned char *)osc_arena_alloc(arena, padded_len);
+        size_t ci;
+        for (ci = 0; ci < msg_len; ci++) padded[ci] = msg[ci];
+        padded[msg_len] = 0x80;
+        for (ci = msg_len + 1; ci < padded_len - 8; ci++) padded[ci] = 0;
+        for (i = 0; i < 8; i++)
+            padded[padded_len - 1 - i] = (unsigned char)(total_bits >> (i * 8));
+
+        for (ci = 0; ci < padded_len; ci += 64) {
+            unsigned int w[64], a, b, c, d, e, f, g, hh, t1, t2;
+            int j;
+            for (j = 0; j < 16; j++)
+                w[j] = ((unsigned int)padded[ci+j*4]<<24) | ((unsigned int)padded[ci+j*4+1]<<16) |
+                       ((unsigned int)padded[ci+j*4+2]<<8) | ((unsigned int)padded[ci+j*4+3]);
+            for (j = 16; j < 64; j++) {
+                unsigned int s0 = ((w[j-15]>>7)|(w[j-15]<<25)) ^ ((w[j-15]>>18)|(w[j-15]<<14)) ^ (w[j-15]>>3);
+                unsigned int s1 = ((w[j-2]>>17)|(w[j-2]<<15)) ^ ((w[j-2]>>19)|(w[j-2]<<13)) ^ (w[j-2]>>10);
+                w[j] = w[j-16] + s0 + w[j-7] + s1;
+            }
+            a=h0; b=h1; c=h2; d=h3; e=h4; f=h5; g=h6; hh=h7;
+            for (j = 0; j < 64; j++) {
+                unsigned int S1 = ((e>>6)|(e<<26)) ^ ((e>>11)|(e<<21)) ^ ((e>>25)|(e<<7));
+                unsigned int ch = (e & f) ^ ((~e) & g);
+                t1 = hh + S1 + ch + sha256_k[j] + w[j];
+                {
+                unsigned int S0 = ((a>>2)|(a<<30)) ^ ((a>>13)|(a<<19)) ^ ((a>>22)|(a<<10));
+                unsigned int maj = (a & b) ^ (a & c) ^ (b & c);
+                t2 = S0 + maj;
+                }
+                hh=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+            }
+            h0+=a; h1+=b; h2+=c; h3+=d; h4+=e; h5+=f; h6+=g; h7+=hh;
+        }
+        hash[0]=(unsigned char)(h0>>24); hash[1]=(unsigned char)(h0>>16); hash[2]=(unsigned char)(h0>>8); hash[3]=(unsigned char)h0;
+        hash[4]=(unsigned char)(h1>>24); hash[5]=(unsigned char)(h1>>16); hash[6]=(unsigned char)(h1>>8); hash[7]=(unsigned char)h1;
+        hash[8]=(unsigned char)(h2>>24); hash[9]=(unsigned char)(h2>>16); hash[10]=(unsigned char)(h2>>8); hash[11]=(unsigned char)h2;
+        hash[12]=(unsigned char)(h3>>24); hash[13]=(unsigned char)(h3>>16); hash[14]=(unsigned char)(h3>>8); hash[15]=(unsigned char)h3;
+        hash[16]=(unsigned char)(h4>>24); hash[17]=(unsigned char)(h4>>16); hash[18]=(unsigned char)(h4>>8); hash[19]=(unsigned char)h4;
+        hash[20]=(unsigned char)(h5>>24); hash[21]=(unsigned char)(h5>>16); hash[22]=(unsigned char)(h5>>8); hash[23]=(unsigned char)h5;
+        hash[24]=(unsigned char)(h6>>24); hash[25]=(unsigned char)(h6>>16); hash[26]=(unsigned char)(h6>>8); hash[27]=(unsigned char)h6;
+        hash[28]=(unsigned char)(h7>>24); hash[29]=(unsigned char)(h7>>16); hash[30]=(unsigned char)(h7>>8); hash[31]=(unsigned char)h7;
+    }
+#endif
+
+    hex = (char *)osc_arena_alloc(arena, 65);
+    for (i = 0; i < 32; i++) {
+        hex[i * 2]     = hexchars[(hash[i] >> 4) & 0x0f];
+        hex[i * 2 + 1] = hexchars[hash[i] & 0x0f];
+    }
+    hex[64] = '\0';
+    result.data = hex;
+    result.len = 64;
+    return result;
+}
+
+/* ================================================================== */
+/*  Tier 13: Terminal detection                                        */
+/* ================================================================== */
+
+uint8_t osc_is_tty(void)
+{
+#ifdef OSC_FREESTANDING
+    return l_isatty(L_STDOUT) ? 1 : 0;
+#else
+#ifdef _WIN32
+    return _isatty(_fileno(stdout)) ? 1 : 0;
+#else
+    return isatty(STDOUT_FILENO) ? 1 : 0;
+#endif
+#endif
+}
+
+/* ================================================================== */
+/*  Tier 13: Environment modification                                  */
+/* ================================================================== */
+
+int32_t osc_env_set(osc_str name, osc_str value)
+{
+    char nbuf[256], vbuf[4096];
+    osc_str_to_cstr_buf(name, nbuf, 256);
+    osc_str_to_cstr_buf(value, vbuf, 4096);
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_setenv(nbuf, vbuf);
+#else
+#ifdef _WIN32
+    return _putenv_s(nbuf, vbuf) == 0 ? 0 : -1;
+#else
+    return setenv(nbuf, vbuf, 1) == 0 ? 0 : -1;
+#endif
+#endif
+}
+
+int32_t osc_env_delete(osc_str name)
+{
+    char nbuf[256];
+    osc_str_to_cstr_buf(name, nbuf, 256);
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_unsetenv(nbuf);
+#else
+#ifdef _WIN32
+    return _putenv_s(nbuf, "") == 0 ? 0 : -1;
+#else
+    return unsetenv(nbuf) == 0 ? 0 : -1;
+#endif
+#endif
+}
+
+/* ================================================================== */
 /*  Graphics wrappers (requires l_gfx.h)                               */
 /* ================================================================== */
 
@@ -2789,6 +3327,38 @@ void osc_socket_close(int32_t sock)
     l_socket_close((L_SOCKET)sock);
 }
 
+int32_t osc_socket_udp(void)
+{
+    return (int32_t)l_socket_udp();
+}
+
+int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
+{
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    return (int32_t)l_socket_sendto((L_SOCKET)sock, data.data, (size_t)data.len, buf, (int)port);
+}
+
+osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    ptrdiff_t n;
+    char addr_buf[16];
+    int port_out;
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = l_socket_recvfrom((L_SOCKET)sock, buf, (size_t)max_len, addr_buf, &port_out);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
+}
+
 #elif defined(_WIN32) /* Windows libc mode */
 
 #pragma comment(lib, "ws2_32.lib")
@@ -2871,6 +3441,47 @@ void osc_socket_close(int32_t sock)
     closesocket((SOCKET)sock);
 }
 
+int32_t osc_socket_udp(void)
+{
+    osc_wsa_init();
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+}
+
+int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
+{
+    struct sockaddr_in sa;
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    sa.sin_addr.s_addr = inet_addr(buf);
+    return (int32_t)sendto((SOCKET)sock, data.data, data.len, 0,
+                           (struct sockaddr *)&sa, sizeof(sa));
+}
+
+osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    int n;
+    struct sockaddr_in sa;
+    int sa_len = sizeof(sa);
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = recvfrom((SOCKET)sock, buf, max_len, 0,
+                 (struct sockaddr *)&sa, &sa_len);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
+}
+
 #else /* POSIX libc */
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -2939,6 +3550,45 @@ osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
 void osc_socket_close(int32_t sock)
 {
     close(sock);
+}
+
+int32_t osc_socket_udp(void)
+{
+    return (int32_t)socket(AF_INET, SOCK_DGRAM, 0);
+}
+
+int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
+{
+    struct sockaddr_in sa;
+    char buf[256];
+    int32_t len = addr.len < 255 ? addr.len : 255;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = addr.data[i];
+    buf[len] = '\0';
+    memset(&sa, 0, sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons((unsigned short)port);
+    inet_pton(AF_INET, buf, &sa.sin_addr);
+    return (int32_t)sendto(sock, data.data, (size_t)data.len, 0,
+                           (struct sockaddr *)&sa, sizeof(sa));
+}
+
+osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    ssize_t n;
+    struct sockaddr_in sa;
+    socklen_t sa_len = sizeof(sa);
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    n = recvfrom(sock, buf, (size_t)max_len, 0,
+                 (struct sockaddr *)&sa, &sa_len);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf;
+    result.len = (int32_t)n;
+    return result;
 }
 
 #endif /* OSC_HAS_SOCKETS / _WIN32 / POSIX */

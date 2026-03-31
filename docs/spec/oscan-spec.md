@@ -436,7 +436,32 @@ let xs: [i32] = [1, 2, 3];
 - `push(a, val)` — appends to dynamic array (mutates, requires `mut` binding). Available via micro-lib.
 - Fixed-size arrays do NOT support `push`.
 
-### 3.5 Boxed Types for Recursion
+### 3.5 Map Type
+
+The `map` type is a built-in hash map from `str` keys to `str` values. It is an opaque, arena-allocated handle.
+
+```
+let mut m: map = map_new();
+map_set(m, "key", "value");
+let v: str = map_get(m, "key");
+```
+
+#### Map Operations
+
+| Function | Signature | Purity | Description |
+|----------|-----------|--------|-------------|
+| `map_new()` | `() -> map` | `fn!` | Create an empty map |
+| `map_set(m, key, value)` | `(map, str, str) -> unit` | `fn!` | Set a key-value pair (insert or update) |
+| `map_get(m, key)` | `(map, str) -> str` | `fn!` | Get value by key (panics if missing) |
+| `map_has(m, key)` | `(map, str) -> bool` | `fn` | Check if key exists |
+| `map_delete(m, key)` | `(map, str) -> unit` | `fn!` | Remove a key |
+| `map_len(m)` | `(map) -> i32` | `fn` | Number of entries |
+
+- Uses FNV-1a hashing with open addressing.
+- Managed by the arena allocator.
+- `map_get` panics at runtime if the key is not found; use `map_has` to check first.
+
+### 3.6 Boxed Types for Recursion
 
 For recursive data structures, dynamic arrays serve as the indirection mechanism:
 
@@ -449,11 +474,11 @@ enum Tree {
 
 The dynamic array `[Tree]` provides the heap indirection needed for recursion. There is no separate `Box` type — dynamic arrays handle all heap allocation needs.
 
-### 3.6 No Type Aliases
+### 3.7 No Type Aliases
 
 There are no type aliases. Every type must be referred to by its full name. This maximizes explicitness.
 
-### 3.7 Explicit Casts
+### 3.8 Explicit Casts
 
 The `as` keyword performs explicit type conversion. Only the following casts are permitted:
 
@@ -1408,9 +1433,9 @@ fn math_sqrt2() -> f64                       // √2 ≈ 1.41421356237310
 
 **Note:** Math constants are zero-argument pure functions, not global variables. Call them as `math_pi()`, not `math_pi`.
 
-### 10.17 Tier 9: Socket Networking (8) — `fn!`
+### 10.17 Tier 9: Socket Networking (11) — `fn!`
 
-Socket builtins provide TCP networking. All are side-effecting (`fn!`).
+Socket builtins provide TCP and UDP networking. All are side-effecting (`fn!`).
 
 ```
 fn! socket_tcp() -> i32                      // Create a TCP socket; returns socket descriptor (-1 on error)
@@ -1420,7 +1445,10 @@ fn! socket_listen(sock: i32, backlog: i32) -> i32          // Listen for incomin
 fn! socket_accept(sock: i32) -> i32          // Accept incoming connection; returns client socket descriptor (-1 on error)
 fn! socket_send(sock: i32, data: str) -> i32 // Send data over socket; returns number of bytes sent (-1 on error)
 fn! socket_recv(sock: i32, max_len: i32) -> str  // Receive data from socket; returns received data as string
-fn! socket_close(sock: i32)                  // Close socket
+fn! socket_close(sock: i32)                  // Close socket (works for both TCP and UDP)
+fn! socket_udp() -> i32                      // Create a UDP socket; returns socket descriptor (-1 on error)
+fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32  // Send data to addr:port via UDP; returns bytes sent (-1 on error)
+fn! socket_recvfrom(sock: i32, max_len: i32) -> str  // Receive UDP datagram; returns received data as string
 ```
 
 **Example — Simple TCP client:**
@@ -1434,6 +1462,16 @@ fn! main() {
         let response: str = socket_recv(sock, 1024);
         println(response);
     };
+    socket_close(sock);
+}
+```
+
+**Example — Simple UDP sender:**
+
+```
+fn! main() {
+    let sock: i32 = socket_udp();
+    socket_sendto(sock, "Hello, UDP!", "127.0.0.1", 9000);
     socket_close(sock);
 }
 ```
@@ -1525,9 +1563,60 @@ fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32                // Creates an ARGB
 
 ---
 
+### 10.21 Tier 13: Date/Time, Glob, SHA-256, Terminal & Environment Modification (14)
+
+Extended system builtins for date/time manipulation, pattern matching, hashing, terminal detection, and environment modification.
+
+#### Date/Time (`fn!`)
+
+```
+fn! time_format(timestamp: i64, fmt: str) -> str    // Format UTC timestamp using strftime-style format string. Allocates result on arena.
+fn! time_utc_year(timestamp: i64) -> i32             // Extract UTC year (e.g. 2024) from Unix timestamp.
+fn! time_utc_month(timestamp: i64) -> i32            // Extract UTC month (1-12) from Unix timestamp.
+fn! time_utc_day(timestamp: i64) -> i32              // Extract UTC day of month (1-31) from Unix timestamp.
+fn! time_utc_hour(timestamp: i64) -> i32             // Extract UTC hour (0-23) from Unix timestamp.
+fn! time_utc_min(timestamp: i64) -> i32              // Extract UTC minute (0-59) from Unix timestamp.
+fn! time_utc_sec(timestamp: i64) -> i32              // Extract UTC second (0-59) from Unix timestamp.
+```
+
+**Note:** All time functions operate on UTC. Use `time_now()` to get the current Unix timestamp, then pass it to these functions. `time_format` uses standard C strftime format specifiers (e.g. `"%Y-%m-%d"`, `"%H:%M:%S"`).
+
+#### Glob Matching (pure `fn`)
+
+```
+fn glob_match(pattern: str, text: str) -> bool       // Returns true if text matches the glob pattern. Supports *, ?, and character ranges.
+```
+
+**Note:** `glob_match` is a pure function — no side effects. Equivalent to POSIX `fnmatch()`.
+
+#### SHA-256 (`fn!`)
+
+```
+fn! sha256(data: str) -> str                         // Returns the SHA-256 hash of data as a 64-character lowercase hex string. Allocates on arena.
+```
+
+**Note:** The result is always exactly 64 hex characters (representing 32 bytes). Example: `sha256("hello")` returns `"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"`.
+
+#### Terminal Detection (pure `fn`)
+
+```
+fn is_tty() -> bool                                  // Returns true if stdout is connected to a terminal (not redirected/piped).
+```
+
+#### Environment Modification (`fn!`)
+
+```
+fn! env_set(name: str, value: str) -> i32            // Set environment variable. Returns 0 on success, -1 on error.
+fn! env_delete(name: str) -> i32                     // Delete (unset) environment variable. Returns 0 on success, -1 on error.
+```
+
+**Note:** `env_set` and `env_delete` modify the process environment. Use `env_get` (from Tier 4) to read variables.
+
+---
+
 **Extended Library Summary:**
 
-The library is organized into 12 tiers:
+The library is organized into 13 tiers:
 
 - **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), Memory (1), CLI args (2), File I/O (7)
 - **Tier 1:** Character classification (11 functions)
@@ -1542,6 +1631,7 @@ The library is organized into 12 tiers:
 - **Tier 10:** Path utilities (4 functions)
 - **Tier 11:** Array sorting (4 functions)
 - **Tier 12:** Graphics builtins (19 functions)
+- **Tier 13:** Date/Time, glob, SHA-256, terminal & environment modification (14 functions)
 
 ---
 

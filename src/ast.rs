@@ -396,4 +396,5 @@ pub enum PrimitiveType {
     Bool,
     Str,
     Unit,
+    Map,
 }
