@@ -174,36 +174,36 @@ Oscan supports creating graphical applications using a unified graphics API buil
 
 Seven example programs in `examples/gfx/` demonstrate graphics capabilities:
 
-- **`bounce.osc`** — Bouncing ball animation with collision detection
-- **`gfx_demo.osc`** — Shape and text rendering showcase
-- **`starfield.osc`** — 3D perspective starfield scrolling effect
-- **`plasma.osc`** — Sine wave plasma effect using procedural color blending
-- **`life.osc`** — Conway's Game of Life cellular automaton
-- **`ui_demo.osc`** — UI widget showcase using `libs/ui.osc`
-- **`spirograph.osc`** — Animated spirograph using trigonometric parametric curves
+- **[bounce.osc](examples/gfx/bounce.osc)** — Bouncing ball animation with collision detection
+- **[gfx_demo.osc](examples/gfx/gfx_demo.osc)** — Shape and text rendering showcase
+- **[starfield.osc](examples/gfx/starfield.osc)** — 3D perspective starfield scrolling effect
+- **[plasma.osc](examples/gfx/plasma.osc)** — Sine wave plasma effect using procedural color blending
+- **[life.osc](examples/gfx/life.osc)** — Conway's Game of Life cellular automaton
+- **[ui_demo.osc](examples/gfx/ui_demo.osc)** — UI widget showcase using `libs/ui.osc`
+- **[spirograph.osc](examples/gfx/spirograph.osc)** — Animated spirograph using trigonometric parametric curves
 
 ## CLI Examples
 
 Beyond the graphics examples, Oscan includes CLI utility programs in `examples/` demonstrating language features:
 
-- **`hello.osc`** — Hello World
-- **`fibonacci.osc`** — Recursive fibonacci
-- **`error_handling.osc`** — Result type and pattern matching
-- **`countlines.osc`** — Count lines in files
-- **`upper.osc`** — Convert text to uppercase
-- **`wc.osc`** — Word count (like Unix wc)
-- **`grep.osc`** — Pattern matching in files
-- **`checksum.osc`** — MD5 checksums (legacy)
-- **`hexdump.osc`** — Hex dump utility
-- **`base64.osc`** — Base64 encode/decode
-- **`sort.osc`** — Sort lines from files
-- **`file_io.osc`** — Basic file I/O operations
-- **`word_freq.osc`** — Word frequency counter (map, str_split, for-in)
-- **`http_client.osc`** — Simple HTTP GET client (TCP sockets)
-- **`file_checksum.osc`** — SHA-256 file hasher (sha256, path_ext, file_size)
-- **`env_info.osc`** — System info tool (datetime, is_tty, glob_match, env_get)
-- **`web_server.osc`** — TCP socket web server (socket_bind, socket_listen, socket_accept)
-- **`string_interpolation.osc`** — Interpolated string showcase (str, i32, i64, f64, bool, escaped braces)
+- **[hello.osc](examples/hello.osc)** — Hello World
+- **[fibonacci.osc](examples/fibonacci.osc)** — Recursive fibonacci
+- **[error_handling.osc](examples/error_handling.osc)** — Result type and pattern matching
+- **[countlines.osc](examples/countlines.osc)** — Count lines in files
+- **[upper.osc](examples/upper.osc)** — Convert text to uppercase
+- **[wc.osc](examples/wc.osc)** — Word count (like Unix wc)
+- **[grep.osc](examples/grep.osc)** — Pattern matching in files
+- **[checksum.osc](examples/checksum.osc)** — MD5 checksums (legacy)
+- **[hexdump.osc](examples/hexdump.osc)** — Hex dump utility
+- **[base64.osc](examples/base64.osc)** — Base64 encode/decode
+- **[sort.osc](examples/sort.osc)** — Sort lines from files
+- **[file_io.osc](examples/file_io.osc)** — Basic file I/O operations
+- **[word_freq.osc](examples/word_freq.osc)** — Word frequency counter (map, str_split, for-in)
+- **[http_client.osc](examples/http_client.osc)** — Simple HTTP GET client (TCP sockets)
+- **[file_checksum.osc](examples/file_checksum.osc)** — SHA-256 file hasher (sha256, path_ext, file_size)
+- **[env_info.osc](examples/env_info.osc)** — System info tool (datetime, is_tty, glob_match, env_get)
+- **[web_server.osc](examples/web_server.osc)** — TCP socket web server (socket_bind, socket_listen, socket_accept)
+- **[string_interpolation.osc](examples/string_interpolation.osc)** — Interpolated string showcase (str, i32, i64, f64, bool, escaped braces)
 
 ## Building & Testing
 
