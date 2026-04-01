@@ -94,3 +94,74 @@
 - Merged all inbox decisions into `.squad/decisions.md` (entries 2–6)
 - Archived spec/guide alignment as complete ("Specification Audit & Fixes" decision)
 
+### 2026-03-28 — Phase 0 Doc Sync Complete
+
+**Three synchronization tasks completed:**
+
+#### Task 0.1: Guide Update — Compound Assignment & Control Flow (✅ DONE)
+- Added `### Compound Assignment` subsection under Variables with examples: `x += 5`, `x -= 2`, `x *= 3`
+- Added `### Loop Control: Break and Continue` subsection under Control Flow with runnable examples
+- Removed false Gotchas: "No `+=`, `-=`" and "No `break`/`continue`"
+- Updated Gotcha #1 to acknowledge `++`/`--` don't exist but `x += 1` does
+- All examples compile against actual working test suite
+
+#### Task 0.2: README Builtin Audit (✅ VERIFIED)
+- Confirmed ~156 builtin count is correct (7+7+9+2+4+11+4+6+10+8+4+4+6+2+8+8+4+11+8+3+5+1+5+8+4+2+7+1+1+1+2 = 156)
+- Verified all categories and counts match spec tables exactly
+- README builtin table fully synchronized with spec §10
+
+#### Task 0.3: Spec Appendix B — Roadmap & Commitment (✅ DONE)
+- Renamed "Appendix B: Reserved for Future Consideration" → "Appendix B: Roadmap (Feature Phases)"
+- Created Phase 1 subsection: **String Interpolation** marked as "Committed — v0.2"
+- Added detailed rationale: ergonomic bottleneck, existing infrastructure, lowering pattern
+- Moved other features to "Phase 2+" with explicit deferrals and rationale
+- Result: spec now clearly commits to interpolation as next major feature
+
+**Commit:** `24ad9ea` — "Doc sync: reflect working features and commit string interpolation as Phase 1"
+
+---
+
+### 2026-03-28 — Feature Batch Decision: String Interpolation First
+
+**Research report consensus:** String interpolation is the highest-leverage feature because:
+1. Oscan already covers broad capability (networking, graphics, hashing, datetime, maps, filesystem)
+2. Ergonomic bottleneck: current examples use nested `str_concat` and manual conversions
+3. Examples affected: `env_info.osc`, `http_client.osc`, `file_checksum.osc`, `web_server.osc` all pay token tax
+4. Compiler infrastructure ready: code generator already handles string concat, runtime has `str_concat` + `str_from_*`
+5. LLM alignment: fewer nested parens, clearer intent, reduced conversion boilerplate
+
+**Implementation shape:**
+- MVP scope: `"text {expr} text"` syntax (not full printf)
+- Allowed types: `i32`, `i64`, `f64`, `bool`, `str` (have obvious conversions)
+- Lowering: interpolated literal → nested `str_concat(...)` + conversion calls
+- No complexity: no nested braces, no alignment/precision specifiers in v1
+
+**Ownership & Responsibility:**
+- **Trinity (Compiler):** Lexer/parser (Task 1.1), semantic (Task 1.2), codegen (Task 1.3)
+- **Tank (Tests):** Positive/negative tests, example refreshes (Task 1.4)
+- **Neo (Architecture):** Design reviews, spec/guide/README updates (Task 1.5), gate approvals
+- **Morpheus (Runtime):** Review implications (expected: none for v0)
+
+**Key design document:** `.squad/decisions/inbox/neo-feature-batch.md` — full specification, ownership split, success criteria
+
+**Next phase after interpolation:** Whole-file I/O convenience (`read_file`, `write_file`) — reduces byte-at-a-time boilerplate in file readers
+
+---
+
+## Key Architectural Patterns
+
+1. **AST-to-C lowering pattern:** Complex syntax (like future interpolated strings) lowers to simpler expressions (nested concat). Codegen doesn't need full C backend — just map to existing runtime.
+2. **Purity separation:** Any function that allocates on arena must be `fn!` (side effect). This makes memory semantics obvious to LLMs.
+3. **One way to do everything:** Compound assignment is shorthand syntax; no new semantics. `break`/`continue` are control flow keywords, not simulation with flags.
+4. **Doc sync is architecture:** Out-of-sync docs create cognitive debt. Keeping README/guide/spec synchronized is as important as keeping code working.
+
+---
+
+## User Preferences & Style
+
+- **Luca:** Extreme minimalism, decisive feature choices, clear ownership accountability, written decisions in inbox before work
+- **Process:** Feature choices come from research reports with high-quality rationale; architecture gates compiler before tests; docs sync is Phase 0 before implementation
+- **Communication:** Prefer human-readable outcomes; suppress tool internals in final response
+
+
+
