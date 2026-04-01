@@ -1,8 +1,6 @@
 # Oscan
 
-**A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile to C99 and run anywhere.
-
-Oscan is designed so that LLMs *understand what they are writing*. A small, explicit grammar. 24 reserved words. One allocation model. Clear error handling. No hidden control flow. The compiler outputs readable C that you can inspect or embed directly.
+**A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile to C99 and run anywhere. Oscan is designed so that LLMs *understand what they are writing* — a small, explicit grammar with readable C output you can inspect or embed directly.
 
 ## Language Highlights
 
@@ -17,7 +15,7 @@ Oscan is designed so that LLMs *understand what they are writing*. A small, expl
 
 ## A Quick Look
 
-```
+```oscan
 fn fib(n: i32) -> i32 {
     if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
 }
@@ -30,16 +28,11 @@ fn! main() {
 }
 ```
 
-**Key patterns:**
-- `fn` = pure function; `fn!` = can do I/O and side effects
-- `for i in 0..10` loops over ranges
-- `let name: str = ...` declares immutable bindings; `let mut x = ...` for mutation
-- String interpolation: `"{expr}"` embeds values; escape literal braces as `{{` and `}}`
-- Semicolons terminate statements; the last expression in a block is its return value
-
-## Install & Build
+## Getting Started
 
 **Requires:** Rust toolchain (to build the compiler) and a C compiler (GCC, Clang, or MSVC).
+
+**Build the compiler:**
 
 ```bash
 git clone <repository-url>
@@ -49,7 +42,7 @@ cargo build --release
 
 The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime; you only need the binary and a C compiler to run Oscan programs.
 
-## Getting Started
+**Your first program:**
 
 Create `hello.osc`:
 
@@ -78,19 +71,9 @@ oscan [OPTIONS] <file.osc>
   --dump-tokens   Print tokens (debug)
 ```
 
-## What You Can Build
-
-**CLI utilities:** Text processing, file handling, sorting, grepping, checksums.
-
-**Network programs:** HTTP clients, web servers, UDP tools.
-
-**Graphics:** Games, animations, data visualization (using built-in canvas + drawing).
-
-**Data tools:** CSV processing, log analysis, word frequency counters.
-
-See **[Examples](#examples)** below for concrete programs.
-
 ## Examples
+
+You can write **CLI utilities** (text processing, file handling, sorting, grepping), **network programs** (HTTP clients, web servers, UDP tools), **graphics** (games, animations, data visualization), and **data tools** (CSV processing, log analysis, word frequency counters).
 
 ### Command-Line Utilities
 
@@ -106,6 +89,8 @@ See **[Examples](#examples)** below for concrete programs.
 - [hexdump.osc](examples/hexdump.osc) — Hex dump utility
 - [base64.osc](examples/base64.osc) — Base64 encode/decode
 - [checksum.osc](examples/checksum.osc) — File checksums
+- [env_info.osc](examples/env_info.osc) — System info (datetime, environment, glob matching)
+- [file_checksum.osc](examples/file_checksum.osc) — SHA-256 file hasher
 - [word_freq.osc](examples/word_freq.osc) — Word frequency counter (using hash maps)
 - [string_interpolation.osc](examples/string_interpolation.osc) — String interpolation showcase
 
@@ -113,8 +98,6 @@ See **[Examples](#examples)** below for concrete programs.
 
 - [http_client.osc](examples/http_client.osc) — HTTP GET client (TCP with hostname support)
 - [web_server.osc](examples/web_server.osc) — TCP web server
-- [env_info.osc](examples/env_info.osc) — System info (datetime, environment, glob matching)
-- [file_checksum.osc](examples/file_checksum.osc) — SHA-256 file hasher
 
 ### Graphics & Games
 
@@ -136,6 +119,11 @@ See **[Examples](#examples)** below for concrete programs.
 
 ```bash
 cargo test                      # Rust unit tests
+```
+
+On Windows, you can also run the full validation suite:
+
+```bash
 .\test.ps1                      # full validation suite
 .\tests\run_tests.ps1 -Oscan .\target\debug\oscan.exe   # integration tests
 ```
