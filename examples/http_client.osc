@@ -1,26 +1,50 @@
 // Simple HTTP Client
 // Connects to a server and sends an HTTP GET request, prints the response.
 // Shows TCP socket usage in Oscan.
-// Usage: http_client
-// (Expects a web server listening on 127.0.0.1:8080)
+// Usage: http_client <ip> <port> [path]
+// Example: http_client 93.184.216.34 80 /index.html
 
 fn! main() {
+    if arg_count() < 3 {
+        println("Usage: http_client <ip> <port> [path]");
+        println("Example: http_client 93.184.216.34 80 /index.html");
+        exit(1);
+    };
+
+    let addr: str = arg_get(1);
+    let port_result: Result<i32, str> = parse_i32(arg_get(2));
+    let mut port: i32 = 80;
+    match port_result {
+        Result::Ok(p) => { port = p; },
+        Result::Err(_) => {
+            println("Error: invalid port number");
+            exit(1);
+        },
+    };
+
+    let mut path: str = "/";
+    if arg_count() >= 4 {
+        path = arg_get(3);
+    };
+
     let sock: i32 = socket_tcp();
     if sock < 0 {
         println("Error: failed to create socket");
         exit(1);
     };
 
-    // Connect to localhost:8080 (change to your server)
-    let result: i32 = socket_connect(sock, "127.0.0.1", 8080);
+    let result: i32 = socket_connect(sock, addr, port);
     if result < 0 {
-        println("Error: failed to connect to 127.0.0.1:8080");
+        print("Error: failed to connect to ");
+        print(addr);
+        print(":");
+        println(i32_to_str(port));
         socket_close(sock);
         exit(1);
     };
 
-    // Send HTTP GET request
-    let request: str = "GET / HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    // Build and send HTTP GET request
+    let request: str = str_concat("GET ", str_concat(path, str_concat(" HTTP/1.0\r\nHost: ", str_concat(addr, "\r\nConnection: close\r\n\r\n"))));
     let sent: i32 = socket_send(sock, request);
     if sent < 0 {
         println("Error: failed to send request");
@@ -30,7 +54,7 @@ fn! main() {
 
     // Read response in chunks until empty
     let mut done: bool = false;
-    while done == false {
+    while not done {
         let chunk: str = socket_recv(sock, 4096);
         if str_len(chunk) > 0 {
             print(chunk);
