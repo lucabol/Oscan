@@ -24,7 +24,7 @@ fn! main() {
     let path: str = arg_get(1);
     let fd: i32 = file_open_read(path);
     if fd < 0 {
-        println(str_concat("Error: cannot open ", path));
+        println("Error: cannot open {path}");
         exit(1);
     };
 
@@ -79,8 +79,8 @@ fn! main() {
     };
 
     // Print header
-    println(str_concat("Total words: ", i32_to_str(total)));
-    println(str_concat("Unique words: ", i32_to_str(num_words)));
+    println("Total words: {total}");
+    println("Unique words: {num_words}");
     println("");
 
     // Print sorted by frequency (descending) — selection sort
@@ -100,9 +100,7 @@ fn! main() {
         if max_val < 0 { break; };
 
         // Print and mark as done
-        print(words_seen[max_idx]);
-        print(": ");
-        println(i32_to_str(max_val));
+        println("{words_seen[max_idx]}: {max_val}");
         freq[max_idx] = -1;
         printed += 1;
     };

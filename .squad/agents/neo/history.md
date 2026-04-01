@@ -209,4 +209,10 @@
 
 **Status:** All doc sync and inbox consolidation tasks complete. Ready for Trinity to implement string interpolation features.
 
+### 2026-04-01 — Web Server Example Repair
+
+- `examples\web_server.osc` can keep the accepted interpolation upgrades, but the CSS `font-family` line must avoid the single-quoted `Segoe UI` fragment to stay safe for the example compile gate.
+- The minimal repair was to preserve escaped CSS braces (`{{` / `}}`) and change `font-family: 'Segoe UI', ...` to `font-family: Segoe UI, ...` rather than backing out interpolation.
+- Validation scope for this kind of repair should include both the repaired example itself and the full examples compile sweep, because the user explicitly wanted all interpolation upgrades preserved elsewhere.
+
 

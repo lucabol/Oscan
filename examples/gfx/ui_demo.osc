@@ -63,9 +63,10 @@ fn! main() {
         ui_separator(30, 166, WIN_W - 80);
 
         // Status display
-        ui_label(30, 178, str_concat("Clicks: ", i32_to_str(click_count)));
-        ui_label(30, 194, str_concat("Checkbox: ", if checked { "ON" } else { "OFF" }));
-        ui_label(30, 210, str_concat("Volume: ", i32_to_str(volume)));
+        let checkbox_label: str = if checked { "ON" } else { "OFF" };
+        ui_label(30, 178, "Clicks: {click_count}");
+        ui_label(30, 194, "Checkbox: {checkbox_label}");
+        ui_label(30, 210, "Volume: {volume}");
 
         // Separator before textbox section
         ui_separator(30, 230, WIN_W - 80);
@@ -75,7 +76,8 @@ fn! main() {
         text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn, key);
 
         // Display typed text
-        ui_label(30, 286, str_concat("Typed: ", str_from_chars(text_buf)));
+        let typed_text: str = str_from_chars(text_buf);
+        ui_label(30, 286, "Typed: {typed_text}");
 
         // Save button state for next frame transition detection
         prev_btn = canvas_mouse_btn();

@@ -93,7 +93,7 @@
 - Repo-wide example build path is not fully green for unrelated reasons: `examples/web_server.osc` currently fails with `unexpected character '''` at line 72, but `string_interpolation` itself compiles cleanly in that same pass.
 
 ### 2026-04-01 — Team Batch: Inbox Consolidation & Cross-Agent Updates
-
+ 
 - **Decision inbox merged:** All 18 inbox decision files consolidated into `.squad/decisions.md` with deduplication
 - **Team updates logged:** Appended progress entries to Trinity, Neo, and Morpheus history files documenting:
   - README example link conversion (Oracle work)
@@ -106,4 +106,21 @@
   2. String indexing and comparison tests
   3. File I/O and CLI args tests
   4. Comprehensive negative tests for invalid string indices
+
+### Example interpolation reviewer gate (2026-04-01)
+- Reviewer sweep validated Trinity's current interpolation updates in `examples/env_info.osc`, `examples/error_handling.osc`, `examples/file_checksum.osc`, `examples/http_client.osc`, `examples/word_freq.osc`, and `examples/gfx/ui_demo.osc`; those changes compile under the checked-in compiler path and fit the "presentation strings should prefer interpolation" direction.
+- `build-examples.ps1` remains the repo-level example compile gate; on the current tree it reports **24 compiled, 1 failed**, with the lone blocker still `examples/web_server.osc`.
+- Current blocker is precise: `target\debug\oscan.exe examples\web_server.osc -o ...` still fails with `error in examples\web_server.osc:72:58: unexpected character '''` even after CSS brace escaping. The failing line is the `font-family: 'Segoe UI'` CSS fragment.
+- Targeted interpolation validation is green otherwise: all `tests\positive\*interpolation*.osc` cases matched expected output, all `tests\negative\*interpolation*.osc` cases were correctly rejected, and `examples\string_interpolation.osc --run` still prints the expected showcase output.
+- Reviewer guidance for future sweeps: use interpolation for human-readable output, protocol text, and UI labels, but it is acceptable to leave streaming/columnar utilities like `wc.osc`, `checksum.osc`, `hexdump.osc`, `sort.osc`, `upper.osc`, and similar byte-oriented examples on manual `print`/`write_*` paths when interpolation does not improve clarity.
+
+### Example interpolation approval follow-up (2026-04-01)
+- Supplemental audit matched Tank's findings: the highest-value interpolation conversions were `web_server`, `http_client`, `env_info`, `file_checksum`, `error_handling`, and `word_freq`, with `web_server` as the sole blocker until revalidated.
+- Re-review outcome is now green: direct compile of `examples\web_server.osc` succeeds with the checked-in compiler, and `build-examples.ps1` reports **25 compiled, 0 failed**.
+- Interpolation regression coverage remained green after the follow-up review: the positive `tests\positive\*interpolation*.osc` files compiled, the negative `tests\negative\*interpolation*.osc` files were rejected, and no new reviewer blockers remained in the touched examples.
+
+### Neo web_server repair verdict (2026-04-01)
+- Per coordinator direction, Tank treated Trinity's earlier revision as rejected and re-reviewed Neo's `examples\web_server.osc` repair independently.
+- Neo's revision passes the required reviewer gate: direct compile of `examples\web_server.osc` succeeds, `build-examples.ps1` is fully green at **25 compiled, 0 failed**, and the interpolation positive/negative compile-reject gate still passes afterward.
+- Fresh reviewer verdict for Neo's revision: **approve**. No remaining blockers were found in the repaired `web_server` artifact or in the related interpolation regressions.
 

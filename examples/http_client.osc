@@ -35,16 +35,13 @@ fn! main() {
 
     let result: i32 = socket_connect(sock, addr, port);
     if result < 0 {
-        print("Error: failed to connect to ");
-        print(addr);
-        print(":");
-        println(i32_to_str(port));
+        println("Error: failed to connect to {addr}:{port}");
         socket_close(sock);
         exit(1);
     };
 
     // Build and send HTTP GET request
-    let request: str = str_concat("GET ", str_concat(path, str_concat(" HTTP/1.0\r\nHost: ", str_concat(addr, "\r\nConnection: close\r\n\r\n"))));
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {addr}\r\nConnection: close\r\n\r\n";
     let sent: i32 = socket_send(sock, request);
     if sent < 0 {
         println("Error: failed to send request");

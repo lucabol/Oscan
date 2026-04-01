@@ -40,13 +40,10 @@ fn! main() {
     println("Parsing '42':");
     match parse_positive("42") {
         Result::Ok(val) => {
-            print("Success! Value = ");
-            print_i32(val);
-            println("");
+            println("Success! Value = {val}");
         },
         Result::Err(msg) => {
-            print("Error: ");
-            println(msg);
+            println("Error: {msg}");
         },
     };
     
@@ -56,13 +53,10 @@ fn! main() {
     println("Parsing 'invalid':");
     match parse_positive("invalid") {
         Result::Ok(val) => {
-            print("Success! Value = ");
-            print_i32(val);
-            println("");
+            println("Success! Value = {val}");
         },
         Result::Err(msg) => {
-            print("Error: ");
-            println(msg);
+            println("Error: {msg}");
         },
     };
     
@@ -72,13 +66,10 @@ fn! main() {
     println("Doubling '100' (with try):");
     match double_positive("100") {
         Result::Ok(val) => {
-            print("Doubled value = ");
-            print_i32(val);
-            println("");
+            println("Doubled value = {val}");
         },
         Result::Err(msg) => {
-            print("Error: ");
-            println(msg);
+            println("Error: {msg}");
         },
     };
     
@@ -88,13 +79,10 @@ fn! main() {
     println("Doubling 'bad' (with try):");
     match double_positive("bad") {
         Result::Ok(val) => {
-            print("Doubled value = ");
-            print_i32(val);
-            println("");
+            println("Doubled value = {val}");
         },
         Result::Err(msg) => {
-            print("Error propagated: ");
-            println(msg);
+            println("Error propagated: {msg}");
         },
     };
 }

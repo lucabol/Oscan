@@ -8,7 +8,7 @@
 //   ./examples/web_server 8080
 
 fn! table_row(label: str, value: str) -> str {
-    str_concat("<tr><td>", str_concat(label, str_concat("</td><td>", str_concat(value, "</td></tr>\n"))))
+    "<tr><td>{label}</td><td>{value}</td></tr>\n"
 }
 
 fn! main() {
@@ -43,7 +43,7 @@ fn! main() {
         exit(1);
     };
 
-    println(str_concat("Oscan web server listening on http://localhost:", i32_to_str(port)));
+    println("Oscan web server listening on http://localhost:{port}");
     println("Press Ctrl+C to stop.");
 
     let mut request_count: i32 = 0;
@@ -68,22 +68,22 @@ fn! main() {
             html = str_concat(html, "<meta charset=\"utf-8\">\n");
             html = str_concat(html, "<title>Oscan Web Server</title>\n");
             html = str_concat(html, "<style>\n");
-            html = str_concat(html, "* { box-sizing: border-box; }\n");
-            html = str_concat(html, "body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; ");
+            html = str_concat(html, "* {{ box-sizing: border-box; }}\n");
+            html = str_concat(html, "body {{ font-family: Segoe UI, system-ui, -apple-system, sans-serif; ");
             html = str_concat(html, "max-width: 720px; margin: 40px auto; padding: 0 24px; ");
-            html = str_concat(html, "background: #f0f2f5; color: #1a1a2e; }\n");
-            html = str_concat(html, "h1 { color: #16213e; border-bottom: 3px solid #0f3460; padding-bottom: 12px; }\n");
-            html = str_concat(html, ".card { background: #fff; border-radius: 10px; padding: 24px; ");
-            html = str_concat(html, "margin: 20px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }\n");
-            html = str_concat(html, ".card h2 { margin-top: 0; color: #0f3460; }\n");
-            html = str_concat(html, "table { width: 100%; border-collapse: collapse; }\n");
-            html = str_concat(html, "th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #e8e8e8; }\n");
-            html = str_concat(html, "th { background: #f8f9fa; color: #555; font-weight: 600; width: 40%; }\n");
-            html = str_concat(html, "td { color: #333; }\n");
-            html = str_concat(html, ".badge { display: inline-block; background: #0f3460; color: #fff; ");
-            html = str_concat(html, "padding: 2px 10px; border-radius: 12px; font-size: 0.85em; }\n");
-            html = str_concat(html, "footer { text-align: center; color: #888; margin-top: 32px; font-size: 0.9em; }\n");
-            html = str_concat(html, "code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }\n");
+            html = str_concat(html, "background: #f0f2f5; color: #1a1a2e; }}\n");
+            html = str_concat(html, "h1 {{ color: #16213e; border-bottom: 3px solid #0f3460; padding-bottom: 12px; }}\n");
+            html = str_concat(html, ".card {{ background: #fff; border-radius: 10px; padding: 24px; ");
+            html = str_concat(html, "margin: 20px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }}\n");
+            html = str_concat(html, ".card h2 {{ margin-top: 0; color: #0f3460; }}\n");
+            html = str_concat(html, "table {{ width: 100%; border-collapse: collapse; }}\n");
+            html = str_concat(html, "th, td {{ padding: 12px 16px; text-align: left; border-bottom: 1px solid #e8e8e8; }}\n");
+            html = str_concat(html, "th {{ background: #f8f9fa; color: #555; font-weight: 600; width: 40%; }}\n");
+            html = str_concat(html, "td {{ color: #333; }}\n");
+            html = str_concat(html, ".badge {{ display: inline-block; background: #0f3460; color: #fff; ");
+            html = str_concat(html, "padding: 2px 10px; border-radius: 12px; font-size: 0.85em; }}\n");
+            html = str_concat(html, "footer {{ text-align: center; color: #888; margin-top: 32px; font-size: 0.9em; }}\n");
+            html = str_concat(html, "code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }}\n");
             html = str_concat(html, "</style>\n</head>\n<body>\n");
 
             // Page title
@@ -99,7 +99,7 @@ fn! main() {
             html = str_concat(html, table_row("Unix Timestamp", ts_str));
             html = str_concat(html, table_row("Requests Served", count_str));
             html = str_concat(html, table_row("Listening Port", port_str));
-            html = str_concat(html, table_row("Last Request Size", str_concat(req_len_str, " bytes")));
+            html = str_concat(html, table_row("Last Request Size", "{req_len_str} bytes"));
             html = str_concat(html, "</table>\n</div>\n");
 
             // About card
@@ -113,22 +113,20 @@ fn! main() {
             html = str_concat(html, "<ul>\n");
             html = str_concat(html, "<li>Built with <code>socket_tcp()</code>, <code>socket_bind()</code>, ");
             html = str_concat(html, "<code>socket_accept()</code></li>\n");
-            html = str_concat(html, "<li>HTML generated via <code>str_concat()</code></li>\n");
+            html = str_concat(html, "<li>HTML generated via interpolated strings + <code>str_concat()</code></li>\n");
             html = str_concat(html, "<li>Timestamps from <code>time_now()</code> + <code>time_format()</code></li>\n");
             html = str_concat(html, "</ul>\n");
             html = str_concat(html, "</div>\n");
 
             // Footer
-            html = str_concat(html, "<footer>Powered by Oscan &mdash; ");
-            html = str_concat(html, str_concat(date_str, str_concat(" ", time_str)));
-            html = str_concat(html, "</footer>\n</body>\n</html>\n");
+            html = str_concat(html, "<footer>Powered by Oscan &mdash; {date_str} {time_str}</footer>\n</body>\n</html>\n");
 
             // Send HTTP response
-            let response: str = str_concat("HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n", html);
+            let response: str = "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{html}";
             socket_send(client, response);
             socket_close(client);
 
-            println(str_concat("Request #", str_concat(count_str, str_concat(" served at ", str_concat(date_str, str_concat(" ", time_str))))));
+            println("Request #{request_count} served at {date_str} {time_str}");
         };
     };
 

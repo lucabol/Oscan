@@ -1,33 +1,42 @@
-# Interpolation Example Review
+---
+name: "interpolation-example-review"
+description: "Review and modernize Oscan examples that should showcase string interpolation without breaking purity or literal-brace handling."
+domain: "examples"
+confidence: "high"
+source: "earned"
+---
 
-## When to use
+## Context
 
-Use this when reviewing a new Oscan example that is meant to showcase string interpolation.
+Use this when reviewing new or existing Oscan examples that build human-readable output, protocol text, HTML, CSS, or JSON. It applies both to dedicated interpolation demos and to older examples that still use nested `str_concat(...)` formatting chains.
 
-## Validation pattern
+## Patterns
 
 1. Read team context first:
    - `.squad/agents/tank/history.md`
    - `.squad/decisions.md`
    - `.squad/identity/wisdom.md`
    - `.squad/identity/now.md`
-2. Inspect the example source and verify it demonstrates:
-   - supported interpolation types: `str`, `i32`, `i64`, `f64`, `bool`
-   - at least one expression hole
-   - pure helper calls inside interpolation, not `fn!`
-   - escaped literal braces with `{{` / `}}`
-3. Run the targeted example directly with the checked-in compiler binary:
-   - prefer `target\debug\oscan.exe`
-   - fallback to `target\release\oscan.exe`
-   - command shape: `oscan examples\string_interpolation.osc --run`
-4. Run the interpolation conformance suite:
-   - positive: `tests\positive\*interpolation*.osc`
-   - negative: `tests\negative\*interpolation*.osc`
-5. Run `build-examples.ps1` to confirm the example is wired into the normal examples validation path.
-6. Distinguish example-specific failures from unrelated existing example failures before approving or rejecting.
+2. Prefer interpolation for presentation-only strings:
+   - console output like `"count={count}"`
+   - protocol/request text like `"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n"`
+   - UI/status labels like `"Volume: {volume}"`
+3. Keep hole expressions pure. If data comes from an allocating or impure helper (`str_from_chars`, `str_slice`, `dir_current`, `arg_count`, etc.), compute it first in a binding and interpolate the variable instead.
+4. Escape literal braces in string literals as `{{` / `}}`. This is required for CSS, JSON, templated HTML, and any literal `{` or `}` text after interpolation support shipped.
+5. After any HTML/CSS interpolation refactor, compile the example immediately. Brace escaping is necessary but not sufficient; lexer-sensitive literals can still break the file. If a CSS fragment trips the parser, prefer a semantically equivalent literal that avoids embedded apostrophes before backing out interpolation.
+6. Keep `str_concat(...)` where incremental buffer assembly is still clearer, especially when appending many static fragments over time.
 
-## Notes
+## Examples
 
-- In this repo, `build-examples.ps1` is the established examples compile path.
-- If `cargo` is unavailable, it is acceptable to validate with the existing `target\debug\oscan.exe` or `target\release\oscan.exe`.
-- `f64` interpolation output should match string conversion formatting (`str_from_f64` style), not `print_f64`.
+- `examples\web_server.osc`: escape CSS braces and use interpolation for table rows, footer text, HTTP response framing, and request logs.
+- `examples\web_server.osc`: if the CSS `font-family` fragment causes parser trouble, keep the interpolation upgrade and switch from `'Segoe UI'` to `Segoe UI` rather than reverting the broader cleanup.
+- `examples\http_client.osc`: replace nested request-building concatenation with one interpolated request string.
+- `examples\gfx\ui_demo.osc`: convert status labels to interpolation, but precompute `str_from_chars(text_buf)` before using it in a hole.
+- `examples\env_info.osc`: precompute impure values like `dir_current()` before interpolation; interpolate simple numeric/date output directly.
+- `build-examples.ps1`: use this as the repo-wide regression gate after touching examples; it catches both missed interpolation opportunities and literal-brace/parser regressions.
+
+## Anti-Patterns
+
+- Leaving lone `{` or `}` inside example strings after interpolation support exists.
+- Calling impure helpers directly inside interpolation holes.
+- Rewriting every concatenation mechanically; only update cases where interpolation improves readability or discoverability.

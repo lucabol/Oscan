@@ -12,7 +12,7 @@ fn! main() {
 
     // Current time
     let now: i64 = time_now();
-    println(str_concat("Timestamp: ", str_from_i64(now)));
+    println("Timestamp: {now}");
 
     // Time components
     let year: i32 = time_utc_year(now);
@@ -21,8 +21,8 @@ fn! main() {
     let hour: i32 = time_utc_hour(now);
     let min: i32 = time_utc_min(now);
     let sec: i32 = time_utc_sec(now);
-    println(str_concat("Date (UTC): ", str_concat(i32_to_str(year), str_concat("-", str_concat(i32_to_str(month), str_concat("-", i32_to_str(day)))))));
-    println(str_concat("Time (UTC): ", str_concat(i32_to_str(hour), str_concat(":", str_concat(i32_to_str(min), str_concat(":", i32_to_str(sec)))))));
+    println("Date (UTC): {year}-{month}-{day}");
+    println("Time (UTC): {hour}:{min}:{sec}");
 
     // Terminal detection
     print("Terminal: ");
@@ -30,10 +30,12 @@ fn! main() {
     else { println("no (piped/redirected)"); };
 
     // Working directory
-    println(str_concat("Directory: ", dir_current()));
+    let cwd: str = dir_current();
+    println("Directory: {cwd}");
 
     // Arguments
-    println(str_concat("Arguments: ", i32_to_str(arg_count())));
+    let argc: i32 = arg_count();
+    println("Arguments: {argc}");
 
     // Environment variables
     println("");
@@ -45,9 +47,10 @@ fn! main() {
         match result {
             Result::Ok(val) => {
                 if str_len(val) > 60 {
-                    println(str_concat(name, str_concat("=", str_concat(str_slice(val, 0, 60), "..."))));
+                    let preview: str = str_slice(val, 0, 60);
+                    println("{name}={preview}...");
                 } else {
-                    println(str_concat(name, str_concat("=", val)));
+                    println("{name}={val}");
                 };
             },
             Result::Err(_) => {},

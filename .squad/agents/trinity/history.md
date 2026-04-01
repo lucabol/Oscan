@@ -63,6 +63,7 @@
 - **Purity model for holes:** Embedded interpolation expressions are stricter than surrounding `fn!` code — they may call only pure functions. This keeps formatted-string construction free of hidden side effects and matches the language philosophy.
 - **Validation updated:** Added/covered interpolation unit tests plus end-to-end positive/negative test programs. Verified with `cargo test` and `tests\run_tests.ps1 -Oscan ..\target\debug\oscan.exe` (73 positive, 26 negative, 75 freestanding checks passing).
 - **Interpolation example discovery:** User-facing examples live under `examples\*.osc` with a short header comment and run instructions; README's `## CLI Examples` section is the right discoverability surface for new CLI examples like `examples\string_interpolation.osc`.
+- **Example interpolation sweep:** After interpolation shipped, examples with human-readable formatting should prefer `"text {value}"` over nested `str_concat(...)` chains, and any literal braces in strings (especially HTML/CSS/JSON) must be escaped as `{{` and `}}` to keep examples compiling.
 
 ### 2026-04-01 — Team Batch: README Example Links & Doc Sync Completion
 
