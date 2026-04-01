@@ -121,6 +121,27 @@
 
 ---
 
+### 2026-03-28 — Oracle Doc-Sync Review: REJECTED (Incomplete Delivery)
+
+**Code Review Decision:** Oracle's `.squad/decisions/inbox/oracle-doc-sync.md` submitted as "complete" but contained critical gaps:
+1. README.md still claimed "Six example programs" while listing 7
+2. docs/test_suite.md still listed `compound_assign` as unsupported (contradicts current language)
+3. No git commits for claimed fixes (only decision document)
+
+**Reviewer Action:** 
+- Rejected Oracle's work (CRITICAL severity)
+- Applied strict lockout rule: Oracle locked out from rework
+- Neo executed emergency remediation (1 commit, 2 minutes) to unblock feature batch
+  - README line 156: "Six" → "Seven"
+  - test_suite.md: Removed stale compound_assign negative test row
+- Reassigned to Trinity for future rework if needed
+
+**Commit:** `f43b0df` — Neo architecture gate fixes
+
+**Lesson Learned:** Decision documents must be paired with actual git commits. Claims of "complete" work must be verified against live files before acceptance.
+
+---
+
 ### 2026-03-28 — Feature Batch Decision: String Interpolation First
 
 **Research report consensus:** String interpolation is the highest-leverage feature because:
