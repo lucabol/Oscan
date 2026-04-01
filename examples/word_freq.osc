@@ -1,7 +1,19 @@
 // Word Frequency Counter
-// Reads a file, splits into words, counts frequencies using a map, prints results.
+// Reads a file, strips punctuation, counts word frequencies, prints sorted by count.
 // Usage: word_freq <filename>
-// Shows: map, str_split, str_to_lower, for-in, file I/O
+// Shows: map, str_split, str_to_lower, str_to_chars, str_from_chars, for-in, file I/O
+
+// Strip non-alphanumeric characters from a word
+fn! strip_punct(s: str) -> str {
+    let chars: [i32] = str_to_chars(s);
+    let mut clean: [i32] = [];
+    for c in chars {
+        if char_is_alnum(c) {
+            push(clean, c);
+        };
+    };
+    str_from_chars(clean)
+}
 
 fn! main() {
     if arg_count() < 2 {
@@ -31,12 +43,13 @@ fn! main() {
 
     let mut counts: map = map_new();
     let mut words_seen: [str] = [];
+    let mut freq: [i32] = [];
     let mut total: i32 = 0;
 
     for line in lines {
         let words: [str] = str_split(line, " ");
         for word in words {
-            let w: str = str_to_lower(str_trim(word));
+            let w: str = str_to_lower(strip_punct(str_trim(word)));
             if str_len(w) > 0 {
                 if map_has(counts, w) {
                     match parse_i32(map_get(counts, w)) {
@@ -54,13 +67,43 @@ fn! main() {
         };
     };
 
-    // Print results
+    // Build frequency array (parallel to words_seen)
+    let num_words: i32 = len(words_seen);
+    let mut i: i32 = 0;
+    while i < num_words {
+        match parse_i32(map_get(counts, words_seen[i])) {
+            Result::Ok(c) => { push(freq, c); },
+            Result::Err(_) => { push(freq, 0); },
+        };
+        i += 1;
+    };
+
+    // Print header
     println(str_concat("Total words: ", i32_to_str(total)));
-    println(str_concat("Unique words: ", i32_to_str(map_len(counts))));
+    println(str_concat("Unique words: ", i32_to_str(num_words)));
     println("");
-    for w in words_seen {
-        print(w);
+
+    // Print sorted by frequency (descending) — selection sort
+    let mut printed: i32 = 0;
+    while printed < num_words {
+        // Find max remaining
+        let mut max_idx: i32 = 0;
+        let mut max_val: i32 = -1;
+        let mut j: i32 = 0;
+        while j < num_words {
+            if freq[j] > max_val {
+                max_val = freq[j];
+                max_idx = j;
+            };
+            j += 1;
+        };
+        if max_val < 0 { break; };
+
+        // Print and mark as done
+        print(words_seen[max_idx]);
         print(": ");
-        println(map_get(counts, w));
+        println(i32_to_str(max_val));
+        freq[max_idx] = -1;
+        printed += 1;
     };
 }
