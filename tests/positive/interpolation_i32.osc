@@ -1,0 +1,12 @@
+// Test: Interpolation of i32 values and nested pure i32 expressions.
+
+fn double(n: i32) -> i32 {
+    n * 2
+}
+
+fn! main() {
+    let count: i32 = 42;
+    println("count={count}");
+    println("double={double(count)}");
+    println("delta {count} -> {count + 1}");
+}

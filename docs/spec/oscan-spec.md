@@ -128,7 +128,7 @@ int_literal    = digit+ ;
 - No leading zeros except `0` itself.
 - No hex, octal, or binary prefixes. Decimal only.
 - No underscores in numeric literals.
-- Integer literals default to `i32`. Use an explicit cast for other integer types: `42 as i64`.
+- Integer literals default to `i32` and must fit the `i32` range. Build larger `i64` values from in-range `i32` values with explicit casts and arithmetic.
 
 #### Float Literals
 
@@ -143,13 +143,22 @@ float_literal  = digit+ '.' digit+ ;
 #### String Literals
 
 ```
-string_literal = '"' string_char* '"' ;
-string_char    = any_unicode_except_backslash_or_quote | escape_seq ;
+string_literal = '"' string_item* '"' ;
+string_item    = string_char | interpolation ;
+string_char    = any_unicode_except_backslash_or_quote_or_left_brace
+               | escape_seq
+               | '{{'
+               | '}}' ;
 escape_seq     = '\\' ('n' | 't' | 'r' | '\\' | '"' | '0') ;
+interpolation  = '{' expr '}' ;
 ```
 
 - Strings are UTF-8 encoded.
-- No raw strings, no multi-line strings, no string interpolation.
+- No raw strings and no multi-line strings.
+- Interpolation is supported inside string literals with `"text {expr} text"` syntax.
+- Embedded expressions must have type `str`, `i32`, `i64`, `f64`, or `bool`.
+- Embedded expressions must be pure: they may call `fn`, but not `fn!` or `extern`.
+- Literal braces inside interpolated strings are written as `{{` and `}}`.
 - String literals have type `str`.
 
 #### Boolean Literals
@@ -287,7 +296,7 @@ arg_list         = expr (',' expr)* ','? ;
 
 primary_expr     = INT_LIT
                  | FLOAT_LIT
-                 | STRING_LIT
+                 | string_literal
                  | 'true'
                  | 'false'
                  | IDENT
@@ -338,6 +347,8 @@ pattern_list     = pattern (',' pattern)* ','? ;
 5. **`try` syntax:** `try` is a prefix on a function call. The grammar restricts `try` to a dotted name path followed by arguments: `try foo(x)` or `try obj.method(x)`. This avoids ambiguity with `postfix_expr` greedily consuming the call suffix. `try foo(x)` calls `foo(x)` which must return `Result<T, E>`, and either unwraps to `T` or causes an early return of the error. The enclosing function must also return `Result<_, E>` with a compatible error type.
 
 6. **Negative literal patterns:** Match patterns allow an optional leading `-` on integer and float literals (e.g., `match x { -1 => "neg", _ => "other" }`). The `-` is part of the pattern syntax, not a unary operator.
+7. **Interpolation tokenization:** The lexer keeps interpolation single-pass parseable by emitting segmented string tokens around `{expr}` holes. Nested braces inside the embedded expression are balanced before control returns to string scanning.
+8. **Literal brace escaping:** Inside string literals, literal braces must be written as `{{` and `}}`. A lone `}` is always a lexical error.
 
 ---
 
@@ -1218,7 +1229,7 @@ fn! str_from_chars(arr: [i32]) -> str      // Create string from array of charac
 fn! str_to_chars(s: str) -> [i32]          // Convert string to array of byte values (allocates)
 ```
 
-**Note:** `str_concat`, `str_to_cstr`, `str_from_i32`, and `str_slice` are `fn!` because they allocate on the arena, which is a side effect (mutation of the arena). `str_find` is pure — it only reads.
+**Note:** `str_concat`, `str_to_cstr`, `str_from_i32`, and `str_slice` are `fn!` because they allocate on the arena, which is a side effect (mutation of the arena). `str_find` is pure — it only reads. Interpolated strings lower to these helpers plus the conversion functions in §10.4 (`i32_to_str`, `str_from_i64`, `str_from_f64`, `str_from_bool`).
 
 ### 10.3 Math & Bitwise Functions (9)
 
@@ -1254,7 +1265,7 @@ fn! str_from_i32_hex(n: i32) -> str        // Convert i32 to hexadecimal string 
 fn! str_from_i64_hex(n: i64) -> str        // Convert i64 to hexadecimal string representation (allocates)
 ```
 
-**Note:** `i32_to_str` is `fn!` because it returns a `str`, which requires arena allocation. By the same logic as `str_concat`, any function that allocates on the arena is side-effecting.
+**Note:** `i32_to_str` is `fn!` because it returns a `str`, which requires arena allocation. By the same logic as `str_concat`, any function that allocates on the arena is side-effecting. `str_from_i32` is the equivalent helper in the `str_from_*` family and may be used interchangeably by compiler lowering.
 
 ### 10.6 Memory Functions (1)
 
@@ -1324,6 +1335,8 @@ fn str_from_bool(b: bool) -> str             // Convert bool to "true" or "false
 ```
 
 **Note:** Parsing functions use standard C number parsing rules. `str_from_i64` and `str_from_f64` allocate on the arena, so they are `fn!`. `str_from_bool` returns static string literals and is pure.
+
+**Interpolation MVP runtime note:** no dedicated formatter is required. Compiler lowering can build interpolated strings entirely from `str_concat`, `i32_to_str` / `str_from_i32`, `str_from_i64`, `str_from_f64`, and `str_from_bool`.
 
 ### 10.11 Tier 3: System Functions (5) — `fn!`
 
@@ -2061,11 +2074,9 @@ The `deps/laststanding` library (`l_os.h`) provides a freestanding C runtime wit
 
 ## Appendix B: Roadmap (Feature Phases)
 
-### Phase 1 (Committed — v0.2)
+### Phase 1 (Delivered in v0.2)
 
-**String Interpolation** — `"text {expr} text"` syntax for cleaner output construction.
-
-**Rationale:** Current examples show repeated use of `str_concat` and manual numeric conversions. Interpolation directly addresses this ergonomic bottleneck in output-heavy programs (CLI tools, HTTP clients, web servers). The compiler infrastructure to support it already exists: code generator already lowers string concatenation, and runtime provides the necessary `str_concat` and `str_from_*` functions. Interpolation will be lowered to nested `str_concat` calls, preserving simplicity.
+**String Interpolation** — `"text {expr} text"` syntax now lowers to nested `str_concat` calls plus the existing string conversion helpers.
 
 ### Intentionally Reserved for Later Consideration (Phase 2+)
 

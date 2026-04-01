@@ -20,7 +20,9 @@ const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 
 fn resolve_imports(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String, String> {
-    let canonical = path.canonicalize().map_err(|e| format!("cannot resolve {}: {}", path.display(), e))?;
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve {}: {}", path.display(), e))?;
     if !visited.insert(canonical.clone()) {
         return Ok(String::new());
     }
@@ -218,7 +220,10 @@ enum CCompiler {
     Gcc(String),
     Clang(String),
     /// cl.exe path and optional vcvarsall.bat path (needed when cl.exe is not already on PATH)
-    Msvc { cl_path: String, vcvars: Option<String> },
+    Msvc {
+        cl_path: String,
+        vcvars: Option<String>,
+    },
 }
 
 fn command_exists(cmd: &str) -> bool {
@@ -250,9 +255,15 @@ fn find_vs_clang() -> Option<String> {
     let vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe";
     if Path::new(vswhere).exists() {
         let output = Command::new(vswhere)
-            .args(["-latest", "-products", "*",
-                   "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                   "-property", "installationPath"])
+            .args([
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property",
+                "installationPath",
+            ])
             .output();
         if let Ok(out) = output {
             if out.status.success() {
@@ -276,9 +287,13 @@ fn find_msvc_cl() -> Option<(String, Option<String>)> {
     if Path::new(vswhere).exists() {
         let output = Command::new(vswhere)
             .args([
-                "-latest", "-products", "*",
-                "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                "-find", r"VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
+                "-latest",
+                "-products",
+                "*",
+                "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-find",
+                r"VC\Tools\MSVC\*\bin\Hostx64\x64\cl.exe",
             ])
             .output();
         if let Ok(out) = output {
@@ -344,7 +359,10 @@ fn find_c_compiler() -> Option<CCompiler> {
     }
     if cfg!(windows) {
         if command_exists("cl.exe") {
-            return Some(CCompiler::Msvc { cl_path: "cl.exe".to_string(), vcvars: None });
+            return Some(CCompiler::Msvc {
+                cl_path: "cl.exe".to_string(),
+                vcvars: None,
+            });
         }
         if let Some((cl_path, vcvars)) = find_msvc_cl() {
             return Some(CCompiler::Msvc { cl_path, vcvars });
@@ -506,7 +524,13 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
 }
 
 /// Detect a C compiler and invoke it. Returns true on success.
-fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, include_dirs: &[PathBuf], freestanding: bool) -> bool {
+fn invoke_c_compiler(
+    c_file: &Path,
+    exe_file: &Path,
+    runtime_c: &Path,
+    include_dirs: &[PathBuf],
+    freestanding: bool,
+) -> bool {
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
@@ -528,10 +552,20 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, include_d
             if freestanding && cfg!(windows) {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
-                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
+                    return compile_with_gcc_or_clang(
+                        &clang_path,
+                        c_file,
+                        exe_file,
+                        runtime_c,
+                        include_dirs,
+                        freestanding,
+                    );
                 }
             }
-            eprintln!("Compiling with gcc{}...", if freestanding { " (freestanding)" } else { "" });
+            eprintln!(
+                "Compiling with gcc{}...",
+                if freestanding { " (freestanding)" } else { "" }
+            );
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
         CCompiler::Clang(cmd) => {
@@ -540,10 +574,20 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, include_d
             if freestanding && cfg!(windows) {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
-                    return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
+                    return compile_with_gcc_or_clang(
+                        &clang_path,
+                        c_file,
+                        exe_file,
+                        runtime_c,
+                        include_dirs,
+                        freestanding,
+                    );
                 }
             }
-            eprintln!("Compiling with clang{}...", if freestanding { " (freestanding)" } else { "" });
+            eprintln!(
+                "Compiling with clang{}...",
+                if freestanding { " (freestanding)" } else { "" }
+            );
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
         CCompiler::Msvc { cl_path, vcvars } => {
@@ -552,21 +596,41 @@ fn invoke_c_compiler(c_file: &Path, exe_file: &Path, runtime_c: &Path, include_d
                 if cfg!(windows) {
                     if let Some(clang_path) = find_vs_clang() {
                         eprintln!("Compiling with clang (freestanding)...");
-                        return compile_with_gcc_or_clang(&clang_path, c_file, exe_file, runtime_c, include_dirs, freestanding);
+                        return compile_with_gcc_or_clang(
+                            &clang_path,
+                            c_file,
+                            exe_file,
+                            runtime_c,
+                            include_dirs,
+                            freestanding,
+                        );
                     }
                 }
                 eprintln!("note: freestanding mode requires GCC/Clang; falling back to libc mode for MSVC");
             }
             eprintln!("Compiling with MSVC cl.exe...");
             // MSVC always uses libc mode; pass OSC_NOFREESTANDING to select libc headers in dual-mode code
-            compile_with_msvc(cl_path, vcvars.as_deref(), c_file, exe_file, runtime_c, include_dirs, false, freestanding)
+            compile_with_msvc(
+                cl_path,
+                vcvars.as_deref(),
+                c_file,
+                exe_file,
+                runtime_c,
+                include_dirs,
+                false,
+                freestanding,
+            )
         }
     }
 }
 
 fn compile_with_gcc_or_clang(
-    cmd: &str, c_file: &Path, exe_file: &Path, runtime_c: &Path,
-    include_dirs: &[PathBuf], freestanding: bool,
+    cmd: &str,
+    c_file: &Path,
+    exe_file: &Path,
+    runtime_c: &Path,
+    include_dirs: &[PathBuf],
+    freestanding: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -574,20 +638,24 @@ fn compile_with_gcc_or_clang(
         // Freestanding: single TU (runtime is #included), no libc
         // Use gnu11 for GNU extensions required by l_os.h (register asm, etc.)
         // Size optimization flags matching laststanding build scripts
-        command.arg("-std=gnu11").arg("-ffreestanding")
-            .arg("-Oz")  // aggressive size optimization
+        command
+            .arg("-std=gnu11")
+            .arg("-ffreestanding")
+            .arg("-Oz") // aggressive size optimization
             .arg("-fno-builtin")
             .arg("-fno-asynchronous-unwind-tables")
             .arg("-fomit-frame-pointer")
             .arg("-ffunction-sections")
             .arg("-fdata-sections")
-            .arg("-s");  // strip symbols
+            .arg("-s"); // strip symbols
         if cfg!(windows) {
             // Windows: link kernel32 for Win32 API and ws2_32 for sockets
             command.arg("-lkernel32").arg("-lws2_32");
         } else {
             // Unix: fully standalone, no system libraries
-            command.arg("-nostdlib").arg("-static")
+            command
+                .arg("-nostdlib")
+                .arg("-static")
                 .arg("-Wno-builtin-declaration-mismatch")
                 .arg("-Wl,--gc-sections,--build-id=none");
         }
@@ -595,21 +663,14 @@ fn compile_with_gcc_or_clang(
         for dir in include_dirs {
             command.arg(format!("-I{}", dir.display()));
         }
-        command
-            .arg("-o")
-            .arg(exe_file);
+        command.arg("-o").arg(exe_file);
     } else {
         // libc mode: two TUs (generated + runtime), link libc + libm
-        command
-            .arg("-std=c99")
-            .arg(c_file)
-            .arg(runtime_c);
+        command.arg("-std=c99").arg(c_file).arg(runtime_c);
         for dir in include_dirs {
             command.arg(format!("-I{}", dir.display()));
         }
-        command
-            .arg("-o")
-            .arg(exe_file);
+        command.arg("-o").arg(exe_file);
         // On Windows, math functions live in ucrt (no separate libm);
         // -lm is only needed on Unix.
         if !cfg!(windows) {
@@ -637,19 +698,29 @@ fn compile_with_gcc_or_clang(
 }
 
 fn compile_with_msvc(
-    cl_path: &str, vcvars: Option<&str>,
-    c_file: &Path, exe_file: &Path, runtime_c: &Path,
-    include_dirs: &[PathBuf], freestanding: bool, needs_nofreestanding: bool,
+    cl_path: &str,
+    vcvars: Option<&str>,
+    c_file: &Path,
+    exe_file: &Path,
+    runtime_c: &Path,
+    include_dirs: &[PathBuf],
+    freestanding: bool,
+    needs_nofreestanding: bool,
 ) -> bool {
     // When codegen emitted dual-mode headers but we're compiling with MSVC (libc),
     // define OSC_NOFREESTANDING to select the libc path.
-    let nofree_flag = if needs_nofreestanding { " /DOSC_NOFREESTANDING" } else { "" };
+    let nofree_flag = if needs_nofreestanding {
+        " /DOSC_NOFREESTANDING"
+    } else {
+        ""
+    };
 
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
         // vcvarsall.bat can set up the environment in the same cmd session.
         let bat_file = exe_file.with_extension("bat");
-        let all_includes: String = include_dirs.iter()
+        let all_includes: String = include_dirs
+            .iter()
             .map(|d| format!(" /I\"{}\"", d.display()))
             .collect();
 
@@ -699,7 +770,7 @@ fn compile_with_msvc(
             command
                 .arg("/nologo")
                 .arg("/std:c11")
-                .arg("/Os")  // optimize for size
+                .arg("/Os") // optimize for size
                 .arg("/GS-");
             for dir in include_dirs {
                 command.arg(format!("/I{}", dir.display()));
@@ -712,9 +783,7 @@ fn compile_with_msvc(
                 .arg("kernel32.lib")
                 .arg("ws2_32.lib");
         } else {
-            command
-                .arg("/nologo")
-                .arg("/std:c11");
+            command.arg("/nologo").arg("/std:c11");
             if needs_nofreestanding {
                 command.arg("/DOSC_NOFREESTANDING");
             }

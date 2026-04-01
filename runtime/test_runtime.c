@@ -384,6 +384,7 @@ static void test_array(void)
         int32_t v = 1;
         osc_array_push(arena, arr, &v);
         int32_t nv = 99;
+        (void)nv;
         EXPECT_PANIC({ osc_array_set(arr, 5, &nv); });
     }
 
@@ -476,6 +477,14 @@ static void test_strings(void)
     }
     PASS();
 
+    TEST("str_from_i32 aliases i32_to_str");
+    {
+        osc_str a = osc_str_from_i32(arena, -2048);
+        osc_str b = osc_i32_to_str(arena, -2048);
+        assert(osc_str_eq(a, b) == 1);
+    }
+    PASS();
+
     osc_arena_destroy(arena);
 }
 
@@ -520,7 +529,9 @@ static void test_type_casts(void)
 
     TEST("f64 to i32 (NaN)");
     {
-        double nan_val = 0.0 / 0.0;
+        volatile double zero = 0.0;
+        double nan_val = zero / zero;
+        (void)nan_val;
         EXPECT_PANIC({ osc_f64_to_i32(nan_val); });
     }
 
@@ -534,13 +545,17 @@ static void test_type_casts(void)
 
     TEST("f64 to i64 (NaN)");
     {
-        double nan_val = 0.0 / 0.0;
+        volatile double zero = 0.0;
+        double nan_val = zero / zero;
+        (void)nan_val;
         EXPECT_PANIC({ osc_f64_to_i64(nan_val); });
     }
 
     TEST("f64 to i64 (Inf)");
     {
-        double inf_val = 1.0 / 0.0;
+        volatile double zero = 0.0;
+        double inf_val = 1.0 / zero;
+        (void)inf_val;
         EXPECT_PANIC({ osc_f64_to_i64(inf_val); });
     }
 }
@@ -584,6 +599,29 @@ static void test_conversions(void)
         osc_str s = osc_i32_to_str(arena, INT32_MIN);
         assert(s.len == 11); /* -2147483648 */
         assert(memcmp(s.data, "-2147483648", 11) == 0);
+    }
+    PASS();
+
+    TEST("str_from_i64 positive");
+    {
+        osc_str s = osc_str_from_i64(arena, 9876543210LL);
+        assert(s.len == 10);
+        assert(memcmp(s.data, "9876543210", 10) == 0);
+    }
+    PASS();
+
+    TEST("str_from_f64 trims trailing zeros");
+    {
+        osc_str s = osc_str_from_f64(arena, 12.340000);
+        assert(s.len == 5);
+        assert(memcmp(s.data, "12.34", 5) == 0);
+    }
+    PASS();
+
+    TEST("str_from_bool true/false");
+    {
+        assert(osc_str_eq(osc_str_from_bool(1), osc_str_from_cstr("true")) == 1);
+        assert(osc_str_eq(osc_str_from_bool(0), osc_str_from_cstr("false")) == 1);
     }
     PASS();
 

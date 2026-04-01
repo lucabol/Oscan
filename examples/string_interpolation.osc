@@ -1,0 +1,32 @@
+// String interpolation showcase
+//
+// Demonstrates:
+// - str, i32, i64, f64, bool interpolation
+// - expression holes
+// - pure helper calls inside interpolation holes
+// - escaped braces with {{ and }}
+//
+// To run:
+//   cargo run -- examples\string_interpolation.osc --run
+
+fn status_label(ok: bool) -> str {
+    match ok {
+        true => "green",
+        false => "red",
+    }
+}
+
+fn! main() {
+    let service: str = "api-gateway";
+    let version: i32 = 42;
+    let build_id: i64 = (2025 as i64) * (1000000 as i64) + (401 as i64);
+    let latency_ms: f64 = 12.75;
+    let healthy: bool = true;
+    let region: str = "eu-west";
+
+    println("service={service} version={version}");
+    println("build={build_id} latency_ms={latency_ms} healthy={healthy}");
+    println("next_version={version + 1} region={region}");
+    println("status={status_label(healthy)}");
+    println("payload {{\"service\":\"{service}\",\"ok\":{healthy}}}");
+}

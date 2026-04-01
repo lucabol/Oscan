@@ -1,0 +1,9 @@
+// EXPECT ERROR: Interpolated expressions must remain pure and cannot call fn! functions.
+
+fn! next_id() -> i32 {
+    7
+}
+
+fn! main() {
+    println("id={next_id()}");
+}

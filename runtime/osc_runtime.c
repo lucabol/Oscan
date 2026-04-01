@@ -17,6 +17,15 @@
 #endif
 #endif
 
+#ifdef _WIN32
+#ifndef _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
+#endif
+#ifndef _WINSOCK_DEPRECATED_NO_WARNINGS
+#define _WINSOCK_DEPRECATED_NO_WARNINGS
+#endif
+#endif
+
 #include "osc_runtime.h"
 
 #ifndef OSC_FREESTANDING
@@ -575,36 +584,7 @@ int32_t osc_str_find(osc_str haystack, osc_str needle)
 
 osc_str osc_str_from_i32(osc_arena *arena, int32_t n)
 {
-    /* -2147483648 is 11 chars + NUL */
-    char tmp[12];
-    int pos = 0;
-    uint32_t u;
-    osc_str result;
-    char *buf;
-
-    if (n < 0) {
-        tmp[pos++] = '-';
-        u = (uint32_t)(-(int64_t)n);
-    } else {
-        u = (uint32_t)n;
-    }
-    /* write digits in reverse into tmp */
-    {
-        int start = pos;
-        do {
-            tmp[pos++] = (char)('0' + (u % 10));
-            u /= 10;
-        } while (u > 0);
-        /* reverse the digit portion */
-        for (int i = start, j = pos - 1; i < j; i++, j--) {
-            char c = tmp[i]; tmp[i] = tmp[j]; tmp[j] = c;
-        }
-    }
-    buf = (char *)osc_arena_alloc(arena, (size_t)pos);
-    memcpy(buf, tmp, (size_t)pos);
-    result.data = buf;
-    result.len  = (int32_t)pos;
-    return result;
+    return osc_i32_to_str(arena, n);
 }
 
 osc_str osc_str_slice(osc_arena *arena, osc_str s, int32_t start, int32_t end)

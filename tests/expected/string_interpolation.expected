@@ -1,0 +1,7 @@
+hello Neo
+answer=42
+big=9000000000
+ratio=3.5
+flag=true
+mix Neo 43 true
+braces {ok}

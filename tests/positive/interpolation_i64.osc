@@ -1,0 +1,13 @@
+// Test: Interpolation of i64 values, including widened arithmetic.
+
+fn to_i64(n: i32) -> i64 {
+    n as i64
+}
+
+fn! main() {
+    let limit: i64 = 2147483647 as i64;
+    let widened: i64 = limit + (2 as i64);
+    println("limit={limit}");
+    println("widened={widened}");
+    println("via_fn={to_i64(9)}");
+}

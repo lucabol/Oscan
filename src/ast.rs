@@ -209,6 +209,11 @@ pub enum Expr {
     FloatLit(f64, Span),
     /// String literal
     StringLit(String, Span),
+    /// Interpolated string literal: "hello {name}"
+    InterpolatedString {
+        parts: Vec<InterpolatedStringPart>,
+        span: Span,
+    },
     /// Boolean literal
     BoolLit(bool, Span),
     /// Variable reference
@@ -271,10 +276,7 @@ pub enum Expr {
         span: Span,
     },
     /// Array literal: `[1, 2, 3]`
-    ArrayLit {
-        elements: Vec<Expr>,
-        span: Span,
-    },
+    ArrayLit { elements: Vec<Expr>, span: Span },
     /// Struct literal: `Point { x: 1.0, y: 2.0 }`
     StructLit {
         name: String,
@@ -304,6 +306,7 @@ impl Expr {
             | Expr::Call { span, .. }
             | Expr::FieldAccess { span, .. }
             | Expr::Index { span, .. }
+            | Expr::InterpolatedString { span, .. }
             | Expr::If { span, .. }
             | Expr::Match { span, .. }
             | Expr::Try { span, .. }
@@ -313,6 +316,12 @@ impl Expr {
             Expr::Block(block) => block.span,
         }
     }
+}
+
+#[derive(Debug)]
+pub enum InterpolatedStringPart {
+    Text(String),
+    Expr(Expr),
 }
 
 /// Binary operators.

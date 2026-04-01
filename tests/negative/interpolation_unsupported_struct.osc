@@ -1,0 +1,11 @@
+// EXPECT ERROR: Interpolation only supports str, i32, i64, f64, and bool expressions.
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn! main() {
+    let point: Point = Point { x: 1, y: 2 };
+    println("point={point}");
+}

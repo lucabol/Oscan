@@ -1,0 +1,18 @@
+// Test: String interpolation / formatted string construction
+// Exercises: str, i32, i64, f64, bool interpolation; expression holes; literal braces
+
+fn! main() {
+    let name: str = "Neo";
+    let answer: i32 = 42;
+    let big: i64 = (30000 as i64) * (300000 as i64);
+    let ratio: f64 = 3.5;
+    let flag: bool = true;
+
+    println("hello {name}");
+    println("answer={answer}");
+    println("big={big}");
+    println("ratio={ratio}");
+    println("flag={flag}");
+    println("mix {name} {answer + 1} {flag}");
+    println("braces {{ok}}");
+}

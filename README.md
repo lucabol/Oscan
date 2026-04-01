@@ -22,6 +22,24 @@ LLMs hallucinate less when the target language is small and unambiguous. Oscan g
 
 The output is readable C99 that compiles on any platform with a C compiler.
 
+### String interpolation
+
+Oscan supports interpolated string literals with `"text {expr} text"` syntax.
+
+- Supported embedded expression types: `str`, `i32`, `i64`, `f64`, `bool`
+- Write literal braces as `{{` and `}}`; a lone `}` is invalid
+- Lowering uses the existing helpers: `str_concat`, `i32_to_str` / `str_from_i32`, `str_from_i64`, `str_from_f64`, and `str_from_bool`
+- Mixed-part or numeric interpolation allocates, so it is typically used in `fn!` code
+
+```text
+fn! main() {
+    let name: str = "Neo";
+    let count: i32 = 42;
+    println("hello {name}");
+    println("count={count} ready={{yes}}");
+}
+```
+
 ## Quick Start
 
 ### Prerequisites
@@ -87,13 +105,14 @@ fn fib(n: i32) -> i32 {
 
 // Side-effecting function — can do I/O
 fn! main() {
+    let name: str = "Oscan";
     for i in 0..10 {
-        print_i32(fib(i));
-        print(" ");
+        println("{name} fib({i}) = {fib(i)}");
     };
-    println("");
 }
 ```
+
+Interpolated strings support `str`, `i32`, `i64`, `f64`, and `bool` inside `{...}`. Holes must stay pure (`fn`, not `fn!`), literal braces are escaped as `{{` / `}}`, and integer literals still must fit `i32` before any explicit cast.
 
 For a complete walkthrough, see the **[Language Guide](docs/guide.md)**.
 For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Oscan-spec.md)**.
@@ -165,7 +184,7 @@ Seven example programs in `examples/gfx/` demonstrate graphics capabilities:
 
 ## CLI Examples
 
-Beyond the graphics examples, Oscan includes ~21 CLI utility programs in `examples/` demonstrating language features:
+Beyond the graphics examples, Oscan includes CLI utility programs in `examples/` demonstrating language features:
 
 - **`hello.osc`** — Hello World
 - **`fibonacci.osc`** — Recursive fibonacci
@@ -184,8 +203,7 @@ Beyond the graphics examples, Oscan includes ~21 CLI utility programs in `exampl
 - **`file_checksum.osc`** — SHA-256 file hasher (sha256, path_ext, file_size)
 - **`env_info.osc`** — System info tool (datetime, is_tty, glob_match, env_get)
 - **`web_server.osc`** — TCP socket web server (socket_bind, socket_listen, socket_accept)
-- **`web_client.osc`** — TCP socket web client (socket_tcp, socket_connect)
-- Plus 3 more utility programs showcasing additional features
+- **`string_interpolation.osc`** — Interpolated string showcase (str, i32, i64, f64, bool, escaped braces)
 
 ## Building & Testing
 

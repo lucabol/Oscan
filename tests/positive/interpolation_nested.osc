@@ -1,0 +1,16 @@
+// Test: Interpolation with nested pure calls across multiple supported types.
+
+fn square(n: i32) -> i32 {
+    n * n
+}
+
+fn verdict(ok: bool) -> str {
+    if ok { "ok" } else { "bad" }
+}
+
+fn! main() {
+    let name: str = "tank";
+    let ok: bool = true;
+    println("report {name}: {square(5)} {verdict(ok)}");
+    println("{str_len(name)} chars / {not ok} failed");
+}

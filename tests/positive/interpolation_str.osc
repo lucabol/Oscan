@@ -1,0 +1,12 @@
+// Test: Interpolation of str values and pure str-producing calls.
+
+fn env_name(prod: bool) -> str {
+    if prod { "prod" } else { "dev" }
+}
+
+fn! main() {
+    let user: str = "alice";
+    println("user={user}");
+    println("env={env_name(true)}");
+    println("path=/home/{user}/app");
+}

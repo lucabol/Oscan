@@ -1,0 +1,16 @@
+// Test: Interpolation in realistic logging and request-building patterns.
+
+fn! main() {
+    let method: str = "GET";
+    let path: str = "/health";
+    let code: i32 = 200;
+    let elapsed_ms: f64 = 12.5;
+    let cached: bool = false;
+
+    println("[{method}] {path} -> {code} in {elapsed_ms}ms cached={cached}");
+
+    let mut headers: [str] = [];
+    push(headers, "Host: example.com");
+    push(headers, "X-Trace: abc123");
+    println("request {method} {path} headers={len(headers)}");
+}

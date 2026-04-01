@@ -1,0 +1,12 @@
+// Test: Interpolation of f64 values and nested pure f64 expressions.
+
+fn half(x: f64) -> f64 {
+    x / 2.0
+}
+
+fn! main() {
+    let ratio: f64 = 3.5;
+    println("ratio={ratio}");
+    println("half={half(ratio)}");
+    println("mix={ratio + 0.25}");
+}

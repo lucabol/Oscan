@@ -36,7 +36,7 @@ fn! main() {
 | `str`  | Immutable string (UTF-8)     | `"hello"`, `"line\n"`   |
 | `unit` | Void equivalent (0 bits)     | `()`                    |
 
-- Integer literals are `i32` by default. Use `as i64` for i64.
+- Integer literals are `i32` by default and must fit the `i32` range. Build larger `i64` values from in-range `i32` values with explicit casts.
 - Float literals must have digits on both sides: `0.5` not `.5`.
 - String escapes: `\n`, `\t`, `\r`, `\\`, `\"`, `\0`.
 
@@ -400,6 +400,32 @@ print_bool(str_eq(a, b));        // false
 
 String escape sequences: `\n` (newline), `\t` (tab), `\r` (carriage return), `\\`, `\"`, `\0`.
 
+### String Interpolation
+
+Interpolated string literals use `"text {expr} text"` syntax:
+
+```
+fn! main() {
+    let name: str = "Neo";
+    let count: i32 = 42;
+    let ok: bool = true;
+
+    println("hello {name}");
+    println("count={count} ok={ok}");
+    println("literal braces: {{ready}}");
+}
+```
+
+Rules:
+
+- Embedded expression types are limited to `str`, `i32`, `i64`, `f64`, and `bool`.
+- Embedded expressions must be pure: they can call `fn`, but not `fn!` or `extern`.
+- Write literal braces as `{{` and `}}`. A lone `}` is a lexical error.
+- Interpolation lowers to the existing string builders plus the numeric/bool conversion helpers.
+- Mixed-part or numeric interpolation allocates, so it is typically used in `fn!` code.
+
+See `examples/string_interpolation.osc` for a small end-to-end showcase.
+
 ### String Functions (Pure)
 
 | Function                          | Description              |
@@ -413,6 +439,17 @@ String escape sequences: `\n` (newline), `\t` (tab), `\r` (carriage return), `\\
 |-----------------------------------|------------------------------------------|
 | `str_concat(a: str, b: str) -> str` | Concatenate strings (allocates)      |
 | `str_to_cstr(s: str) -> str`      | Convert to C-compatible null-terminated string (FFI) |
+
+### String Conversion Helpers
+
+| Function                          | Description                              |
+|-----------------------------------|------------------------------------------|
+| `i32_to_str(n: i32) -> str`       | Convert `i32` to string (allocates)      |
+| `str_from_i64(n: i64) -> str`     | Convert `i64` to string (allocates)      |
+| `str_from_f64(n: f64) -> str`     | Convert `f64` to string (allocates)      |
+| `str_from_bool(b: bool) -> str`   | Convert `bool` to `"true"` / `"false"` |
+
+These helpers are the runtime surface interpolation lowers to.
 
 ## Operators
 
@@ -481,11 +518,14 @@ See the **Strings** section above for the complete string function tables.
 | `abs_f64(n: f64) -> f64`          | Absolute value          |
 | `mod_i32(a: i32, b: i32) -> i32`  | Integer modulo          |
 
-### Conversion (Impure)
+### Conversion
 
 | Function                            | Description             |
 |-------------------------------------|-------------------------|
 | `i32_to_str(n: i32) -> str`        | Integer to string (allocates) |
+| `str_from_i64(n: i64) -> str`      | `i64` to string (allocates) |
+| `str_from_f64(n: f64) -> str`      | `f64` to string (allocates) |
+| `str_from_bool(b: bool) -> str`    | Bool to string (pure) |
 
 ### Array Functions (Pure)
 
@@ -530,7 +570,7 @@ let x: i32 = 1;
 3. **No closures, no first-class functions.** Functions are not values.
 4. **No methods.** All functions are free-standing. Use `area(shape)`, not `shape.area()`.
 5. **No generics** except the built-in `Result<T, E>`.
-6. **No string interpolation.** Use `str_concat` and conversion functions.
+6. **Interpolation is intentionally small.** Only `str`, `i32`, `i64`, `f64`, and `bool` can appear inside `{...}`.
 7. **Semicolons after control flow (optional).** `if`/`while`/`for`/`match` used as statements may have a trailing `;` but it is not required.
 8. **Integer literals are `i32`.** For `i64`, write `42 as i64`.
 9. **Panics are for bugs.** Overflow, out-of-bounds, division by zero panic at runtime. Expected failures use `Result`.

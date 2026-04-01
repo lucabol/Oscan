@@ -1,0 +1,10 @@
+// EXPECT ERROR: interpolated string expressions only allow scalar displayable types
+
+struct Point {
+    x: i32,
+}
+
+fn! main() {
+    let p: Point = Point { x: 1 };
+    println("{p}");
+}

@@ -1,0 +1,5 @@
+// EXPECT ERROR: Stray closing brace in an interpolated string literal.
+
+fn! main() {
+    println("oops }");
+}

@@ -184,5 +184,11 @@
 - **Process:** Feature choices come from research reports with high-quality rationale; architecture gates compiler before tests; docs sync is Phase 0 before implementation
 - **Communication:** Prefer human-readable outcomes; suppress tool internals in final response
 
+### 2026-04-01 — Interpolation Revision
+
+- The interpolation blockers split cleanly into two language rules and one test-fixture issue: impurity in holes and stray `}` were already lexer/semantic concerns, while the `string_interpolation` mismatch came from an oversized integer literal cast expectation.
+- We are keeping the language rule simple: integer literals are still `i32` values first, so anything outside the `i32` range must be constructed as `i64` from in-range literals plus explicit widening/arithmetic, not by casting an oversized literal token.
+- For regression safety, interpolation now has explicit unit coverage for impure calls in holes, lone `}` rejection, and out-of-range integer literal rejection, plus the positive string interpolation case now exercises a true large `i64` value (`9000000000`) legally.
+
 
 

@@ -1,0 +1,3 @@
+user=alice
+env=prod
+path=/home/alice/app

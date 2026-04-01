@@ -1,0 +1,2 @@
+[GET] /health -> 200 in 12.5ms cached=false
+request GET /health headers=2

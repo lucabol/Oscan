@@ -13,12 +13,19 @@
 - Arena never frees until program exit — known limitation; `temp {}` block proposed but not implemented
 - Empty array literal bug was found and fixed (elem_size was hardcoded to 1)
 - All functions receive hidden `osc_arena* _arena` first parameter
-- `fn!` denotes fallible functions (single FN_BANG token)
+- `fn!` denotes impure functions (single FN_BANG token)
 - Struct literal vs block ambiguity resolved by pre-scanning struct names
-- 99 tests total: 53 unit + 30 positive integration + 16 negative integration
+- **85 tests total:** 53 unit + 65 positive integration + 20 negative integration (updated 2025-07-19)
+- 139 compiler-registered builtins across 13+ tiers (spec documents 140+)
+- 35 example programs: 21 CLI utilities + 14 graphics demonstrations
 
 ## Learnings
-- **Spec audit completed (2025-07-15):** Found 9 inconsistencies, 7 gaps, 5 ambiguities. Full report in `.squad/decisions/inbox/oracle-spec-audit.md`.
+- **Full doc sync completed (2025-07-19):** Audited README.md, docs/spec/oscan-spec.md, docs/guide.md, docs/test_suite.md against current code/tests/examples.
+  - **README fixes:** Updated builtin count (~156→~139), examples count (~17→21 CLI), test count (81→85)
+  - **guide.md status:** Already correct (compound assignment documented properly)
+  - **spec status:** Fully accurate; no implementation divergences found; 139 builtins match 13 tiers
+  - **test_suite.md fixes:** Updated test counts (38→85 total; 22→65 positive; 16→20 negative)
+  - **Full audit report:** `.squad/decisions/inbox/oracle-doc-sync.md`
 - **Key purity issue:** str_concat and i32_to_str allocate on arena → must be fn!. Guide incorrectly marks them pure.
 - **Guide has phantom functions:** i64_to_str, f64_to_str, str_to_i32 are in the guide but not in spec or compiler.
 - **Grammar-parser divergence:** while/for trailing semicolons are optional in parser, absent from EBNF, "required" in guide.

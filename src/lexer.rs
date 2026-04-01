@@ -1,11 +1,18 @@
 use crate::error::CompileError;
 use crate::token::{Span, Token, TokenKind};
 
+#[derive(Debug, Clone, Copy)]
+enum LexerMode {
+    StringContinuation,
+    Interpolation { brace_depth: usize },
+}
+
 pub struct Lexer {
     source: Vec<char>,
     pos: usize,
     line: usize,
     column: usize,
+    modes: Vec<LexerMode>,
 }
 
 impl Lexer {
@@ -15,6 +22,7 @@ impl Lexer {
             pos: 0,
             line: 1,
             column: 1,
+            modes: Vec::new(),
         }
     }
 
@@ -87,52 +95,83 @@ impl Lexer {
                 }
                 Some(_) => {}
                 None => {
-                    return Err(CompileError::new(
-                        start_span,
-                        "unterminated block comment",
-                    ));
+                    return Err(CompileError::new(start_span, "unterminated block comment"));
                 }
             }
         }
     }
 
-    fn read_string(&mut self) -> Result<Token, CompileError> {
-        let start_span = self.span();
-        // Already consumed opening '"'
+    fn read_string_escape(&mut self, s: &mut String, esc_span: Span) -> Result<(), CompileError> {
+        match self.advance() {
+            Some('n') => s.push('\n'),
+            Some('t') => s.push('\t'),
+            Some('r') => s.push('\r'),
+            Some('\\') => s.push('\\'),
+            Some('"') => s.push('"'),
+            Some('0') => s.push('\0'),
+            Some(c) => {
+                return Err(CompileError::new(
+                    esc_span,
+                    format!("invalid escape sequence '\\{c}'"),
+                ));
+            }
+            None => {
+                return Err(CompileError::new(esc_span, "unterminated string literal"));
+            }
+        }
+        Ok(())
+    }
+
+    fn read_string_segment(
+        &mut self,
+        start_span: Span,
+        is_initial: bool,
+    ) -> Result<Token, CompileError> {
         let mut s = String::new();
         loop {
             match self.advance() {
                 Some('"') => {
-                    return Ok(Token::new(TokenKind::StringLit(s), start_span));
+                    if is_initial {
+                        return Ok(Token::new(TokenKind::StringLit(s), start_span));
+                    }
+                    let mode = self.modes.pop();
+                    debug_assert!(matches!(mode, Some(LexerMode::StringContinuation)));
+                    return Ok(Token::new(TokenKind::InterpStringEnd(s), start_span));
                 }
                 Some('\\') => {
                     let esc_span = self.span();
-                    match self.advance() {
-                        Some('n') => s.push('\n'),
-                        Some('t') => s.push('\t'),
-                        Some('r') => s.push('\r'),
-                        Some('\\') => s.push('\\'),
-                        Some('"') => s.push('"'),
-                        Some('0') => s.push('\0'),
-                        Some(c) => {
-                            return Err(CompileError::new(
-                                esc_span,
-                                format!("invalid escape sequence '\\{c}'"),
-                            ));
-                        }
-                        None => {
-                            return Err(CompileError::new(
-                                esc_span,
-                                "unterminated string literal",
-                            ));
-                        }
+                    self.read_string_escape(&mut s, esc_span)?;
+                }
+                Some('{') => {
+                    if self.peek() == Some('{') {
+                        self.advance();
+                        s.push('{');
+                        continue;
+                    }
+                    if is_initial {
+                        self.modes.push(LexerMode::StringContinuation);
+                    }
+                    self.modes.push(LexerMode::Interpolation { brace_depth: 0 });
+                    let kind = if is_initial {
+                        TokenKind::InterpStringStart(s)
+                    } else {
+                        TokenKind::InterpStringMiddle(s)
+                    };
+                    return Ok(Token::new(kind, start_span));
+                }
+                Some('}') => {
+                    if self.peek() == Some('}') {
+                        self.advance();
+                        s.push('}');
+                    } else {
+                        return Err(CompileError::new(
+                            start_span,
+                            "single '}' is not allowed in string literals; use '}}' for a literal brace",
+                        ));
                     }
                 }
                 Some('\n') | None => {
-                    return Err(CompileError::new(
-                        start_span,
-                        "unterminated string literal",
-                    ));
+                    return Err(CompileError::new(start_span, "unterminated string literal"));
                 }
                 Some(c) => s.push(c),
             }
@@ -238,7 +277,7 @@ impl Lexer {
         Token::new(kind, start_span)
     }
 
-    fn next_token(&mut self) -> Result<Token, CompileError> {
+    fn lex_normal_token(&mut self) -> Result<Token, CompileError> {
         loop {
             self.skip_whitespace();
             let span = self.span();
@@ -267,7 +306,7 @@ impl Lexer {
                 }
                 Some('"') => {
                     self.advance();
-                    return self.read_string();
+                    return self.read_string_segment(span, true);
                 }
                 Some(ch) if ch.is_ascii_digit() => {
                     return self.read_number();
@@ -405,6 +444,55 @@ impl Lexer {
             }
         }
     }
+
+    fn next_token(&mut self) -> Result<Token, CompileError> {
+        match self.modes.last().copied() {
+            Some(LexerMode::StringContinuation) => {
+                let span = self.span();
+                self.read_string_segment(span, false)
+            }
+            Some(LexerMode::Interpolation { brace_depth }) => {
+                loop {
+                    self.skip_whitespace();
+                    if self.peek() == Some('/') && self.peek_ahead(1) == Some('/') {
+                        self.advance();
+                        self.advance();
+                        self.skip_line_comment();
+                        continue;
+                    }
+                    if self.peek() == Some('/') && self.peek_ahead(1) == Some('*') {
+                        self.advance();
+                        self.advance();
+                        self.skip_block_comment()?;
+                        continue;
+                    }
+                    break;
+                }
+                if brace_depth == 0 && self.peek() == Some('}') {
+                    self.advance();
+                    self.modes.pop();
+                    self.next_token()
+                } else if self.peek() == Some('{') {
+                    let span = self.span();
+                    self.advance();
+                    if let Some(LexerMode::Interpolation { brace_depth }) = self.modes.last_mut() {
+                        *brace_depth += 1;
+                    }
+                    Ok(Token::new(TokenKind::LBrace, span))
+                } else if self.peek() == Some('}') {
+                    let span = self.span();
+                    self.advance();
+                    if let Some(LexerMode::Interpolation { brace_depth }) = self.modes.last_mut() {
+                        *brace_depth -= 1;
+                    }
+                    Ok(Token::new(TokenKind::RBrace, span))
+                } else {
+                    self.lex_normal_token()
+                }
+            }
+            None => self.lex_normal_token(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -499,6 +587,28 @@ mod tests {
         assert_eq!(tokens[1], TokenKind::StringLit("world\n".into()));
         assert_eq!(tokens[2], TokenKind::StringLit("tab\there".into()));
         assert_eq!(tokens[3], TokenKind::StringLit("esc\\".into()));
+    }
+
+    #[test]
+    fn test_interpolated_string_tokens() {
+        let tokens = lex(r#""hello {name}!""#);
+        assert_eq!(tokens[0], TokenKind::InterpStringStart("hello ".into()));
+        assert_eq!(tokens[1], TokenKind::Ident("name".into()));
+        assert_eq!(tokens[2], TokenKind::InterpStringEnd("!".into()));
+    }
+
+    #[test]
+    fn test_interpolated_string_literal_braces() {
+        let tokens = lex(r#""{{value}} {n}""#);
+        assert_eq!(tokens[0], TokenKind::InterpStringStart("{value} ".into()));
+        assert_eq!(tokens[1], TokenKind::Ident("n".into()));
+        assert_eq!(tokens[2], TokenKind::InterpStringEnd("".into()));
+    }
+
+    #[test]
+    fn test_interpolated_string_rejects_single_closing_brace() {
+        let msg = lex_err(r#""oops }""#);
+        assert!(msg.contains("single '}' is not allowed"), "got: {msg}");
     }
 
     #[test]

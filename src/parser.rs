@@ -149,7 +149,10 @@ impl Parser {
             }
             _ => Err(CompileError::new(
                 span,
-                format!("expected string literal after 'use', found '{}'", self.peek()),
+                format!(
+                    "expected string literal after 'use', found '{}'",
+                    self.peek()
+                ),
             )),
         }
     }
@@ -442,7 +445,10 @@ impl Parser {
             } else {
                 Err(CompileError::new(
                     size_span,
-                    format!("expected integer literal for array size, found '{}'", self.peek()),
+                    format!(
+                        "expected integer literal for array size, found '{}'",
+                        self.peek()
+                    ),
                 ))
             }
         } else {
@@ -501,8 +507,12 @@ impl Parser {
     fn is_at_statement_start(&self) -> bool {
         matches!(
             self.peek(),
-            TokenKind::Let | TokenKind::While | TokenKind::For | TokenKind::Return
-            | TokenKind::Break | TokenKind::Continue
+            TokenKind::Let
+                | TokenKind::While
+                | TokenKind::For
+                | TokenKind::Return
+                | TokenKind::Break
+                | TokenKind::Continue
         ) || self.is_at_assign()
     }
 
@@ -539,8 +549,12 @@ impl Parser {
                         i += 1;
                     }
                 }
-                TokenKind::Eq | TokenKind::PlusEq | TokenKind::MinusEq
-                | TokenKind::StarEq | TokenKind::SlashEq | TokenKind::PercentEq => {
+                TokenKind::Eq
+                | TokenKind::PlusEq
+                | TokenKind::MinusEq
+                | TokenKind::StarEq
+                | TokenKind::SlashEq
+                | TokenKind::PercentEq => {
                     return true;
                 }
                 _ => return false,
@@ -958,6 +972,11 @@ impl Parser {
                 self.advance();
                 Ok(Expr::StringLit(s, span))
             }
+            TokenKind::InterpStringStart(s) => {
+                let s = s.clone();
+                self.advance();
+                self.parse_interpolated_string_expr(s, span)
+            }
             TokenKind::True => {
                 self.advance();
                 Ok(Expr::BoolLit(true, span))
@@ -988,8 +1007,7 @@ impl Parser {
                 }
                 // Check for struct literal: Ident { ... }
                 // Only if the name is a known type name
-                if self.peek_ahead(1) == &TokenKind::LBrace
-                    && self.known_type_names.contains(&name)
+                if self.peek_ahead(1) == &TokenKind::LBrace && self.known_type_names.contains(&name)
                 {
                     return self.parse_struct_literal();
                 }
@@ -1002,6 +1020,48 @@ impl Parser {
                 format!("expected expression, found '{}'", self.peek()),
             )),
         }
+    }
+
+    fn parse_interpolated_string_expr(
+        &mut self,
+        start_text: String,
+        span: Span,
+    ) -> Result<Expr, CompileError> {
+        let mut parts = Vec::new();
+        if !start_text.is_empty() {
+            parts.push(InterpolatedStringPart::Text(start_text));
+        }
+
+        loop {
+            let expr = self.parse_expr()?;
+            parts.push(InterpolatedStringPart::Expr(expr));
+
+            match self.peek().clone() {
+                TokenKind::InterpStringMiddle(text) => {
+                    let text = text.clone();
+                    self.advance();
+                    if !text.is_empty() {
+                        parts.push(InterpolatedStringPart::Text(text));
+                    }
+                }
+                TokenKind::InterpStringEnd(text) => {
+                    let text = text.clone();
+                    self.advance();
+                    if !text.is_empty() {
+                        parts.push(InterpolatedStringPart::Text(text));
+                    }
+                    break;
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        self.peek_span(),
+                        "unterminated interpolated string",
+                    ));
+                }
+            }
+        }
+
+        Ok(Expr::InterpolatedString { parts, span })
     }
 
     fn parse_if_expr(&mut self) -> Result<Expr, CompileError> {
@@ -1187,7 +1247,10 @@ impl Parser {
                     }
                     _ => Err(CompileError::new(
                         lit_span,
-                        format!("expected numeric literal after '-' in pattern, found '{}'", self.peek()),
+                        format!(
+                            "expected numeric literal after '-' in pattern, found '{}'",
+                            self.peek()
+                        ),
                     )),
                 }
             }
@@ -1298,9 +1361,7 @@ mod tests {
 
     #[test]
     fn test_enum_decl() {
-        let program = parse(
-            "enum Shape { Circle(f64), Rectangle(f64, f64), Empty, }",
-        );
+        let program = parse("enum Shape { Circle(f64), Rectangle(f64, f64), Empty, }");
         match &program.decls[0] {
             TopDecl::Enum(e) => {
                 assert_eq!(e.name, "Shape");
@@ -1347,8 +1408,15 @@ mod tests {
                 let tail = f.body.tail_expr.as_ref().unwrap();
                 // Should be Add(1, Mul(2, 3)) due to precedence
                 match tail.as_ref() {
-                    Expr::BinaryOp { op: BinOp::Add, right, .. } => {
-                        assert!(matches!(right.as_ref(), Expr::BinaryOp { op: BinOp::Mul, .. }));
+                    Expr::BinaryOp {
+                        op: BinOp::Add,
+                        right,
+                        ..
+                    } => {
+                        assert!(matches!(
+                            right.as_ref(),
+                            Expr::BinaryOp { op: BinOp::Mul, .. }
+                        ));
                     }
                     other => panic!("expected add, got {:?}", other),
                 }
@@ -1416,9 +1484,8 @@ mod tests {
 
     #[test]
     fn test_struct_literal() {
-        let program = parse(
-            "struct Point { x: f64, y: f64 } fn f() -> Point { Point { x: 1.0, y: 2.0 } }",
-        );
+        let program =
+            parse("struct Point { x: f64, y: f64 } fn f() -> Point { Point { x: 1.0, y: 2.0 } }");
         match &program.decls[1] {
             TopDecl::Fn(f) => {
                 let tail = f.body.tail_expr.as_ref().unwrap();
@@ -1444,17 +1511,13 @@ mod tests {
     fn test_error_unexpected_token() {
         // Parser error: a bare literal is not a valid top-level decl
         let msg = parse_err("42");
-        assert!(
-            msg.contains("expected top-level declaration"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("expected top-level declaration"), "got: {msg}");
     }
 
     #[test]
     fn test_try_expr() {
-        let program = parse(
-            "fn f() -> Result<i32, str> { let x: i32 = try parse(\"42\"); Result::Ok(x) }",
-        );
+        let program =
+            parse("fn f() -> Result<i32, str> { let x: i32 = try parse(\"42\"); Result::Ok(x) }");
         match &program.decls[0] {
             TopDecl::Fn(f) => {
                 assert!(!f.body.stmts.is_empty());
@@ -1494,6 +1557,35 @@ mod tests {
                 let tail = f.body.tail_expr.as_ref().unwrap();
                 assert!(matches!(tail.as_ref(), Expr::Cast { .. }));
             }
+            _ => panic!("expected fn"),
+        }
+    }
+
+    #[test]
+    fn test_interpolated_string_expr() {
+        let program = parse(r#"fn! main() { println("hello {name}!"); }"#);
+        match &program.decls[0] {
+            TopDecl::Fn(f) => match &f.body.stmts[0] {
+                Stmt::Expr(expr_stmt) => match &expr_stmt.expr {
+                    Expr::Call { args, .. } => match &args[0] {
+                        Expr::InterpolatedString { parts, .. } => {
+                            assert_eq!(parts.len(), 3);
+                            assert!(
+                                matches!(&parts[0], InterpolatedStringPart::Text(text) if text == "hello ")
+                            );
+                            assert!(
+                                matches!(&parts[1], InterpolatedStringPart::Expr(Expr::Ident(name, _)) if name == "name")
+                            );
+                            assert!(
+                                matches!(&parts[2], InterpolatedStringPart::Text(text) if text == "!")
+                            );
+                        }
+                        other => panic!("expected interpolated string, got {:?}", other),
+                    },
+                    other => panic!("expected call, got {:?}", other),
+                },
+                other => panic!("expected expr stmt, got {:?}", other),
+            },
             _ => panic!("expected fn"),
         }
     }

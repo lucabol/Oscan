@@ -18,6 +18,13 @@
 
 ## Learnings
 
+### Interpolation MVP runtime prep
+- **Files:** `runtime/osc_runtime.c`, `runtime/test_runtime.c`, `docs/spec/oscan-spec.md`, `docs/guide.md`, `README.md`, `.squad/decisions/inbox/morpheus-interpolation.md`
+- **Runtime decision:** Interpolation MVP needs no new formatter helper. The existing arena-backed surface is enough: `str_concat`, `str_from_i32` / `i32_to_str`, `str_from_i64`, `str_from_f64`, and `str_from_bool`.
+- **Implementation:** `osc_str_from_i32()` now delegates to `osc_i32_to_str()` so i32 stringification has one runtime implementation and one behavior path.
+- **Validation:** Added runtime tests for i32 aliasing plus i64/f64/bool stringification, and adjusted panic tests for MSVC friendliness. Runtime test suite passes on Windows/MSVC (`cl`) with 82/82 passing.
+- **Docs:** Synced spec, guide, and README so they all describe interpolation as upcoming syntax lowered onto existing string helpers rather than a new runtime subsystem.
+
 ### Phase 5: Runtime & Micro-Lib (completed)
 - **Files:** `runtime/osc_runtime.h`, `runtime/osc_runtime.c`, `runtime/test_runtime.c`, `runtime/Makefile`
 - **Arena allocator:** Single-arena model with 8-byte alignment, doubling growth strategy. `osc_arena_create / alloc / reset / destroy`. Global arena pointer (`osc_global_arena`) for generated main() to set.

@@ -1,0 +1,10 @@
+// Test: Multi-segment interpolation with escapes adjacent to interpolated values.
+
+fn! main() {
+    let name: str = "neo";
+    let count: i32 = 7;
+    println("quote:\"{name}\"");
+    println("slash:\\{count}");
+    println("left\n{name}\nright");
+    println("multi:{name}:{count}:done");
+}

@@ -50,21 +50,24 @@ pub enum TokenKind {
     IntLit(i64),
     FloatLit(f64),
     StringLit(String),
+    InterpStringStart(String),
+    InterpStringMiddle(String),
+    InterpStringEnd(String),
 
     // Identifier
     Ident(String),
 
     // Operators
-    Plus,       // +
-    Minus,      // -
-    Star,       // *
-    Slash,      // /
-    Percent,    // %
-    PlusEq,     // +=
-    MinusEq,    // -=
-    StarEq,     // *=
-    SlashEq,    // /=
-    PercentEq,  // %=
+    Plus,      // +
+    Minus,     // -
+    Star,      // *
+    Slash,     // /
+    Percent,   // %
+    PlusEq,    // +=
+    MinusEq,   // -=
+    StarEq,    // *=
+    SlashEq,   // /=
+    PercentEq, // %=
     EqEq,      // ==
     BangEq,    // !=
     Lt,        // <
@@ -75,18 +78,18 @@ pub enum TokenKind {
     FatArrow,  // =>
 
     // Punctuation
-    LBrace,    // {
-    RBrace,    // }
-    LParen,    // (
-    RParen,    // )
-    LBracket,  // [
-    RBracket,  // ]
-    Comma,     // ,
-    Colon,     // :
-    Semicolon, // ;
-    Dot,       // .
-    DotDot,    // ..
-    Arrow,     // ->
+    LBrace,     // {
+    RBrace,     // }
+    LParen,     // (
+    RParen,     // )
+    LBracket,   // [
+    RBracket,   // ]
+    Comma,      // ,
+    Colon,      // :
+    Semicolon,  // ;
+    Dot,        // .
+    DotDot,     // ..
+    Arrow,      // ->
     ColonColon, // ::
     Underscore, // _
 
@@ -124,6 +127,9 @@ impl std::fmt::Display for TokenKind {
             TokenKind::IntLit(v) => write!(f, "{v}"),
             TokenKind::FloatLit(v) => write!(f, "{v}"),
             TokenKind::StringLit(s) => write!(f, "\"{s}\""),
+            TokenKind::InterpStringStart(s) => write!(f, "\"{s}{{"),
+            TokenKind::InterpStringMiddle(s) => write!(f, "}}{s}{{"),
+            TokenKind::InterpStringEnd(s) => write!(f, "}}{s}\""),
             TokenKind::Ident(s) => write!(f, "{s}"),
             TokenKind::Plus => write!(f, "+"),
             TokenKind::Minus => write!(f, "-"),

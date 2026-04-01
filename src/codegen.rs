@@ -104,7 +104,11 @@ impl CodeGenerator {
         }
     }
 
-    fn collect_result_types_from_ast_type(&mut self, ty: &Type, seen: &mut HashSet<(BcType, BcType)>) {
+    fn collect_result_types_from_ast_type(
+        &mut self,
+        ty: &Type,
+        seen: &mut HashSet<(BcType, BcType)>,
+    ) {
         if let Type::Result(ok, err, _) = ty {
             let ok_bc = self.resolve_ast_type(ok);
             let err_bc = self.resolve_ast_type(err);
@@ -156,11 +160,10 @@ impl CodeGenerator {
     /// Mangle identifiers that clash with C keywords or standard type names.
     fn mangle_c_name(name: &str) -> String {
         const C_RESERVED: &[&str] = &[
-            "auto", "break", "case", "char", "const", "continue", "default", "do",
-            "double", "else", "enum", "extern", "float", "for", "goto", "if",
-            "int", "long", "register", "return", "short", "signed", "sizeof",
-            "static", "struct", "switch", "typedef", "union", "unsigned", "void",
-            "volatile", "while", "inline", "restrict",
+            "auto", "break", "case", "char", "const", "continue", "default", "do", "double",
+            "else", "enum", "extern", "float", "for", "goto", "if", "int", "long", "register",
+            "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef",
+            "union", "unsigned", "void", "volatile", "while", "inline", "restrict",
         ];
         if C_RESERVED.contains(&name) {
             format!("{}_", name)
@@ -223,8 +226,15 @@ impl CodeGenerator {
             }
             let ok_c = self.type_to_c(ok);
             let err_c = self.type_to_c(err);
-            let ok_c_field = if *ok == BcType::Unit { "uint8_t".to_string() } else { ok_c };
-            self.line(&format!("OSC_RESULT_DECL({}, {}, {});", ok_c_field, err_c, name));
+            let ok_c_field = if *ok == BcType::Unit {
+                "uint8_t".to_string()
+            } else {
+                ok_c
+            };
+            self.line(&format!(
+                "OSC_RESULT_DECL({}, {}, {});",
+                ok_c_field, err_c, name
+            ));
         }
         self.blank();
     }
@@ -339,14 +349,19 @@ impl CodeGenerator {
                         let escaped = self.escape_c_string(s);
                         self.line(&format!(
                             "static const osc_str {} = {{ \"{}\", {} }};",
-                            l.name, escaped, s.len()
+                            l.name,
+                            escaped,
+                            s.len()
                         ));
                     }
                     _ => {
                         // Try compile-time constant evaluation first (C99 requires
                         // static initializers to be constant expressions).
                         if let Some(const_val) = Self::try_const_eval(&l.value) {
-                            self.line(&format!("static const {} {} = {};", c_ty, l.name, const_val));
+                            self.line(&format!(
+                                "static const {} {} = {};",
+                                c_ty, l.name, const_val
+                            ));
                         } else {
                             self.scopes.push(HashMap::new());
                             let val = self.emit_expr(&l.value);
@@ -366,7 +381,9 @@ impl CodeGenerator {
             Expr::IntLit(v, _) => Some(format!("{}", v)),
             Expr::FloatLit(v, _) => Some(format!("{:?}", v)),
             Expr::BoolLit(b, _) => Some(if *b { "1".to_string() } else { "0".to_string() }),
-            Expr::BinaryOp { op, left, right, .. } => {
+            Expr::BinaryOp {
+                op, left, right, ..
+            } => {
                 let l = Self::try_const_eval(left)?;
                 let r = Self::try_const_eval(right)?;
                 let lv = l.parse::<i64>().ok()?;
@@ -380,7 +397,11 @@ impl CodeGenerator {
                     _ => None,
                 }
             }
-            Expr::UnaryOp { op: UnaryOp::Neg, operand, .. } => {
+            Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand,
+                ..
+            } => {
                 let v = Self::try_const_eval(operand)?;
                 let iv = v.parse::<i64>().ok()?;
                 Some(format!("{}", iv.checked_neg()?))
@@ -404,7 +425,11 @@ impl CodeGenerator {
     fn emit_function(&mut self, f: &FnDecl) {
         let ret = self.fn_return_c(f);
         let params = self.fn_params_c(f);
-        let name = if f.name == "main" { "oscan_main".to_string() } else { Self::mangle_c_name(&f.name) };
+        let name = if f.name == "main" {
+            "oscan_main".to_string()
+        } else {
+            Self::mangle_c_name(&f.name)
+        };
 
         self.current_fn_return_type = match &f.return_type {
             Some(t) => Some(self.resolve_ast_type(t)),
@@ -523,7 +548,12 @@ impl CodeGenerator {
                 } else {
                     // For structs/enums/arrays, skip const qualifier to avoid C issues
                     match &ty {
-                        BcType::Struct(_) | BcType::Enum(_) | BcType::Array(_) | BcType::FixedArray(_, _) | BcType::Result(_, _) | BcType::Map => {
+                        BcType::Struct(_)
+                        | BcType::Enum(_)
+                        | BcType::Array(_)
+                        | BcType::FixedArray(_, _)
+                        | BcType::Result(_, _)
+                        | BcType::Map => {
                             self.line(&format!("{} {} = {};", c_ty, ls.name, val));
                         }
                         _ => {
@@ -586,11 +616,16 @@ impl CodeGenerator {
             Stmt::For(f) => {
                 let start = self.emit_expr(&f.start);
                 let end = self.emit_expr(&f.end);
-                self.line(&format!("for (int32_t {} = {}; {} < {}; {}++) {{",
-                    f.var, start, f.var, end, f.var));
+                self.line(&format!(
+                    "for (int32_t {} = {}; {} < {}; {}++) {{",
+                    f.var, start, f.var, end, f.var
+                ));
                 self.indent += 1;
                 self.push_scope();
-                self.scopes.last_mut().unwrap().insert(f.var.clone(), BcType::I32);
+                self.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(f.var.clone(), BcType::I32);
                 for s in &f.body.stmts {
                     self.emit_stmt(s);
                 }
@@ -616,21 +651,35 @@ impl CodeGenerator {
                 };
                 let c_elem_ty = self.type_to_c(&elem_ty);
                 if is_fixed {
-                    self.line(&format!("for (int32_t {} = 0; {} < {}; {}++) {{",
-                        iter_idx, iter_idx, fixed_size, iter_idx));
+                    self.line(&format!(
+                        "for (int32_t {} = 0; {} < {}; {}++) {{",
+                        iter_idx, iter_idx, fixed_size, iter_idx
+                    ));
                     self.indent += 1;
                     self.push_scope();
-                    self.scopes.last_mut().unwrap().insert(fi.var.clone(), elem_ty);
-                    self.line(&format!("const {} {} = {}[{}];",
-                        c_elem_ty, fi.var, arr_expr, iter_idx));
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(fi.var.clone(), elem_ty);
+                    self.line(&format!(
+                        "const {} {} = {}[{}];",
+                        c_elem_ty, fi.var, arr_expr, iter_idx
+                    ));
                 } else {
-                    self.line(&format!("for (int32_t {} = 0; {} < {}->len; {}++) {{",
-                        iter_idx, iter_idx, arr_expr, iter_idx));
+                    self.line(&format!(
+                        "for (int32_t {} = 0; {} < {}->len; {}++) {{",
+                        iter_idx, iter_idx, arr_expr, iter_idx
+                    ));
                     self.indent += 1;
                     self.push_scope();
-                    self.scopes.last_mut().unwrap().insert(fi.var.clone(), elem_ty);
-                    self.line(&format!("const {} {} = (({}*){}->data)[{}];",
-                        c_elem_ty, fi.var, c_elem_ty, arr_expr, iter_idx));
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(fi.var.clone(), elem_ty);
+                    self.line(&format!(
+                        "const {} {} = (({}*){}->data)[{}];",
+                        c_elem_ty, fi.var, c_elem_ty, arr_expr, iter_idx
+                    ));
                 }
                 for s in &fi.body.stmts {
                     self.emit_stmt(s);
@@ -706,13 +755,20 @@ impl CodeGenerator {
                 let escaped = self.escape_c_string(s);
                 format!("osc_str_from_cstr(\"{}\")", escaped)
             }
-            Expr::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
+            Expr::InterpolatedString { parts, .. } => self.emit_interpolated_string(parts),
+            Expr::BoolLit(b, _) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
 
             Expr::Ident(name, _) => name.clone(),
 
-            Expr::BinaryOp { op, left, right, .. } => {
-                self.emit_binary_op(*op, left, right)
-            }
+            Expr::BinaryOp {
+                op, left, right, ..
+            } => self.emit_binary_op(*op, left, right),
 
             Expr::UnaryOp { op, operand, .. } => {
                 let val = self.emit_expr(operand);
@@ -730,7 +786,9 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::Cast { expr: inner, ty, .. } => {
+            Expr::Cast {
+                expr: inner, ty, ..
+            } => {
                 let val = self.emit_expr(inner);
                 let from = self.type_of(inner);
                 let to = self.resolve_ast_type(ty);
@@ -745,18 +803,25 @@ impl CodeGenerator {
                 self.emit_call(&name, args)
             }
 
-            Expr::FieldAccess { expr: obj, field, .. } => {
+            Expr::FieldAccess {
+                expr: obj, field, ..
+            } => {
                 let obj_c = self.emit_expr(obj);
                 format!("{}.{}", obj_c, field)
             }
 
-            Expr::Index { expr: arr, index, .. } => {
+            Expr::Index {
+                expr: arr, index, ..
+            } => {
                 let arr_c = self.emit_expr(arr);
                 let idx_c = self.emit_expr(index);
                 let arr_ty = self.type_of(arr);
                 match &arr_ty {
                     BcType::Str => {
-                        format!("((int32_t)(unsigned char)(({}).data[osc_str_check_index({}, {})]))", arr_c, arr_c, idx_c)
+                        format!(
+                            "((int32_t)(unsigned char)(({}).data[osc_str_check_index({}, {})]))",
+                            arr_c, arr_c, idx_c
+                        )
                     }
                     _ => {
                         let elem_ty = match &arr_ty {
@@ -825,29 +890,29 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::If { condition, then_block, else_branch, .. } => {
-                self.emit_if(condition, then_block, else_branch.as_deref())
-            }
+            Expr::If {
+                condition,
+                then_block,
+                else_branch,
+                ..
+            } => self.emit_if(condition, then_block, else_branch.as_deref()),
 
-            Expr::Match { scrutinee, arms, .. } => {
-                self.emit_match(scrutinee, arms)
-            }
+            Expr::Match {
+                scrutinee, arms, ..
+            } => self.emit_match(scrutinee, arms),
 
-            Expr::Try { call, span } => {
-                self.emit_try(call, *span)
-            }
+            Expr::Try { call, span } => self.emit_try(call, *span),
 
-            Expr::ArrayLit { elements, .. } => {
-                self.emit_array_lit(elements)
-            }
+            Expr::ArrayLit { elements, .. } => self.emit_array_lit(elements),
 
-            Expr::StructLit { name, fields, .. } => {
-                self.emit_struct_lit(name, fields)
-            }
+            Expr::StructLit { name, fields, .. } => self.emit_struct_lit(name, fields),
 
-            Expr::EnumConstructor { enum_name, variant, args, .. } => {
-                self.emit_enum_constructor(enum_name, variant, args)
-            }
+            Expr::EnumConstructor {
+                enum_name,
+                variant,
+                args,
+                ..
+            } => self.emit_enum_constructor(enum_name, variant, args),
         }
     }
 
@@ -888,20 +953,16 @@ impl CodeGenerator {
                 BcType::I64 => format!("osc_mod_i64({}, {})", lv, rv),
                 _ => format!("({} %% {})", lv, rv),
             },
-            BinOp::Eq => {
-                match ty {
-                    BcType::Str => format!("osc_str_eq({}, {})", lv, rv),
-                    BcType::Enum(_) => format!("({}.tag == {}.tag)", lv, rv),
-                    _ => format!("({} == {})", lv, rv),
-                }
-            }
-            BinOp::Neq => {
-                match ty {
-                    BcType::Str => format!("(!osc_str_eq({}, {}))", lv, rv),
-                    BcType::Enum(_) => format!("({}.tag != {}.tag)", lv, rv),
-                    _ => format!("({} != {})", lv, rv),
-                }
-            }
+            BinOp::Eq => match ty {
+                BcType::Str => format!("osc_str_eq({}, {})", lv, rv),
+                BcType::Enum(_) => format!("({}.tag == {}.tag)", lv, rv),
+                _ => format!("({} == {})", lv, rv),
+            },
+            BinOp::Neq => match ty {
+                BcType::Str => format!("(!osc_str_eq({}, {}))", lv, rv),
+                BcType::Enum(_) => format!("({}.tag != {}.tag)", lv, rv),
+                _ => format!("({} != {})", lv, rv),
+            },
             BinOp::Lt => match ty {
                 BcType::Str => format!("(osc_str_compare({}, {}) < 0)", lv, rv),
                 _ => format!("({} < {})", lv, rv),
@@ -920,6 +981,46 @@ impl CodeGenerator {
             },
             BinOp::And => format!("({} && {})", lv, rv),
             BinOp::Or => format!("({} || {})", lv, rv),
+        }
+    }
+
+    fn emit_interpolated_string(&mut self, parts: &[InterpolatedStringPart]) -> String {
+        let mut rendered_parts = Vec::new();
+
+        for part in parts {
+            match part {
+                InterpolatedStringPart::Text(text) => {
+                    if !text.is_empty() {
+                        let escaped = self.escape_c_string(text);
+                        rendered_parts.push(format!("osc_str_from_cstr(\"{}\")", escaped));
+                    }
+                }
+                InterpolatedStringPart::Expr(expr) => {
+                    rendered_parts.push(self.emit_interpolated_expr(expr));
+                }
+            }
+        }
+
+        if rendered_parts.is_empty() {
+            return "osc_str_from_cstr(\"\")".to_string();
+        }
+
+        let mut result = rendered_parts[0].clone();
+        for part in rendered_parts.iter().skip(1) {
+            result = format!("osc_str_concat(_arena, {}, {})", result, part);
+        }
+        result
+    }
+
+    fn emit_interpolated_expr(&mut self, expr: &Expr) -> String {
+        let value = self.emit_expr(expr);
+        match self.type_of(expr) {
+            BcType::Str => value,
+            BcType::I32 => format!("osc_str_from_i32(_arena, {})", value),
+            BcType::I64 => format!("osc_str_from_i64(_arena, {})", value),
+            BcType::F64 => format!("osc_str_from_f64(_arena, {})", value),
+            BcType::Bool => format!("osc_str_from_bool({})", value),
+            _ => unreachable!("semantic analysis should reject unsupported interpolation types"),
         }
     }
 
@@ -960,7 +1061,10 @@ impl CodeGenerator {
             "str_to_cstr" => format!("osc_str_to_cstr(_arena, {})", arg_strs[0]),
             "str_find" => format!("osc_str_find({}, {})", arg_strs[0], arg_strs[1]),
             "str_from_i32" => format!("osc_str_from_i32(_arena, {})", arg_strs[0]),
-            "str_slice" => format!("osc_str_slice(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "str_slice" => format!(
+                "osc_str_slice(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "abs_i32" => format!("osc_abs_i32({})", arg_strs[0]),
             "abs_f64" => format!("osc_abs_f64({})", arg_strs[0]),
             "mod_i32" => format!("osc_mod_i32({}, {})", arg_strs[0], arg_strs[1]),
@@ -979,11 +1083,26 @@ impl CodeGenerator {
             "math_e" => "osc_math_e()".to_string(),
             "math_ln2" => "osc_math_ln2()".to_string(),
             "math_sqrt2" => "osc_math_sqrt2()".to_string(),
-            "band" => format!("((int32_t)((uint32_t)({}) & (uint32_t)({})))", arg_strs[0], arg_strs[1]),
-            "bor" => format!("((int32_t)((uint32_t)({}) | (uint32_t)({})))", arg_strs[0], arg_strs[1]),
-            "bxor" => format!("((int32_t)((uint32_t)({}) ^ (uint32_t)({})))", arg_strs[0], arg_strs[1]),
-            "bshl" => format!("((int32_t)((uint32_t)({}) << ({})))", arg_strs[0], arg_strs[1]),
-            "bshr" => format!("((int32_t)((uint32_t)({}) >> ({})))", arg_strs[0], arg_strs[1]),
+            "band" => format!(
+                "((int32_t)((uint32_t)({}) & (uint32_t)({})))",
+                arg_strs[0], arg_strs[1]
+            ),
+            "bor" => format!(
+                "((int32_t)((uint32_t)({}) | (uint32_t)({})))",
+                arg_strs[0], arg_strs[1]
+            ),
+            "bxor" => format!(
+                "((int32_t)((uint32_t)({}) ^ (uint32_t)({})))",
+                arg_strs[0], arg_strs[1]
+            ),
+            "bshl" => format!(
+                "((int32_t)((uint32_t)({}) << ({})))",
+                arg_strs[0], arg_strs[1]
+            ),
+            "bshr" => format!(
+                "((int32_t)((uint32_t)({}) >> ({})))",
+                arg_strs[0], arg_strs[1]
+            ),
             "bnot" => format!("((int32_t)(~(uint32_t)({})))", arg_strs[0]),
             "i32_to_str" => format!("osc_i32_to_str(_arena, {})", arg_strs[0]),
             "arena_reset" => "osc_arena_reset_global()".to_string(),
@@ -996,7 +1115,10 @@ impl CodeGenerator {
             "file_delete" => format!("osc_file_delete({})", arg_strs[0]),
             // Socket I/O
             "socket_tcp" => "osc_socket_tcp()".to_string(),
-            "socket_connect" => format!("osc_socket_connect({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "socket_connect" => format!(
+                "osc_socket_connect({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "socket_bind" => format!("osc_socket_bind({}, {})", arg_strs[0], arg_strs[1]),
             "socket_listen" => format!("osc_socket_listen({}, {})", arg_strs[0], arg_strs[1]),
             "socket_accept" => format!("osc_socket_accept({})", arg_strs[0]),
@@ -1005,8 +1127,14 @@ impl CodeGenerator {
             "socket_close" => format!("osc_socket_close({})", arg_strs[0]),
             // UDP Socket I/O
             "socket_udp" => "osc_socket_udp()".to_string(),
-            "socket_sendto" => format!("osc_socket_sendto({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
-            "socket_recvfrom" => format!("osc_socket_recvfrom(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "socket_sendto" => format!(
+                "osc_socket_sendto({}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+            ),
+            "socket_recvfrom" => format!(
+                "osc_socket_recvfrom(_arena, {}, {})",
+                arg_strs[0], arg_strs[1]
+            ),
             "arg_count" => "osc_arg_count()".to_string(),
             "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
             // Tier 1: Character classification
@@ -1059,7 +1187,10 @@ impl CodeGenerator {
             "str_split" => format!("osc_str_split(_arena, {}, {})", arg_strs[0], arg_strs[1]),
             "str_to_upper" => format!("osc_str_to_upper(_arena, {})", arg_strs[0]),
             "str_to_lower" => format!("osc_str_to_lower(_arena, {})", arg_strs[0]),
-            "str_replace" => format!("osc_str_replace(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "str_replace" => format!(
+                "osc_str_replace(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "str_compare" => format!("osc_str_compare({}, {})", arg_strs[0], arg_strs[1]),
             // Tier 7: Directory listing & process control
             "dir_list" => format!("osc_dir_list(_arena, {})", arg_strs[0]),
@@ -1095,20 +1226,44 @@ impl CodeGenerator {
             "env_set" => format!("osc_env_set({}, {})", arg_strs[0], arg_strs[1]),
             "env_delete" => format!("osc_env_delete({})", arg_strs[0]),
             // Graphics: Canvas Lifecycle
-            "canvas_open" => format!("osc_canvas_open({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "canvas_open" => format!(
+                "osc_canvas_open({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "canvas_close" => "osc_canvas_close()".to_string(),
             "canvas_alive" => "osc_canvas_alive()".to_string(),
             "canvas_flush" => "osc_canvas_flush()".to_string(),
             "canvas_clear" => format!("osc_canvas_clear({})", arg_strs[0]),
             // Graphics: Drawing Primitives
-            "gfx_pixel" => format!("osc_gfx_pixel({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "gfx_pixel" => format!(
+                "osc_gfx_pixel({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "gfx_get_pixel" => format!("osc_gfx_get_pixel({}, {})", arg_strs[0], arg_strs[1]),
-            "gfx_line" => format!("osc_gfx_line({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
-            "gfx_rect" => format!("osc_gfx_rect({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
-            "gfx_fill_rect" => format!("osc_gfx_fill_rect({}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]),
-            "gfx_circle" => format!("osc_gfx_circle({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
-            "gfx_fill_circle" => format!("osc_gfx_fill_circle({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
-            "gfx_draw_text" => format!("osc_gfx_draw_text({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            "gfx_line" => format!(
+                "osc_gfx_line({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
+            ),
+            "gfx_rect" => format!(
+                "osc_gfx_rect({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
+            ),
+            "gfx_fill_rect" => format!(
+                "osc_gfx_fill_rect({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
+            ),
+            "gfx_circle" => format!(
+                "osc_gfx_circle({}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+            ),
+            "gfx_fill_circle" => format!(
+                "osc_gfx_fill_circle({}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+            ),
+            "gfx_draw_text" => format!(
+                "osc_gfx_draw_text({}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+            ),
             // Graphics: Input
             "canvas_key" => "osc_canvas_key()".to_string(),
             "canvas_mouse_x" => "osc_canvas_mouse_x()".to_string(),
@@ -1116,7 +1271,10 @@ impl CodeGenerator {
             "canvas_mouse_btn" => "osc_canvas_mouse_btn()".to_string(),
             // Graphics: Color
             "rgb" => format!("osc_rgb({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
-            "rgba" => format!("osc_rgba({}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]),
+            "rgba" => format!(
+                "osc_rgba({}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+            ),
             // Tier 11: Array sort
             "sort_i32" => format!("osc_sort_i32({})", arg_strs[0]),
             "sort_i64" => format!("osc_sort_i64({})", arg_strs[0]),
@@ -1124,7 +1282,10 @@ impl CodeGenerator {
             "sort_f64" => format!("osc_sort_f64({})", arg_strs[0]),
             // HashMap builtins
             "map_new" => "osc_map_new(_arena)".to_string(),
-            "map_set" => format!("osc_map_set(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "map_set" => format!(
+                "osc_map_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "map_get" => format!("osc_map_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_has" => format!("osc_map_has({}, {})", arg_strs[0], arg_strs[1]),
             "map_delete" => format!("osc_map_delete({}, {})", arg_strs[0], arg_strs[1]),
@@ -1176,7 +1337,12 @@ impl CodeGenerator {
     // If expression
     // -----------------------------------------------------------------------
 
-    fn emit_if(&mut self, condition: &Expr, then_block: &Block, else_branch: Option<&Expr>) -> String {
+    fn emit_if(
+        &mut self,
+        condition: &Expr,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+    ) -> String {
         // Pre-scan then_block let stmts to determine type correctly
         let ty = if then_block.tail_expr.is_some() {
             self.push_scope();
@@ -1211,7 +1377,12 @@ impl CodeGenerator {
             self.indent -= 1;
             if let Some(else_expr) = else_branch {
                 match else_expr {
-                    Expr::If { condition: ec, then_block: et, else_branch: ee, .. } => {
+                    Expr::If {
+                        condition: ec,
+                        then_block: et,
+                        else_branch: ee,
+                        ..
+                    } => {
                         // else if
                         let ec_c = self.emit_expr(ec);
                         self.line(&format!("}} else if ({}) {{", ec_c));
@@ -1293,7 +1464,12 @@ impl CodeGenerator {
 
     fn emit_else_unit(&mut self, expr: &Expr) {
         match expr {
-            Expr::If { condition, then_block, else_branch, .. } => {
+            Expr::If {
+                condition,
+                then_block,
+                else_branch,
+                ..
+            } => {
                 let cond = self.emit_expr(condition);
                 self.line(&format!("}} else if ({}) {{", cond));
                 self.indent += 1;
@@ -1367,7 +1543,9 @@ impl CodeGenerator {
     fn emit_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
         match scrut_ty {
             BcType::Enum(ename) => {
-                let has_payload = self.enums.get(ename)
+                let has_payload = self
+                    .enums
+                    .get(ename)
                     .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
                     .unwrap_or(false);
                 if has_payload {
@@ -1392,10 +1570,18 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_match_valued(&mut self, tmp: &str, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_match_valued(
+        &mut self,
+        tmp: &str,
+        scrut_c: &str,
+        scrut_ty: &BcType,
+        arms: &[MatchArm],
+    ) {
         match scrut_ty {
             BcType::Enum(ename) => {
-                let has_payload = self.enums.get(ename)
+                let has_payload = self
+                    .enums
+                    .get(ename)
                     .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
                     .unwrap_or(false);
                 if has_payload {
@@ -1444,10 +1630,16 @@ impl CodeGenerator {
                 self.line("}");
                 return;
             }
-            Pattern::Enum { variant, bindings: _, .. } => {
+            Pattern::Enum {
+                variant,
+                bindings: _,
+                ..
+            } => {
                 self.line(&format!("case {}_TAG_{}: {{", ename, variant));
             }
-            _ => { self.line("default: {"); }
+            _ => {
+                self.line("default: {");
+            }
         }
         self.indent += 1;
         self.push_scope();
@@ -1470,7 +1662,9 @@ impl CodeGenerator {
             Pattern::Enum { variant, .. } => {
                 self.line(&format!("case {}_TAG_{}: {{", ename, variant));
             }
-            _ => { self.line("default: {"); }
+            _ => {
+                self.line("default: {");
+            }
         }
         self.indent += 1;
         self.push_scope();
@@ -1484,7 +1678,10 @@ impl CodeGenerator {
     }
 
     fn bind_enum_payload(&mut self, scrut_c: &str, ename: &str, pattern: &Pattern) {
-        if let Pattern::Enum { variant, bindings, .. } = pattern {
+        if let Pattern::Enum {
+            variant, bindings, ..
+        } = pattern
+        {
             let info = self.enums.get(ename).unwrap().clone();
             let var_info = info.variants.iter().find(|(n, _)| n == variant);
             if let Some((_, payload_types)) = var_info {
@@ -1493,9 +1690,14 @@ impl CodeGenerator {
                         if i < payload_types.len() {
                             let ty = &payload_types[i];
                             let c_ty = self.type_to_c(ty);
-                            self.line(&format!("{} {} = {}.data.{}._{};",
-                                c_ty, name, scrut_c, variant, i));
-                            self.scopes.last_mut().unwrap().insert(name.clone(), ty.clone());
+                            self.line(&format!(
+                                "{} {} = {}.data.{}._{};",
+                                c_ty, name, scrut_c, variant, i
+                            ));
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(name.clone(), ty.clone());
                         }
                     }
                 }
@@ -1503,7 +1705,13 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_result_match_unit(&mut self, scrut_c: &str, ok_ty: &BcType, err_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_result_match_unit(
+        &mut self,
+        scrut_c: &str,
+        ok_ty: &BcType,
+        err_ty: &BcType,
+        arms: &[MatchArm],
+    ) {
         let mut ok_arm = None;
         let mut err_arm = None;
         let mut wildcard_arm = None;
@@ -1524,14 +1732,21 @@ impl CodeGenerator {
                 if let Some(Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(ok_ty);
                     self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
-                    self.scopes.last_mut().unwrap().insert(name.clone(), ok_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), ok_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
-            if v != "(void)0" { self.line(&format!("{};", v)); }
+            if v != "(void)0" {
+                self.line(&format!("{};", v));
+            }
         } else if let Some(arm) = wildcard_arm {
             let v = self.emit_expr(&arm.body);
-            if v != "(void)0" { self.line(&format!("{};", v)); }
+            if v != "(void)0" {
+                self.line(&format!("{};", v));
+            }
         }
         self.pop_scope();
         self.indent -= 1;
@@ -1543,21 +1758,35 @@ impl CodeGenerator {
                 if let Some(Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(err_ty);
                     self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
-                    self.scopes.last_mut().unwrap().insert(name.clone(), err_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), err_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
-            if v != "(void)0" { self.line(&format!("{};", v)); }
+            if v != "(void)0" {
+                self.line(&format!("{};", v));
+            }
         } else if let Some(arm) = wildcard_arm {
             let v = self.emit_expr(&arm.body);
-            if v != "(void)0" { self.line(&format!("{};", v)); }
+            if v != "(void)0" {
+                self.line(&format!("{};", v));
+            }
         }
         self.pop_scope();
         self.indent -= 1;
         self.line("}");
     }
 
-    fn emit_result_match_valued(&mut self, tmp: &str, scrut_c: &str, ok_ty: &BcType, err_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_result_match_valued(
+        &mut self,
+        tmp: &str,
+        scrut_c: &str,
+        ok_ty: &BcType,
+        err_ty: &BcType,
+        arms: &[MatchArm],
+    ) {
         let mut ok_arm = None;
         let mut err_arm = None;
         let mut wildcard_arm = None;
@@ -1578,7 +1807,10 @@ impl CodeGenerator {
                 if let Some(Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(ok_ty);
                     self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
-                    self.scopes.last_mut().unwrap().insert(name.clone(), ok_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), ok_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -1597,7 +1829,10 @@ impl CodeGenerator {
                 if let Some(Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(err_ty);
                     self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
-                    self.scopes.last_mut().unwrap().insert(name.clone(), err_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), err_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -1616,25 +1851,40 @@ impl CodeGenerator {
         for arm in arms {
             match &arm.pattern {
                 Pattern::Wildcard(_) => {
-                    if first { self.line("{"); } else { self.line("} else {"); }
+                    if first {
+                        self.line("{");
+                    } else {
+                        self.line("} else {");
+                    }
                     self.indent += 1;
                     self.push_scope();
                     let v = self.emit_expr(&arm.body);
-                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
                     self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     return;
                 }
                 Pattern::Ident(name, _) => {
-                    if first { self.line("{"); } else { self.line("} else {"); }
+                    if first {
+                        self.line("{");
+                    } else {
+                        self.line("} else {");
+                    }
                     self.indent += 1;
                     self.push_scope();
                     let c_ty = self.type_to_c(scrut_ty);
                     self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
-                    self.scopes.last_mut().unwrap().insert(name.clone(), scrut_ty.clone());
+                    self.scopes
+                        .last_mut()
+                        .unwrap()
+                        .insert(name.clone(), scrut_ty.clone());
                     let v = self.emit_expr(&arm.body);
-                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
                     self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
@@ -1652,7 +1902,9 @@ impl CodeGenerator {
                     self.indent += 1;
                     self.push_scope();
                     let v = self.emit_expr(&arm.body);
-                    if v != "(void)0" { self.line(&format!("{};", v)); }
+                    if v != "(void)0" {
+                        self.line(&format!("{};", v));
+                    }
                     self.pop_scope();
                     self.indent -= 1;
                 }
@@ -1661,18 +1913,31 @@ impl CodeGenerator {
         self.line("}");
     }
 
-    fn emit_literal_match_valued(&mut self, tmp: &str, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_literal_match_valued(
+        &mut self,
+        tmp: &str,
+        scrut_c: &str,
+        scrut_ty: &BcType,
+        arms: &[MatchArm],
+    ) {
         let mut first = true;
         for arm in arms {
             match &arm.pattern {
                 Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
-                    if first { self.line("{"); } else { self.line("} else {"); }
+                    if first {
+                        self.line("{");
+                    } else {
+                        self.line("} else {");
+                    }
                     self.indent += 1;
                     self.push_scope();
                     if let Pattern::Ident(name, _) = &arm.pattern {
                         let c_ty = self.type_to_c(scrut_ty);
                         self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
-                        self.scopes.last_mut().unwrap().insert(name.clone(), scrut_ty.clone());
+                        self.scopes
+                            .last_mut()
+                            .unwrap()
+                            .insert(name.clone(), scrut_ty.clone());
                     }
                     let v = self.emit_expr(&arm.body);
                     self.line(&format!("{} = {};", tmp, v));
@@ -1706,8 +1971,16 @@ impl CodeGenerator {
         match pat {
             Pattern::IntLit(v, _) => format!("{}", v),
             Pattern::FloatLit(v, _) => format!("{}", v),
-            Pattern::StringLit(s, _) => format!("osc_str_from_cstr(\"{}\")", self.escape_c_string(s)),
-            Pattern::BoolLit(b, _) => if *b { "1".to_string() } else { "0".to_string() },
+            Pattern::StringLit(s, _) => {
+                format!("osc_str_from_cstr(\"{}\")", self.escape_c_string(s))
+            }
+            Pattern::BoolLit(b, _) => {
+                if *b {
+                    "1".to_string()
+                } else {
+                    "0".to_string()
+                }
+            }
             _ => "0".to_string(),
         }
     }
@@ -1769,8 +2042,12 @@ impl CodeGenerator {
         let elem_c = self.type_to_c(&elem_ty);
         let tmp = self.fresh_tmp();
         let size_expr = self.c_sizeof(&elem_ty);
-        self.line(&format!("osc_array* {} = osc_array_new(_arena, {}, {});",
-            tmp, size_expr, elements.len()));
+        self.line(&format!(
+            "osc_array* {} = osc_array_new(_arena, {}, {});",
+            tmp,
+            size_expr,
+            elements.len()
+        ));
         for elem in elements {
             let v = self.emit_expr(elem);
             let push_tmp = self.fresh_tmp();
@@ -1803,7 +2080,8 @@ impl CodeGenerator {
         }
 
         let info = self.enums.get(enum_name).cloned();
-        let has_payload = info.as_ref()
+        let has_payload = info
+            .as_ref()
             .map(|i| i.variants.iter().any(|v| !v.1.is_empty()))
             .unwrap_or(false);
 
@@ -1820,8 +2098,14 @@ impl CodeGenerator {
                 let v = self.emit_expr(arg);
                 payload_parts.push(format!("._{} = {}", i, v));
             }
-            format!("({}){{ .tag = {}_TAG_{}, .data.{} = {{ {} }} }}",
-                enum_name, enum_name, variant, variant, payload_parts.join(", "))
+            format!(
+                "({}){{ .tag = {}_TAG_{}, .data.{} = {{ {} }} }}",
+                enum_name,
+                enum_name,
+                variant,
+                variant,
+                payload_parts.join(", ")
+            )
         }
     }
 
@@ -1839,12 +2123,18 @@ impl CodeGenerator {
                 if ok_ty == BcType::Unit {
                     format!("({}){{ .is_ok = 1 }}", result_c_ty)
                 } else {
-                    format!("({}){{ .is_ok = 1, .value = {{ .ok = {} }} }}", result_c_ty, val)
+                    format!(
+                        "({}){{ .is_ok = 1, .value = {{ .ok = {} }} }}",
+                        result_c_ty, val
+                    )
                 }
             }
             "Err" => {
                 let val = self.emit_expr(&args[0]);
-                format!("({}){{ .is_ok = 0, .value = {{ .err = {} }} }}", result_c_ty, val)
+                format!(
+                    "({}){{ .is_ok = 0, .value = {{ .err = {} }} }}",
+                    result_c_ty, val
+                )
             }
             _ => "0".to_string(),
         }
@@ -1928,15 +2218,11 @@ impl CodeGenerator {
             Type::FixedArray(elem, size, _) => {
                 BcType::FixedArray(Box::new(self.resolve_ast_type(elem)), *size)
             }
-            Type::DynamicArray(elem, _) => {
-                BcType::Array(Box::new(self.resolve_ast_type(elem)))
-            }
-            Type::Result(ok, err, _) => {
-                BcType::Result(
-                    Box::new(self.resolve_ast_type(ok)),
-                    Box::new(self.resolve_ast_type(err)),
-                )
-            }
+            Type::DynamicArray(elem, _) => BcType::Array(Box::new(self.resolve_ast_type(elem))),
+            Type::Result(ok, err, _) => BcType::Result(
+                Box::new(self.resolve_ast_type(ok)),
+                Box::new(self.resolve_ast_type(err)),
+            ),
         }
     }
 
@@ -1946,38 +2232,49 @@ impl CodeGenerator {
             Expr::IntLit(_, _) => BcType::I32,
             Expr::FloatLit(_, _) => BcType::F64,
             Expr::StringLit(_, _) => BcType::Str,
+            Expr::InterpolatedString { .. } => BcType::Str,
             Expr::BoolLit(_, _) => BcType::Bool,
-            Expr::Ident(name, _) => {
-                self.lookup_type(name).unwrap_or(BcType::Unit)
-            }
-            Expr::BinaryOp { op, left, .. } => {
-                match op {
-                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt
-                    | BinOp::LtEq | BinOp::GtEq | BinOp::And | BinOp::Or => BcType::Bool,
-                    _ => self.type_of(left),
-                }
-            }
-            Expr::UnaryOp { op, operand, .. } => {
-                match op {
-                    UnaryOp::Not => BcType::Bool,
-                    UnaryOp::Neg => self.type_of(operand),
-                }
-            }
+            Expr::Ident(name, _) => self.lookup_type(name).unwrap_or(BcType::Unit),
+            Expr::BinaryOp { op, left, .. } => match op {
+                BinOp::Eq
+                | BinOp::Neq
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::LtEq
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => BcType::Bool,
+                _ => self.type_of(left),
+            },
+            Expr::UnaryOp { op, operand, .. } => match op {
+                UnaryOp::Not => BcType::Bool,
+                UnaryOp::Neg => self.type_of(operand),
+            },
             Expr::Cast { ty, .. } => self.resolve_ast_type(ty),
-            Expr::Call { callee, args: _, .. } => {
+            Expr::Call {
+                callee, args: _, ..
+            } => {
                 if let Expr::Ident(name, _) = callee.as_ref() {
-                    if name == "len" { return BcType::I32; }
-                    if name == "push" { return BcType::Unit; }
-                    self.functions.get(name)
+                    if name == "len" {
+                        return BcType::I32;
+                    }
+                    if name == "push" {
+                        return BcType::Unit;
+                    }
+                    self.functions
+                        .get(name)
                         .map(|f| f.return_type.clone())
                         .unwrap_or(BcType::Unit)
                 } else {
                     BcType::Unit
                 }
             }
-            Expr::FieldAccess { expr: obj, field, .. } => {
+            Expr::FieldAccess {
+                expr: obj, field, ..
+            } => {
                 if let BcType::Struct(name) = self.type_of(obj) {
-                    self.structs.get(&name)
+                    self.structs
+                        .get(&name)
                         .and_then(|s| s.fields.iter().find(|(n, _)| n == field))
                         .map(|(_, t)| t.clone())
                         .unwrap_or(BcType::Unit)
@@ -1985,14 +2282,16 @@ impl CodeGenerator {
                     BcType::Unit
                 }
             }
-            Expr::Index { expr: arr, .. } => {
-                match self.type_of(arr) {
-                    BcType::Array(e) | BcType::FixedArray(e, _) => *e,
-                    _ => BcType::Unit,
-                }
-            }
+            Expr::Index { expr: arr, .. } => match self.type_of(arr) {
+                BcType::Array(e) | BcType::FixedArray(e, _) => *e,
+                _ => BcType::Unit,
+            },
             Expr::Block(block) => self.block_type(block),
-            Expr::If { then_block, else_branch, .. } => {
+            Expr::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
                 if else_branch.is_some() {
                     self.block_type(then_block)
                 } else {
@@ -2006,12 +2305,10 @@ impl CodeGenerator {
                     self.arm_body_type(&arms[0].body)
                 }
             }
-            Expr::Try { call, .. } => {
-                match self.type_of(call) {
-                    BcType::Result(ok, _) => *ok,
-                    _ => BcType::Unit,
-                }
-            }
+            Expr::Try { call, .. } => match self.type_of(call) {
+                BcType::Result(ok, _) => *ok,
+                _ => BcType::Unit,
+            },
             Expr::ArrayLit { elements, .. } => {
                 if elements.is_empty() {
                     BcType::Array(Box::new(BcType::Unit))
@@ -2048,25 +2345,57 @@ impl CodeGenerator {
         self.push_scope();
         // Register pattern bindings from enum/result patterns
         match (&arm.pattern, scrut_ty) {
-            (Pattern::Enum { enum_name, variant, bindings, .. }, BcType::Enum(ename)) => {
-                let lookup = if enum_name.is_empty() { ename.as_str() } else { enum_name.as_str() };
+            (
+                Pattern::Enum {
+                    enum_name,
+                    variant,
+                    bindings,
+                    ..
+                },
+                BcType::Enum(ename),
+            ) => {
+                let lookup = if enum_name.is_empty() {
+                    ename.as_str()
+                } else {
+                    enum_name.as_str()
+                };
                 if let Some(info) = self.enums.get(lookup).cloned() {
-                    if let Some((_, payload_types)) = info.variants.iter().find(|(n, _)| n == variant) {
+                    if let Some((_, payload_types)) =
+                        info.variants.iter().find(|(n, _)| n == variant)
+                    {
                         for (i, binding) in bindings.iter().enumerate() {
                             if let Pattern::Ident(name, _) = binding {
                                 if i < payload_types.len() {
-                                    self.scopes.last_mut().unwrap().insert(name.clone(), payload_types[i].clone());
+                                    self.scopes
+                                        .last_mut()
+                                        .unwrap()
+                                        .insert(name.clone(), payload_types[i].clone());
                                 }
                             }
                         }
                     }
                 }
             }
-            (Pattern::Enum { variant, bindings, .. }, BcType::Result(ok_ty, err_ty)) => {
+            (
+                Pattern::Enum {
+                    variant, bindings, ..
+                },
+                BcType::Result(ok_ty, err_ty),
+            ) => {
                 if let Some(Pattern::Ident(name, _)) = bindings.first() {
                     match variant.as_str() {
-                        "Ok" => { self.scopes.last_mut().unwrap().insert(name.clone(), (**ok_ty).clone()); }
-                        "Err" => { self.scopes.last_mut().unwrap().insert(name.clone(), (**err_ty).clone()); }
+                        "Ok" => {
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(name.clone(), (**ok_ty).clone());
+                        }
+                        "Err" => {
+                            self.scopes
+                                .last_mut()
+                                .unwrap()
+                                .insert(name.clone(), (**err_ty).clone());
+                        }
                         _ => {}
                     }
                 }

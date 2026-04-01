@@ -1,0 +1,6 @@
+// EXPECT ERROR: Interpolation only supports str, i32, i64, f64, and bool expressions.
+
+fn! main() {
+    let nums: [i32] = [1, 2, 3];
+    println("nums={nums}");
+}

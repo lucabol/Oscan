@@ -1,0 +1,6 @@
+// EXPECT ERROR: Unterminated interpolation expression inside a string literal.
+
+fn! main() {
+    let value: i32 = 5;
+    println("value={value");
+}

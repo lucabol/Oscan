@@ -1,0 +1,13 @@
+// Test: Interpolation of bool values and logical expressions.
+
+fn negate(flag: bool) -> bool {
+    not flag
+}
+
+fn! main() {
+    let ready: bool = true;
+    let status: str = if ready { "ship" } else { "hold" };
+    println("ready={ready}");
+    println("negated={negate(ready)}");
+    println("status={status} ok={ready and not negate(ready)}");
+}
