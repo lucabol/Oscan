@@ -66,7 +66,18 @@ count = count + 1;         // OK
 // x = 20;                 // compile error!
 ```
 
-**No compound assignment.** Write `x = x + 1`, not `x += 1`.
+### Compound Assignment
+
+Compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`) provide shorthand for common mutations:
+
+```
+let mut x: i32 = 10;
+x += 5;         // equivalent to x = x + 5
+x -= 2;         // equivalent to x = x - 2
+x *= 3;         // equivalent to x = x * 3
+```
+
+Compound assignment requires the binding to be mutable and follows the same type rules as the underlying operator.
 
 ### Top-Level Constants
 
@@ -294,11 +305,28 @@ let label: str = if x > 10 { "big" } else { "small" };
 let mut i: i32 = 0;
 while i < 10 {
     print_i32(i);
-    i = i + 1;
+    i += 1;
 };
 ```
 
-There is no `break` or `continue`. Use a boolean flag if needed.
+### Loop Control: Break and Continue
+
+Exit or skip iterations with `break` and `continue`:
+
+```
+let mut i: i32 = 0;
+while i < 10 {
+    if i == 5 {
+        break;     // exit the loop
+    };
+    if i == 2 {
+        i += 1;
+        continue;  // skip to next iteration
+    };
+    print_i32(i);
+    i += 1;
+};
+```
 
 ### For Loop
 
@@ -497,13 +525,12 @@ let x: i32 = 1;
 
 ## Gotchas & Notes
 
-1. **No `++`, `--`, `+=`, `-=`.** Write `x = x + 1`.
+1. **No `++`, `--`.** Write `x = x + 1` or use compound assignment `x += 1`.
 2. **No `&&`, `||`, `!`.** Use `and`, `or`, `not`.
-3. **No `break`/`continue`.** Use a boolean flag.
-4. **No closures, no first-class functions.** Functions are not values.
-5. **No methods.** All functions are free-standing. Use `area(shape)`, not `shape.area()`.
-6. **No generics** except the built-in `Result<T, E>`.
-7. **No string interpolation.** Use `str_concat` and conversion functions.
-8. **Semicolons after control flow (optional).** `if`/`while`/`for`/`match` used as statements may have a trailing `;` but it is not required.
-9. **Integer literals are `i32`.** For `i64`, write `42 as i64`.
-10. **Panics are for bugs.** Overflow, out-of-bounds, division by zero panic at runtime. Expected failures use `Result`.
+3. **No closures, no first-class functions.** Functions are not values.
+4. **No methods.** All functions are free-standing. Use `area(shape)`, not `shape.area()`.
+5. **No generics** except the built-in `Result<T, E>`.
+6. **No string interpolation.** Use `str_concat` and conversion functions.
+7. **Semicolons after control flow (optional).** `if`/`while`/`for`/`match` used as statements may have a trailing `;` but it is not required.
+8. **Integer literals are `i32`.** For `i64`, write `42 as i64`.
+9. **Panics are for bugs.** Overflow, out-of-bounds, division by zero panic at runtime. Expected failures use `Result`.

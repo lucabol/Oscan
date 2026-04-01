@@ -2059,17 +2059,28 @@ The `deps/laststanding` library (`l_os.h`) provides a freestanding C runtime wit
 
 ---
 
-## Appendix B: Reserved for Future Consideration
+## Appendix B: Roadmap (Feature Phases)
 
-The following features are explicitly **NOT** in v0.1 but may be considered later:
-- User-defined generics
-- Closures / first-class functions
-- Traits / interfaces
-- Pattern matching on structs
-- String interpolation
-- Iterators
+### Phase 1 (Committed — v0.2)
 
-These are documented here to confirm they are intentional omissions, not oversights.
+**String Interpolation** — `"text {expr} text"` syntax for cleaner output construction.
+
+**Rationale:** Current examples show repeated use of `str_concat` and manual numeric conversions. Interpolation directly addresses this ergonomic bottleneck in output-heavy programs (CLI tools, HTTP clients, web servers). The compiler infrastructure to support it already exists: code generator already lowers string concatenation, and runtime provides the necessary `str_concat` and `str_from_*` functions. Interpolation will be lowered to nested `str_concat` calls, preserving simplicity.
+
+### Intentionally Reserved for Later Consideration (Phase 2+)
+
+The following features are explicitly **NOT** in v0.1 and are deferred pending further rationale:
+
+- **Whole-file I/O convenience** (`read_file`, `write_file`) — reduces byte-at-a-time boilerplate in file readers
+- **Evented / multiplexed I/O** (`poll`, nonblocking patterns) — enables truly concurrent I/O servers
+- **User-defined generics** — complexity tradeoff; current `Result<T,E>` is sufficient for v0.1
+- **Closures / first-class functions** — eliminates capture semantics, keeps functions simple for now
+- **Traits / interfaces** — deferred; nominal typing sufficient for v0.1
+- **Pattern matching on structs** — nice-to-have for convenience; match on enums covers most cases
+- **Iterators** — nice-to-have; `for`-in loops and arrays sufficient for v0.1
+- **Richer error ergonomics** (typed error enums) — future direction for error composability
+
+These are documented here to confirm they are intentional deferrals, not oversights.
 
 ## Appendix C: Design Rationale Summary
 
