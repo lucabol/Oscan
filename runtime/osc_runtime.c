@@ -49,6 +49,7 @@
 #else
 #include <unistd.h>
 #include <dirent.h>
+#include <netdb.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -3250,7 +3251,47 @@ int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L
 /*  Socket wrappers                                                    */
 /* ================================================================== */
 
+/* Shared helper for libc modes: resolve hostname or IPv4 address to sockaddr_in.
+   Uses getaddrinfo() for DNS/hostname resolution (requires libc). */
+#ifndef OSC_FREESTANDING
+static int osc_socket_lookup_ipv4(osc_str addr, int32_t port, struct sockaddr_in *sa)
+{
+    char host[256];
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    struct addrinfo *it;
+
+    if (!sa) return -1;
+    if (port < 0 || port > 65535) return -1;
+
+    osc_path_to_cstr(addr, host, sizeof(host));
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+
+    if (getaddrinfo(host, NULL, &hints, &result) != 0) {
+        return -1;
+    }
+
+    for (it = result; it != NULL; it = it->ai_next) {
+        if (it->ai_family == AF_INET && (size_t)it->ai_addrlen >= sizeof(*sa)) {
+            memcpy(sa, it->ai_addr, sizeof(*sa));
+            sa->sin_port = htons((unsigned short)port);
+            freeaddrinfo(result);
+            return 0;
+        }
+    }
+
+    freeaddrinfo(result);
+    return -1;
+}
+#endif
+
 #ifdef OSC_HAS_SOCKETS
+
+static int osc_socket_port_is_valid(int32_t port)
+{
+    return port >= 0 && port <= 65535;
+}
 
 int32_t osc_socket_tcp(void)
 {
@@ -3259,12 +3300,13 @@ int32_t osc_socket_tcp(void)
 
 int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    return (int32_t)l_socket_connect((L_SOCKET)sock, buf, (int)port);
+    char host[256];
+    char resolved[16];
+
+    if (!osc_socket_port_is_valid(port)) return -1;
+    osc_path_to_cstr(addr, host, sizeof(host));
+    if (l_resolve(host, resolved) < 0) return -1;
+    return (int32_t)l_socket_connect((L_SOCKET)sock, resolved, (int)port);
 }
 
 int32_t osc_socket_bind(int32_t sock, int32_t port)
@@ -3314,12 +3356,13 @@ int32_t osc_socket_udp(void)
 
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
 {
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    return (int32_t)l_socket_sendto((L_SOCKET)sock, data.data, (size_t)data.len, buf, (int)port);
+    char host[256];
+    char resolved[16];
+
+    if (!osc_socket_port_is_valid(port)) return -1;
+    osc_path_to_cstr(addr, host, sizeof(host));
+    if (l_resolve(host, resolved) < 0) return -1;
+    return (int32_t)l_socket_sendto((L_SOCKET)sock, data.data, (size_t)data.len, resolved, (int)port);
 }
 
 osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
@@ -3363,15 +3406,7 @@ int32_t osc_socket_tcp(void)
 int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
     struct sockaddr_in sa;
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    sa.sin_addr.s_addr = inet_addr(buf);
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
     return connect((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
 }
 
@@ -3431,15 +3466,7 @@ int32_t osc_socket_udp(void)
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
 {
     struct sockaddr_in sa;
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    sa.sin_addr.s_addr = inet_addr(buf);
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
     return (int32_t)sendto((SOCKET)sock, data.data, data.len, 0,
                            (struct sockaddr *)&sa, sizeof(sa));
 }
@@ -3475,15 +3502,7 @@ int32_t osc_socket_tcp(void)
 int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
     struct sockaddr_in sa;
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    inet_pton(AF_INET, buf, &sa.sin_addr);
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
     return connect(sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
 }
 
@@ -3540,15 +3559,7 @@ int32_t osc_socket_udp(void)
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
 {
     struct sockaddr_in sa;
-    char buf[256];
-    int32_t len = addr.len < 255 ? addr.len : 255;
-    int i;
-    for (i = 0; i < len; i++) buf[i] = addr.data[i];
-    buf[len] = '\0';
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    inet_pton(AF_INET, buf, &sa.sin_addr);
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
     return (int32_t)sendto(sock, data.data, (size_t)data.len, 0,
                            (struct sockaddr *)&sa, sizeof(sa));
 }

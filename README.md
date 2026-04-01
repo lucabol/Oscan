@@ -199,7 +199,7 @@ Beyond the graphics examples, Oscan includes CLI utility programs in `examples/`
 - **[sort.osc](examples/sort.osc)** — Sort lines from files
 - **[file_io.osc](examples/file_io.osc)** — Basic file I/O operations
 - **[word_freq.osc](examples/word_freq.osc)** — Word frequency counter (map, str_split, for-in)
-- **[http_client.osc](examples/http_client.osc)** — Simple HTTP GET client (TCP sockets)
+- **[http_client.osc](examples/http_client.osc)** — Simple HTTP GET client (TCP sockets with hostname support)
 - **[file_checksum.osc](examples/file_checksum.osc)** — SHA-256 file hasher (sha256, path_ext, file_size)
 - **[env_info.osc](examples/env_info.osc)** — System info tool (datetime, is_tty, glob_match, env_get)
 - **[web_server.osc](examples/web_server.osc)** — TCP socket web server (socket_bind, socket_listen, socket_accept)

@@ -45,6 +45,14 @@
 - File extension: `.osc`
 - Grammar is LL(2), recursive descent, no backtracking
 
+### 2026-04-01 — Batch approval & example repair (hostname + interpolation)
+- **Architecture review:** Hostname integration approved. No language surface growth. Transparent runtime resolution via `l_resolve` (freestanding) and `getaddrinfo(AF_INET)` (libc). ✅
+- **Web server repair:** Fixed compile failure in `examples/web_server.osc` line 72. CSS `font-family: 'Segoe UI'` apostrophe triggered parser sensitivity. Surgical fix: unquoted family name (valid CSS, preserves interpolation improvements). ✅
+- **Validation:** Direct compile of repaired file: PASS. Example sweep (25/25): PASS. Interpolation regression gate: PASS.
+- **Reviewer follow-up:** Tank re-review approved both tracks (hostname + interpolation). All blockers resolved.
+- **Decisions merged:** `.squad/decisions.md` entries #7 (Hostname Support Integration) + #8 (Example Interpolation Sweep). Decision inbox cleared.
+- **Orchestration logs:** `.squad/orchestration-log/2026-04-01T10-54-28Z-neo.md`
+
 ### 2025-07-25 — README Rewrite & Language Guide
 
 **What I learned from reading the test suite (22 positive, 16 negative tests):**
@@ -183,6 +191,25 @@
 - **Luca:** Extreme minimalism, decisive feature choices, clear ownership accountability, written decisions in inbox before work
 - **Process:** Feature choices come from research reports with high-quality rationale; architecture gates compiler before tests; docs sync is Phase 0 before implementation
 - **Communication:** Prefer human-readable outcomes; suppress tool internals in final response
+
+### 2026-04-01 — laststanding DNS Integration Review: APPROVED
+
+**Reviewed change:** Bump `deps/laststanding` to `5b3c0cd` and add transparent hostname resolution to `socket_connect` / `socket_sendto` in the runtime.
+
+**Architecture decision:** No new builtin. Hostname resolution lives inside the runtime, behind the existing `addr: str` parameter. This is the right surface — zero language growth, strict superset of prior behavior.
+
+**Implementation pattern:** Three-backend consistency:
+- Freestanding: `l_resolve()` → resolved IPv4 string → `l_socket_connect()`
+- Windows/POSIX: shared `osc_socket_lookup_ipv4()` using `getaddrinfo(AF_INET)`
+
+**Key files:**
+- `runtime/osc_runtime.c` — hostname resolution in socket wrappers
+- `tests/positive/socket_hostnames.osc` — TCP + UDP `"localhost"` test
+- `docs/spec/oscan-spec.md` — updated comments and examples
+
+**Pattern:** Transparent runtime enhancement (no language surface change) is the preferred approach when a dependency gains new capability that maps naturally onto an existing API parameter. Document the expanded semantics in the spec comment, don't add a new builtin.
+
+---
 
 ### 2026-04-01 — Interpolation Revision
 

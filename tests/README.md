@@ -31,7 +31,8 @@ tests/
 │   ├── top_level_const.osc  # Top-level let bindings
 │   ├── ffi.osc              # Extern declarations
 │   ├── order_independence.osc # Functions/types used before declaration
-│   └── nested_control.osc   # Nested if/while/for/match
+│   ├── nested_control.osc   # Nested if/while/for/match
+│   └── socket_hostnames.osc # Loopback hostname regression for socket_connect/socket_sendto
 ├── negative/               # Invalid programs that must be REJECTED
 │   ├── shadowing.osc        # Variable shadowing → compile error
 │   ├── non_exhaustive_match.osc # Missing enum variant → error
@@ -122,4 +123,5 @@ chmod +x run_tests.sh
 | §8          | Arrays                 | arrays                    | —                          |
 | §9          | FFI                    | ffi                       | —                          |
 | §10         | Micro-lib              | strings, hello_world      | —                          |
+| appendix A  | Socket hostname adaption | builtin_socket, builtin_udp, socket_hostnames | —                      |
 | various     | Nested constructs      | nested_control            | undeclared_var             |

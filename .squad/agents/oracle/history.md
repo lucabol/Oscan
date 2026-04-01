@@ -20,6 +20,16 @@
 - 35 example programs: 21 CLI utilities + 14 graphics demonstrations
 
 ## Learnings
+
+### 2026-04-01 — Hostname documentation alignment (APPROVED batch)
+- **Task:** Update user-facing documentation to reflect approved hostname support.
+- **Trigger:** Tank QA approved hostname integration (socket_hostnames.osc regression green).
+- **README.md (line 202):** Old wording removed conservative "until hostname QA is green" caveat. Now: "TCP sockets with hostname support".
+- **examples/http_client.osc:** Header and usage updated to reflect hostname capability. Parameter changed from `<ip>` to `<hostname|ip>`. Example changed from numeric IPv4 (93.184.216.34) to practical hostname (example.com).
+- **Rationale:** Hostname support is implemented, tested, approved. Spec already documents behavior. User docs now align with reality.
+- **Decision merged:** `.squad/decisions.md` entry #9 (User-Facing Documentation Alignment: Hostname Support)
+- **Orchestration log:** `.squad/orchestration-log/2026-04-01T10-54-28Z-oracle.md`
+
 - **Full doc sync completed (2025-07-19):** Audited README.md, docs/spec/oscan-spec.md, docs/guide.md, docs/test_suite.md against current code/tests/examples.
   - **README fixes:** Updated builtin count (~156→~139), examples count (~17→21 CLI), test count (81→85)
   - **guide.md status:** Already correct (compound assignment documented properly)
@@ -59,3 +69,11 @@
   - All descriptions preserved unchanged
 - **Pattern**: When documenting code examples in user-facing docs, markdown links to actual files are more discoverable than plain text references
 - **Links format**: Used relative paths from root (xamples/filename.osc and xamples/gfx/filename.osc) to enable GitHub and static site viewing
+
+### Session: Hostname Support Documentation (Luca Bolognese Request)
+- **Task**: Updated README.md and examples/http_client.osc to reflect approved hostname support (previously marked as "under QA")
+- **Changes**:
+  - README.md line 202: Changed http_client description from "TCP sockets; use IPv4 literals until hostname QA is green" to "TCP sockets with hostname support"
+  - examples/http_client.osc: Updated header comments and usage examples to reflect hostname support; changed from IPv4-only literal (93.184.216.34) to hostname (example.com); parameter descriptions updated to show <hostname|ip> instead of just <ip>
+- **Spec Status**: Confirmed docs/spec/oscan-spec.md already correctly documents hostname support in socket_connect and socket_sendto (spec parameter shows ddr: str with note "IPv4 address or hostname")
+- **Tests**: Verified tests/README.md already references socket_hostnames.osc test for hostname regression coverage; no updates needed

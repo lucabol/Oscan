@@ -1,17 +1,17 @@
 // Simple HTTP Client
 // Connects to a server and sends an HTTP GET request, prints the response.
-// Shows TCP socket usage in Oscan.
-// Usage: http_client <ip> <port> [path]
-// Example: http_client 93.184.216.34 80 /index.html
+// Shows TCP socket usage in Oscan with hostname support.
+// Usage: http_client <hostname|ip> <port> [path]
+// Example: http_client example.com 80 /index.html
 
 fn! main() {
     if arg_count() < 3 {
-        println("Usage: http_client <ip> <port> [path]");
-        println("Example: http_client 93.184.216.34 80 /index.html");
+        println("Usage: http_client <hostname|ip> <port> [path]");
+        println("Example: http_client example.com 80 /index.html");
         exit(1);
     };
 
-    let addr: str = arg_get(1);
+    let host: str = arg_get(1);
     let port_result: Result<i32, str> = parse_i32(arg_get(2));
     let mut port: i32 = 80;
     match port_result {
@@ -33,15 +33,15 @@ fn! main() {
         exit(1);
     };
 
-    let result: i32 = socket_connect(sock, addr, port);
+    let result: i32 = socket_connect(sock, host, port);
     if result < 0 {
-        println("Error: failed to connect to {addr}:{port}");
+        println("Error: failed to connect to {host}:{port}");
         socket_close(sock);
         exit(1);
     };
 
     // Build and send HTTP GET request
-    let request: str = "GET {path} HTTP/1.0\r\nHost: {addr}\r\nConnection: close\r\n\r\n";
+    let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n";
     let sent: i32 = socket_send(sock, request);
     if sent < 0 {
         println("Error: failed to send request");

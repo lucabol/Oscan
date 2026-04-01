@@ -1452,7 +1452,7 @@ Socket builtins provide TCP and UDP networking. All are side-effecting (`fn!`).
 
 ```
 fn! socket_tcp() -> i32                      // Create a TCP socket; returns socket descriptor (-1 on error)
-fn! socket_connect(sock: i32, addr: str, port: i32) -> i32  // Connect to remote address; returns 0 on success, -1 on error
+fn! socket_connect(sock: i32, addr: str, port: i32) -> i32  // Connect to remote IPv4 address or hostname; returns 0 on success, -1 on error
 fn! socket_bind(sock: i32, port: i32) -> i32               // Bind socket to local port; returns 0 on success, -1 on error
 fn! socket_listen(sock: i32, backlog: i32) -> i32          // Listen for incoming connections; returns 0 on success, -1 on error
 fn! socket_accept(sock: i32) -> i32          // Accept incoming connection; returns client socket descriptor (-1 on error)
@@ -1460,7 +1460,7 @@ fn! socket_send(sock: i32, data: str) -> i32 // Send data over socket; returns n
 fn! socket_recv(sock: i32, max_len: i32) -> str  // Receive data from socket; returns received data as string
 fn! socket_close(sock: i32)                  // Close socket (works for both TCP and UDP)
 fn! socket_udp() -> i32                      // Create a UDP socket; returns socket descriptor (-1 on error)
-fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32  // Send data to addr:port via UDP; returns bytes sent (-1 on error)
+fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32  // Send data to IPv4 address or hostname via UDP; returns bytes sent (-1 on error)
 fn! socket_recvfrom(sock: i32, max_len: i32) -> str  // Receive UDP datagram; returns received data as string
 ```
 
@@ -1469,7 +1469,7 @@ fn! socket_recvfrom(sock: i32, max_len: i32) -> str  // Receive UDP datagram; re
 ```
 fn! main() {
     let sock: i32 = socket_tcp();
-    let status: i32 = socket_connect(sock, "127.0.0.1", 8080);
+    let status: i32 = socket_connect(sock, "localhost", 8080);
     if status == 0 {
         socket_send(sock, "Hello, server!");
         let response: str = socket_recv(sock, 1024);
@@ -1484,7 +1484,7 @@ fn! main() {
 ```
 fn! main() {
     let sock: i32 = socket_udp();
-    socket_sendto(sock, "Hello, UDP!", "127.0.0.1", 9000);
+    socket_sendto(sock, "Hello, UDP!", "localhost", 9000);
     socket_close(sock);
 }
 ```

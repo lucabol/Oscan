@@ -18,8 +18,18 @@
 
 ## Learnings
 
+### 2026-04-01 — laststanding DNS wiring (APPROVED batch)
+- **Files:** `deps/laststanding/l_os.h`, `runtime/osc_runtime.c`, `examples/http_client.osc`, `docs/spec/oscan-spec.md`
+- **Dependency update:** Oscan's submodule checkout now points at `deps/laststanding` commit `5b3c0cd`, which is newer than the superproject's previously pinned `dd5282c`.
+- **Runtime pattern:** Keep the language surface unchanged when a freestanding dependency grows a useful primitive. For networking, normalize `osc_str` to a bounded C buffer, validate the port once, then resolve hostnames before calling the lower socket primitive.
+- **Implementation:** `socket_connect` and `socket_sendto` now accept hostnames as well as dotted IPv4 text in both freestanding (`l_resolve`) and libc (`getaddrinfo(AF_INET)`) modes.
+- **Sample/docs:** `examples/http_client.osc` now documents `<host>` input and uses `example.com`; the spec now states socket connect/sendto accept hostnames too.
+- **Validation:** `cargo test --quiet` passed (62/62), and `examples/http_client.osc` compiled in freestanding mode and successfully fetched a local `python -m http.server` endpoint via `localhost`.
+- **Team batch approved:** Orchestration logs in `.squad/orchestration-log/2026-04-01T10-54-28Z-*.md`. Neo architecture review APPROVED. Tank re-review APPROVED (both freestanding and libc regressions green). Oracle updated user docs per Tank approval.
+- **Decision merged:** `.squad/decisions.md` entry #7 (Hostname Support Integration via laststanding DNS)
+
 ### Interpolation MVP runtime prep
-- **Files:** `runtime/osc_runtime.c`, `runtime/test_runtime.c`, `docs/spec/oscan-spec.md`, `docs/guide.md`, `README.md`, `.squad/decisions/inbox/morpheus-interpolation.md`
+- **Files:** `runtime/osc_runtime.c`, `runtime/test_runtime.c`, `docs/spec/oscan-spec.md`, `docs/guide.md`, `README.md`
 - **Runtime decision:** Interpolation MVP needs no new formatter helper. The existing arena-backed surface is enough: `str_concat`, `str_from_i32` / `i32_to_str`, `str_from_i64`, `str_from_f64`, and `str_from_bool`.
 - **Implementation:** `osc_str_from_i32()` now delegates to `osc_i32_to_str()` so i32 stringification has one runtime implementation and one behavior path.
 - **Validation:** Added runtime tests for i32 aliasing plus i64/f64/bool stringification, and adjusted panic tests for MSVC friendliness. Runtime test suite passes on Windows/MSVC (`cl`) with 82/82 passing.

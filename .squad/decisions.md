@@ -180,6 +180,113 @@ Full pipeline operational: `oscan input.osc -o output.c` produces valid C99 link
 
 ---
 
+### 7. Hostname Support Integration via laststanding DNS
+
+**Authors:** Morpheus, Trinity, Neo  
+**Date:** 2026-04-01  
+**Status:** APPROVED  
+
+#### Summary
+
+Integrated transparent hostname resolution into Oscan's socket builtins. Updated `deps/laststanding` to v5b3c0cd (adds `l_resolve` for IPv4 hostname lookup). Runtime now resolves hostnames inside `socket_connect` and `socket_sendto` before calling platform socket primitives.
+
+#### Key Decisions
+
+- **Language surface unchanged.** Existing `addr: str` parameter naturally expands from "IPv4 text" to "hostname or IPv4 text" at runtime.
+- **Freestanding:** Uses `l_resolve(hostname, ip_out)` from laststanding; resolves before `l_socket_connect()` / `l_socket_sendto()`.
+- **Libc:** Uses `getaddrinfo(..., AF_INET, ...)` for IPv4 resolution on Windows/POSIX; shared helper `osc_socket_lookup_ipv4()`.
+- **Port validation:** All paths validate port is in range `0..65535` on entry.
+- **Backward compatible:** Numeric IPv4 literals still work unchanged.
+- **Test coverage:** `tests/positive/socket_hostnames.osc` validates `"localhost"` resolution in both TCP and UDP modes.
+
+#### Impact
+
+- Users can pass hostnames to `socket_connect` / `socket_sendto` without language surface growth
+- Consistent behavior across freestanding and libc backends
+- Enables practical examples like HTTP client using hostnames (example.com, localhost)
+
+#### Future Direction
+
+If the language later needs explicit DNS APIs, richer error reporting, or IPv6 support, those should be designed as new language-level builtins rather than overloading the current transparent resolution.
+
+---
+
+### 8. Example Interpolation Sweep with Brace Escaping
+
+**Authors:** Trinity, Neo, Tank  
+**Date:** 2026-04-01  
+**Status:** APPROVED  
+
+#### Summary
+
+Applied string interpolation to 6 example programs to reduce nested `str_concat(...)` chains in human-readable output. Fixed brace escaping in embedded CSS/JSON fragments. Repaired `examples/web_server.osc` compile failure.
+
+#### Key Decisions
+
+- **Scope:** Favor interpolation in example output, request formatting, status labels, and presentation strings.
+- **Brace escaping:** Any literal braces in strings must be escaped as `{{` and `}}` to avoid parser misinterpretation.
+- **Preservation:** Keep plain concatenation where it is still the clearest choice for incremental buffer assembly.
+
+#### Examples Updated
+
+- `env_info.osc` — interpolation applied
+- `error_handling.osc` — interpolation applied
+- `file_checksum.osc` — interpolation applied
+- `http_client.osc` — interpolation + hostname example
+- `word_freq.osc` — interpolation applied
+- `gfx/ui_demo.osc` — interpolation applied
+- `web_server.osc` — interpolation + CSS brace fix (unquoted font family)
+
+#### Validation
+
+- Initial: 24/25 examples compiled; `web_server.osc` failed on CSS `font-family: 'Segoe UI'`
+- Repair: Replaced single-quoted family name with unquoted `Segoe UI` (valid CSS)
+- Final: 25/25 examples compiled; interpolation regression gate green
+
+#### Impact
+
+- Examples showcase string interpolation feature naturally
+- Reduced boilerplate in presentation strings
+- No runtime behavior changes — purely syntax improvements
+
+---
+
+### 9. User-Facing Documentation Alignment: Hostname Support
+
+**Author:** Oracle (Language Spec Specialist)  
+**Date:** 2026-04-01  
+**Status:** APPLIED  
+
+#### Summary
+
+Updated README.md and examples/http_client.osc to accurately reflect that hostname support in socket networking is now approved and operational. Removed conservative "until hostname QA is green" warning language.
+
+#### Changes Applied
+
+**README.md (line 202):**
+- Old: "Simple HTTP GET client (TCP sockets; use IPv4 literals until hostname QA is green)"
+- New: "Simple HTTP GET client (TCP sockets with hostname support)"
+
+**examples/http_client.osc (header + usage):**
+- Header comments: Updated from "use IPv4 literal" caveat to "with hostname support"
+- Parameter specification: `<ip>` → `<hostname|ip>`
+- Demonstration: Changed from IPv4 literal (93.184.216.34) to practical hostname (example.com)
+
+#### Rationale
+
+- Hostname support is now implemented, tested, and approved by Tank QA
+- Specification (docs/spec/oscan-spec.md) already correctly documents hostname capability
+- User-facing documentation now accurately reflects implemented, approved behavior
+- No code or behavior changes — documentation alignment only
+
+#### Impact
+
+- Users will no longer see conservative warnings about hostname support
+- Example code reflects real-world usage patterns (hostnames are more practical than IP literals)
+- No breaking changes; purely informational update
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

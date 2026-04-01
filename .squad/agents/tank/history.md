@@ -15,6 +15,32 @@
 
 ## Learnings
 
+### laststanding DNS + interpolation review (2026-04-01 — APPROVED batch)
+- **Round 1 (2026-03-31):** REJECTED — Two critical blockers identified:
+  1. Freestanding hostname regression failing: `tcp localhost failed` / `udp localhost failed`
+  2. Libc build failure: `osc_socket_lookup_ipv4` undeclared in Windows socket wrappers
+  
+- **Round 2 (2026-04-01):** APPROVED — Both blockers resolved
+  1. Freestanding test now passing: `tcp localhost ok` / `udp localhost ok` (compiler rebuild fixed embedded dependency)
+  2. Libc build successful with shared helper `osc_socket_lookup_ipv4` visible across backends
+  3. Integration validated: `examples/http_client.osc` end-to-end via localhost
+  
+- **Example interpolation parallel review (2026-03-31 → 2026-04-01):**
+  1. Initial: 24/25 examples compile; `web_server.osc` fails on CSS `font-family: 'Segoe UI'` apostrophe sensitivity
+  2. Neo repair: Unquoted CSS family name (valid CSS, avoids parser ambiguity)
+  3. Final: 25/25 examples compile; interpolation regression gate green
+  
+- **Recommendations executed by Morpheus/Trinity/Neo:** Libc runtime fixed, dependency rebuilt, example repaired.
+- **Cleanup flagged (not blocking):** Stale C files in repo root + `.squad/skills/*` artifacts
+- **Decision merged:** `.squad/decisions.md` entries #7 (Hostname Support), #8 (Example Interpolation Sweep)
+- **Orchestration log:** `.squad/orchestration-log/2026-04-01T10-54-28Z-tank.md`
+
+### laststanding DNS review (initial investigation 2026-03-31)
+- `deps\laststanding` now ships `l_resolve(hostname, ip_out)` plus upstream loopback coverage in `deps\laststanding\test\test.c` and a hostname-accepting sample in `deps\laststanding\test\http_get.c`.
+- Oscan hostname regression artifact is `tests\positive\socket_hostnames.osc` with expected output in `tests\expected\socket_hostnames.expected`; this is the reviewer gate for `socket_connect(..., "localhost", ...)` and `socket_sendto(..., "localhost", ...)`.
+- Current reviewer evidence split is important: numeric loopback still works in `examples\http_client.osc`, upstream laststanding hostname resolution works against a local Python server, but Oscan currently fails the freestanding hostname regression and the libc runtime build trips on `osc_socket_lookup_ipv4`.
+- Freestanding dependency bumps require a compiler rebuild because `src\main.rs` embeds `deps\laststanding\l_os.h` via `include_str!`, so stale `target\release\oscan.exe` can hide dependency-side runtime changes.
+
 ### Phase 7A — Test Infrastructure (2025-07-14)
 - Created full test suite: 20 positive tests, 14 negative tests, 20 expected output files
 - Test runners: `run_tests.sh` (bash) and `run_tests.ps1` (PowerShell)
@@ -123,4 +149,11 @@
 - Per coordinator direction, Tank treated Trinity's earlier revision as rejected and re-reviewed Neo's `examples\web_server.osc` repair independently.
 - Neo's revision passes the required reviewer gate: direct compile of `examples\web_server.osc` succeeds, `build-examples.ps1` is fully green at **25 compiled, 0 failed**, and the interpolation positive/negative compile-reject gate still passes afterward.
 - Fresh reviewer verdict for Neo's revision: **approve**. No remaining blockers were found in the repaired `web_server` artifact or in the related interpolation regressions.
+
+### laststanding hostname re-review (2026-04-01)
+- Current authoritative gate for hostname sockets is `tests\positive\socket_hostnames.osc` plus `tests\expected\socket_hostnames.expected`; it exercises both `socket_connect(..., "localhost", ...)` and `socket_sendto(..., "localhost", ...)`.
+- After rebuilding with `C:\Users\lucabol\.cargo\bin\cargo.exe build --release`, the current worktree passes that regression in both modes: freestanding (`target\release\oscan.exe ...`) and `--libc`, each printing `tcp localhost ok` / `udp localhost ok`.
+- `runtime\osc_runtime.c` now resolves freestanding hostnames via `l_resolve(...)` and libc hostnames via shared `osc_socket_lookup_ipv4(...)`, so the earlier Windows libc compile failure is gone.
+- The public docs are now out of sync with reality: `docs\spec\oscan-spec.md` already documents hostname support, but `README.md` and `examples\http_client.osc` still carry conservative "IPv4 until QA is green" wording that should be removed by the implementation/docs owner.
+- Non-feature cleanup still pending in the worktree: scratch validation files remain at repo root (`socket_hostnames_generated.c`, `socket_libc_test.c`, `test_resolve.c`, `test_socket_localhost.c`), and stale `.squad\skills\*` artifacts are present but were ignored for the review.
 

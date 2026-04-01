@@ -18,6 +18,22 @@
 - All generated C must guard against UB (bounds checks, overflow, null)
 
 ## Learnings
+
+### 2026-04-01 — Example interpolation sweep (APPROVED batch)
+- **Task:** Apply string interpolation to example output formatting; reduce nested str_concat chains.
+- **Scope:** 6 examples plus header/docs; skip examples where plain concat is clearer.
+- **Brace escaping:** Any literal braces in strings escaped as `{{` / `}}` to avoid parser misinterpretation.
+- **Files updated:** `env_info.osc`, `error_handling.osc`, `file_checksum.osc`, `http_client.osc`, `word_freq.osc`, `gfx/ui_demo.osc`, `web_server.osc`
+- **Blocker resolved:** `web_server.osc` compile failure on CSS `font-family: 'Segoe UI'` — Neo applied surgical fix (unquoted font family).
+- **Validation:** Initial 24/25 compile → Final 25/25 compile. Interpolation regression gate green.
+- **Team batch approved:** Tank re-review APPROVED. Orchestration log in `.squad/orchestration-log/2026-04-01T10-54-28Z-trinity.md`. Decision merged to `.squad/decisions.md` entry #8 (Example Interpolation Sweep).
+
+### DNS language stability (APPROVED batch)
+- **Decision:** No language surface changes. Hostname resolution is runtime-internal expansion of existing `addr: str` parameter.
+- **Trinity impact:** Examples/docs updated to reflect hostname capability; no compiler work required.
+- **Rationale:** Keep language minimal. DNS support emerges naturally from runtime adaptation layer.
+- **Decision merged:** `.squad/decisions.md` entry #7 (Hostname Support Integration).
+
 - **Phase 2 completed:** Full compiler infrastructure (lexer + parser + AST) implemented in Rust.
 - **Project structure:** `src/main.rs` (CLI), `src/token.rs` (tokens), `src/lexer.rs` (lexer), `src/ast.rs` (AST nodes), `src/parser.rs` (recursive descent parser), `src/error.rs` (error types), `src/types.rs` (type representation), `src/semantic.rs` (semantic analysis), `src/codegen.rs` (C code generation).
 - **Lexer design:** Single-pass character-by-character scanner. `fn!` handled as a single `FnBang` token by peeking after `fn`. All escape sequences (`\n`, `\t`, `\r`, `\\`, `\"`, `\0`) supported. Block comments non-nesting, line comments `//`.
@@ -71,3 +87,5 @@
 - **Specification v0.2 expansion merged:** Decisions merged from inbox: 4 feature groups (bitwise, string ops, command-line args, file I/O) expanding micro-lib from 18 to 36 functions. Trinity action items: register new builtins, implement string indexing and str comparison operators.
 - **Doc sync decision finalized:** Neo/Trinity sync initiative identified as Phase 0 priority (compound assignment, break/continue doc updates, README refresh) before string interpolation Phase 1 implementation.
 - **Full documentation audit completed:** Oracle completed comprehensive audit of README, spec, guide, test_suite documentation. 3 out of 4 files updated with current counts. Spec verified as 100% accurate vs compiler — no implementation divergences.
+- **laststanding DNS integration status:** No new Oscan builtin was needed. Existing `socket_connect(addr: str, ...)` and `socket_sendto(..., addr: str, ...)` already accept hostnames because `runtime/osc_runtime.c` normalizes `addr` through `l_resolve` in freestanding mode and `getaddrinfo(AF_INET)` in libc mode before connecting/sending.
+- **Hostname coverage added:** `tests\positive\socket_hostnames.osc` is the focused end-to-end regression for hostname-aware TCP/UDP loopback, and `examples\http_client.osc` is the user-facing sample that should describe the first argument as `<host>` rather than `<ip>`.
