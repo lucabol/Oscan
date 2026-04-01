@@ -1,9 +1,9 @@
 # Oscan Test Suite
 
 ## Summary
-- **Total Tests**: 38
-- **Positive Tests**: 22 (compile and run successfully)
-- **Negative Tests**: 16 (correctly rejected by compiler)
+- **Total Tests**: 85
+- **Positive Tests**: 65 (compile and run successfully)
+- **Negative Tests**: 20 (correctly rejected by compiler)
 
 ## Positive Tests
 
@@ -37,7 +37,6 @@
 | Test Name | Description | Error Message |
 |-----------|-------------|---------------|
 | comparison_chain | Chained comparisons | Comparison chaining not allowed |
-| compound_assign | Compound assignment | Compound assignment operators not supported |
 | **extern_duplicate** | **Duplicate extern** | **duplicate extern function** |
 | **extern_in_pure** | **Pure fn calling extern** | **pure function cannot call impure function** |
 | global_mut | Mutable global | Top-level let cannot be mut |
@@ -132,10 +131,19 @@ wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && tests/build/ffi"
 
 ## Test Results (Current)
 
-All 38 tests pass:
-- 53 unit tests pass
-- 22 positive integration tests pass
-- 16 negative compilation tests pass
+All 85 tests pass:
+- 53 unit tests pass (src/lib.rs)
+- 65 positive integration tests pass (tests/positive/*.osc)
+- 20 negative integration tests pass (tests/negative/*.osc)
+
+**Full test listing:**
+```bash
+# Positive tests: 65 files in tests/positive/
+ls tests/positive/*.osc
+
+# Negative tests: 20 files in tests/negative/
+ls tests/negative/*.osc
+```
 
 ---
 *Last updated: Phase 6 (C-FFI Implementation)*

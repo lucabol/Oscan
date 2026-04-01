@@ -100,7 +100,7 @@ For the full formal specification, see **[docs/spec/Oscan-spec.md](docs/spec/Osc
 
 ## Built-in Functions
 
-Oscan provides **~156 builtin functions** across these categories:
+Oscan provides **~139 builtin functions** across these categories:
 
 | Category | Functions | Count |
 |----------|-----------|-------|
@@ -153,7 +153,7 @@ Oscan supports creating graphical applications using a unified graphics API buil
 
 ### Examples
 
-Six example programs in `examples/gfx/` demonstrate graphics capabilities:
+Seven example programs in `examples/gfx/` demonstrate graphics capabilities:
 
 - **`bounce.osc`** — Bouncing ball animation with collision detection
 - **`gfx_demo.osc`** — Shape and text rendering showcase
@@ -165,7 +165,7 @@ Six example programs in `examples/gfx/` demonstrate graphics capabilities:
 
 ## CLI Examples
 
-Beyond the graphics examples, Oscan includes ~17 CLI utility programs in `examples/` demonstrating language features:
+Beyond the graphics examples, Oscan includes ~21 CLI utility programs in `examples/` demonstrating language features:
 
 - **`hello.osc`** — Hello World
 - **`fibonacci.osc`** — Recursive fibonacci
@@ -183,18 +183,21 @@ Beyond the graphics examples, Oscan includes ~17 CLI utility programs in `exampl
 - **`http_client.osc`** — Simple HTTP GET client (TCP sockets)
 - **`file_checksum.osc`** — SHA-256 file hasher (sha256, path_ext, file_size)
 - **`env_info.osc`** — System info tool (datetime, is_tty, glob_match, env_get)
+- **`web_server.osc`** — TCP socket web server (socket_bind, socket_listen, socket_accept)
+- **`web_client.osc`** — TCP socket web client (socket_tcp, socket_connect)
+- Plus 3 more utility programs showcasing additional features
 
 ## Building & Testing
 
 ```bash
 cargo build                     # debug build
 cargo build --release           # optimized build
-cargo test                      # unit tests + 81 integration tests
+cargo test                      # unit tests + 85 integration tests (65 positive + 20 negative)
 cargo test --lib                # unit tests only
 cargo test --test '*'           # integration tests only
 ```
 
-Tests run on Windows (Clang), Linux (GCC), macOS (Clang), and ARM64 (QEMU) via CI.
+Tests run on Windows (MSVC), Linux (GCC), macOS (Clang), and ARM64 (QEMU) via CI.
 
 The C runtime has its own test suite:
 
