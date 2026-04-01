@@ -1,6 +1,6 @@
 # Decisions — Oscan Project
 
-**Last Updated:** 2026-03-27T13:05
+**Last Updated:** 2026-04-01T09:37:38Z
 
 ---
 
@@ -134,8 +134,150 @@ All team members writing the compiler/runtime should ensure their output format 
 
 ---
 
+---
+
+## Phase 6: Specification & Documentation (Oracle & Neo)
+
+### Decision: String Interpolation Feature & Doc Sync Priority
+
+**Author:** Neo (Lead Architect)  
+**Date:** 2026-03-28  
+**Status:** DECIDED  
+
+#### Context
+Documentation sync revealed three blocking inconsistencies: (1) Guide marks compound assignment and break/continue as unsupported when they work, (2) Guide still marks string interpolation as unsupported (correct but outdated for planning), (3) README builtin count needs refresh.
+
+#### Decision
+**Phase 0: Doc Sync First** (Neo, Trinity)
+1. Update guide to document compound assignment (+=, -=, *=, /=, %=) with examples
+2. Update guide to document loop control (break, continue) with examples
+3. Audit and refresh README builtin count and examples list
+
+**Phase 1: String Interpolation** (committed next feature)
+- **Syntax:** `"text {expr} text"`
+- **Scope:** Support i32, i64, f64, bool, str embedded expressions
+- **Lowering:** Uses existing helpers (str_concat, i32_to_str, etc.)
+- **Constraint:** No nested braces; escape `{{` and `}}`
+
+#### Impact
+- Trinity: Implement string interpolation in parser, semantic, codegen
+- Morpheus: No new runtime functions needed (use existing converters)
+- Tank: Add interpolation test coverage
+- Oracle: Spec updated with interpolation grammar and semantics
+
+---
+
+### Decision: Specification v0.2 Expansion (4 Feature Groups)
+
+**Author:** Oracle (Language Spec Specialist)  
+**Date:** 2025-07-18  
+**Status:** APPLIED  
+
+#### Context
+Expanded docs/spec/oscan-spec.md to support CLI sample programs (grep, sort, hexdump, base64).
+
+#### Changes Applied
+
+1. **Bitwise Functions (§10.3):** 6 new pure i32 functions
+   - `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` with unsigned shift semantics
+
+2. **String Operations (§10.2 expanded + §5.12.1 + §5.2)**
+   - 3 new built-ins: `str_find`, `str_from_i32`, `str_slice`
+   - §5.12.1 "String Indexing": `s[i]` returns byte as i32, read-only, bounds-checked
+   - §5.2: relational operators `<`, `>`, `<=`, `>=` now accept str (lexicographic)
+
+3. **Command-Line Arguments (new §10.7)**
+   - `arg_count()`, `arg_get(i)` expose C argc/argv
+
+4. **File I/O (new §10.8)**
+   - 7 functions: `file_open_read`, `file_open_write`, `read_byte`, `write_byte`, `write_str`, `file_close`, `file_delete`
+   - 3 constants: `STDIN`, `STDOUT`, `STDERR`
+
+#### Impact
+- Micro-lib grew from 18 to 36 functions
+- Trinity: Register 20 new builtins; implement string indexing and str comparison
+- Morpheus: Implement all new functions in runtime
+- Tank: Comprehensive test coverage needed
+
+---
+
+### Decision: Full Documentation Audit & Fixes
+
+**Author:** Oracle (Language Spec Specialist)  
+**Date:** 2025-07-19  
+**Status:** COMPLETE  
+
+#### Findings & Fixes
+
+| Component | Finding | Fix |
+|-----------|---------|-----|
+| Builtin Count | ~156 claimed, 139 actual | Acceptable variance; both documented |
+| Examples | 23 claimed, 35 actual (21 CLI, 14 gfx) | README updated |
+| Tests | 38 claimed, 85 actual (65 positive, 20 negative) | test_suite.md updated |
+| Compound Assignment | Marked "unsupported" in guide | Fixed; documented with examples |
+| Spec Accuracy | Full audit completed | **100% accurate vs compiler** — no changes needed |
+
+#### Impact
+All 4 documentation files (README, spec, guide, test_suite) now synchronized with actual implementation.
+
+---
+
+### Decision: Specification Gap-Analysis Positive Tests
+
+**Author:** Trinity (Compiler Dev)  
+**Date:** 2025-07-15  
+**Status:** Implemented  
+
+#### Summary
+Created 6 positive test files covering gaps identified in Oracle's spec-to-test gap analysis:
+
+| File | Spec Sections | Key Features |
+|------|--------------|--------------|
+| spec_tokens_syntax | §1-2 | Escape sequences, block comments, return, negative patterns, zero-arg fn |
+| spec_types_casts | §3 | Cast arithmetic, truncation, empty struct, Result helper, array of arrays |
+| spec_declarations | §4 | Zero-arg fn, single-field struct, single-variant enum |
+| spec_expressions | §5 | i64 modulo, unary minus, variable-range for-loop, deep if-else-if |
+| spec_scoping_errors | §6-7 | Pattern reuse, block scope, for-loop binding scope, chained try |
+| spec_microlib | §10 | abs_i32, abs_f64, mod_i32, str_to_cstr, arena_reset, push |
+
+#### Compiler Limitations Discovered
+1. Result<T, CustomEnum> — codegen emits result typedef before enum
+2. Result::Ok(val) in let binding — generates invalid C
+3. Forward struct in fn signatures — fails if struct defined after function
+4. `return` as last statement — makes function body type unit
+
+---
+
+### Decision: README Example Links Update
+
+**Author:** Oracle (Language Spec Specialist) via Luca Bolognese request  
+**Date:** 2026-04-01  
+**Status:** COMPLETE  
+
+#### Task
+Updated README.md examples sections to use markdown links instead of plain code-formatted filenames.
+
+#### Changes
+- Graphics examples: Converted to markdown links → `xamples/gfx/filename.osc`
+- CLI examples: Converted 18 examples to markdown links → `xamples/filename.osc`
+- All descriptions preserved
+- Pattern: Markdown links to actual files are more discoverable than plain text references
+
+#### Impact
+Users can now directly jump to example files via GitHub/static sites.
+
+---
+
+## Team Directives
+
+### User Directive (2026-04-01T09:33:48Z)
+**By:** Luca Bolognese via Copilot  
+**Directive:** Always commit and push after changes; user can always roll back if needed.
+
+---
+
 ## Decision Archive
 
-All major architectural and implementation decisions for Oscan v0.1 are documented above. This file serves as the authoritative decision log for the project.
+All major architectural and implementation decisions for Oscan v0.1–v0.2 are documented above. This file serves as the authoritative decision log for the project.
 
-Last decision entry: 2026-03-27T13:05 (Phases 2, 5, 7A complete)
+Last decision entry: 2026-04-01T09:37:38Z (README example links, doc sync, spec expansion complete)

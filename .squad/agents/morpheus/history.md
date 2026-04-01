@@ -55,3 +55,16 @@
 - **Design choice:** File descriptors as `int32_t` (not `FILE*`) — works on all platforms since fd values are small ints. Avoids 64-bit pointer truncation.
 - **Path handling:** `osc_path_to_cstr()` helper does byte-by-byte copy (no `memcpy` dependency in freestanding), null-terminates into a 4096-byte stack buffer.
 - **Verified:** 53 Rust unit tests pass, 38 positive + 21 negative integration tests pass (Win x64), smoke test writes/reads/deletes a file successfully.
+
+### 2026-04-01 — Team Batch: Spec v0.2 Expansion & Inbox Consolidation
+
+- **Specification v0.2 expansion finalized:** Decision merged from inbox documenting 4 feature groups expanding micro-lib from 18 to 36 functions
+- **New runtime functions required (not yet implemented):**
+  1. **Bitwise (6):** `band`, `bor`, `bxor`, `bshl`, `bshr`, `bnot` — emitted inline by codegen with unsigned semantics
+  2. **String ops (3):** `str_find`, `str_from_i32`, `str_slice` — require runtime implementation
+  3. **String indexing:** `osc_str_check_index` helper for bounds-checked byte access
+  4. **String comparison:** `osc_str_compare` for lexicographic `<`, `>`, `<=`, `>=` on str types
+  5. **CLI args (2):** Access globals `osc_global_argc` / `osc_global_argv` set by main wrapper
+- **Status:** Decision documented, awaiting Trinity implementation and subsequent runtime porting
+- **Microlib growth pattern:** Existing string helpers (`str_concat`, `str_from_*`) remain unchanged; new string ops layer on top
+

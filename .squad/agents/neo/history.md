@@ -190,5 +190,23 @@
 - We are keeping the language rule simple: integer literals are still `i32` values first, so anything outside the `i32` range must be constructed as `i64` from in-range literals plus explicit widening/arithmetic, not by casting an oversized literal token.
 - For regression safety, interpolation now has explicit unit coverage for impure calls in holes, lone `}` rejection, and out-of-range integer literal rejection, plus the positive string interpolation case now exercises a true large `i64` value (`9000000000`) legally.
 
+### 2026-04-01 — Team Batch: Inbox Merged, Doc Decisions Finalized
+
+**Orchestration completed:**
+- Wrote `.squad/orchestration-log/2026-04-01T09-37-38Z-oracle.md` documenting Oracle's README example links batch
+- Wrote `.squad/log/2026-04-01T09-37-38Z-readme-example-links.md` session log
+- Merged all inbox decisions into `.squad/decisions.md` (6 new decision entries added)
+- Deleted all 18 inbox files after merge (deduplication completed)
+- Updated Trinity, Tank, and Morpheus history entries with team progress
+
+**Key decision merges:**
+1. String Interpolation Feature & Doc Sync Priority (Neo) — Phase 0/Phase 1 commitment with ownership split
+2. Specification v0.2 Expansion (Oracle) — 4 feature groups, micro-lib 18→36 functions
+3. Full Documentation Audit & Fixes (Oracle) — README/spec/guide/test_suite synchronized, 3 of 4 files updated
+4. Specification Gap-Analysis Positive Tests (Trinity) — 6 test files covering edge cases
+5. README Example Links Update (Oracle) — Markdown link conversion for discoverability
+6. User Directive (Luca) — Always commit/push; user can roll back
+
+**Status:** All doc sync and inbox consolidation tasks complete. Ready for Trinity to implement string interpolation features.
 
 

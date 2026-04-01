@@ -91,3 +91,19 @@
 - Direct run of `examples/string_interpolation.osc` produced the expected showcase output, and the interpolation conformance files in `tests/positive/*interpolation*.osc` plus `tests/negative/*interpolation*.osc` all validated against the current compiler binary.
 - `cargo` was unavailable in this environment, so validation relied on the checked-in `target\debug\oscan.exe` path rather than rebuilding from source.
 - Repo-wide example build path is not fully green for unrelated reasons: `examples/web_server.osc` currently fails with `unexpected character '''` at line 72, but `string_interpolation` itself compiles cleanly in that same pass.
+
+### 2026-04-01 — Team Batch: Inbox Consolidation & Cross-Agent Updates
+
+- **Decision inbox merged:** All 18 inbox decision files consolidated into `.squad/decisions.md` with deduplication
+- **Team updates logged:** Appended progress entries to Trinity, Neo, and Morpheus history files documenting:
+  - README example link conversion (Oracle work)
+  - Spec v0.2 expansion decision finalization
+  - Full doc sync completion and verification
+  - String interpolation Phase 0/Phase 1 commitment
+- **Test coverage impact:** Oracle's spec-gap-analysis and spec v0.2 expansion identify 11 new features requiring test coverage (bitwise ops, string indexing, file I/O, CLI args, string comparison). Proposed test strategy in merger: group by feature area to minimize file count.
+- **Next priorities for Tank:** 
+  1. Bitwise operator tests (6 pure functions)
+  2. String indexing and comparison tests
+  3. File I/O and CLI args tests
+  4. Comprehensive negative tests for invalid string indices
+

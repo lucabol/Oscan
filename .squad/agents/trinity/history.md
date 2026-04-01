@@ -63,3 +63,10 @@
 - **Purity model for holes:** Embedded interpolation expressions are stricter than surrounding `fn!` code — they may call only pure functions. This keeps formatted-string construction free of hidden side effects and matches the language philosophy.
 - **Validation updated:** Added/covered interpolation unit tests plus end-to-end positive/negative test programs. Verified with `cargo test` and `tests\run_tests.ps1 -Oscan ..\target\debug\oscan.exe` (73 positive, 26 negative, 75 freestanding checks passing).
 - **Interpolation example discovery:** User-facing examples live under `examples\*.osc` with a short header comment and run instructions; README's `## CLI Examples` section is the right discoverability surface for new CLI examples like `examples\string_interpolation.osc`.
+
+### 2026-04-01 — Team Batch: README Example Links & Doc Sync Completion
+
+- **README example link conversion:** Oracle updated README.md examples sections to use direct markdown links instead of plain code-formatted filenames. Graphics and CLI example sections now link directly to actual `.osc` files in `xamples/` and `xamples/gfx/` directories. This improves discoverability via GitHub and static sites.
+- **Specification v0.2 expansion merged:** Decisions merged from inbox: 4 feature groups (bitwise, string ops, command-line args, file I/O) expanding micro-lib from 18 to 36 functions. Trinity action items: register new builtins, implement string indexing and str comparison operators.
+- **Doc sync decision finalized:** Neo/Trinity sync initiative identified as Phase 0 priority (compound assignment, break/continue doc updates, README refresh) before string interpolation Phase 1 implementation.
+- **Full documentation audit completed:** Oracle completed comprehensive audit of README, spec, guide, test_suite documentation. 3 out of 4 files updated with current counts. Spec verified as 100% accurate vs compiler — no implementation divergences.
