@@ -4,14 +4,18 @@
 
 ## Language Highlights
 
-**Minimal and unambiguous:** 24 reserved words, explicit types, no type inference or implicit coercions.  
-**Purity visible in signatures:** `fn` for pure functions, `fn!` for side effects (I/O, mutation, etc.).  
-**Error handling as values:** `Result<T, E>` type; `try` for propagation. No exceptions.  
-**Order-independent definitions:** Functions, types, and constants can be used before they are declared.  
-**Guarded C output:** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.  
-**One allocation model:** Arena-based memory that deallocates on program exit.  
-**Immutable by default:** `let x = ...` is immutable; `let mut x = ...` opts in to mutation.  
-**Built-in batteries:** String interpolation, socket networking, graphics (freestanding), hash maps, math, file I/O, and ~130 other standard functions.
+- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls — no libc, no linker surprises. (A `--libc` mode is available when you want it.)
+- **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
+- **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
+- **~130 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, and more — batteries included.
+- **Purity visible in signatures.** `fn` for pure functions, `fn!` for side effects — the type system tracks who can do I/O.
+- **Errors as values.** `Result<T, E>` with `try` propagation. No exceptions, no hidden control flow.
+- **Guarded C output.** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.
+- **One allocation model.** Arena-based memory — no manual alloc/free, no GC, deterministic cleanup.
+- **Immutable by default.** `let` is immutable; `let mut` opts in to mutation. Anti-shadowing enforced.
+- **24 reserved words.** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
+- **Order-independent definitions.** Use functions, types, and constants before they are declared.
+- **162 tests, 25 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
 
 ## A Quick Look
 
@@ -154,4 +158,4 @@ deps/           laststanding (freestanding OS library)
 
 ## License
 
-[Specify your license here]
+MIT
