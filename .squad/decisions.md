@@ -287,6 +287,43 @@ Updated README.md and examples/http_client.osc to accurately reflect that hostna
 
 ---
 
+### 10. README.md Structural Refactoring
+
+**Author:** Oracle (Language Spec Specialist)  
+**Date:** 2026-04-01  
+**Status:** APPROVED  
+
+#### Summary
+
+Restructured README.md into a cleaner, more scannable front door for the Oscan project. Reduced cumulative 1400+ lines to focused 167 lines (~88% reduction) while preserving all essential technical information.
+
+#### Key Changes
+
+- **Sharper opening:** 3-line pitch emphasizing LLM-optimized minimalist language
+- **Highlights section:** 6 concise bullet points explaining why each feature matters
+- **Quick code example:** Fibonacci + main with inline pattern glossary
+- **Intent-driven use cases:** Help readers self-identify relevant applications
+- **Grouped examples:** Three sections (CLI utilities, network programs, graphics/games) instead of exhaustive list
+- **Removed:** "Why Oscan?" section, string interpolation deep-dive, 139-function table, freestanding runtime explanation
+
+#### Verification
+
+All links, test counts (62 unit + 74 positive + 26 negative), platform counts (4), and feature claims verified against live codebase.
+
+#### Review Cycle
+
+- **Initial submission:** Neo identified 6 factual errors and 2 omissions (REJECTED)
+- **Corrections applied:** Trinity patched all issues independently
+- **Re-review:** Neo verified all corrections against codebase (APPROVED)
+
+#### Impact
+
+- Reduced cognitive load for new users
+- Improved discoverability of examples
+- Maintained technical accuracy throughout
+
+---
+
 ## Governance
 
 - All meaningful changes require team consensus

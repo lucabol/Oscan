@@ -19,6 +19,10 @@
 
 ## Learnings
 
+### 2026-04-01 — README fact sync
+- README fact patches should be verified from repo sources, not prior drafts: `docs/spec/oscan-spec.md` now states 24 reserved words, `examples\*.osc` contains 18 top-level programs, `examples\gfx\*.osc` contains 7 graphics programs, and the current test inventory is 62 unit / 74 positive / 26 negative.
+- The CLI surface also includes `--libc` in `src\main.rs`, so user-facing command summaries should list it alongside `--run`, `--emit-c`, `--dump-ast`, and `--dump-tokens`.
+
 ### 2026-04-01 — Example interpolation sweep (APPROVED batch)
 - **Task:** Apply string interpolation to example output formatting; reduce nested str_concat chains.
 - **Scope:** 6 examples plus header/docs; skip examples where plain concat is clearer.
@@ -89,3 +93,19 @@
 - **Full documentation audit completed:** Oracle completed comprehensive audit of README, spec, guide, test_suite documentation. 3 out of 4 files updated with current counts. Spec verified as 100% accurate vs compiler — no implementation divergences.
 - **laststanding DNS integration status:** No new Oscan builtin was needed. Existing `socket_connect(addr: str, ...)` and `socket_sendto(..., addr: str, ...)` already accept hostnames because `runtime/osc_runtime.c` normalizes `addr` through `l_resolve` in freestanding mode and `getaddrinfo(AF_INET)` in libc mode before connecting/sending.
 - **Hostname coverage added:** `tests\positive\socket_hostnames.osc` is the focused end-to-end regression for hostname-aware TCP/UDP loopback, and `examples\http_client.osc` is the user-facing sample that should describe the first argument as `<host>` rather than `<ip>`.
+
+### 2026-04-01 — README Structural Refactoring Patch (Team Batch)
+- **Trigger:** Neo identified 6 factual errors and 2 omissions in Oracle's README rewrite during review. Instead of waiting for Oracle revision, Trinity applied all corrections independently.
+- **Corrections applied:**
+  - Reserved word count: 21 → 24 (verified against src/lexer.rs:251–274)
+  - Unit test count: 53 → 62 (verified against cargo test output)
+  - Positive integration test count: 65 → 74 (verified against tests/positive/ file count)
+  - Negative integration test count: 20 → 26 (verified against tests/negative/ file count)
+  - Example count: 21 non-gfx → 18 (verified against examples/*.osc file count)
+  - Added missing --libc CLI flag (verified in src/main.rs:71)
+  - Added "Guarded C output" bullet (zero undefined behavior principle)
+  - Added "Order-independent definitions" bullet (language design feature)
+- **All corrections verified:** Every number cross-checked against live codebase sources before submission
+- **Outcome:** Enabled Neo's immediate re-review approval (APPROVED status). README now factually accurate and structurally sound.
+- **Decision merged:** .squad/decisions.md entry #10 (README.md Structural Refactoring) — consolidates review/rejection/approval cycle
+- **Orchestration log:** .squad/orchestration-log/2026-04-01T11-50-20Z-trinity.md

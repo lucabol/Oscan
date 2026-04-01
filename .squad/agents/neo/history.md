@@ -242,4 +242,52 @@
 - The minimal repair was to preserve escaped CSS braces (`{{` / `}}`) and change `font-family: 'Segoe UI', ...` to `font-family: Segoe UI, ...` rather than backing out interpolation.
 - Validation scope for this kind of repair should include both the repaired example itself and the full examples compile sweep, because the user explicitly wanted all interpolation upgrades preserved elsewhere.
 
+### 2025-07-25 — README Rewrite Review: REJECTED (Fixable)
 
+**Review scope:** README.md accuracy audit against codebase, spec, and examples.
+
+**Findings:**
+- 6 factual errors: reserved word count (21→24), all 3 test counts wrong (53→62 unit, 65→74 positive, 20→26 negative), example count (21→18 non-gfx), missing `--libc` CLI flag
+- 2 omissions: "zero undefined behavior" and "order-independent definitions" not in Language Highlights
+- Structure and reader flow are good — no rewrite needed, just number fixes and 2 new bullets
+
+**Lesson:** Test and example counts drift fast. README numbers should be verified against live file counts before any review approval. Consider making counts approximate ("60+ unit tests") or omitting exact numbers.
+
+**Decision written to:** `.squad/decisions/inbox/neo-readme-review.md`
+
+### 2025-07-25 — README Re-Review: APPROVED
+
+**Review scope:** Re-review after Trinity's independent patch to address prior rejection.
+
+**All 8 issues verified fixed:**
+- Reserved word count: 24 ✅ (verified against `src/lexer.rs` lines 251–274)
+- Unit tests: 62 ✅ (19 lexer + 19 parser + 24 semantic)
+- Positive integration tests: 74 ✅ (file count in `tests/positive/`)
+- Negative integration tests: 26 ✅ (file count in `tests/negative/`)
+- Example count: 18 non-gfx + 7 gfx ✅ (file counts in `examples/` and `examples/gfx/`)
+- `--libc` flag: present ✅ (`src/main.rs` line 71)
+- "Zero UB" in highlights: present as "Guarded C output" bullet ✅
+- "Order-independent definitions" in highlights: dedicated bullet ✅
+
+**Structure assessment:** Clean, accurate, well-organized. Good reader flow from highlights → quick look → install → examples → learn more → testing.
+
+**Decision written to:** `.squad/decisions/inbox/neo-readme-rereview.md`
+
+
+### 2026-04-01 — README Rewrite Review & Re-Review (Team Batch)
+- **Initial review (2026-04-01):** Reviewed Oracle's README structural refactoring rewrite. Structure and flow are good. Found 6 factual errors and 2 omissions:
+  - Errors: 24 reserved words (not 21), 62 unit tests (not 53), 74 positive tests (not 65), 26 negative tests (not 20), 18 non-gfx examples (not 21), missing --libc CLI flag
+  - Omissions: "zero undefined behavior" and "order-independent definitions" not in highlights
+- **Rejection decision:** REJECTED — fixable issues. Provided detailed correction guidance with line-specific suggestions for language additions.
+- **Re-review (2026-04-01):** Trinity independently patched all 8 issues without waiting for Oracle revision. Verified all corrections against live codebase:
+  - 24 reserved words: src/lexer.rs lines 251–274 ✅
+  - 62 unit tests: 19 lexer + 19 parser + 24 semantic ✅
+  - 74 positive test files: tests/positive/ count ✅
+  - 26 negative test files: tests/negative/ count ✅
+  - 18 non-gfx + 7 gfx examples: examples/ and examples/gfx/ counts ✅
+  - --libc flag: src/main.rs line 71 ✅
+  - "Guarded C output" (zero UB) bullet: present in highlights ✅
+  - "Order-independent definitions" bullet: dedicated entry in highlights ✅
+- **APPROVAL DECISION:** All 8 issues resolved. README is factually accurate, well-structured, and ready.
+- **Decision merge:** .squad/decisions.md entry #10 (README.md Structural Refactoring) — consolidated initial review, rejection, and re-review approval into single decision record
+- **Orchestration logs:** .squad/orchestration-log/2026-04-01T11-50-20Z-neo.md
