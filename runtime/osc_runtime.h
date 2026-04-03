@@ -168,6 +168,10 @@ void    osc_write_str(int32_t fd, osc_str s);
 void    osc_file_close(int32_t fd);
 int32_t osc_file_delete(osc_str path);
 
+/* Bulk file I/O */
+osc_result_str_str osc_read_file(osc_arena *arena, osc_str path);
+osc_result_str_str osc_write_file(osc_str path, osc_str data);
+
 /* Socket I/O */
 int32_t osc_socket_tcp(void);
 int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port);
@@ -196,6 +200,16 @@ osc_str osc_i32_to_str(osc_arena *arena, int32_t n);
 int32_t osc_abs_i32(int32_t n);
 double  osc_abs_f64(double n);
 int64_t osc_abs_i64(int64_t n);
+
+int32_t osc_min_i32(int32_t a, int32_t b);
+int32_t osc_max_i32(int32_t a, int32_t b);
+int32_t osc_clamp_i32(int32_t v, int32_t lo, int32_t hi);
+int64_t osc_min_i64(int64_t a, int64_t b);
+int64_t osc_max_i64(int64_t a, int64_t b);
+int64_t osc_clamp_i64(int64_t v, int64_t lo, int64_t hi);
+double  osc_min_f64(double a, double b);
+double  osc_max_f64(double a, double b);
+double  osc_clamp_f64(double v, double lo, double hi);
 
 double osc_math_sin(double x);
 double osc_math_cos(double x);
@@ -278,6 +292,8 @@ int64_t  osc_file_size(osc_str path);
 
 osc_str   osc_path_join(osc_arena *arena, osc_str dir, osc_str file);
 osc_str   osc_path_ext(osc_str path);
+osc_str   osc_path_basename(osc_str path);
+osc_str   osc_path_dirname(osc_arena *arena, osc_str path);
 uint8_t   osc_path_exists(osc_str path);
 uint8_t   osc_path_is_dir(osc_str path);
 
@@ -285,6 +301,7 @@ uint8_t   osc_path_is_dir(osc_str path);
 /*  String operations                                                  */
 /* ------------------------------------------------------------------ */
 
+osc_str   osc_str_join(osc_arena *arena, osc_array *arr, osc_str sep);
 uint8_t   osc_str_contains(osc_str s, osc_str sub);
 uint8_t   osc_str_starts_with(osc_str s, osc_str prefix);
 uint8_t   osc_str_ends_with(osc_str s, osc_str suffix);

@@ -1312,6 +1312,33 @@ impl CodeGenerator {
                 let elem_c = self.type_to_c(&elem_ty);
                 format!("(*({}*)osc_array_pop({}))", elem_c, arg_strs[0])
             }
+            // File I/O — whole-file convenience
+            "read_file" => format!("osc_read_file(_arena, {})", arg_strs[0]),
+            "write_file" => format!("osc_write_file({}, {})", arg_strs[0], arg_strs[1]),
+            // Math min/max/clamp
+            "min_i32" => format!("osc_min_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "max_i32" => format!("osc_max_i32({}, {})", arg_strs[0], arg_strs[1]),
+            "clamp_i32" => format!(
+                "osc_clamp_i32({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "min_i64" => format!("osc_min_i64({}, {})", arg_strs[0], arg_strs[1]),
+            "max_i64" => format!("osc_max_i64({}, {})", arg_strs[0], arg_strs[1]),
+            "clamp_i64" => format!(
+                "osc_clamp_i64({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "min_f64" => format!("osc_min_f64({}, {})", arg_strs[0], arg_strs[1]),
+            "max_f64" => format!("osc_max_f64({}, {})", arg_strs[0], arg_strs[1]),
+            "clamp_f64" => format!(
+                "osc_clamp_f64({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            // String join
+            "str_join" => format!("osc_str_join(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            // Path utilities
+            "path_basename" => format!("osc_path_basename({})", arg_strs[0]),
+            "path_dirname" => format!("osc_path_dirname(_arena, {})", arg_strs[0]),
             "str_from_chars" => format!("osc_str_from_chars(_arena, {})", arg_strs[0]),
             "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
             _ => {

@@ -1037,6 +1037,133 @@ impl SemanticAnalyzer {
             builtin(vec![("m", BcType::Map)], BcType::I32, true),
         );
 
+        // File I/O — whole-file convenience (fn!)
+        self.functions.insert(
+            "read_file".into(),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+        self.functions.insert(
+            "write_file".into(),
+            builtin(
+                vec![("path", BcType::Str), ("data", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+
+        // Math min/max/clamp (pure)
+        self.functions.insert(
+            "min_i32".into(),
+            builtin(
+                vec![("a", BcType::I32), ("b", BcType::I32)],
+                BcType::I32,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "max_i32".into(),
+            builtin(
+                vec![("a", BcType::I32), ("b", BcType::I32)],
+                BcType::I32,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "clamp_i32".into(),
+            builtin(
+                vec![
+                    ("v", BcType::I32),
+                    ("lo", BcType::I32),
+                    ("hi", BcType::I32),
+                ],
+                BcType::I32,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "min_i64".into(),
+            builtin(
+                vec![("a", BcType::I64), ("b", BcType::I64)],
+                BcType::I64,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "max_i64".into(),
+            builtin(
+                vec![("a", BcType::I64), ("b", BcType::I64)],
+                BcType::I64,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "clamp_i64".into(),
+            builtin(
+                vec![
+                    ("v", BcType::I64),
+                    ("lo", BcType::I64),
+                    ("hi", BcType::I64),
+                ],
+                BcType::I64,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "min_f64".into(),
+            builtin(
+                vec![("a", BcType::F64), ("b", BcType::F64)],
+                BcType::F64,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "max_f64".into(),
+            builtin(
+                vec![("a", BcType::F64), ("b", BcType::F64)],
+                BcType::F64,
+                true,
+            ),
+        );
+        self.functions.insert(
+            "clamp_f64".into(),
+            builtin(
+                vec![
+                    ("v", BcType::F64),
+                    ("lo", BcType::F64),
+                    ("hi", BcType::F64),
+                ],
+                BcType::F64,
+                true,
+            ),
+        );
+
+        // String join (fn! — allocates)
+        self.functions.insert(
+            "str_join".into(),
+            builtin(
+                vec![
+                    ("arr", BcType::Array(Box::new(BcType::Str))),
+                    ("sep", BcType::Str),
+                ],
+                BcType::Str,
+                false,
+            ),
+        );
+
+        // Path utilities — basename (pure), dirname (fn! — allocates)
+        self.functions.insert(
+            "path_basename".into(),
+            builtin(vec![("path", BcType::Str)], BcType::Str, true),
+        );
+        self.functions.insert(
+            "path_dirname".into(),
+            builtin(vec![("path", BcType::Str)], BcType::Str, false),
+        );
+
         // len and push are special-cased in check_call
     }
 

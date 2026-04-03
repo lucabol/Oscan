@@ -912,6 +912,73 @@ int32_t osc_file_delete(osc_str path)
     return r < 0 ? -1 : 0;
 }
 
+osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
+{
+    osc_result_str_str result;
+    char pbuf[4096];
+    osc_path_to_cstr(path, pbuf, sizeof(pbuf));
+
+    L_FD fd = open_read(pbuf);
+    if ((int)fd < 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("read_file: cannot open file");
+        return result;
+    }
+    L_Stat st;
+    if (l_fstat(fd, &st) != 0 || st.st_size < 0) {
+        close(fd);
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("read_file: cannot stat file");
+        return result;
+    }
+    size_t file_len = (size_t)st.st_size;
+    char *buf = (char *)osc_arena_alloc(arena, file_len + 1);
+    size_t total = 0;
+    while (total < file_len) {
+        ssize_t n = read(fd, buf + total, file_len - total);
+        if (n <= 0) break;
+        total += (size_t)n;
+    }
+    close(fd);
+    buf[total] = '\0';
+    result.is_ok = 1;
+    result.value.ok.data = buf;
+    result.value.ok.len = (int32_t)total;
+    return result;
+}
+
+osc_result_str_str osc_write_file(osc_str path, osc_str data)
+{
+    osc_result_str_str result;
+    char pbuf[4096];
+    osc_path_to_cstr(path, pbuf, sizeof(pbuf));
+
+    L_FD fd = open_write(pbuf);
+    if ((int)fd < 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("write_file: cannot open file");
+        return result;
+    }
+    if (data.len > 0) {
+        size_t total = 0;
+        while (total < (size_t)data.len) {
+            ssize_t n = write(fd, data.data + total, (size_t)data.len - total);
+            if (n <= 0) {
+                close(fd);
+                result.is_ok = 0;
+                result.value.err = osc_str_from_cstr("write_file: write failed");
+                return result;
+            }
+            total += (size_t)n;
+        }
+    }
+    close(fd);
+    result.is_ok = 1;
+    result.value.ok.data = "";
+    result.value.ok.len = 0;
+    return result;
+}
+
 #else /* libc mode */
 
 #ifdef _WIN32
@@ -991,6 +1058,79 @@ int32_t osc_file_delete(osc_str path)
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
     return (int32_t)OSC_UNLINK(buf);
+}
+
+osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
+{
+    osc_result_str_str result;
+    char pbuf[4096];
+    osc_path_to_cstr(path, pbuf, sizeof(pbuf));
+
+    int fd = OSC_OPEN(pbuf, OSC_O_RDONLY | OSC_O_BINARY);
+    if (fd < 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("read_file: cannot open file");
+        return result;
+    }
+#ifdef _WIN32
+    struct _stat st;
+    if (_fstat(fd, &st) != 0 || st.st_size < 0) {
+#else
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 0) {
+#endif
+        OSC_CLOSE(fd);
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("read_file: cannot stat file");
+        return result;
+    }
+    size_t file_len = (size_t)st.st_size;
+    char *buf = (char *)osc_arena_alloc(arena, file_len + 1);
+    size_t total = 0;
+    while (total < file_len) {
+        int n = OSC_READ(fd, buf + total, (unsigned)(file_len - total));
+        if (n <= 0) break;
+        total += (size_t)n;
+    }
+    OSC_CLOSE(fd);
+    buf[total] = '\0';
+    result.is_ok = 1;
+    result.value.ok.data = buf;
+    result.value.ok.len = (int32_t)total;
+    return result;
+}
+
+osc_result_str_str osc_write_file(osc_str path, osc_str data)
+{
+    osc_result_str_str result;
+    char pbuf[4096];
+    osc_path_to_cstr(path, pbuf, sizeof(pbuf));
+
+    int fd = OSC_OPEN(pbuf, OSC_O_WRONLY | OSC_O_CREAT | OSC_O_TRUNC | OSC_O_BINARY,
+                      OSC_S_IREAD | OSC_S_IWRITE);
+    if (fd < 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("write_file: cannot open file");
+        return result;
+    }
+    if (data.len > 0) {
+        size_t total = 0;
+        while (total < (size_t)data.len) {
+            int n = OSC_WRITE(fd, data.data + total, (unsigned)((size_t)data.len - total));
+            if (n <= 0) {
+                OSC_CLOSE(fd);
+                result.is_ok = 0;
+                result.value.err = osc_str_from_cstr("write_file: write failed");
+                return result;
+            }
+            total += (size_t)n;
+        }
+    }
+    OSC_CLOSE(fd);
+    result.is_ok = 1;
+    result.value.ok.data = "";
+    result.value.ok.len = 0;
+    return result;
 }
 
 #endif /* OSC_FREESTANDING — file I/O */
@@ -1341,6 +1481,22 @@ int64_t osc_abs_i64(int64_t n)
     }
     return n < 0 ? -n : n;
 }
+
+/* ================================================================== */
+/*  Min / Max / Clamp                                                  */
+/* ================================================================== */
+
+int32_t osc_min_i32(int32_t a, int32_t b) { return a < b ? a : b; }
+int32_t osc_max_i32(int32_t a, int32_t b) { return a > b ? a : b; }
+int32_t osc_clamp_i32(int32_t v, int32_t lo, int32_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+int64_t osc_min_i64(int64_t a, int64_t b) { return a < b ? a : b; }
+int64_t osc_max_i64(int64_t a, int64_t b) { return a > b ? a : b; }
+int64_t osc_clamp_i64(int64_t v, int64_t lo, int64_t hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+double osc_min_f64(double a, double b) { return a < b ? a : b; }
+double osc_max_f64(double a, double b) { return a > b ? a : b; }
+double osc_clamp_f64(double v, double lo, double hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 /* ================================================================== */
 /*  Number parsing                                                     */
@@ -1812,6 +1968,66 @@ uint8_t osc_path_is_dir(osc_str path)
 #endif
 }
 
+osc_str osc_path_basename(osc_str path)
+{
+    osc_str result;
+    int32_t i;
+    int32_t last_sep = -1;
+
+    if (path.len == 0) {
+        result.data = "";
+        result.len = 0;
+        return result;
+    }
+    for (i = 0; i < path.len; i++) {
+        if (path.data[i] == '/' || path.data[i] == '\\') last_sep = i;
+    }
+    if (last_sep < 0) {
+        /* No separator — entire path is the basename */
+        return path;
+    }
+    result.data = path.data + last_sep + 1;
+    result.len = path.len - last_sep - 1;
+    return result;
+}
+
+osc_str osc_path_dirname(osc_arena *arena, osc_str path)
+{
+    osc_str result;
+    int32_t i;
+    int32_t last_sep = -1;
+    char *copy;
+
+    if (path.len == 0) {
+        result.data = ".";
+        result.len = 1;
+        return result;
+    }
+    for (i = 0; i < path.len; i++) {
+        if (path.data[i] == '/' || path.data[i] == '\\') last_sep = i;
+    }
+    if (last_sep < 0) {
+        result.data = ".";
+        result.len = 1;
+        return result;
+    }
+    if (last_sep == 0) {
+        /* Root directory */
+        copy = (char *)osc_arena_alloc(arena, 2);
+        copy[0] = path.data[0];
+        copy[1] = '\0';
+        result.data = copy;
+        result.len = 1;
+        return result;
+    }
+    copy = (char *)osc_arena_alloc(arena, (size_t)last_sep + 1);
+    memcpy(copy, path.data, (size_t)last_sep);
+    copy[last_sep] = '\0';
+    result.data = copy;
+    result.len = last_sep;
+    return result;
+}
+
 /* ================================================================== */
 /*  Tier 6: String operations                                          */
 /* ================================================================== */
@@ -2015,6 +2231,49 @@ osc_array *osc_str_to_chars(osc_arena *arena, osc_str s)
         osc_array_push(arena, arr, &ch);
     }
     return arr;
+}
+
+osc_str osc_str_join(osc_arena *arena, osc_array *arr, osc_str sep)
+{
+    osc_str result;
+    int32_t i;
+    int32_t total_len;
+    char *buf;
+    int32_t pos;
+
+    if (!arr) {
+        OSC_PANIC("str_join: array is NULL");
+    }
+    if (arr->len == 0) {
+        result.data = "";
+        result.len = 0;
+        return result;
+    }
+    /* Compute total length */
+    total_len = 0;
+    for (i = 0; i < arr->len; i++) {
+        osc_str *s = (osc_str *)osc_array_get(arr, i);
+        total_len += s->len;
+    }
+    total_len += sep.len * (arr->len - 1);
+
+    buf = (char *)osc_arena_alloc(arena, (size_t)total_len + 1);
+    pos = 0;
+    for (i = 0; i < arr->len; i++) {
+        osc_str *s = (osc_str *)osc_array_get(arr, i);
+        if (i > 0 && sep.len > 0) {
+            memcpy(buf + pos, sep.data, (size_t)sep.len);
+            pos += sep.len;
+        }
+        if (s->len > 0) {
+            memcpy(buf + pos, s->data, (size_t)s->len);
+            pos += s->len;
+        }
+    }
+    buf[pos] = '\0';
+    result.data = buf;
+    result.len = pos;
+    return result;
 }
 
 

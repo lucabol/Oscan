@@ -1,0 +1,25 @@
+fn! main() {
+    // Write a test file
+    let wr: Result<str, str> = write_file("_test_rw.txt", "hello oscan");
+    match wr {
+        Result::Ok(_) => { println("write: ok"); },
+        Result::Err(e) => { println("write: {e}"); },
+    };
+
+    // Read it back
+    let rd: Result<str, str> = read_file("_test_rw.txt");
+    match rd {
+        Result::Ok(content) => { println("read: {content}"); },
+        Result::Err(e) => { println("read: {e}"); },
+    };
+
+    // Read nonexistent file
+    let bad: Result<str, str> = read_file("_nonexistent_file.txt");
+    match bad {
+        Result::Ok(_) => { println("bad: should not reach"); },
+        Result::Err(_) => { println("bad: error ok"); },
+    };
+
+    // Cleanup
+    file_delete("_test_rw.txt");
+}

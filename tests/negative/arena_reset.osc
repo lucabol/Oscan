@@ -1,0 +1,6 @@
+// EXPECT ERROR: arena_reset is no longer a valid builtin
+// Should fail with "undefined function" or similar.
+
+fn! main() {
+    arena_reset();
+}

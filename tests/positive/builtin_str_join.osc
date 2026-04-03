@@ -1,0 +1,12 @@
+fn! main() {
+    let words: [str] = ["hello", "world", "oscan"];
+    println(str_join(words, " "));
+    println(str_join(words, ", "));
+    println(str_join(words, ""));
+
+    let empty: [str] = [];
+    println(str_join(empty, ","));
+
+    let single: [str] = ["alone"];
+    println(str_join(single, ","));
+}

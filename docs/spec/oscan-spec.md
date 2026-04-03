@@ -1274,7 +1274,49 @@ fn! arg_get(i: i32) -> str                 // Get argument at index i (0 = progr
 
 **Note:** These expose the underlying C `argc`/`argv`. `arg_get(0)` returns the program name.
 
-### 10.8 File I/O (7)
+### 10.7 Whole-File I/O (2) — `fn!`
+
+```
+fn! read_file(path: str) -> Result<str, str>      // Read entire file into a string. Returns Ok(content) or Err(message).
+fn! write_file(path: str, data: str) -> Result<str, str>  // Write string to file (creates/overwrites). Returns Ok("") or Err(message).
+```
+
+**Note:** `read_file` uses a single bulk read (not byte-at-a-time) for performance. The entire file is loaded into arena memory. Both functions return `Result<str, str>` where the error is a human-readable message.
+
+### 10.8 Minimum/Maximum/Clamp Functions (9) — Pure
+
+```
+fn min_i32(a: i32, b: i32) -> i32          // Returns the smaller of a and b
+fn max_i32(a: i32, b: i32) -> i32          // Returns the larger of a and b
+fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32  // Clamps v to [lo, hi]
+fn min_i64(a: i64, b: i64) -> i64          // Returns the smaller of a and b
+fn max_i64(a: i64, b: i64) -> i64          // Returns the larger of a and b
+fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64  // Clamps v to [lo, hi]
+fn min_f64(a: f64, b: f64) -> f64          // Returns the smaller of a and b
+fn max_f64(a: f64, b: f64) -> f64          // Returns the larger of a and b
+fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64  // Clamps v to [lo, hi]
+```
+
+**Note:** These are pure functions (`fn`). No allocation. `min` and `max` compare values directly. `clamp` ensures `v` falls within the inclusive range `[lo, hi]`. If `v < lo`, returns `lo`; if `v > hi`, returns `hi`; otherwise returns `v`.
+
+### 10.9 String Join (1) — `fn!`
+
+```
+fn! str_join(arr: [str], sep: str) -> str   // Join array of strings with separator (allocates)
+```
+
+**Note:** `str_join` allocates on the arena, so it is `fn!`. It concatenates all strings in `arr` with `sep` inserted between each pair. Empty array returns empty string.
+
+### 10.10 Path Utilities (2)
+
+```
+fn path_basename(path: str) -> str          // Extract filename from path (pure — returns view)
+fn! path_dirname(path: str) -> str          // Extract directory from path (allocates)
+```
+
+**Note:** `path_basename` is pure and returns a view into the input string (no allocation). `path_dirname` allocates because it may need to trim the trailing separator. Both work on POSIX-style (`/`) and Windows-style (`\`) path separators.
+
+### 10.11 File I/O (7)
 
 ```
 fn! file_open_read(path: str) -> i32       // Open file for reading, returns handle (-1 on error)
@@ -1296,7 +1338,7 @@ fn! file_delete(path: str) -> i32          // Delete file, returns 0 on success
 
 **Note:** In freestanding mode, file I/O uses OS syscalls. In libc mode, it uses standard C stdio. Byte-at-a-time I/O avoids buffer management complexity.
 
-### 10.9 Tier 1: Character Classification (11)
+### 10.12 Tier 1: Character Classification (11)
 
 All pure functions (`fn`).
 
@@ -1316,7 +1358,7 @@ fn abs_i64(n: i64) -> i64                    // Absolute value of 64-bit integer
 
 **Note:** Character classification functions treat the i32 as a Unicode code point or ASCII value. Input values should be in the range 0-127 for ASCII, or valid Unicode code points for extended use.
 
-### 10.10 Tier 2: Number Parsing & Conversion (5)
+### 10.13 Tier 2: Number Parsing & Conversion (5)
 
 ```
 fn parse_i32(s: str) -> Result<i32, str>     // Parse string to i32; returns error message on failure
@@ -1330,7 +1372,7 @@ fn str_from_bool(b: bool) -> str             // Convert bool to "true" or "false
 
 **Interpolation MVP runtime note:** no dedicated formatter is required. Compiler lowering can build interpolated strings entirely from `str_concat`, `i32_to_str` / `str_from_i32`, `str_from_i64`, `str_from_f64`, and `str_from_bool`.
 
-### 10.11 Tier 3: System Functions (5) — `fn!`
+### 10.14 Tier 3: System Functions (5) — `fn!`
 
 ```
 fn! rand_seed(seed: i32)                     // Seed the random number generator
@@ -1342,7 +1384,7 @@ fn! exit(code: i32)                          // Exit the process with given exit
 
 **Note:** `rand_seed` must be called before using `rand_i32` (otherwise RNG behavior is undefined). `time_now` returns seconds since January 1, 1970 UTC.
 
-### 10.12 Tier 4: Environment & Error (6) — `fn!`
+### 10.15 Tier 4: Environment & Error (6) — `fn!`
 
 ```
 fn! env_get(name: str) -> Result<str, str>   // Get environment variable; returns error if not found
@@ -1355,7 +1397,7 @@ fn! errno_str(code: i32) -> str              // Convert errno code to human-read
 
 **Note:** `env_get` returns a string from the environment (must be copied to the arena if you need it to persist). `env_count`, `env_key`, and `env_value` allow iterating over all environment variables by index. `errno_get` and `errno_str` are useful for debugging OS-level errors.
 
-### 10.13 Tier 5: Filesystem Operations (8) — `fn!`
+### 10.16 Tier 5: Filesystem Operations (8) — `fn!`
 
 ```
 fn! file_rename(old: str, new: str) -> i32   // Rename file; returns 0 on success, -1 on error
@@ -1370,7 +1412,7 @@ fn! dir_change(path: str) -> i32             // Change current working directory
 
 **Note:** File operations use OS-level syscalls (or libc equivalents). File handles are the same format as those returned by `file_open_read`/`file_open_write`. `dir_current()` returns a newly allocated string on the arena with the CWD path.
 
-### 10.14 Tier 6: String Operations (9)
+### 10.17 Tier 6: String Operations (9)
 
 Most are pure (`fn`); allocation functions are `fn!`.
 
@@ -1388,7 +1430,7 @@ fn str_compare(a: str, b: str) -> i32        // Lexicographic comparison: -1 (a<
 
 **Note:** All string functions that create new strings (`str_trim`, `str_split`, `str_to_upper`, `str_to_lower`, `str_replace`) are `fn!` because they allocate on the arena.
 
-### 10.15 Tier 7: Directory Listing, Process Control & Terminal (7) — `fn!`
+### 10.18 Tier 7: Directory Listing, Process Control & Terminal (7) — `fn!`
 
 ```
 fn! dir_list(path: str) -> [str]             // List directory entries (returns array of names, allocates)
@@ -1621,9 +1663,9 @@ fn! env_delete(name: str) -> i32                     // Delete (unset) environme
 
 **Extended Library Summary:**
 
-The library is organized into 13 tiers:
+The library is organized into 13 tiers with core functions plus specialized tiers:
 
-- **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), Memory (1), CLI args (2), File I/O (7)
+- **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), Memory (1), CLI args (2), File I/O (7), Whole-File I/O (2), Min/Max/Clamp (9), String Join (1), Path Utilities (2)
 - **Tier 1:** Character classification (11 functions)
 - **Tier 2:** Number parsing & conversion (5 functions)
 - **Tier 3:** System functions (5 functions)
@@ -1637,6 +1679,8 @@ The library is organized into 13 tiers:
 - **Tier 11:** Array sorting (4 functions)
 - **Tier 12:** Graphics builtins (19 functions)
 - **Tier 13:** Date/Time, glob, SHA-256, terminal & environment modification (14 functions)
+
+**Total builtin functions:** ~167 (139 core + core extensions + 13+ tiers)
 
 ---
 
@@ -2074,7 +2118,6 @@ The `deps/laststanding` library (`l_os.h`) provides a freestanding C runtime wit
 
 The following features are explicitly **NOT** in v0.1 and are deferred pending further rationale:
 
-- **Whole-file I/O convenience** (`read_file`, `write_file`) — reduces byte-at-a-time boilerplate in file readers
 - **Evented / multiplexed I/O** (`poll`, nonblocking patterns) — enables truly concurrent I/O servers
 - **User-defined generics** — complexity tradeoff; current `Result<T,E>` is sufficient for v0.1
 - **Closures / first-class functions** — eliminates capture semantics, keeps functions simple for now

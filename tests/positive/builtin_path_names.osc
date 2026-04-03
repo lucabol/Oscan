@@ -1,0 +1,8 @@
+fn! main() {
+    println(path_basename("dir/file.txt"));
+    println(path_dirname("dir/file.txt"));
+    println(path_basename("file.txt"));
+    println(path_dirname("file.txt"));
+    println(path_basename("/a/b/c"));
+    println(path_dirname("/a/b/c"));
+}

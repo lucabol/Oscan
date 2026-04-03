@@ -1,0 +1,18 @@
+fn! main() {
+    // i32
+    print_i32(min_i32(3, 7)); print(" ");
+    print_i32(max_i32(3, 7)); print(" ");
+    print_i32(clamp_i32(10, 0, 5)); println("");
+
+    // i64
+    let a: i64 = 100 as i64;
+    let b: i64 = 200 as i64;
+    print_i64(min_i64(a, b)); print(" ");
+    print_i64(max_i64(a, b)); print(" ");
+    print_i64(clamp_i64(50 as i64, a, b)); println("");
+
+    // f64
+    print_f64(min_f64(1.5, 2.5)); print(" ");
+    print_f64(max_f64(1.5, 2.5)); print(" ");
+    print_f64(clamp_f64(3.5, 1.5, 2.5)); println("");
+}

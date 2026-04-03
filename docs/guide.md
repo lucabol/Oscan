@@ -539,6 +539,40 @@ See the **Strings** section above for the complete string function tables.
 |----------------------------|----------------------------|
 | `push(arr, elem)`          | Append to dynamic array    |
 
+### Whole-File I/O (Impure)
+
+| Function                             | Description                          |
+|--------------------------------------|--------------------------------------|
+| `read_file(path: str) -> Result<str, str>` | Read entire file; returns content or error |
+| `write_file(path: str, data: str) -> Result<str, str>` | Write string to file; returns empty string or error |
+
+### Min/Max/Clamp (Pure)
+
+| Function                                    | Description                  |
+|---------------------------------------------|------------------------------|
+| `min_i32(a: i32, b: i32) -> i32`           | Minimum of two i32 values    |
+| `max_i32(a: i32, b: i32) -> i32`           | Maximum of two i32 values    |
+| `clamp_i32(v: i32, lo: i32, hi: i32) -> i32` | Clamp i32 to range [lo, hi] |
+| `min_i64(a: i64, b: i64) -> i64`           | Minimum of two i64 values    |
+| `max_i64(a: i64, b: i64) -> i64`           | Maximum of two i64 values    |
+| `clamp_i64(v: i64, lo: i64, hi: i64) -> i64` | Clamp i64 to range [lo, hi] |
+| `min_f64(a: f64, b: f64) -> f64`           | Minimum of two f64 values    |
+| `max_f64(a: f64, b: f64) -> f64`           | Maximum of two f64 values    |
+| `clamp_f64(v: f64, lo: f64, hi: f64) -> f64` | Clamp f64 to range [lo, hi] |
+
+### String Join (Impure)
+
+| Function                          | Description                              |
+|-----------------------------------|------------------------------------------|
+| `str_join(arr: [str], sep: str) -> str` | Join array of strings with separator (allocates) |
+
+### Path Utilities (Mixed Purity)
+
+| Function                          | Description                              |
+|-----------------------------------|------------------------------------------|
+| `path_basename(path: str) -> str` | Extract filename from path (pure)        |
+| `path_dirname(path: str) -> str`  | Extract directory from path (allocates)  |
+
 ---
 
 ## Scoping Rules
