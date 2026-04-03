@@ -109,3 +109,10 @@
 - **Outcome:** Enabled Neo's immediate re-review approval (APPROVED status). README now factually accurate and structurally sound.
 - **Decision merged:** .squad/decisions.md entry #10 (README.md Structural Refactoring) — consolidates review/rejection/approval cycle
 - **Orchestration log:** .squad/orchestration-log/2026-04-01T11-50-20Z-trinity.md
+
+### arena_reset() removal for memory safety
+- **Task:** Surgically removed `arena_reset()` from the language surface to eliminate the only source of use-after-free.
+- **Files changed (8):** `src/semantic.rs` (builtin registration), `src/codegen.rs` (codegen arm), `runtime/osc_runtime.h` (declaration), `runtime/osc_runtime.c` (function body), `tests/positive/spec_microlib.osc` + `tests/expected/spec_microlib.expected` (test + expected output), `docs/spec/oscan-spec.md` (§8.2, §8.3, §10), `docs/guide.md` (builtin table).
+- **Preserved:** Internal `osc_arena_reset()` in runtime — still used for arena lifecycle management, just not exposed to Oscan programs.
+- **Validation:** 62 unit tests pass, 74 positive + 26 negative integration tests pass, 25 examples compile. Pre-existing libc/spec_microlib printf formatting mismatch (`0` vs `0.0` for `abs_f64(0.0)`) is unrelated.
+- **Key insight:** The `arena_reset()` builtin was the only way an Oscan program could trigger use-after-free. Removing it makes the language fully memory-safe at the surface level.
