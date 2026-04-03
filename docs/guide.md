@@ -539,12 +539,6 @@ See the **Strings** section above for the complete string function tables.
 |----------------------------|----------------------------|
 | `push(arr, elem)`          | Append to dynamic array    |
 
-### Memory
-
-| Function         | Description                           |
-|------------------|---------------------------------------|
-| `arena_reset()`  | Reset arena (advanced, long-running)  |
-
 ---
 
 ## Scoping Rules

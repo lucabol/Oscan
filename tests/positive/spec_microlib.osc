@@ -1,5 +1,5 @@
 // Test §10: abs_i32, abs_f64, mod_i32, str_to_cstr, str_len on empty,
-// str_eq false, str_concat with empty, i32_to_str, arena_reset, len, push.
+// str_eq false, str_concat with empty, i32_to_str, len, push.
 
 fn! main() {
     // abs_i32: negative, zero, positive
@@ -55,15 +55,6 @@ fn! main() {
     print(i32_to_str(0));
     print(" ");
     println(i32_to_str(-99));
-
-    // arena_reset followed by new allocation
-    arena_reset();
-    let mut fresh: [i32] = [];
-    push(fresh, 1);
-    push(fresh, 2);
-    print("arena_reset_ok: ");
-    print_i32(len(fresh));
-    println("");
 
     // len on fixed-size array
     let fixed: [i32; 5] = [10, 20, 30, 40, 50];

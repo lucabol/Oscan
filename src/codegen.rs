@@ -1105,7 +1105,7 @@ impl CodeGenerator {
             ),
             "bnot" => format!("((int32_t)(~(uint32_t)({})))", arg_strs[0]),
             "i32_to_str" => format!("osc_i32_to_str(_arena, {})", arg_strs[0]),
-            "arena_reset" => "osc_arena_reset_global()".to_string(),
+
             "file_open_read" => format!("osc_file_open_read({})", arg_strs[0]),
             "file_open_write" => format!("osc_file_open_write({})", arg_strs[0]),
             "read_byte" => format!("osc_read_byte({})", arg_strs[0]),

@@ -233,11 +233,6 @@ void osc_arena_destroy(osc_arena *arena)
     }
 }
 
-void osc_arena_reset_global(void)
-{
-    osc_arena_reset(osc_global_arena);
-}
-
 /* ================================================================== */
 /*  Checked arithmetic — i32                                           */
 /* ================================================================== */

@@ -295,10 +295,6 @@ impl SemanticAnalyzer {
             builtin(vec![("n", BcType::I32)], BcType::Str, false),
         );
 
-        // Memory
-        self.functions
-            .insert("arena_reset".into(), builtin(vec![], BcType::Unit, false));
-
         // File I/O (fn!)
         self.functions.insert(
             "file_open_read".into(),

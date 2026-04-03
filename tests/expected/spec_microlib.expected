@@ -6,6 +6,5 @@ str_len_empty: 0
 str_eq_false: false
 concat_empty: hello hello
 i32_to_str: 0 -99
-arena_reset_ok: 2
 fixed_len: 5
 push_10: 10

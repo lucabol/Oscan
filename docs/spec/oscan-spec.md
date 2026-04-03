@@ -1079,7 +1079,7 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 
 2. **Allocation:** When the compiler emits code that needs heap memory (e.g., creating a `[T]` dynamic array or growing one via `push`), it calls the runtime's `osc_arena_alloc(arena, size)`.
 
-3. **Deallocation:** The arena is freed in bulk when the program exits. For long-running programs, the programmer can use `arena_reset()` from the micro-lib to reclaim all arena memory (invalidating all dynamic arrays — the programmer must ensure no references are used after reset).
+3. **Deallocation:** The arena is freed in bulk when the program exits.
 
 4. **Stack allocation:** Primitives, fixed-size arrays, and small structs are stack-allocated. The threshold for "small" is implementation-defined; the compiler determines placement based on size. This is an optimization detail that does not affect program semantics.
 
@@ -1088,8 +1088,6 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 - **Nothing regarding memory.** The LLM writes standard Oscan code. All memory management is implicit.
 - Dynamic arrays are created via literals or `push` and automatically use the arena.
 - The LLM never writes `alloc`, `free`, `new`, or `delete`.
-- The only memory-related function exposed is `arena_reset()` for advanced use.
-
 ### 8.4 Runtime Representation (for Morpheus)
 
 The runtime library provides:
@@ -1267,13 +1265,7 @@ fn! str_from_i64_hex(n: i64) -> str        // Convert i64 to hexadecimal string 
 
 **Note:** `i32_to_str` is `fn!` because it returns a `str`, which requires arena allocation. By the same logic as `str_concat`, any function that allocates on the arena is side-effecting. `str_from_i32` is the equivalent helper in the `str_from_*` family and may be used interchangeably by compiler lowering.
 
-### 10.6 Memory Functions (1)
-
-```
-fn! arena_reset()                          // Reset the program arena (frees all dynamic memory)
-```
-
-### 10.7 Command-Line Arguments (2)
+### 10.6 Command-Line Arguments (2)
 
 ```
 fn! arg_count() -> i32                     // Number of command-line arguments (including program name)
