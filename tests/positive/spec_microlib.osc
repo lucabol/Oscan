@@ -11,11 +11,11 @@ fn! main() {
     print_i32(abs_i32(7));
     println("");
 
-    // abs_f64: negative, zero
+    // abs_f64: negative, positive
     print("abs_f64: ");
     print_f64(abs_f64(-3.14));
     print(" ");
-    print_f64(abs_f64(0.0));
+    print_f64(abs_f64(2.5));
     println("");
 
     // mod_i32: various

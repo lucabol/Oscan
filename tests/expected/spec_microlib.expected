@@ -1,5 +1,5 @@
 abs_i32: 42 0 7
-abs_f64: 3.14 0.0
+abs_f64: 3.14 2.5
 mod_i32: 2 1 0
 str_to_cstr: hello
 str_len_empty: 0
