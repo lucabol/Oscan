@@ -52,6 +52,7 @@ fn! main() {
         let client_result: Result<i32, str> = socket_accept(server);
         match client_result {
         Result::Ok(client) => {
+            request_count = request_count + 1;
             arena {
                 let request: str = socket_recv(client, 4096);
 
@@ -132,8 +133,6 @@ fn! main() {
 
                 println("Request #{request_count} served at {date_str} {time_str}");
             };
-            
-            request_count = request_count + 1;
         },
         Result::Err(_) => { },
         };
