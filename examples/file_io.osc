@@ -13,11 +13,11 @@ fn! main() {
         println("Error: cannot create file");
         exit(1);
     };
+    defer file_close(fd_w);
     write_str(fd_w, "Hello, Oscan!");
     write_byte(fd_w, 10);
     write_str(fd_w, "File I/O works!");
     write_byte(fd_w, 10);
-    file_close(fd_w);
     println("Wrote file.");
 
     // Read back byte by byte
@@ -26,6 +26,7 @@ fn! main() {
         println("Error: cannot read file");
         exit(1);
     };
+    defer file_close(fd_r);
     print("Read back: ");
     let mut count: i32 = 0;
     let mut b: i32 = read_byte(fd_r);
@@ -34,7 +35,6 @@ fn! main() {
         count += 1;
         b = read_byte(fd_r);
     };
-    file_close(fd_r);
     println("Total bytes: {count}");
 
     // Delete the file

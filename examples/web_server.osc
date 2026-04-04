@@ -28,18 +28,17 @@ fn! main() {
         println("Error: failed to create socket");
         exit(1);
     };
+    defer socket_close(server);
 
     let bind_result: i32 = socket_bind(server, port);
     if bind_result < 0 {
         println("Error: failed to bind to port");
-        socket_close(server);
         exit(1);
     };
 
     let listen_result: i32 = socket_listen(server, 5);
     if listen_result < 0 {
         println("Error: failed to listen");
-        socket_close(server);
         exit(1);
     };
 
@@ -129,6 +128,4 @@ fn! main() {
             println("Request #{request_count} served at {date_str} {time_str}");
         };
     };
-
-    socket_close(server);
 }

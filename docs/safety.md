@@ -18,7 +18,8 @@ Oscan prevents **10 of the 12 major categories of bugs** that plague C programs 
 | Type confusion | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Format string attack | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Data races | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Prevented:** | **0/10** | **10/10** | **10/10** | **7/10** | **8/10** |
+| Resource leaks | ❌ | ⚠️ | ✅ | ⚠️ | ⚠️ |
+| **Prevented:** | **0/11** | **10/11** | **11/11** | **7/11** | **8/11** |
 
 **Legend:** ✅ = prevented by design, ⚠️ = partially prevented, ❌ = not prevented
 

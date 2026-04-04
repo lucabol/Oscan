@@ -32,11 +32,11 @@ fn! main() {
         println("Error: failed to create socket");
         exit(1);
     };
+    defer socket_close(sock);
 
     let result: i32 = socket_connect(sock, host, port);
     if result < 0 {
         println("Error: failed to connect to {host}:{port}");
-        socket_close(sock);
         exit(1);
     };
 
@@ -45,7 +45,6 @@ fn! main() {
     let sent: i32 = socket_send(sock, request);
     if sent < 0 {
         println("Error: failed to send request");
-        socket_close(sock);
         exit(1);
     };
 
@@ -59,6 +58,4 @@ fn! main() {
             done = true;
         };
     };
-
-    socket_close(sock);
 }

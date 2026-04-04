@@ -116,3 +116,12 @@
 - **Preserved:** Internal `osc_arena_reset()` in runtime — still used for arena lifecycle management, just not exposed to Oscan programs.
 - **Validation:** 62 unit tests pass, 74 positive + 26 negative integration tests pass, 25 examples compile. Pre-existing libc/spec_microlib printf formatting mismatch (`0` vs `0.0` for `abs_f64(0.0)`) is unrelated.
 - **Key insight:** The `arena_reset()` builtin was the only way an Oscan program could trigger use-after-free. Removing it makes the language fully memory-safe at the surface level.
+
+### defer statement implementation (full pipeline)
+- **Task:** Implemented `defer` statement across all compiler phases: token, lexer, AST, parser, semantic analysis, and code generation.
+- **Semantics:** `defer <call>;` registers a function call to execute when the enclosing function exits. Multiple defers execute in LIFO order. Only allowed in `fn!` (impure) functions. Deferred expression must be a function call.
+- **Files changed (6 source):** `src/token.rs` (added `Defer` variant), `src/lexer.rs` (keyword match), `src/ast.rs` (DeferStmt struct + Stmt::Defer variant), `src/parser.rs` (parse_defer_stmt + statement dispatch), `src/semantic.rs` (purity check + call-only validation + interpolation purity walk), `src/codegen.rs` (deferred_exprs vec, LIFO emission at function end and before returns).
+- **Codegen strategy:** Function-level defer collection. `deferred_exprs: Vec<String>` accumulates C code strings. At function end and before `return`, all defers are emitted in reverse order. For returns with values, the return expression is saved to a temp variable first, then defers run, then the temp is returned.
+- **Tests added (3):** `tests/positive/defer_basic.osc` (LIFO ordering), `tests/positive/defer_return.osc` (defer + early return with value), `tests/negative/defer_pure.osc` (defer in pure fn rejected).
+- **Validation:** 62 unit tests pass, 25/25 examples compile, both positive defer tests produce correct output, negative test correctly rejected.
+- **Key insight:** The `saved_deferred = std::mem::take(&mut self.deferred_exprs)` pattern at function entry/exit prevents nested function definitions from leaking deferred expressions. The tail-expression return path also needs defer emission — the codegen saves the tail value to a temp, emits defers, then returns the temp.
