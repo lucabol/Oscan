@@ -71,9 +71,7 @@ fn! main() {
                 };
 
                 if visible {
-                    let mut bright: i32 = 255 - (star_z[i] * 255 / Z_FAR);
-                    if bright < 40 { bright = 40; };
-                    if bright > 255 { bright = 255; };
+                    let bright: i32 = clamp_i32(255 - (star_z[i] * 255 / Z_FAR), 40, 255);
                     let color: i32 = rgb(bright, bright, bright);
 
                     if star_z[i] < Z_FAR / 4 {

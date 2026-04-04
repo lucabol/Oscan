@@ -1444,7 +1444,7 @@ fn! read_nonblock() -> i32                   // Non-blocking read of a single by
 
 **Note:** `proc_run` executes an external command synchronously and returns its exit code. `term_width()` and `term_height()` return 0 if output is not connected to a terminal (useful for detecting interactive vs. piped execution). `term_raw()` and `term_restore()` are used in pairs for interactive TUI applications; always call `term_restore()` before program exit. `read_nonblock()` is useful in raw mode for polling keyboard input without blocking.
 
-### 10.16 Tier 8: Math Functions (15) — `fn`
+### 10.19 Tier 8: Math Functions (15) — `fn`
 
 All math functions are pure (`fn`). They operate on `f64` values and delegate to the C math library (`<math.h>`).
 
@@ -1480,7 +1480,7 @@ fn math_sqrt2() -> f64                       // √2 ≈ 1.41421356237310
 
 **Note:** Math constants are zero-argument pure functions, not global variables. Call them as `math_pi()`, not `math_pi`.
 
-### 10.17 Tier 9: Socket Networking (11) — `fn!`
+### 10.20 Tier 9: Socket Networking (11) — `fn!`
 
 Socket builtins provide TCP and UDP networking. All are side-effecting (`fn!`).
 
@@ -1525,7 +1525,7 @@ fn! main() {
 
 **Note:** Socket operations use OS-level syscalls. Error handling follows the C convention of returning -1 on failure; use `errno_get()` for detailed error information.
 
-### 10.18 Tier 10: Path Utilities (4) — mixed purity
+### 10.21 Tier 10: Path Utilities (4) — mixed purity
 
 ```
 fn path_ext(path: str) -> str                // Extract file extension (e.g., "foo.txt" → ".txt"); pure
@@ -1536,7 +1536,7 @@ fn! path_is_dir(path: str) -> bool           // Check if a path is a directory
 
 **Note:** `path_ext` is pure — it only inspects the string. `path_join` allocates a new string on the arena. `path_exists` and `path_is_dir` perform filesystem checks and are side-effecting.
 
-### 10.19 Tier 11: Array Sorting (4) — `fn!`
+### 10.22 Tier 11: Array Sorting (4) — `fn!`
 
 Sort builtins sort dynamic arrays in-place. All are `fn!` because they mutate the array.
 
@@ -1563,7 +1563,7 @@ fn! main() {
 
 **Note:** Sorting uses an in-place algorithm (Shell sort) with no additional heap allocation. There are separate functions per type because Oscan does not support user-defined generics.
 
-### 10.20 Tier 12: Graphics Builtins (19) — `fn!` / `fn`
+### 10.23 Tier 12: Graphics Builtins (19) — `fn!` / `fn`
 
 Graphics builtins are available in freestanding mode only and use `l_gfx.h` from the laststanding library.
 
@@ -1610,7 +1610,7 @@ fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32                // Creates an ARGB
 
 ---
 
-### 10.21 Tier 13: Date/Time, Glob, SHA-256, Terminal & Environment Modification (14)
+### 10.24 Tier 13: Date/Time, Glob, SHA-256, Terminal & Environment Modification (14)
 
 Extended system builtins for date/time manipulation, pattern matching, hashing, terminal detection, and environment modification.
 
@@ -1665,7 +1665,7 @@ fn! env_delete(name: str) -> i32                     // Delete (unset) environme
 
 The library is organized into 13 tiers with core functions plus specialized tiers:
 
-- **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), Memory (1), CLI args (2), File I/O (7), Whole-File I/O (2), Min/Max/Clamp (9), String Join (1), Path Utilities (2)
+- **Core:** I/O (7), String (9), Math & Bitwise (9), Array (3), Conversion (3), CLI args (2), Whole-File I/O (2), File I/O (7), Min/Max/Clamp (9), String Join (1), Path Utilities (2)
 - **Tier 1:** Character classification (11 functions)
 - **Tier 2:** Number parsing & conversion (5 functions)
 - **Tier 3:** System functions (5 functions)
@@ -1674,13 +1674,13 @@ The library is organized into 13 tiers with core functions plus specialized tier
 - **Tier 6:** String operations (9 functions)
 - **Tier 7:** Directory, process control & terminal (7 functions)
 - **Tier 8:** Math functions (15 functions)
-- **Tier 9:** Socket networking (8 functions)
+- **Tier 9:** Socket networking (11 functions)
 - **Tier 10:** Path utilities (4 functions)
 - **Tier 11:** Array sorting (4 functions)
 - **Tier 12:** Graphics builtins (19 functions)
 - **Tier 13:** Date/Time, glob, SHA-256, terminal & environment modification (14 functions)
 
-**Total builtin functions:** ~167 (139 core + core extensions + 13+ tiers)
+**Total builtin functions:** ~168 (54 core + 11 Tier 1 + extended tiers)
 
 ---
 

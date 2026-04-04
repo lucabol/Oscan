@@ -1,6 +1,6 @@
 // Grep — search for a pattern in a file, print matching lines with line numbers
 // Usage: grep <pattern> <filename>
-// Uses byte-by-byte comparison since Oscan has no byte-to-string conversion.
+// Uses byte-level comparison for pattern matching.
 
 fn! check_and_print(bytes: [i32], start: i32, end: i32, pattern: str, line_num: i32) -> i32 {
     let line_len: i32 = end - start;
@@ -50,43 +50,37 @@ fn! main() {
     } else {
         let pattern: str = arg_get(1);
         let path: str = arg_get(2);
-        let fd: i32 = file_open_read(path);
-        if fd < 0 {
-            print("Error: cannot open ");
-            println(path);
-        } else {
-            // Read all bytes
-            let mut bytes: [i32] = [];
-            let mut b: i32 = read_byte(fd);
-            while b >= 0 {
-                push(bytes, b);
-                b = read_byte(fd);
-            };
-            file_close(fd);
+        match read_file(path) {
+            Result::Ok(text) => {
+                let bytes: [i32] = str_to_chars(text);
 
-            // Process lines
-            let mut line_start: i32 = 0;
-            let mut line_num: i32 = 0;
-            let mut matches: i32 = 0;
-            let total: i32 = len(bytes);
+                // Process lines
+                let mut line_start: i32 = 0;
+                let mut line_num: i32 = 0;
+                let mut matches: i32 = 0;
+                let total: i32 = len(bytes);
 
-            for pos in 0..total {
-                if bytes[pos] == 10 {
-                    line_num = line_num + 1;
-                    matches = matches + check_and_print(bytes, line_start, pos, pattern, line_num);
-                    line_start = pos + 1;
+                for pos in 0..total {
+                    if bytes[pos] == 10 {
+                        line_num = line_num + 1;
+                        matches = matches + check_and_print(bytes, line_start, pos, pattern, line_num);
+                        line_start = pos + 1;
+                    };
                 };
-            };
 
-            // Handle last line without trailing newline
-            if line_start < total {
-                line_num = line_num + 1;
-                matches = matches + check_and_print(bytes, line_start, total, pattern, line_num);
-            };
+                // Handle last line without trailing newline
+                if line_start < total {
+                    line_num = line_num + 1;
+                    matches = matches + check_and_print(bytes, line_start, total, pattern, line_num);
+                };
 
-            if matches == 0 {
-                println("No matches found.");
-            };
+                if matches == 0 {
+                    println("No matches found.");
+                };
+            },
+            Result::Err(e) => {
+                println("Error: {e}");
+            },
         };
     };
 }

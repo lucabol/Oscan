@@ -22,23 +22,11 @@ fn! main() {
     };
 
     let path: str = arg_get(1);
-    let fd: i32 = file_open_read(path);
-    if fd < 0 {
-        println("Error: cannot open {path}");
-        exit(1);
+    let mut text: str = "";
+    match read_file(path) {
+        Result::Ok(t) => { text = t; },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
-
-    // Read entire file into bytes
-    let mut bytes: [i32] = [];
-    let mut b: i32 = read_byte(fd);
-    while b >= 0 {
-        push(bytes, b);
-        b = read_byte(fd);
-    };
-    file_close(fd);
-
-    // Convert to string and split into lines
-    let text: str = str_from_chars(bytes);
     let lines: [str] = str_split(text, "\n");
 
     let mut counts: map = map_new();

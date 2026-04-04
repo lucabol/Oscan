@@ -7,10 +7,7 @@
 fn compare_lines(bytes: [i32], a_start: i32, a_end: i32, b_start: i32, b_end: i32) -> i32 {
     let a_len: i32 = a_end - a_start;
     let b_len: i32 = b_end - b_start;
-    let mut min_len: i32 = a_len;
-    if b_len < min_len {
-        min_len = b_len;
-    };
+    let min_len: i32 = min_i32(a_len, b_len);
 
     let mut result: i32 = 0;
     let mut k: i32 = 0;
@@ -45,20 +42,12 @@ fn! main() {
         println("Usage: sort <filename>");
     } else {
         let path: str = arg_get(1);
-        let fd: i32 = file_open_read(path);
-        if fd < 0 {
-            print("Error: cannot open ");
-            println(path);
-        } else {
-            // Read all bytes
-            let mut bytes: [i32] = [];
-            let mut b: i32 = read_byte(fd);
-            while b >= 0 {
-                push(bytes, b);
-                b = read_byte(fd);
-            };
-            file_close(fd);
+        let bytes: [i32] = match read_file(path) {
+            Result::Ok(t) => { str_to_chars(t) },
+            Result::Err(e) => { println("Error: {e}"); exit(1); [] },
+        };
 
+        {
             let total: i32 = len(bytes);
 
             // Build line starts and ends arrays
@@ -116,3 +105,4 @@ fn! main() {
         };
     };
 }
+

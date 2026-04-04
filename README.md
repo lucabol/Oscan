@@ -7,7 +7,7 @@
 - **Runs without a C library.** Compiles to freestanding C99 via direct syscalls — no libc, no linker surprises. (A `--libc` mode is available when you want it.)
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
-- **~130 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, and more — batteries included.
+- **~150 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included.
 - **Purity visible in signatures.** `fn` for pure functions, `fn!` for side effects — the type system tracks who can do I/O.
 - **Errors as values.** `Result<T, E>` with `try` propagation. No exceptions, no hidden control flow.
 - **Guarded C output.** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.

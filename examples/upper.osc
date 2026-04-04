@@ -18,17 +18,16 @@ fn! main() {
         println("Usage: upper <filename>");
     } else {
         let path: str = arg_get(1);
-        let fd: i32 = file_open_read(path);
-        if fd < 0 {
-            print("Error: cannot open ");
-            println(path);
-        } else {
-            let mut b: i32 = read_byte(fd);
-            while b >= 0 {
-                write_byte(1, to_upper(b));
-                b = read_byte(fd);
-            };
-            file_close(fd);
+        match read_file(path) {
+            Result::Ok(text) => {
+                let bytes: [i32] = str_to_chars(text);
+                for b in bytes {
+                    write_byte(1, to_upper(b));
+                };
+            },
+            Result::Err(e) => {
+                println("Error: {e}");
+            },
         };
     };
 }

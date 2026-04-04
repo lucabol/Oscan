@@ -1,64 +1,76 @@
 // File I/O Demo — write, read back, and delete a file
-// Demonstrates file_open_write, write_str, write_byte, file_close,
-// file_open_read, read_byte, file_delete
+// Demonstrates both low-level (write_str, read_byte) and high-level (write_file, read_file) I/O
 
 fn! main() {
     let filename: str = "_file_io_demo.txt";
 
-    // Write some content
+    // === Part 1: Low-level I/O ===
+    println("--- Low-level I/O ---");
+
+    // Write using low-level functions
     let fd_w: i32 = file_open_write(filename);
     if fd_w < 0 {
         println("Error: cannot create file");
+        exit(1);
+    };
+    write_str(fd_w, "Hello, Oscan!");
+    write_byte(fd_w, 10);
+    write_str(fd_w, "File I/O works!");
+    write_byte(fd_w, 10);
+    file_close(fd_w);
+    println("Wrote file.");
+
+    // Read back byte by byte
+    let fd_r: i32 = file_open_read(filename);
+    if fd_r < 0 {
+        println("Error: cannot read file");
+        exit(1);
+    };
+    print("Read back: ");
+    let mut count: i32 = 0;
+    let mut b: i32 = read_byte(fd_r);
+    while b >= 0 {
+        write_byte(1, b);
+        count += 1;
+        b = read_byte(fd_r);
+    };
+    file_close(fd_r);
+    println("Total bytes: {count}");
+
+    // Delete the file
+    let del: i32 = file_delete(filename);
+    if del == 0 {
+        println("File deleted successfully.");
     } else {
-        write_str(fd_w, "Hello, Oscan!");
-        write_byte(fd_w, 10); // newline
-        write_str(fd_w, "File I/O works!");
-        write_byte(fd_w, 10); // newline
-        file_close(fd_w);
-        println("Wrote file.");
+        println("Error: could not delete file.");
+    };
 
-        // Read it back byte by byte and print to stdout
-        let fd_r: i32 = file_open_read(filename);
-        if fd_r < 0 {
-            println("Error: cannot read file");
-        } else {
+    // === Part 2: High-level I/O (preferred) ===
+    println("");
+    println("--- High-level I/O ---");
+
+    // Write using write_file
+    match write_file(filename, "Hello from write_file!\nHigh-level I/O works!\n") {
+        Result::Ok(_) => { println("Wrote file with write_file."); },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
+
+    // Read back using read_file
+    match read_file(filename) {
+        Result::Ok(text) => {
             print("Read back: ");
-            let mut b: i32 = read_byte(fd_r);
-            while b >= 0 {
-                write_byte(1, b);
-                b = read_byte(fd_r);
-            };
-            file_close(fd_r);
+            print(text);
+            let sz: i32 = str_len(text);
+            println("Total bytes: {sz}");
+        },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
-            // Count bytes
-            let fd_r2: i32 = file_open_read(filename);
-            let mut count: i32 = 0;
-            let mut b2: i32 = read_byte(fd_r2);
-            while b2 >= 0 {
-                count = count + 1;
-                b2 = read_byte(fd_r2);
-            };
-            file_close(fd_r2);
-            print("Total bytes: ");
-            print_i32(count);
-            println("");
-
-            // Delete the file
-            let del: i32 = file_delete(filename);
-            if del == 0 {
-                println("File deleted successfully.");
-            } else {
-                println("Error: could not delete file.");
-            };
-
-            // Verify it's gone
-            let fd_gone: i32 = file_open_read(filename);
-            if fd_gone < 0 {
-                println("Confirmed: file no longer exists.");
-            } else {
-                println("Unexpected: file still exists!");
-                file_close(fd_gone);
-            };
-        };
+    // Clean up
+    let del2: i32 = file_delete(filename);
+    if del2 == 0 {
+        println("File deleted successfully.");
+    } else {
+        println("Error: could not delete file.");
     };
 }

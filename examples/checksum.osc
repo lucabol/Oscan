@@ -23,32 +23,30 @@ fn! main() {
         println("Usage: checksum <filename>");
     } else {
         let path: str = arg_get(1);
-        let fd: i32 = file_open_read(path);
-        if fd < 0 {
-            print("Error: cannot open ");
-            println(path);
-        } else {
-            let mut xor_sum: i32 = 0;
-            let mut add_sum: i32 = 0;
-            let mut total_bytes: i32 = 0;
+        match read_file(path) {
+            Result::Ok(text) => {
+                let bytes: [i32] = str_to_chars(text);
+                let mut xor_sum: i32 = 0;
+                let mut add_sum: i32 = 0;
+                let total_bytes: i32 = len(bytes);
 
-            let mut b: i32 = read_byte(fd);
-            while b >= 0 {
-                xor_sum = bxor(xor_sum, b);
-                add_sum = add_sum + b;
-                total_bytes = total_bytes + 1;
-                b = read_byte(fd);
-            };
-            file_close(fd);
+                for b in bytes {
+                    xor_sum = bxor(xor_sum, b);
+                    add_sum = add_sum + b;
+                };
 
-            print("XOR: ");
-            write_hex32(xor_sum);
-            print("  SUM: ");
-            write_hex32(add_sum);
-            print("  ");
-            print(i32_to_str(total_bytes));
-            print(" bytes  ");
-            println(path);
+                print("XOR: ");
+                write_hex32(xor_sum);
+                print("  SUM: ");
+                write_hex32(add_sum);
+                print("  ");
+                print(i32_to_str(total_bytes));
+                print(" bytes  ");
+                println(path);
+            },
+            Result::Err(e) => {
+                println("Error: {e}");
+            },
         };
     };
 }

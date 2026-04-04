@@ -10,26 +10,12 @@ fn! main() {
 
     let path: str = arg_get(1);
 
-    if file_exists(path) == false {
-        println("Error: file not found: {path}");
-        exit(1);
+    let mut text: str = "";
+    match read_file(path) {
+        Result::Ok(t) => { text = t; },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
 
-    // Read file contents byte-by-byte
-    let fd: i32 = file_open_read(path);
-    if fd < 0 {
-        println("Error: cannot open {path}");
-        exit(1);
-    };
-    let mut content: [i32] = [];
-    let mut b: i32 = read_byte(fd);
-    while b >= 0 {
-        push(content, b);
-        b = read_byte(fd);
-    };
-    file_close(fd);
-
-    let text: str = str_from_chars(content);
     let hash: str = sha256(text);
     let sz: i64 = file_size(path);
 
