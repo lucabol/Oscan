@@ -116,6 +116,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 ## Learn More
 
 - **[Language Guide](docs/guide.md)** — Concise walkthrough of syntax, types, and patterns
+- **[Safety Guide](docs/safety.md)** — How Oscan prevents 10 of 12 major bug categories
 - **[Language Specification](docs/spec/oscan-spec.md)** — Full formal semantics, grammar, and standard library reference
 - **[Runtime Primitives](docs/spec/oscan-spec.md#appendix-a-available-runtime-primitives-future-builtins)** — Inventory of available freestanding OS primitives (Appendix A)
 

@@ -2,6 +2,8 @@
 
 A concise guide to writing correct Oscan programs. For the full formal specification, see [Oscan-spec.md](spec/Oscan-spec.md).
 
+**Interested in safety?** See [Safety Guide](safety.md) to learn how Oscan prevents 10 of 12 major bug categories that plague C.
+
 ---
 
 ## Basics
