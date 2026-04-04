@@ -78,3 +78,14 @@
 - **Status:** Decision documented, awaiting Trinity implementation and subsequent runtime porting
 - **Microlib growth pattern:** Existing string helpers (`str_concat`, `str_from_*`) remain unchanged; new string ops layer on top
 
+### Result-type return migration for error-code functions
+- **Files:** `runtime/osc_runtime.h`, `runtime/osc_runtime.c`
+- **Scope:** Changed 20 runtime functions from returning `int32_t` (where -1 means error) to returning `osc_result_i32_str` or `osc_result_str_str`, making error handling explicit and consistent with Oscan's safety philosophy.
+- **Functions changed:** `file_open_read`, `file_open_write`, `file_delete`, `file_rename`, `file_open_append`, `dir_create`, `dir_remove`, `dir_change`, `socket_tcp`, `socket_udp`, `socket_connect`, `socket_bind`, `socket_listen`, `socket_accept`, `socket_send`, `env_set`, `env_delete`, `term_raw`, `term_restore`, `canvas_open`
+- **Result types:** Used existing `osc_result_i32_str` (for fd/value returns) and `osc_result_str_str` (for success/failure with empty Ok string). Moved `osc_result_i32_str` declaration earlier in header (line 118) so it's available before first use.
+- **Error messages:** Each error path now returns a descriptive string (e.g., "file_open_read: cannot open file", "socket_connect: cannot resolve address").
+- **Platform coverage:** All three conditional compilation variants updated: freestanding (`OSC_FREESTANDING`), Windows libc (`_WIN32`), POSIX libc.
+- **file_open_append fix:** Libc mode now properly returns an fd via `open()`/`_open()` with `O_APPEND` flag instead of the old fopen+fclose+return 0 pattern.
+- **Preserved:** `read_byte`, `read_nonblock`, `socket_sendto`, `rand_i32`, `time_utc_*`, `term_width/height`, `canvas_key/mouse_*`, `errno_get`, `proc_run` — all return legitimate data values, not error codes.
+- **Validation:** `cargo test --quiet` passes (62/62).
+

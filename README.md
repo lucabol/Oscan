@@ -5,10 +5,10 @@
 ## Language Highlights
 
 - **Runs without a C library.** Compiles to freestanding C99 via direct syscalls — no libc, no linker surprises. (A `--libc` mode is available when you want it.)
-- **[Memory safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [10 of 12 major bug categories](docs/safety.md) eliminated.
+- **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [10 of 12 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
-- **~150 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included.
+- **173 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included. See the [full table](#built-in-functions) below.
 - **Purity visible in signatures.** `fn` for pure functions, `fn!` for side effects — the type system tracks who can do I/O.
 - **Errors as values.** `Result<T, E>` with `try` propagation. No exceptions, no hidden control flow.
 - **Guarded C output.** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.
@@ -113,6 +113,277 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 - [life.osc](examples/gfx/life.osc) — Conway's Game of Life
 - [spirograph.osc](examples/gfx/spirograph.osc) — Animated spirograph
 - [ui_demo.osc](examples/gfx/ui_demo.osc) — UI widget library showcase
+
+## Built-in Functions
+
+<!-- BEGIN BUILTIN TABLE -->
+
+**173 built-in functions** across 18 categories.
+
+### I/O (7 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! print(s: str)` | Print string to stdout |
+| `fn! println(s: str)` | Print string with newline |
+| `fn! print_i32(n: i32)` | Print i32 to stdout |
+| `fn! print_i64(n: i64)` | Print i64 to stdout |
+| `fn! print_f64(n: f64)` | Print f64 to stdout |
+| `fn! print_bool(b: bool)` | Print bool to stdout |
+| `fn! read_line() -> Result<str, str>` | Read a line from stdin |
+
+### String (19 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn str_len(s: str) -> i32` | Length of string in bytes |
+| `fn str_eq(a: str, b: str) -> bool` | String equality check |
+| `fn! str_concat(a: str, b: str) -> str` | Concatenate two strings |
+| `fn! str_to_cstr(s: str) -> str` | Convert to null-terminated C string |
+| `fn str_find(haystack: str, needle: str) -> i32` | Find substring index or -1 |
+| `fn! str_from_i32(n: i32) -> str` | Convert i32 to string |
+| `fn! str_slice(s: str, start: i32, end: i32) -> str` | Extract substring by index range |
+| `fn str_contains(s: str, sub: str) -> bool` | Check if string contains substring |
+| `fn str_starts_with(s: str, prefix: str) -> bool` | Check if string starts with prefix |
+| `fn str_ends_with(s: str, suffix: str) -> bool` | Check if string ends with suffix |
+| `fn! str_trim(s: str) -> str` | Remove leading and trailing whitespace |
+| `fn! str_split(s: str, delim: str) -> [str]` | Split string by delimiter |
+| `fn! str_to_upper(s: str) -> str` | Convert string to uppercase |
+| `fn! str_to_lower(s: str) -> str` | Convert string to lowercase |
+| `fn! str_replace(s: str, old: str, new_s: str) -> str` | Replace all occurrences of substring |
+| `fn str_compare(a: str, b: str) -> i32` | Lexicographic comparison (-1, 0, 1) |
+| `fn! str_from_chars(arr: [i32]) -> str` | Build string from char code array |
+| `fn! str_to_chars(s: str) -> [i32]` | Convert string to char code array |
+| `fn! str_join(arr: [str], sep: str) -> str` | Join string array with separator |
+
+### Conversion (8 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! i32_to_str(n: i32) -> str` | Convert i32 to string |
+| `fn parse_i32(s: str) -> Result<i32, str>` | Parse string to i32 |
+| `fn parse_i64(s: str) -> Result<i64, str>` | Parse string to i64 |
+| `fn! str_from_i64(n: i64) -> str` | Convert i64 to string |
+| `fn! str_from_f64(n: f64) -> str` | Convert f64 to string |
+| `fn str_from_bool(b: bool) -> str` | Convert bool to string |
+| `fn! str_from_i32_hex(n: i32) -> str` | Convert i32 to hex string |
+| `fn! str_from_i64_hex(n: i64) -> str` | Convert i64 to hex string |
+
+### Character (10 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn char_is_alpha(c: i32) -> bool` | Check if character is alphabetic |
+| `fn char_is_digit(c: i32) -> bool` | Check if character is a digit |
+| `fn char_is_alnum(c: i32) -> bool` | Check if character is alphanumeric |
+| `fn char_is_space(c: i32) -> bool` | Check if character is whitespace |
+| `fn char_is_upper(c: i32) -> bool` | Check if character is uppercase |
+| `fn char_is_lower(c: i32) -> bool` | Check if character is lowercase |
+| `fn char_is_print(c: i32) -> bool` | Check if character is printable |
+| `fn char_is_xdigit(c: i32) -> bool` | Check if character is hex digit |
+| `fn char_to_upper(c: i32) -> i32` | Convert character to uppercase |
+| `fn char_to_lower(c: i32) -> i32` | Convert character to lowercase |
+
+### Math (28 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn abs_i32(n: i32) -> i32` | Absolute value of i32 |
+| `fn abs_f64(n: f64) -> f64` | Absolute value of f64 |
+| `fn mod_i32(a: i32, b: i32) -> i32` | Integer modulus |
+| `fn math_sin(x: f64) -> f64` | Sine |
+| `fn math_cos(x: f64) -> f64` | Cosine |
+| `fn math_sqrt(x: f64) -> f64` | Square root |
+| `fn math_pow(base: f64, exp: f64) -> f64` | Power |
+| `fn math_exp(x: f64) -> f64` | Exponential (e^x) |
+| `fn math_log(x: f64) -> f64` | Natural logarithm |
+| `fn math_atan2(y: f64, x: f64) -> f64` | Two-argument arctangent |
+| `fn math_floor(x: f64) -> f64` | Floor |
+| `fn math_ceil(x: f64) -> f64` | Ceiling |
+| `fn math_fmod(x: f64, y: f64) -> f64` | Floating-point modulus |
+| `fn math_abs(x: f64) -> f64` | Absolute value of f64 |
+| `fn math_pi() -> f64` | Constant pi |
+| `fn math_e() -> f64` | Constant e |
+| `fn math_ln2() -> f64` | Constant ln(2) |
+| `fn math_sqrt2() -> f64` | Constant sqrt(2) |
+| `fn abs_i64(n: i64) -> i64` | Absolute value of i64 |
+| `fn min_i32(a: i32, b: i32) -> i32` | Minimum of two i32 |
+| `fn max_i32(a: i32, b: i32) -> i32` | Maximum of two i32 |
+| `fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32` | Clamp i32 to range |
+| `fn min_i64(a: i64, b: i64) -> i64` | Minimum of two i64 |
+| `fn max_i64(a: i64, b: i64) -> i64` | Maximum of two i64 |
+| `fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64` | Clamp i64 to range |
+| `fn min_f64(a: f64, b: f64) -> f64` | Minimum of two f64 |
+| `fn max_f64(a: f64, b: f64) -> f64` | Maximum of two f64 |
+| `fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64` | Clamp f64 to range |
+
+### Bitwise (6 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn band(a: i32, b: i32) -> i32` | Bitwise AND |
+| `fn bor(a: i32, b: i32) -> i32` | Bitwise OR |
+| `fn bxor(a: i32, b: i32) -> i32` | Bitwise XOR |
+| `fn bshl(a: i32, n: i32) -> i32` | Bitwise shift left |
+| `fn bshr(a: i32, n: i32) -> i32` | Bitwise shift right |
+| `fn bnot(a: i32) -> i32` | Bitwise NOT |
+
+### File I/O (13 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! file_open_read(path: str) -> i32` | Open file for reading, returns fd |
+| `fn! file_open_write(path: str) -> i32` | Open file for writing, returns fd |
+| `fn! read_byte(fd: i32) -> i32` | Read one byte from fd |
+| `fn! write_byte(fd: i32, b: i32)` | Write one byte to fd |
+| `fn! write_str(fd: i32, s: str)` | Write string to fd |
+| `fn! file_close(fd: i32)` | Close file descriptor |
+| `fn! file_delete(path: str) -> i32` | Delete a file |
+| `fn! file_rename(old: str, new_path: str) -> i32` | Rename a file |
+| `fn! file_exists(path: str) -> bool` | Check if file exists |
+| `fn! file_open_append(path: str) -> i32` | Open file for appending, returns fd |
+| `fn! file_size(path: str) -> i64` | Get file size in bytes |
+| `fn! read_file(path: str) -> Result<str, str>` | Read entire file as string |
+| `fn! write_file(path: str, data: str) -> Result<str, str>` | Write string to file |
+
+### Filesystem (5 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! dir_create(path: str) -> i32` | Create a directory |
+| `fn! dir_remove(path: str) -> i32` | Remove a directory |
+| `fn! dir_current() -> str` | Get current working directory |
+| `fn! dir_change(path: str) -> i32` | Change working directory |
+| `fn! dir_list(path: str) -> [str]` | List directory contents |
+
+### Path (6 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! path_join(dir: str, file: str) -> str` | Join directory and filename |
+| `fn path_ext(path: str) -> str` | Get file extension |
+| `fn! path_exists(path: str) -> bool` | Check if path exists |
+| `fn! path_is_dir(path: str) -> bool` | Check if path is a directory |
+| `fn path_basename(path: str) -> str` | Get filename from path |
+| `fn! path_dirname(path: str) -> str` | Get directory from path |
+
+### Socket (11 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! socket_tcp() -> i32` | Create TCP socket |
+| `fn! socket_connect(sock: i32, addr: str, port: i32) -> i32` | Connect to address and port |
+| `fn! socket_bind(sock: i32, port: i32) -> i32` | Bind socket to port |
+| `fn! socket_listen(sock: i32, backlog: i32) -> i32` | Listen for connections |
+| `fn! socket_accept(sock: i32) -> i32` | Accept incoming connection |
+| `fn! socket_send(sock: i32, data: str) -> i32` | Send data on socket |
+| `fn! socket_recv(sock: i32, max_len: i32) -> str` | Receive data from socket |
+| `fn! socket_close(sock: i32)` | Close socket |
+| `fn! socket_udp() -> i32` | Create UDP socket |
+| `fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32` | Send UDP data to address |
+| `fn! socket_recvfrom(sock: i32, max_len: i32) -> str` | Receive UDP data |
+
+### HashMap (6 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! map_new() -> map` | Create empty hash map |
+| `fn! map_set(m: map, key: str, value: str)` | Set key-value pair |
+| `fn! map_get(m: map, key: str) -> str` | Get value by key |
+| `fn map_has(m: map, key: str) -> bool` | Check if key exists |
+| `fn! map_delete(m: map, key: str)` | Delete key from map |
+| `fn map_len(m: map) -> i32` | Number of entries in map |
+
+### Array (4 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! sort_i32(arr: [i32])` | Sort i32 array in place |
+| `fn! sort_i64(arr: [i64])` | Sort i64 array in place |
+| `fn! sort_str(arr: [str])` | Sort string array in place |
+| `fn! sort_f64(arr: [f64])` | Sort f64 array in place |
+
+### Date/Time (7 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! time_format(timestamp: i64, fmt: str) -> str` | Format timestamp as string |
+| `fn! time_utc_year(timestamp: i64) -> i32` | Get UTC year from timestamp |
+| `fn! time_utc_month(timestamp: i64) -> i32` | Get UTC month from timestamp |
+| `fn! time_utc_day(timestamp: i64) -> i32` | Get UTC day from timestamp |
+| `fn! time_utc_hour(timestamp: i64) -> i32` | Get UTC hour from timestamp |
+| `fn! time_utc_min(timestamp: i64) -> i32` | Get UTC minute from timestamp |
+| `fn! time_utc_sec(timestamp: i64) -> i32` | Get UTC second from timestamp |
+
+### System (10 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! arg_count() -> i32` | Number of command-line arguments |
+| `fn! arg_get(i: i32) -> str` | Get command-line argument by index |
+| `fn! rand_seed(seed: i32)` | Seed the random number generator |
+| `fn! rand_i32() -> i32` | Generate random i32 |
+| `fn! time_now() -> i64` | Current time as Unix timestamp |
+| `fn! sleep_ms(ms: i32)` | Sleep for milliseconds |
+| `fn! exit(code: i32)` | Exit with status code |
+| `fn glob_match(pattern: str, text: str) -> bool` | Match text against glob pattern |
+| `fn! sha256(data: str) -> str` | Compute SHA-256 hash |
+| `fn is_tty() -> bool` | Check if stdout is a terminal |
+
+### Environment (8 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! env_get(name: str) -> Result<str, str>` | Get environment variable |
+| `fn! errno_get() -> i32` | Get last error code |
+| `fn! errno_str(code: i32) -> str` | Convert error code to message |
+| `fn! env_count() -> i32` | Number of environment variables |
+| `fn! env_key(i: i32) -> str` | Get env variable name by index |
+| `fn! env_value(i: i32) -> str` | Get env variable value by index |
+| `fn! env_set(name: str, value: str) -> i32` | Set environment variable |
+| `fn! env_delete(name: str) -> i32` | Delete environment variable |
+
+### Terminal (5 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! term_width() -> i32` | Get terminal width in columns |
+| `fn! term_height() -> i32` | Get terminal height in rows |
+| `fn! term_raw() -> i32` | Enter raw terminal mode |
+| `fn! term_restore() -> i32` | Restore normal terminal mode |
+| `fn! read_nonblock() -> i32` | Non-blocking read from stdin |
+
+### Process (1 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! proc_run(cmd: str, args: [str]) -> i32` | Run external process |
+
+### Graphics (19 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! canvas_open(width: i32, height: i32, title: str) -> i32` | Open graphics canvas |
+| `fn! canvas_close()` | Close graphics canvas |
+| `fn! canvas_alive() -> bool` | Check if canvas is still open |
+| `fn! canvas_flush()` | Flush canvas to screen |
+| `fn! canvas_clear(color: i32)` | Clear canvas with color |
+| `fn! gfx_pixel(x: i32, y: i32, color: i32)` | Draw a pixel |
+| `fn! gfx_get_pixel(x: i32, y: i32) -> i32` | Get pixel color at position |
+| `fn! gfx_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32)` | Draw a line |
+| `fn! gfx_rect(x: i32, y: i32, w: i32, h: i32, color: i32)` | Draw rectangle outline |
+| `fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)` | Draw filled rectangle |
+| `fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw circle outline |
+| `fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw filled circle |
+| `fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)` | Draw text on canvas |
+| `fn! canvas_key() -> i32` | Get last key press |
+| `fn! canvas_mouse_x() -> i32` | Get mouse X position |
+| `fn! canvas_mouse_y() -> i32` | Get mouse Y position |
+| `fn! canvas_mouse_btn() -> i32` | Get mouse button state |
+| `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
+| `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
+
+<!-- END BUILTIN TABLE -->
 
 ## Learn More
 

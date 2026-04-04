@@ -23,23 +23,20 @@ fn! main() {
         };
     };
 
-    let server: i32 = socket_tcp();
-    if server < 0 {
-        println("Error: failed to create socket");
-        exit(1);
+    let server: i32 = match socket_tcp() {
+        Result::Ok(s) => { s },
+        Result::Err(e) => { println("Error: failed to create socket: {e}"); exit(1); 0 },
     };
     defer socket_close(server);
 
-    let bind_result: i32 = socket_bind(server, port);
-    if bind_result < 0 {
-        println("Error: failed to bind to port");
-        exit(1);
+    match socket_bind(server, port) {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: failed to bind to port: {e}"); exit(1); },
     };
 
-    let listen_result: i32 = socket_listen(server, 5);
-    if listen_result < 0 {
-        println("Error: failed to listen");
-        exit(1);
+    match socket_listen(server, 5) {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: failed to listen: {e}"); exit(1); },
     };
 
     println("Oscan web server listening on http://localhost:{port}");
@@ -49,8 +46,9 @@ fn! main() {
     let mut running: bool = true;
 
     while running {
-        let client: i32 = socket_accept(server);
-        if client >= 0 {
+        let client_result: Result<i32, str> = socket_accept(server);
+        match client_result {
+        Result::Ok(client) => {
             let request: str = socket_recv(client, 4096);
             request_count = request_count + 1;
 
@@ -122,10 +120,15 @@ fn! main() {
 
             // Send HTTP response
             let response: str = "HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n{html}";
-            socket_send(client, response);
+            match socket_send(client, response) {
+                Result::Ok(_) => { },
+                Result::Err(_) => { },
+            };
             socket_close(client);
 
             println("Request #{request_count} served at {date_str} {time_str}");
+        },
+        Result::Err(_) => { },
         };
     };
 }

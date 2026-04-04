@@ -64,9 +64,10 @@ fn! main() {
     println("");
 
     // --- Environment modification ---
-    let set_result: i32 = env_set("OSC_TEST_VAR_XYZ", "hello_oscan");
-    print_i32(set_result);
-    println("");
+    match env_set("OSC_TEST_VAR_XYZ", "hello_oscan") {
+        Result::Ok(_) => { println("env_set: ok"); },
+        Result::Err(e) => { println("env_set: {e}"); },
+    };
 
     // Verify the set variable
     match env_get("OSC_TEST_VAR_XYZ") {
@@ -79,9 +80,10 @@ fn! main() {
     };
 
     // Delete it
-    let del_result: i32 = env_delete("OSC_TEST_VAR_XYZ");
-    print_i32(del_result);
-    println("");
+    match env_delete("OSC_TEST_VAR_XYZ") {
+        Result::Ok(_) => { println("env_del: ok"); },
+        Result::Err(e) => { println("env_del: {e}"); },
+    };
 
     // Verify deletion
     match env_get("OSC_TEST_VAR_XYZ") {

@@ -30,7 +30,10 @@ fn palette_color(idx: i32) -> i32 {
 }
 
 fn! main() {
-    canvas_open(W, H, "Plasma");
+    match canvas_open(W, H, "Plasma") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
     // Precompute palette into an array for fast lookup
     let mut pal: [i32] = [];

@@ -8,7 +8,10 @@
 //   oscan gfx_demo.osc --run
 
 fn! main() {
-    canvas_open(320, 240, "GFX Demo");
+    match canvas_open(320, 240, "GFX Demo") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
     canvas_clear(rgb(0, 0, 0));
 

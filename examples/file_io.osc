@@ -8,10 +8,9 @@ fn! main() {
     println("--- Low-level I/O ---");
 
     // Write using low-level functions
-    let fd_w: i32 = file_open_write(filename);
-    if fd_w < 0 {
-        println("Error: cannot create file");
-        exit(1);
+    let fd_w: i32 = match file_open_write(filename) {
+        Result::Ok(fd) => { fd },
+        Result::Err(e) => { println("Error: cannot create file: {e}"); exit(1); 0 },
     };
     defer file_close(fd_w);
     write_str(fd_w, "Hello, Oscan!");
@@ -21,10 +20,9 @@ fn! main() {
     println("Wrote file.");
 
     // Read back byte by byte
-    let fd_r: i32 = file_open_read(filename);
-    if fd_r < 0 {
-        println("Error: cannot read file");
-        exit(1);
+    let fd_r: i32 = match file_open_read(filename) {
+        Result::Ok(fd) => { fd },
+        Result::Err(e) => { println("Error: cannot read file: {e}"); exit(1); 0 },
     };
     defer file_close(fd_r);
     print("Read back: ");
@@ -38,11 +36,9 @@ fn! main() {
     println("Total bytes: {count}");
 
     // Delete the file
-    let del: i32 = file_delete(filename);
-    if del == 0 {
-        println("File deleted successfully.");
-    } else {
-        println("Error: could not delete file.");
+    match file_delete(filename) {
+        Result::Ok(_) => { println("File deleted successfully."); },
+        Result::Err(_) => { println("Error: could not delete file."); },
     };
 
     // === Part 2: High-level I/O (preferred) ===
@@ -67,10 +63,8 @@ fn! main() {
     };
 
     // Clean up
-    let del2: i32 = file_delete(filename);
-    if del2 == 0 {
-        println("File deleted successfully.");
-    } else {
-        println("Error: could not delete file.");
+    match file_delete(filename) {
+        Result::Ok(_) => { println("File deleted successfully."); },
+        Result::Err(_) => { println("Error: could not delete file."); },
     };
 }

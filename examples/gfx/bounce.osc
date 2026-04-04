@@ -12,7 +12,10 @@ let H: i32 = 240;
 let R: i32 = 10;
 
 fn! main() {
-    canvas_open(W, H, "Bounce");
+    match canvas_open(W, H, "Bounce") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
     let mut x: i32 = W / 2;
     let mut y: i32 = H / 2;

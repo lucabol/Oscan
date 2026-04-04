@@ -1,0 +1,7 @@
+// Test: resource-acquiring call without matching defer should emit a warning
+// Exercises: file_open_read without defer file_close — compiler warning
+
+fn! main() {
+    let f: Result<i32, str> = file_open_read("test.txt");
+    println("opened file without defer");
+}

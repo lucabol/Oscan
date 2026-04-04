@@ -114,6 +114,9 @@ int32_t   osc_array_len(osc_array *arr);
 /* Result<str, str> used by osc_read_line */
 OSC_RESULT_DECL(osc_str, osc_str, osc_result_str_str);
 
+/* Result<i32, str> used by file/socket I/O */
+OSC_RESULT_DECL(int32_t, osc_str, osc_result_i32_str);
+
 /* ------------------------------------------------------------------ */
 /*  Checked arithmetic — i32                                           */
 /* ------------------------------------------------------------------ */
@@ -160,30 +163,30 @@ void osc_print_bool(uint8_t b);
 osc_result_str_str osc_read_line(osc_arena *arena);
 
 /* File I/O */
-int32_t osc_file_open_read(osc_str path);
-int32_t osc_file_open_write(osc_str path);
+osc_result_i32_str osc_file_open_read(osc_str path);
+osc_result_i32_str osc_file_open_write(osc_str path);
 int32_t osc_read_byte(int32_t fd);
 void    osc_write_byte(int32_t fd, int32_t b);
 void    osc_write_str(int32_t fd, osc_str s);
 void    osc_file_close(int32_t fd);
-int32_t osc_file_delete(osc_str path);
+osc_result_str_str osc_file_delete(osc_str path);
 
 /* Bulk file I/O */
 osc_result_str_str osc_read_file(osc_arena *arena, osc_str path);
 osc_result_str_str osc_write_file(osc_str path, osc_str data);
 
 /* Socket I/O */
-int32_t osc_socket_tcp(void);
-int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port);
-int32_t osc_socket_bind(int32_t sock, int32_t port);
-int32_t osc_socket_listen(int32_t sock, int32_t backlog);
-int32_t osc_socket_accept(int32_t sock);
-int32_t osc_socket_send(int32_t sock, osc_str data);
+osc_result_i32_str osc_socket_tcp(void);
+osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port);
+osc_result_str_str osc_socket_bind(int32_t sock, int32_t port);
+osc_result_str_str osc_socket_listen(int32_t sock, int32_t backlog);
+osc_result_i32_str osc_socket_accept(int32_t sock);
+osc_result_i32_str osc_socket_send(int32_t sock, osc_str data);
 osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len);
 void    osc_socket_close(int32_t sock);
 
 /* UDP Socket I/O */
-int32_t osc_socket_udp(void);
+osc_result_i32_str osc_socket_udp(void);
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port);
 osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len);
 
@@ -246,7 +249,6 @@ int32_t osc_char_to_lower(int32_t c);
 /*  Number parsing & conversion                                        */
 /* ------------------------------------------------------------------ */
 
-OSC_RESULT_DECL(int32_t, osc_str, osc_result_i32_str);
 OSC_RESULT_DECL(int64_t, osc_str, osc_result_i64_str);
 
 osc_result_i32_str osc_parse_i32(osc_str s);
@@ -277,13 +279,13 @@ void    osc_exit(int32_t code);
 /*  Filesystem operations                                              */
 /* ------------------------------------------------------------------ */
 
-int32_t  osc_file_rename(osc_str old_path, osc_str new_path);
+osc_result_str_str  osc_file_rename(osc_str old_path, osc_str new_path);
 uint8_t  osc_file_exists(osc_str path);
-int32_t  osc_dir_create(osc_str path);
-int32_t  osc_dir_remove(osc_str path);
+osc_result_str_str  osc_dir_create(osc_str path);
+osc_result_str_str  osc_dir_remove(osc_str path);
 osc_str  osc_dir_current(osc_arena *arena);
-int32_t  osc_dir_change(osc_str path);
-int32_t  osc_file_open_append(osc_str path);
+osc_result_str_str  osc_dir_change(osc_str path);
+osc_result_i32_str  osc_file_open_append(osc_str path);
 int64_t  osc_file_size(osc_str path);
 
 /* ------------------------------------------------------------------ */
@@ -326,8 +328,8 @@ int32_t    osc_term_height(void);
 /*  Raw terminal I/O                                                   */
 /* ------------------------------------------------------------------ */
 
-int32_t osc_term_raw(void);
-int32_t osc_term_restore(void);
+osc_result_str_str osc_term_raw(void);
+osc_result_str_str osc_term_restore(void);
 int32_t osc_read_nonblock(void);
 
 /* ------------------------------------------------------------------ */
@@ -379,8 +381,8 @@ uint8_t   osc_is_tty(void);
 /*  Environment modification                                           */
 /* ------------------------------------------------------------------ */
 
-int32_t   osc_env_set(osc_str name, osc_str value);
-int32_t   osc_env_delete(osc_str name);
+osc_result_str_str   osc_env_set(osc_str name, osc_str value);
+osc_result_str_str   osc_env_delete(osc_str name);
 
 /* ------------------------------------------------------------------ */
 /*  Array sort                                                         */
@@ -422,7 +424,7 @@ extern osc_arena *osc_global_arena;
 /*  Graphics — Canvas lifecycle                                        */
 /* ------------------------------------------------------------------ */
 
-int32_t osc_canvas_open(int32_t width, int32_t height, osc_str title);
+osc_result_str_str osc_canvas_open(int32_t width, int32_t height, osc_str title);
 void    osc_canvas_close(void);
 uint8_t osc_canvas_alive(void);
 void    osc_canvas_flush(void);

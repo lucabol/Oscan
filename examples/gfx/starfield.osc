@@ -23,7 +23,10 @@ fn! rand_range(lo: i32, hi: i32) -> i32 {
 }
 
 fn! main() {
-    canvas_open(W, H, "Starfield");
+    match canvas_open(W, H, "Starfield") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
     let mut star_x: [i32] = [];
     let mut star_y: [i32] = [];

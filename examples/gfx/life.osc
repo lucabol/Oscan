@@ -42,7 +42,10 @@ fn! randomize(grid: [i32]) {
 }
 
 fn! main() {
-    canvas_open(W, H, "Game of Life");
+    match canvas_open(W, H, "Game of Life") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
     rand_seed(42);
 
     let size: i32 = GW * GH;

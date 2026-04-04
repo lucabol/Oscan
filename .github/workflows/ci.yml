@@ -11,6 +11,20 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────
+  # Verify generated docs are up to date
+  # ─────────────────────────────────────────────
+  docs:
+    name: Verify builtin table
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Verify builtin table
+        run: python scripts/gen-builtin-table.py --check
+
+  # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (Linux)
   # ─────────────────────────────────────────────
   linux:

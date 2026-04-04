@@ -6,6 +6,21 @@ use crate::token::Span;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
+// Resource functions that should have a matching defer cleanup.
+// Format: (acquire_fn, cleanup_fn)
+// ---------------------------------------------------------------------------
+
+const RESOURCE_PAIRS: &[(&str, &str)] = &[
+    ("file_open_read", "file_close"),
+    ("file_open_write", "file_close"),
+    ("file_open_append", "file_close"),
+    ("socket_tcp", "socket_close"),
+    ("socket_udp", "socket_close"),
+    ("socket_accept", "socket_close"),
+    ("term_raw", "term_restore"),
+];
+
+// ---------------------------------------------------------------------------
 // Binding info for variables in scope
 // ---------------------------------------------------------------------------
 
@@ -78,30 +93,37 @@ impl SemanticAnalyzer {
         };
 
         // I/O (fn!)
+        // @builtin category="I/O" name="print" sig="fn! print(s: str)" desc="Print string to stdout"
         self.functions.insert(
             "print".into(),
             builtin(vec![("s", BcType::Str)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="println" sig="fn! println(s: str)" desc="Print string with newline"
         self.functions.insert(
             "println".into(),
             builtin(vec![("s", BcType::Str)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="print_i32" sig="fn! print_i32(n: i32)" desc="Print i32 to stdout"
         self.functions.insert(
             "print_i32".into(),
             builtin(vec![("n", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="print_i64" sig="fn! print_i64(n: i64)" desc="Print i64 to stdout"
         self.functions.insert(
             "print_i64".into(),
             builtin(vec![("n", BcType::I64)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="print_f64" sig="fn! print_f64(n: f64)" desc="Print f64 to stdout"
         self.functions.insert(
             "print_f64".into(),
             builtin(vec![("n", BcType::F64)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="print_bool" sig="fn! print_bool(b: bool)" desc="Print bool to stdout"
         self.functions.insert(
             "print_bool".into(),
             builtin(vec![("b", BcType::Bool)], BcType::Unit, false),
         );
+        // @builtin category="I/O" name="read_line" sig="fn! read_line() -> Result<str, str>" desc="Read a line from stdin"
         self.functions.insert(
             "read_line".into(),
             builtin(
@@ -112,10 +134,12 @@ impl SemanticAnalyzer {
         );
 
         // String (pure except concat/to_cstr/slice/from_i32 which allocate)
+        // @builtin category="String" name="str_len" sig="fn str_len(s: str) -> i32" desc="Length of string in bytes"
         self.functions.insert(
             "str_len".into(),
             builtin(vec![("s", BcType::Str)], BcType::I32, true),
         );
+        // @builtin category="String" name="str_eq" sig="fn str_eq(a: str, b: str) -> bool" desc="String equality check"
         self.functions.insert(
             "str_eq".into(),
             builtin(
@@ -124,6 +148,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="String" name="str_concat" sig="fn! str_concat(a: str, b: str) -> str" desc="Concatenate two strings"
         self.functions.insert(
             "str_concat".into(),
             builtin(
@@ -132,10 +157,12 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="String" name="str_to_cstr" sig="fn! str_to_cstr(s: str) -> str" desc="Convert to null-terminated C string"
         self.functions.insert(
             "str_to_cstr".into(),
             builtin(vec![("s", BcType::Str)], BcType::Str, false),
         );
+        // @builtin category="String" name="str_find" sig="fn str_find(haystack: str, needle: str) -> i32" desc="Find substring index or -1"
         self.functions.insert(
             "str_find".into(),
             builtin(
@@ -144,10 +171,12 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="String" name="str_from_i32" sig="fn! str_from_i32(n: i32) -> str" desc="Convert i32 to string"
         self.functions.insert(
             "str_from_i32".into(),
             builtin(vec![("n", BcType::I32)], BcType::Str, false),
         );
+        // @builtin category="String" name="str_slice" sig="fn! str_slice(s: str, start: i32, end: i32) -> str" desc="Extract substring by index range"
         self.functions.insert(
             "str_slice".into(),
             builtin(
@@ -162,14 +191,17 @@ impl SemanticAnalyzer {
         );
 
         // Math (pure)
+        // @builtin category="Math" name="abs_i32" sig="fn abs_i32(n: i32) -> i32" desc="Absolute value of i32"
         self.functions.insert(
             "abs_i32".into(),
             builtin(vec![("n", BcType::I32)], BcType::I32, true),
         );
+        // @builtin category="Math" name="abs_f64" sig="fn abs_f64(n: f64) -> f64" desc="Absolute value of f64"
         self.functions.insert(
             "abs_f64".into(),
             builtin(vec![("n", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="mod_i32" sig="fn mod_i32(a: i32, b: i32) -> i32" desc="Integer modulus"
         self.functions.insert(
             "mod_i32".into(),
             builtin(
@@ -178,18 +210,22 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="math_sin" sig="fn math_sin(x: f64) -> f64" desc="Sine"
         self.functions.insert(
             "math_sin".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_cos" sig="fn math_cos(x: f64) -> f64" desc="Cosine"
         self.functions.insert(
             "math_cos".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_sqrt" sig="fn math_sqrt(x: f64) -> f64" desc="Square root"
         self.functions.insert(
             "math_sqrt".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_pow" sig="fn math_pow(base: f64, exp: f64) -> f64" desc="Power"
         self.functions.insert(
             "math_pow".into(),
             builtin(
@@ -198,14 +234,17 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="math_exp" sig="fn math_exp(x: f64) -> f64" desc="Exponential (e^x)"
         self.functions.insert(
             "math_exp".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_log" sig="fn math_log(x: f64) -> f64" desc="Natural logarithm"
         self.functions.insert(
             "math_log".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_atan2" sig="fn math_atan2(y: f64, x: f64) -> f64" desc="Two-argument arctangent"
         self.functions.insert(
             "math_atan2".into(),
             builtin(
@@ -214,14 +253,17 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="math_floor" sig="fn math_floor(x: f64) -> f64" desc="Floor"
         self.functions.insert(
             "math_floor".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_ceil" sig="fn math_ceil(x: f64) -> f64" desc="Ceiling"
         self.functions.insert(
             "math_ceil".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_fmod" sig="fn math_fmod(x: f64, y: f64) -> f64" desc="Floating-point modulus"
         self.functions.insert(
             "math_fmod".into(),
             builtin(
@@ -230,20 +272,26 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="math_abs" sig="fn math_abs(x: f64) -> f64" desc="Absolute value of f64"
         self.functions.insert(
             "math_abs".into(),
             builtin(vec![("x", BcType::F64)], BcType::F64, true),
         );
+        // @builtin category="Math" name="math_pi" sig="fn math_pi() -> f64" desc="Constant pi"
         self.functions
             .insert("math_pi".into(), builtin(vec![], BcType::F64, true));
+        // @builtin category="Math" name="math_e" sig="fn math_e() -> f64" desc="Constant e"
         self.functions
             .insert("math_e".into(), builtin(vec![], BcType::F64, true));
+        // @builtin category="Math" name="math_ln2" sig="fn math_ln2() -> f64" desc="Constant ln(2)"
         self.functions
             .insert("math_ln2".into(), builtin(vec![], BcType::F64, true));
+        // @builtin category="Math" name="math_sqrt2" sig="fn math_sqrt2() -> f64" desc="Constant sqrt(2)"
         self.functions
             .insert("math_sqrt2".into(), builtin(vec![], BcType::F64, true));
 
         // Bitwise (pure)
+        // @builtin category="Bitwise" name="band" sig="fn band(a: i32, b: i32) -> i32" desc="Bitwise AND"
         self.functions.insert(
             "band".into(),
             builtin(
@@ -252,6 +300,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Bitwise" name="bor" sig="fn bor(a: i32, b: i32) -> i32" desc="Bitwise OR"
         self.functions.insert(
             "bor".into(),
             builtin(
@@ -260,6 +309,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Bitwise" name="bxor" sig="fn bxor(a: i32, b: i32) -> i32" desc="Bitwise XOR"
         self.functions.insert(
             "bxor".into(),
             builtin(
@@ -268,6 +318,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Bitwise" name="bshl" sig="fn bshl(a: i32, n: i32) -> i32" desc="Bitwise shift left"
         self.functions.insert(
             "bshl".into(),
             builtin(
@@ -276,6 +327,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Bitwise" name="bshr" sig="fn bshr(a: i32, n: i32) -> i32" desc="Bitwise shift right"
         self.functions.insert(
             "bshr".into(),
             builtin(
@@ -284,30 +336,36 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Bitwise" name="bnot" sig="fn bnot(a: i32) -> i32" desc="Bitwise NOT"
         self.functions.insert(
             "bnot".into(),
             builtin(vec![("a", BcType::I32)], BcType::I32, true),
         );
 
         // Conversion
+        // @builtin category="Conversion" name="i32_to_str" sig="fn! i32_to_str(n: i32) -> str" desc="Convert i32 to string"
         self.functions.insert(
             "i32_to_str".into(),
             builtin(vec![("n", BcType::I32)], BcType::Str, false),
         );
 
         // File I/O (fn!)
+        // @builtin category="File I/O" name="file_open_read" sig="fn! file_open_read(path: str) -> Result<i32, str>" desc="Open file for reading, returns fd"
         self.functions.insert(
             "file_open_read".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
         );
+        // @builtin category="File I/O" name="file_open_write" sig="fn! file_open_write(path: str) -> Result<i32, str>" desc="Open file for writing, returns fd"
         self.functions.insert(
             "file_open_write".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
         );
+        // @builtin category="File I/O" name="read_byte" sig="fn! read_byte(fd: i32) -> i32" desc="Read one byte from fd"
         self.functions.insert(
             "read_byte".into(),
             builtin(vec![("fd", BcType::I32)], BcType::I32, false),
         );
+        // @builtin category="File I/O" name="write_byte" sig="fn! write_byte(fd: i32, b: i32)" desc="Write one byte to fd"
         self.functions.insert(
             "write_byte".into(),
             builtin(
@@ -316,6 +374,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="File I/O" name="write_str" sig="fn! write_str(fd: i32, s: str)" desc="Write string to fd"
         self.functions.insert(
             "write_str".into(),
             builtin(
@@ -324,18 +383,22 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="File I/O" name="file_close" sig="fn! file_close(fd: i32)" desc="Close file descriptor"
         self.functions.insert(
             "file_close".into(),
             builtin(vec![("fd", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="File I/O" name="file_delete" sig="fn! file_delete(path: str) -> Result<str, str>" desc="Delete a file"
         self.functions.insert(
             "file_delete".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
         );
 
         // Socket I/O (fn!)
+        // @builtin category="Socket" name="socket_tcp" sig="fn! socket_tcp() -> Result<i32, str>" desc="Create TCP socket"
         self.functions
-            .insert("socket_tcp".into(), builtin(vec![], BcType::I32, false));
+            .insert("socket_tcp".into(), builtin(vec![], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false));
+        // @builtin category="Socket" name="socket_connect" sig="fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>" desc="Connect to address and port"
         self.functions.insert(
             "socket_connect".into(),
             builtin(
@@ -344,38 +407,43 @@ impl SemanticAnalyzer {
                     ("addr", BcType::Str),
                     ("port", BcType::I32),
                 ],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_bind" sig="fn! socket_bind(sock: i32, port: i32) -> Result<str, str>" desc="Bind socket to port"
         self.functions.insert(
             "socket_bind".into(),
             builtin(
                 vec![("sock", BcType::I32), ("port", BcType::I32)],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_listen" sig="fn! socket_listen(sock: i32, backlog: i32) -> Result<str, str>" desc="Listen for connections"
         self.functions.insert(
             "socket_listen".into(),
             builtin(
                 vec![("sock", BcType::I32), ("backlog", BcType::I32)],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_accept" sig="fn! socket_accept(sock: i32) -> Result<i32, str>" desc="Accept incoming connection"
         self.functions.insert(
             "socket_accept".into(),
-            builtin(vec![("sock", BcType::I32)], BcType::I32, false),
+            builtin(vec![("sock", BcType::I32)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
         );
+        // @builtin category="Socket" name="socket_send" sig="fn! socket_send(sock: i32, data: str) -> Result<i32, str>" desc="Send data on socket"
         self.functions.insert(
             "socket_send".into(),
             builtin(
                 vec![("sock", BcType::I32), ("data", BcType::Str)],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_recv" sig="fn! socket_recv(sock: i32, max_len: i32) -> str" desc="Receive data from socket"
         self.functions.insert(
             "socket_recv".into(),
             builtin(
@@ -384,14 +452,17 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_close" sig="fn! socket_close(sock: i32)" desc="Close socket"
         self.functions.insert(
             "socket_close".into(),
             builtin(vec![("sock", BcType::I32)], BcType::Unit, false),
         );
 
         // UDP Socket I/O (fn!)
+        // @builtin category="Socket" name="socket_udp" sig="fn! socket_udp() -> Result<i32, str>" desc="Create UDP socket"
         self.functions
-            .insert("socket_udp".into(), builtin(vec![], BcType::I32, false));
+            .insert("socket_udp".into(), builtin(vec![], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false));
+        // @builtin category="Socket" name="socket_sendto" sig="fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32" desc="Send UDP data to address"
         self.functions.insert(
             "socket_sendto".into(),
             builtin(
@@ -405,6 +476,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Socket" name="socket_recvfrom" sig="fn! socket_recvfrom(sock: i32, max_len: i32) -> str" desc="Receive UDP data"
         self.functions.insert(
             "socket_recvfrom".into(),
             builtin(
@@ -415,60 +487,74 @@ impl SemanticAnalyzer {
         );
 
         // Command-line arguments (fn!)
+        // @builtin category="System" name="arg_count" sig="fn! arg_count() -> i32" desc="Number of command-line arguments"
         self.functions
             .insert("arg_count".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="System" name="arg_get" sig="fn! arg_get(i: i32) -> str" desc="Get command-line argument by index"
         self.functions.insert(
             "arg_get".into(),
             builtin(vec![("i", BcType::I32)], BcType::Str, false),
         );
 
         // Tier 1: Character classification (pure)
+        // @builtin category="Character" name="char_is_alpha" sig="fn char_is_alpha(c: i32) -> bool" desc="Check if character is alphabetic"
         self.functions.insert(
             "char_is_alpha".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_digit" sig="fn char_is_digit(c: i32) -> bool" desc="Check if character is a digit"
         self.functions.insert(
             "char_is_digit".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_alnum" sig="fn char_is_alnum(c: i32) -> bool" desc="Check if character is alphanumeric"
         self.functions.insert(
             "char_is_alnum".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_space" sig="fn char_is_space(c: i32) -> bool" desc="Check if character is whitespace"
         self.functions.insert(
             "char_is_space".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_upper" sig="fn char_is_upper(c: i32) -> bool" desc="Check if character is uppercase"
         self.functions.insert(
             "char_is_upper".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_lower" sig="fn char_is_lower(c: i32) -> bool" desc="Check if character is lowercase"
         self.functions.insert(
             "char_is_lower".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_print" sig="fn char_is_print(c: i32) -> bool" desc="Check if character is printable"
         self.functions.insert(
             "char_is_print".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_is_xdigit" sig="fn char_is_xdigit(c: i32) -> bool" desc="Check if character is hex digit"
         self.functions.insert(
             "char_is_xdigit".into(),
             builtin(vec![("c", BcType::I32)], BcType::Bool, true),
         );
+        // @builtin category="Character" name="char_to_upper" sig="fn char_to_upper(c: i32) -> i32" desc="Convert character to uppercase"
         self.functions.insert(
             "char_to_upper".into(),
             builtin(vec![("c", BcType::I32)], BcType::I32, true),
         );
+        // @builtin category="Character" name="char_to_lower" sig="fn char_to_lower(c: i32) -> i32" desc="Convert character to lowercase"
         self.functions.insert(
             "char_to_lower".into(),
             builtin(vec![("c", BcType::I32)], BcType::I32, true),
         );
+        // @builtin category="Math" name="abs_i64" sig="fn abs_i64(n: i64) -> i64" desc="Absolute value of i64"
         self.functions.insert(
             "abs_i64".into(),
             builtin(vec![("n", BcType::I64)], BcType::I64, true),
         );
 
         // Tier 2: Number parsing & conversion
+        // @builtin category="Conversion" name="parse_i32" sig="fn parse_i32(s: str) -> Result<i32, str>" desc="Parse string to i32"
         self.functions.insert(
             "parse_i32".into(),
             builtin(
@@ -477,6 +563,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Conversion" name="parse_i64" sig="fn parse_i64(s: str) -> Result<i64, str>" desc="Parse string to i64"
         self.functions.insert(
             "parse_i64".into(),
             builtin(
@@ -485,38 +572,47 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Conversion" name="str_from_i64" sig="fn! str_from_i64(n: i64) -> str" desc="Convert i64 to string"
         self.functions.insert(
             "str_from_i64".into(),
             builtin(vec![("n", BcType::I64)], BcType::Str, false),
         );
+        // @builtin category="Conversion" name="str_from_f64" sig="fn! str_from_f64(n: f64) -> str" desc="Convert f64 to string"
         self.functions.insert(
             "str_from_f64".into(),
             builtin(vec![("n", BcType::F64)], BcType::Str, false),
         );
+        // @builtin category="Conversion" name="str_from_bool" sig="fn str_from_bool(b: bool) -> str" desc="Convert bool to string"
         self.functions.insert(
             "str_from_bool".into(),
             builtin(vec![("b", BcType::Bool)], BcType::Str, true),
         );
 
         // Tier 3: Random, time, sleep, exit (fn!)
+        // @builtin category="System" name="rand_seed" sig="fn! rand_seed(seed: i32)" desc="Seed the random number generator"
         self.functions.insert(
             "rand_seed".into(),
             builtin(vec![("seed", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="System" name="rand_i32" sig="fn! rand_i32() -> i32" desc="Generate random i32"
         self.functions
             .insert("rand_i32".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="System" name="time_now" sig="fn! time_now() -> i64" desc="Current time as Unix timestamp"
         self.functions
             .insert("time_now".into(), builtin(vec![], BcType::I64, false));
+        // @builtin category="System" name="sleep_ms" sig="fn! sleep_ms(ms: i32)" desc="Sleep for milliseconds"
         self.functions.insert(
             "sleep_ms".into(),
             builtin(vec![("ms", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="System" name="exit" sig="fn! exit(code: i32)" desc="Exit with status code"
         self.functions.insert(
             "exit".into(),
             builtin(vec![("code", BcType::I32)], BcType::Unit, false),
         );
 
         // Tier 4: Environment & error (fn!)
+        // @builtin category="Environment" name="env_get" sig="fn! env_get(name: str) -> Result<str, str>" desc="Get environment variable"
         self.functions.insert(
             "env_get".into(),
             builtin(
@@ -525,50 +621,61 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Environment" name="errno_get" sig="fn! errno_get() -> i32" desc="Get last error code"
         self.functions
             .insert("errno_get".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Environment" name="errno_str" sig="fn! errno_str(code: i32) -> str" desc="Convert error code to message"
         self.functions.insert(
             "errno_str".into(),
             builtin(vec![("code", BcType::I32)], BcType::Str, false),
         );
 
         // Tier 5: Filesystem operations (fn!)
+        // @builtin category="File I/O" name="file_rename" sig="fn! file_rename(old: str, new_path: str) -> Result<str, str>" desc="Rename a file"
         self.functions.insert(
             "file_rename".into(),
             builtin(
                 vec![("old", BcType::Str), ("new_path", BcType::Str)],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="File I/O" name="file_exists" sig="fn! file_exists(path: str) -> bool" desc="Check if file exists"
         self.functions.insert(
             "file_exists".into(),
             builtin(vec![("path", BcType::Str)], BcType::Bool, false),
         );
+        // @builtin category="Filesystem" name="dir_create" sig="fn! dir_create(path: str) -> Result<str, str>" desc="Create a directory"
         self.functions.insert(
             "dir_create".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
         );
+        // @builtin category="Filesystem" name="dir_remove" sig="fn! dir_remove(path: str) -> Result<str, str>" desc="Remove a directory"
         self.functions.insert(
             "dir_remove".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
         );
+        // @builtin category="Filesystem" name="dir_current" sig="fn! dir_current() -> str" desc="Get current working directory"
         self.functions
             .insert("dir_current".into(), builtin(vec![], BcType::Str, false));
+        // @builtin category="Filesystem" name="dir_change" sig="fn! dir_change(path: str) -> Result<str, str>" desc="Change working directory"
         self.functions.insert(
             "dir_change".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
         );
+        // @builtin category="File I/O" name="file_open_append" sig="fn! file_open_append(path: str) -> Result<i32, str>" desc="Open file for appending, returns fd"
         self.functions.insert(
             "file_open_append".into(),
-            builtin(vec![("path", BcType::Str)], BcType::I32, false),
+            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
         );
+        // @builtin category="File I/O" name="file_size" sig="fn! file_size(path: str) -> i64" desc="Get file size in bytes"
         self.functions.insert(
             "file_size".into(),
             builtin(vec![("path", BcType::Str)], BcType::I64, false),
         );
 
         // Path utilities
+        // @builtin category="Path" name="path_join" sig="fn! path_join(dir: str, file: str) -> str" desc="Join directory and filename"
         self.functions.insert(
             "path_join".into(),
             builtin(
@@ -577,20 +684,24 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Path" name="path_ext" sig="fn path_ext(path: str) -> str" desc="Get file extension"
         self.functions.insert(
             "path_ext".into(),
             builtin(vec![("path", BcType::Str)], BcType::Str, true),
         );
+        // @builtin category="Path" name="path_exists" sig="fn! path_exists(path: str) -> bool" desc="Check if path exists"
         self.functions.insert(
             "path_exists".into(),
             builtin(vec![("path", BcType::Str)], BcType::Bool, false),
         );
+        // @builtin category="Path" name="path_is_dir" sig="fn! path_is_dir(path: str) -> bool" desc="Check if path is a directory"
         self.functions.insert(
             "path_is_dir".into(),
             builtin(vec![("path", BcType::Str)], BcType::Bool, false),
         );
 
         // Tier 6: String operations
+        // @builtin category="String" name="str_contains" sig="fn str_contains(s: str, sub: str) -> bool" desc="Check if string contains substring"
         self.functions.insert(
             "str_contains".into(),
             builtin(
@@ -599,6 +710,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="String" name="str_starts_with" sig="fn str_starts_with(s: str, prefix: str) -> bool" desc="Check if string starts with prefix"
         self.functions.insert(
             "str_starts_with".into(),
             builtin(
@@ -607,6 +719,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="String" name="str_ends_with" sig="fn str_ends_with(s: str, suffix: str) -> bool" desc="Check if string ends with suffix"
         self.functions.insert(
             "str_ends_with".into(),
             builtin(
@@ -615,10 +728,12 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="String" name="str_trim" sig="fn! str_trim(s: str) -> str" desc="Remove leading and trailing whitespace"
         self.functions.insert(
             "str_trim".into(),
             builtin(vec![("s", BcType::Str)], BcType::Str, false),
         );
+        // @builtin category="String" name="str_split" sig="fn! str_split(s: str, delim: str) -> [str]" desc="Split string by delimiter"
         self.functions.insert(
             "str_split".into(),
             builtin(
@@ -627,14 +742,17 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="String" name="str_to_upper" sig="fn! str_to_upper(s: str) -> str" desc="Convert string to uppercase"
         self.functions.insert(
             "str_to_upper".into(),
             builtin(vec![("s", BcType::Str)], BcType::Str, false),
         );
+        // @builtin category="String" name="str_to_lower" sig="fn! str_to_lower(s: str) -> str" desc="Convert string to lowercase"
         self.functions.insert(
             "str_to_lower".into(),
             builtin(vec![("s", BcType::Str)], BcType::Str, false),
         );
+        // @builtin category="String" name="str_replace" sig="fn! str_replace(s: str, old: str, new_s: str) -> str" desc="Replace all occurrences of substring"
         self.functions.insert(
             "str_replace".into(),
             builtin(
@@ -647,6 +765,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="String" name="str_compare" sig="fn str_compare(a: str, b: str) -> i32" desc="Lexicographic comparison (-1, 0, 1)"
         self.functions.insert(
             "str_compare".into(),
             builtin(
@@ -657,6 +776,7 @@ impl SemanticAnalyzer {
         );
 
         // Tier 7: Directory listing & process control (fn!)
+        // @builtin category="Filesystem" name="dir_list" sig="fn! dir_list(path: str) -> [str]" desc="List directory contents"
         self.functions.insert(
             "dir_list".into(),
             builtin(
@@ -665,6 +785,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Process" name="proc_run" sig="fn! proc_run(cmd: str, args: [str]) -> i32" desc="Run external process"
         self.functions.insert(
             "proc_run".into(),
             builtin(
@@ -676,42 +797,53 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Terminal" name="term_width" sig="fn! term_width() -> i32" desc="Get terminal width in columns"
         self.functions
             .insert("term_width".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Terminal" name="term_height" sig="fn! term_height() -> i32" desc="Get terminal height in rows"
         self.functions
             .insert("term_height".into(), builtin(vec![], BcType::I32, false));
 
         // Tier 8: Raw terminal I/O (fn!)
+        // @builtin category="Terminal" name="term_raw" sig="fn! term_raw() -> Result<str, str>" desc="Enter raw terminal mode"
         self.functions
-            .insert("term_raw".into(), builtin(vec![], BcType::I32, false));
+            .insert("term_raw".into(), builtin(vec![], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false));
+        // @builtin category="Terminal" name="term_restore" sig="fn! term_restore() -> Result<str, str>" desc="Restore normal terminal mode"
         self.functions
-            .insert("term_restore".into(), builtin(vec![], BcType::I32, false));
+            .insert("term_restore".into(), builtin(vec![], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false));
+        // @builtin category="Terminal" name="read_nonblock" sig="fn! read_nonblock() -> i32" desc="Non-blocking read from stdin"
         self.functions
             .insert("read_nonblock".into(), builtin(vec![], BcType::I32, false));
 
         // Tier 9: Environment iteration (fn!)
+        // @builtin category="Environment" name="env_count" sig="fn! env_count() -> i32" desc="Number of environment variables"
         self.functions
             .insert("env_count".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Environment" name="env_key" sig="fn! env_key(i: i32) -> str" desc="Get env variable name by index"
         self.functions.insert(
             "env_key".into(),
             builtin(vec![("i", BcType::I32)], BcType::Str, false),
         );
+        // @builtin category="Environment" name="env_value" sig="fn! env_value(i: i32) -> str" desc="Get env variable value by index"
         self.functions.insert(
             "env_value".into(),
             builtin(vec![("i", BcType::I32)], BcType::Str, false),
         );
 
         // Tier 10: Hex formatting (fn! — allocates)
+        // @builtin category="Conversion" name="str_from_i32_hex" sig="fn! str_from_i32_hex(n: i32) -> str" desc="Convert i32 to hex string"
         self.functions.insert(
             "str_from_i32_hex".into(),
             builtin(vec![("n", BcType::I32)], BcType::Str, false),
         );
+        // @builtin category="Conversion" name="str_from_i64_hex" sig="fn! str_from_i64_hex(n: i64) -> str" desc="Convert i64 to hex string"
         self.functions.insert(
             "str_from_i64_hex".into(),
             builtin(vec![("n", BcType::I64)], BcType::Str, false),
         );
 
         // Tier 11: Array sort (fn! — mutates)
+        // @builtin category="Array" name="sort_i32" sig="fn! sort_i32(arr: [i32])" desc="Sort i32 array in place"
         self.functions.insert(
             "sort_i32".into(),
             builtin(
@@ -720,6 +852,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Array" name="sort_i64" sig="fn! sort_i64(arr: [i64])" desc="Sort i64 array in place"
         self.functions.insert(
             "sort_i64".into(),
             builtin(
@@ -728,6 +861,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Array" name="sort_str" sig="fn! sort_str(arr: [str])" desc="Sort string array in place"
         self.functions.insert(
             "sort_str".into(),
             builtin(
@@ -736,6 +870,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Array" name="sort_f64" sig="fn! sort_f64(arr: [f64])" desc="Sort f64 array in place"
         self.functions.insert(
             "sort_f64".into(),
             builtin(
@@ -746,6 +881,7 @@ impl SemanticAnalyzer {
         );
 
         // Tier 12: String <-> char array conversions
+        // @builtin category="String" name="str_from_chars" sig="fn! str_from_chars(arr: [i32]) -> str" desc="Build string from char code array"
         self.functions.insert(
             "str_from_chars".into(),
             builtin(
@@ -754,6 +890,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="String" name="str_to_chars" sig="fn! str_to_chars(s: str) -> [i32]" desc="Convert string to char code array"
         self.functions.insert(
             "str_to_chars".into(),
             builtin(
@@ -764,6 +901,7 @@ impl SemanticAnalyzer {
         );
 
         // Tier 13: Date/Time (fn! — allocates / reads system state)
+        // @builtin category="Date/Time" name="time_format" sig="fn! time_format(timestamp: i64, fmt: str) -> str" desc="Format timestamp as string"
         self.functions.insert(
             "time_format".into(),
             builtin(
@@ -772,32 +910,39 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Date/Time" name="time_utc_year" sig="fn! time_utc_year(timestamp: i64) -> i32" desc="Get UTC year from timestamp"
         self.functions.insert(
             "time_utc_year".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
+        // @builtin category="Date/Time" name="time_utc_month" sig="fn! time_utc_month(timestamp: i64) -> i32" desc="Get UTC month from timestamp"
         self.functions.insert(
             "time_utc_month".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
+        // @builtin category="Date/Time" name="time_utc_day" sig="fn! time_utc_day(timestamp: i64) -> i32" desc="Get UTC day from timestamp"
         self.functions.insert(
             "time_utc_day".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
+        // @builtin category="Date/Time" name="time_utc_hour" sig="fn! time_utc_hour(timestamp: i64) -> i32" desc="Get UTC hour from timestamp"
         self.functions.insert(
             "time_utc_hour".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
+        // @builtin category="Date/Time" name="time_utc_min" sig="fn! time_utc_min(timestamp: i64) -> i32" desc="Get UTC minute from timestamp"
         self.functions.insert(
             "time_utc_min".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
+        // @builtin category="Date/Time" name="time_utc_sec" sig="fn! time_utc_sec(timestamp: i64) -> i32" desc="Get UTC second from timestamp"
         self.functions.insert(
             "time_utc_sec".into(),
             builtin(vec![("timestamp", BcType::I64)], BcType::I32, false),
         );
 
         // Tier 13: Glob matching (pure)
+        // @builtin category="System" name="glob_match" sig="fn glob_match(pattern: str, text: str) -> bool" desc="Match text against glob pattern"
         self.functions.insert(
             "glob_match".into(),
             builtin(
@@ -808,30 +953,35 @@ impl SemanticAnalyzer {
         );
 
         // Tier 13: SHA-256 (fn! — allocates)
+        // @builtin category="System" name="sha256" sig="fn! sha256(data: str) -> str" desc="Compute SHA-256 hash"
         self.functions.insert(
             "sha256".into(),
             builtin(vec![("data", BcType::Str)], BcType::Str, false),
         );
 
         // Tier 13: Terminal detection (pure-ish)
+        // @builtin category="System" name="is_tty" sig="fn is_tty() -> bool" desc="Check if stdout is a terminal"
         self.functions
             .insert("is_tty".into(), builtin(vec![], BcType::Bool, true));
 
         // Tier 13: Environment modification (fn!)
+        // @builtin category="Environment" name="env_set" sig="fn! env_set(name: str, value: str) -> Result<str, str>" desc="Set environment variable"
         self.functions.insert(
             "env_set".into(),
             builtin(
                 vec![("name", BcType::Str), ("value", BcType::Str)],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Environment" name="env_delete" sig="fn! env_delete(name: str) -> Result<str, str>" desc="Delete environment variable"
         self.functions.insert(
             "env_delete".into(),
-            builtin(vec![("name", BcType::Str)], BcType::I32, false),
+            builtin(vec![("name", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
         );
 
         // Graphics: Canvas Lifecycle (fn!)
+        // @builtin category="Graphics" name="canvas_open" sig="fn! canvas_open(width: i32, height: i32, title: str) -> Result<str, str>" desc="Open graphics canvas"
         self.functions.insert(
             "canvas_open".into(),
             builtin(
@@ -840,22 +990,27 @@ impl SemanticAnalyzer {
                     ("height", BcType::I32),
                     ("title", BcType::Str),
                 ],
-                BcType::I32,
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),
         );
+        // @builtin category="Graphics" name="canvas_close" sig="fn! canvas_close()" desc="Close graphics canvas"
         self.functions
             .insert("canvas_close".into(), builtin(vec![], BcType::Unit, false));
+        // @builtin category="Graphics" name="canvas_alive" sig="fn! canvas_alive() -> bool" desc="Check if canvas is still open"
         self.functions
             .insert("canvas_alive".into(), builtin(vec![], BcType::Bool, false));
+        // @builtin category="Graphics" name="canvas_flush" sig="fn! canvas_flush()" desc="Flush canvas to screen"
         self.functions
             .insert("canvas_flush".into(), builtin(vec![], BcType::Unit, false));
+        // @builtin category="Graphics" name="canvas_clear" sig="fn! canvas_clear(color: i32)" desc="Clear canvas with color"
         self.functions.insert(
             "canvas_clear".into(),
             builtin(vec![("color", BcType::I32)], BcType::Unit, false),
         );
 
         // Graphics: Drawing Primitives (fn!)
+        // @builtin category="Graphics" name="gfx_pixel" sig="fn! gfx_pixel(x: i32, y: i32, color: i32)" desc="Draw a pixel"
         self.functions.insert(
             "gfx_pixel".into(),
             builtin(
@@ -868,6 +1023,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_get_pixel" sig="fn! gfx_get_pixel(x: i32, y: i32) -> i32" desc="Get pixel color at position"
         self.functions.insert(
             "gfx_get_pixel".into(),
             builtin(
@@ -876,6 +1032,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_line" sig="fn! gfx_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32)" desc="Draw a line"
         self.functions.insert(
             "gfx_line".into(),
             builtin(
@@ -890,6 +1047,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_rect" sig="fn! gfx_rect(x: i32, y: i32, w: i32, h: i32, color: i32)" desc="Draw rectangle outline"
         self.functions.insert(
             "gfx_rect".into(),
             builtin(
@@ -904,6 +1062,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_fill_rect" sig="fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)" desc="Draw filled rectangle"
         self.functions.insert(
             "gfx_fill_rect".into(),
             builtin(
@@ -918,6 +1077,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_circle" sig="fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)" desc="Draw circle outline"
         self.functions.insert(
             "gfx_circle".into(),
             builtin(
@@ -931,6 +1091,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_fill_circle" sig="fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)" desc="Draw filled circle"
         self.functions.insert(
             "gfx_fill_circle".into(),
             builtin(
@@ -944,6 +1105,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_draw_text" sig="fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)" desc="Draw text on canvas"
         self.functions.insert(
             "gfx_draw_text".into(),
             builtin(
@@ -959,18 +1121,23 @@ impl SemanticAnalyzer {
         );
 
         // Graphics: Input (fn!)
+        // @builtin category="Graphics" name="canvas_key" sig="fn! canvas_key() -> i32" desc="Get last key press"
         self.functions
             .insert("canvas_key".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_mouse_x" sig="fn! canvas_mouse_x() -> i32" desc="Get mouse X position"
         self.functions
             .insert("canvas_mouse_x".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_mouse_y" sig="fn! canvas_mouse_y() -> i32" desc="Get mouse Y position"
         self.functions
             .insert("canvas_mouse_y".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_mouse_btn" sig="fn! canvas_mouse_btn() -> i32" desc="Get mouse button state"
         self.functions.insert(
             "canvas_mouse_btn".into(),
             builtin(vec![], BcType::I32, false),
         );
 
         // Graphics: Color (pure)
+        // @builtin category="Graphics" name="rgb" sig="fn rgb(r: i32, g: i32, b: i32) -> i32" desc="Create RGB color value"
         self.functions.insert(
             "rgb".into(),
             builtin(
@@ -979,6 +1146,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Graphics" name="rgba" sig="fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32" desc="Create RGBA color value"
         self.functions.insert(
             "rgba".into(),
             builtin(
@@ -994,8 +1162,10 @@ impl SemanticAnalyzer {
         );
 
         // HashMap builtins (fn! except map_has and map_len which are pure reads)
+        // @builtin category="HashMap" name="map_new" sig="fn! map_new() -> map" desc="Create empty hash map"
         self.functions
             .insert("map_new".into(), builtin(vec![], BcType::Map, false));
+        // @builtin category="HashMap" name="map_set" sig="fn! map_set(m: map, key: str, value: str)" desc="Set key-value pair"
         self.functions.insert(
             "map_set".into(),
             builtin(
@@ -1008,6 +1178,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="HashMap" name="map_get" sig="fn! map_get(m: map, key: str) -> str" desc="Get value by key"
         self.functions.insert(
             "map_get".into(),
             builtin(
@@ -1016,6 +1187,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="HashMap" name="map_has" sig="fn map_has(m: map, key: str) -> bool" desc="Check if key exists"
         self.functions.insert(
             "map_has".into(),
             builtin(
@@ -1024,6 +1196,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="HashMap" name="map_delete" sig="fn! map_delete(m: map, key: str)" desc="Delete key from map"
         self.functions.insert(
             "map_delete".into(),
             builtin(
@@ -1032,12 +1205,14 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="HashMap" name="map_len" sig="fn map_len(m: map) -> i32" desc="Number of entries in map"
         self.functions.insert(
             "map_len".into(),
             builtin(vec![("m", BcType::Map)], BcType::I32, true),
         );
 
         // File I/O — whole-file convenience (fn!)
+        // @builtin category="File I/O" name="read_file" sig="fn! read_file(path: str) -> Result<str, str>" desc="Read entire file as string"
         self.functions.insert(
             "read_file".into(),
             builtin(
@@ -1046,6 +1221,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="File I/O" name="write_file" sig="fn! write_file(path: str, data: str) -> Result<str, str>" desc="Write string to file"
         self.functions.insert(
             "write_file".into(),
             builtin(
@@ -1056,6 +1232,7 @@ impl SemanticAnalyzer {
         );
 
         // Math min/max/clamp (pure)
+        // @builtin category="Math" name="min_i32" sig="fn min_i32(a: i32, b: i32) -> i32" desc="Minimum of two i32"
         self.functions.insert(
             "min_i32".into(),
             builtin(
@@ -1064,6 +1241,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="max_i32" sig="fn max_i32(a: i32, b: i32) -> i32" desc="Maximum of two i32"
         self.functions.insert(
             "max_i32".into(),
             builtin(
@@ -1072,6 +1250,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="clamp_i32" sig="fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32" desc="Clamp i32 to range"
         self.functions.insert(
             "clamp_i32".into(),
             builtin(
@@ -1084,6 +1263,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="min_i64" sig="fn min_i64(a: i64, b: i64) -> i64" desc="Minimum of two i64"
         self.functions.insert(
             "min_i64".into(),
             builtin(
@@ -1092,6 +1272,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="max_i64" sig="fn max_i64(a: i64, b: i64) -> i64" desc="Maximum of two i64"
         self.functions.insert(
             "max_i64".into(),
             builtin(
@@ -1100,6 +1281,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="clamp_i64" sig="fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64" desc="Clamp i64 to range"
         self.functions.insert(
             "clamp_i64".into(),
             builtin(
@@ -1112,6 +1294,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="min_f64" sig="fn min_f64(a: f64, b: f64) -> f64" desc="Minimum of two f64"
         self.functions.insert(
             "min_f64".into(),
             builtin(
@@ -1120,6 +1303,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="max_f64" sig="fn max_f64(a: f64, b: f64) -> f64" desc="Maximum of two f64"
         self.functions.insert(
             "max_f64".into(),
             builtin(
@@ -1128,6 +1312,7 @@ impl SemanticAnalyzer {
                 true,
             ),
         );
+        // @builtin category="Math" name="clamp_f64" sig="fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64" desc="Clamp f64 to range"
         self.functions.insert(
             "clamp_f64".into(),
             builtin(
@@ -1142,6 +1327,7 @@ impl SemanticAnalyzer {
         );
 
         // String join (fn! — allocates)
+        // @builtin category="String" name="str_join" sig="fn! str_join(arr: [str], sep: str) -> str" desc="Join string array with separator"
         self.functions.insert(
             "str_join".into(),
             builtin(
@@ -1155,10 +1341,12 @@ impl SemanticAnalyzer {
         );
 
         // Path utilities — basename (pure), dirname (fn! — allocates)
+        // @builtin category="Path" name="path_basename" sig="fn path_basename(path: str) -> str" desc="Get filename from path"
         self.functions.insert(
             "path_basename".into(),
             builtin(vec![("path", BcType::Str)], BcType::Str, true),
         );
+        // @builtin category="Path" name="path_dirname" sig="fn! path_dirname(path: str) -> str" desc="Get directory from path"
         self.functions.insert(
             "path_dirname".into(),
             builtin(vec![("path", BcType::Str)], BcType::Str, false),
@@ -1336,10 +1524,173 @@ impl SemanticAnalyzer {
             ));
         }
 
+        // Check for resource-acquiring calls without matching defer cleanup
+        Self::check_resource_leaks(&func.body, &func.name);
+
         self.scopes.pop();
         self.current_fn_return_type = None;
         self.in_pure_fn = false;
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Resource-leak warnings: detect acquire calls without matching defer
+    // -----------------------------------------------------------------------
+
+    /// Extract the callee name from a Call expression, if it's a simple identifier.
+    fn call_name(expr: &Expr) -> Option<&str> {
+        if let Expr::Call { callee, .. } = expr {
+            if let Expr::Ident(name, _) = callee.as_ref() {
+                return Some(name.as_str());
+            }
+        }
+        None
+    }
+
+    /// Collect all function-call names that appear anywhere in a block (recursively).
+    fn collect_calls_in_block(block: &Block, out: &mut HashSet<String>) {
+        for stmt in &block.stmts {
+            Self::collect_calls_in_stmt(stmt, out);
+        }
+        if let Some(tail) = &block.tail_expr {
+            Self::collect_calls_in_expr(tail, out);
+        }
+    }
+
+    fn collect_calls_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+        match stmt {
+            Stmt::Let(ls) => Self::collect_calls_in_expr(&ls.value, out),
+            Stmt::Assign(a) => {
+                Self::collect_calls_in_place(&a.target, out);
+                Self::collect_calls_in_expr(&a.value, out);
+            }
+            Stmt::CompoundAssign(ca) => {
+                Self::collect_calls_in_place(&ca.target, out);
+                Self::collect_calls_in_expr(&ca.value, out);
+            }
+            Stmt::Expr(es) => Self::collect_calls_in_expr(&es.expr, out),
+            Stmt::While(w) => {
+                Self::collect_calls_in_expr(&w.condition, out);
+                Self::collect_calls_in_block(&w.body, out);
+            }
+            Stmt::For(f) => {
+                Self::collect_calls_in_expr(&f.start, out);
+                Self::collect_calls_in_expr(&f.end, out);
+                Self::collect_calls_in_block(&f.body, out);
+            }
+            Stmt::ForIn(fi) => {
+                Self::collect_calls_in_expr(&fi.iterable, out);
+                Self::collect_calls_in_block(&fi.body, out);
+            }
+            Stmt::Return(r) => {
+                if let Some(val) = &r.value {
+                    Self::collect_calls_in_expr(val, out);
+                }
+            }
+            Stmt::Defer(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+        }
+    }
+
+    fn collect_calls_in_place(place: &Place, out: &mut HashSet<String>) {
+        for acc in &place.accessors {
+            if let PlaceAccessor::Index(idx_expr) = acc {
+                Self::collect_calls_in_expr(idx_expr, out);
+            }
+        }
+    }
+
+    fn collect_calls_in_expr(expr: &Expr, out: &mut HashSet<String>) {
+        match expr {
+            Expr::Call { callee, args, .. } => {
+                if let Expr::Ident(name, _) = callee.as_ref() {
+                    out.insert(name.clone());
+                }
+                Self::collect_calls_in_expr(callee, out);
+                for arg in args {
+                    Self::collect_calls_in_expr(arg, out);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                Self::collect_calls_in_expr(left, out);
+                Self::collect_calls_in_expr(right, out);
+            }
+            Expr::UnaryOp { operand, .. } => Self::collect_calls_in_expr(operand, out),
+            Expr::Cast { expr, .. } => Self::collect_calls_in_expr(expr, out),
+            Expr::FieldAccess { expr, .. } => Self::collect_calls_in_expr(expr, out),
+            Expr::Index { expr, index, .. } => {
+                Self::collect_calls_in_expr(expr, out);
+                Self::collect_calls_in_expr(index, out);
+            }
+            Expr::Block(block) => Self::collect_calls_in_block(block, out),
+            Expr::If { condition, then_block, else_branch, .. } => {
+                Self::collect_calls_in_expr(condition, out);
+                Self::collect_calls_in_block(then_block, out);
+                if let Some(eb) = else_branch {
+                    Self::collect_calls_in_expr(eb, out);
+                }
+            }
+            Expr::Match { scrutinee, arms, .. } => {
+                Self::collect_calls_in_expr(scrutinee, out);
+                for arm in arms {
+                    Self::collect_calls_in_expr(&arm.body, out);
+                }
+            }
+            Expr::StructLit { fields, .. } => {
+                for fi in fields {
+                    Self::collect_calls_in_expr(&fi.value, out);
+                }
+            }
+            Expr::ArrayLit { elements, .. } => {
+                for el in elements {
+                    Self::collect_calls_in_expr(el, out);
+                }
+            }
+            Expr::EnumConstructor { args, .. } => {
+                for arg in args {
+                    Self::collect_calls_in_expr(arg, out);
+                }
+            }
+            Expr::InterpolatedString { parts, .. } => {
+                for part in parts {
+                    if let InterpolatedStringPart::Expr(e) = part {
+                        Self::collect_calls_in_expr(e, out);
+                    }
+                }
+            }
+            Expr::Try { call, .. } => Self::collect_calls_in_expr(call, out),
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StringLit(..)
+            | Expr::BoolLit(..) | Expr::Ident(..) => {}
+        }
+    }
+
+    /// Collect callee names from top-level defer statements in a block.
+    fn collect_deferred_calls(block: &Block) -> HashSet<String> {
+        let mut deferred = HashSet::new();
+        for stmt in &block.stmts {
+            if let Stmt::Defer(d) = stmt {
+                if let Some(name) = Self::call_name(&d.expr) {
+                    deferred.insert(name.to_string());
+                }
+            }
+        }
+        deferred
+    }
+
+    /// Emit warnings for resource-acquiring calls without a matching defer cleanup.
+    fn check_resource_leaks(body: &Block, fn_name: &str) {
+        let mut acquired_calls: HashSet<String> = HashSet::new();
+        Self::collect_calls_in_block(body, &mut acquired_calls);
+        let deferred = Self::collect_deferred_calls(body);
+
+        for &(acquire_fn, cleanup_fn) in RESOURCE_PAIRS {
+            if acquired_calls.contains(acquire_fn) && !deferred.contains(cleanup_fn) {
+                eprintln!(
+                    "warning: '{}' called in '{}' without a matching 'defer {}(...)' \
+                     — resource may leak",
+                    acquire_fn, fn_name, cleanup_fn
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

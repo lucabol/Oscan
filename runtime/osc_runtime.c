@@ -865,20 +865,24 @@ static void osc_path_to_cstr(osc_str path, char *buf, size_t bufsz)
 
 #ifdef OSC_FREESTANDING
 
-int32_t osc_file_open_read(osc_str path)
+osc_result_i32_str osc_file_open_read(osc_str path)
 {
+    osc_result_i32_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
     int32_t fd = (int32_t)open_read(buf);
-    return fd < 0 ? -1 : fd;
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_read: cannot open file"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_file_open_write(osc_str path)
+osc_result_i32_str osc_file_open_write(osc_str path)
 {
+    osc_result_i32_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
     int32_t fd = (int32_t)open_write(buf);
-    return fd < 0 ? -1 : fd;
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_write: cannot open file"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
 int32_t osc_read_byte(int32_t fd)
@@ -904,12 +908,14 @@ void osc_file_close(int32_t fd)
     close((L_FD)fd);
 }
 
-int32_t osc_file_delete(osc_str path)
+osc_result_str_str osc_file_delete(osc_str path)
 {
+    osc_result_str_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
     int32_t r = (int32_t)unlink(buf);
-    return r < 0 ? -1 : 0;
+    if (r < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_delete: cannot delete file"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
@@ -1015,19 +1021,25 @@ osc_result_str_str osc_write_file(osc_str path, osc_str data)
 #define OSC_S_IWRITE (S_IWUSR | S_IWGRP)
 #endif
 
-int32_t osc_file_open_read(osc_str path)
+osc_result_i32_str osc_file_open_read(osc_str path)
 {
+    osc_result_i32_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
-    return (int32_t)OSC_OPEN(buf, OSC_O_RDONLY | OSC_O_BINARY);
+    int32_t fd = (int32_t)OSC_OPEN(buf, OSC_O_RDONLY | OSC_O_BINARY);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_read: cannot open file"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_file_open_write(osc_str path)
+osc_result_i32_str osc_file_open_write(osc_str path)
 {
+    osc_result_i32_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
-    return (int32_t)OSC_OPEN(buf, OSC_O_WRONLY | OSC_O_CREAT | OSC_O_TRUNC | OSC_O_BINARY,
+    int32_t fd = (int32_t)OSC_OPEN(buf, OSC_O_WRONLY | OSC_O_CREAT | OSC_O_TRUNC | OSC_O_BINARY,
                              OSC_S_IREAD | OSC_S_IWRITE);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_write: cannot open file"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
 int32_t osc_read_byte(int32_t fd)
@@ -1053,11 +1065,13 @@ void osc_file_close(int32_t fd)
     OSC_CLOSE(fd);
 }
 
-int32_t osc_file_delete(osc_str path)
+osc_result_str_str osc_file_delete(osc_str path)
 {
+    osc_result_str_str result;
     char buf[4096];
     osc_path_to_cstr(path, buf, sizeof(buf));
-    return (int32_t)OSC_UNLINK(buf);
+    if (OSC_UNLINK(buf) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_delete: cannot delete file"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
@@ -1763,16 +1777,20 @@ static void osc_str_to_cstr_buf(osc_str s, char *buf, int32_t bufsz)
     buf[len] = '\0';
 }
 
-int32_t osc_file_rename(osc_str old_path, osc_str new_path)
+osc_result_str_str osc_file_rename(osc_str old_path, osc_str new_path)
 {
+    osc_result_str_str result;
     char obuf[1024], nbuf[1024];
+    int rc;
     osc_str_to_cstr_buf(old_path, obuf, 1024);
     osc_str_to_cstr_buf(new_path, nbuf, 1024);
 #ifdef OSC_FREESTANDING
-    return l_rename(obuf, nbuf);
+    rc = l_rename(obuf, nbuf);
 #else
-    return rename(obuf, nbuf);
+    rc = rename(obuf, nbuf);
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_rename: cannot rename file"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 uint8_t osc_file_exists(osc_str path)
@@ -1790,34 +1808,42 @@ uint8_t osc_file_exists(osc_str path)
 #endif
 }
 
-int32_t osc_dir_create(osc_str path)
+osc_result_str_str osc_dir_create(osc_str path)
 {
+    osc_result_str_str result;
     char buf[1024];
+    int rc;
     osc_str_to_cstr_buf(path, buf, 1024);
 #ifdef OSC_FREESTANDING
-    return l_mkdir(buf, 0755);
+    rc = l_mkdir(buf, 0755);
 #else
 #ifdef _WIN32
-    return _mkdir(buf);
+    rc = _mkdir(buf);
 #else
-    return mkdir(buf, 0755);
+    rc = mkdir(buf, 0755);
 #endif
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("dir_create: cannot create directory"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_dir_remove(osc_str path)
+osc_result_str_str osc_dir_remove(osc_str path)
 {
+    osc_result_str_str result;
     char buf[1024];
+    int rc;
     osc_str_to_cstr_buf(path, buf, 1024);
 #ifdef OSC_FREESTANDING
-    return l_rmdir(buf);
+    rc = l_rmdir(buf);
 #else
 #ifdef _WIN32
-    return _rmdir(buf);
+    rc = _rmdir(buf);
 #else
-    return rmdir(buf);
+    rc = rmdir(buf);
 #endif
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("dir_remove: cannot remove directory"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 osc_str osc_dir_current(osc_arena *arena)
@@ -1844,32 +1870,46 @@ osc_str osc_dir_current(osc_arena *arena)
     return result;
 }
 
-int32_t osc_dir_change(osc_str path)
+osc_result_str_str osc_dir_change(osc_str path)
 {
+    osc_result_str_str result;
     char buf[1024];
+    int rc;
     osc_str_to_cstr_buf(path, buf, 1024);
 #ifdef OSC_FREESTANDING
-    return l_chdir(buf);
+    rc = l_chdir(buf);
 #else
 #ifdef _WIN32
-    return _chdir(buf);
+    rc = _chdir(buf);
 #else
-    return chdir(buf);
+    rc = chdir(buf);
 #endif
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("dir_change: cannot change directory"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_file_open_append(osc_str path)
+osc_result_i32_str osc_file_open_append(osc_str path)
 {
+    osc_result_i32_str result;
     char buf[1024];
     osc_str_to_cstr_buf(path, buf, 1024);
 #ifdef OSC_FREESTANDING
-    return (int32_t)l_open_append(buf);
+    {
+        int32_t fd = (int32_t)l_open_append(buf);
+        if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_append: cannot open file"); return result; }
+        result.is_ok = 1; result.value.ok = fd; return result;
+    }
 #else
-    FILE *f = fopen(buf, "a");
-    if (!f) return -1;
-    fclose(f);
-    return 0;
+    {
+#ifdef _WIN32
+        int32_t fd = (int32_t)_open(buf, _O_WRONLY | _O_CREAT | _O_APPEND | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+        int32_t fd = (int32_t)open(buf, O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+#endif
+        if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("file_open_append: cannot open file"); return result; }
+        result.is_ok = 1; result.value.ok = fd; return result;
+    }
 #endif
 }
 
@@ -2464,24 +2504,25 @@ static int osc_termios_saved = 0;
 #endif
 #endif
 
-int32_t osc_term_raw(void)
+osc_result_str_str osc_term_raw(void)
 {
+    osc_result_str_str result;
 #ifdef OSC_FREESTANDING
     osc_saved_term_mode = l_term_raw();
-    return 0;
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 #else
 #ifdef _WIN32
     {
         HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-        if (h == INVALID_HANDLE_VALUE) return -1;
-        if (!GetConsoleMode(h, &osc_saved_console_mode)) return -1;
-        if (!SetConsoleMode(h, ENABLE_PROCESSED_INPUT)) return -1;
-        return 0;
+        if (h == INVALID_HANDLE_VALUE) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_raw: invalid console handle"); return result; }
+        if (!GetConsoleMode(h, &osc_saved_console_mode)) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_raw: cannot get console mode"); return result; }
+        if (!SetConsoleMode(h, ENABLE_PROCESSED_INPUT)) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_raw: cannot set console mode"); return result; }
+        result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
     }
 #else
     {
         struct termios raw;
-        if (tcgetattr(STDIN_FILENO, &osc_saved_termios) < 0) return -1;
+        if (tcgetattr(STDIN_FILENO, &osc_saved_termios) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_raw: tcgetattr failed"); return result; }
         osc_termios_saved = 1;
         raw = osc_saved_termios;
         raw.c_lflag &= (tcflag_t)~(ECHO | ICANON | ISIG | IEXTEN);
@@ -2489,31 +2530,32 @@ int32_t osc_term_raw(void)
         raw.c_oflag &= (tcflag_t)~(OPOST);
         raw.c_cc[VMIN] = 0;
         raw.c_cc[VTIME] = 0;
-        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) return -1;
-        return 0;
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_raw: tcsetattr failed"); return result; }
+        result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
     }
 #endif
 #endif
 }
 
-int32_t osc_term_restore(void)
+osc_result_str_str osc_term_restore(void)
 {
+    osc_result_str_str result;
 #ifdef OSC_FREESTANDING
     l_term_restore(osc_saved_term_mode);
-    return 0;
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 #else
 #ifdef _WIN32
     {
         HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-        if (h == INVALID_HANDLE_VALUE) return -1;
-        if (!SetConsoleMode(h, osc_saved_console_mode)) return -1;
-        return 0;
+        if (h == INVALID_HANDLE_VALUE) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_restore: invalid console handle"); return result; }
+        if (!SetConsoleMode(h, osc_saved_console_mode)) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_restore: cannot restore console mode"); return result; }
+        result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
     }
 #else
     {
-        if (!osc_termios_saved) return -1;
-        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &osc_saved_termios) < 0) return -1;
-        return 0;
+        if (!osc_termios_saved) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_restore: no saved state"); return result; }
+        if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &osc_saved_termios) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("term_restore: tcsetattr failed"); return result; }
+        result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
     }
 #endif
 #endif
@@ -3427,35 +3469,43 @@ uint8_t osc_is_tty(void)
 /*  Tier 13: Environment modification                                  */
 /* ================================================================== */
 
-int32_t osc_env_set(osc_str name, osc_str value)
+osc_result_str_str osc_env_set(osc_str name, osc_str value)
 {
+    osc_result_str_str result;
     char nbuf[256], vbuf[4096];
+    int rc;
     osc_str_to_cstr_buf(name, nbuf, 256);
     osc_str_to_cstr_buf(value, vbuf, 4096);
 #ifdef OSC_FREESTANDING
-    return (int32_t)l_setenv(nbuf, vbuf);
+    rc = (int)l_setenv(nbuf, vbuf);
 #else
 #ifdef _WIN32
-    return _putenv_s(nbuf, vbuf) == 0 ? 0 : -1;
+    rc = _putenv_s(nbuf, vbuf) == 0 ? 0 : -1;
 #else
-    return setenv(nbuf, vbuf, 1) == 0 ? 0 : -1;
+    rc = setenv(nbuf, vbuf, 1) == 0 ? 0 : -1;
 #endif
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("env_set: cannot set environment variable"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_env_delete(osc_str name)
+osc_result_str_str osc_env_delete(osc_str name)
 {
+    osc_result_str_str result;
     char nbuf[256];
+    int rc;
     osc_str_to_cstr_buf(name, nbuf, 256);
 #ifdef OSC_FREESTANDING
-    return (int32_t)l_unsetenv(nbuf);
+    rc = (int)l_unsetenv(nbuf);
 #else
 #ifdef _WIN32
-    return _putenv_s(nbuf, "") == 0 ? 0 : -1;
+    rc = _putenv_s(nbuf, "") == 0 ? 0 : -1;
 #else
-    return unsetenv(nbuf) == 0 ? 0 : -1;
+    rc = unsetenv(nbuf) == 0 ? 0 : -1;
 #endif
 #endif
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("env_delete: cannot delete environment variable"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 /* ================================================================== */
@@ -3466,10 +3516,13 @@ int32_t osc_env_delete(osc_str name)
 
 static L_Canvas osc_gfx_canvas;
 
-int32_t osc_canvas_open(int32_t width, int32_t height, osc_str title) {
+osc_result_str_str osc_canvas_open(int32_t width, int32_t height, osc_str title) {
+    osc_result_str_str result;
     char buf[256];
     osc_str_to_cstr_buf(title, buf, 256);
-    return (int32_t)l_canvas_open(&osc_gfx_canvas, width, height, buf);
+    int rc = (int)l_canvas_open(&osc_gfx_canvas, width, height, buf);
+    if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("canvas_open: cannot open canvas"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
 void osc_canvas_close(void) { l_canvas_close(&osc_gfx_canvas); }
@@ -3547,40 +3600,55 @@ static int osc_socket_port_is_valid(int32_t port)
     return port >= 0 && port <= 65535;
 }
 
-int32_t osc_socket_tcp(void)
+osc_result_i32_str osc_socket_tcp(void)
 {
-    return (int32_t)l_socket_tcp();
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)l_socket_tcp();
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_tcp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
+    osc_result_str_str result;
     char host[256];
     char resolved[16];
 
-    if (!osc_socket_port_is_valid(port)) return -1;
+    if (!osc_socket_port_is_valid(port)) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: invalid port"); return result; }
     osc_path_to_cstr(addr, host, sizeof(host));
-    if (l_resolve(host, resolved) < 0) return -1;
-    return (int32_t)l_socket_connect((L_SOCKET)sock, resolved, (int)port);
+    if (l_resolve(host, resolved) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: cannot resolve address"); return result; }
+    if (l_socket_connect((L_SOCKET)sock, resolved, (int)port) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
 {
-    return (int32_t)l_socket_bind((L_SOCKET)sock, (int)port);
+    osc_result_str_str result;
+    if (l_socket_bind((L_SOCKET)sock, (int)port) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+osc_result_str_str osc_socket_listen(int32_t sock, int32_t backlog)
 {
-    return (int32_t)l_socket_listen((L_SOCKET)sock, (int)backlog);
+    osc_result_str_str result;
+    if (l_socket_listen((L_SOCKET)sock, (int)backlog) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_listen: listen failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_accept(int32_t sock)
+osc_result_i32_str osc_socket_accept(int32_t sock)
 {
-    return (int32_t)l_socket_accept((L_SOCKET)sock);
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)l_socket_accept((L_SOCKET)sock);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_accept: accept failed"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_socket_send(int32_t sock, osc_str data)
+osc_result_i32_str osc_socket_send(int32_t sock, osc_str data)
 {
-    return (int32_t)l_socket_send((L_SOCKET)sock, data.data, (size_t)data.len);
+    osc_result_i32_str result;
+    int32_t n = (int32_t)l_socket_send((L_SOCKET)sock, data.data, (size_t)data.len);
+    if (n < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_send: send failed"); return result; }
+    result.is_ok = 1; result.value.ok = n; return result;
 }
 
 osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
@@ -3603,9 +3671,12 @@ void osc_socket_close(int32_t sock)
     l_socket_close((L_SOCKET)sock);
 }
 
-int32_t osc_socket_udp(void)
+osc_result_i32_str osc_socket_udp(void)
 {
-    return (int32_t)l_socket_udp();
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)l_socket_udp();
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_udp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
@@ -3650,44 +3721,57 @@ static void osc_wsa_init(void)
     }
 }
 
-int32_t osc_socket_tcp(void)
+osc_result_i32_str osc_socket_tcp(void)
 {
+    osc_result_i32_str result;
     osc_wsa_init();
     SOCKET s = socket(AF_INET, SOCK_STREAM, 0);
-    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+    if (s == INVALID_SOCKET) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_tcp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)s; return result;
 }
 
-int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
+    osc_result_str_str result;
     struct sockaddr_in sa;
-    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
-    return connect((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: cannot resolve address"); return result; }
+    if (connect((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
 {
+    osc_result_str_str result;
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_port = htons((unsigned short)port);
     sa.sin_addr.s_addr = INADDR_ANY;
-    return bind((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+    if (bind((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+osc_result_str_str osc_socket_listen(int32_t sock, int32_t backlog)
 {
-    return listen((SOCKET)sock, (int)backlog) == 0 ? 0 : -1;
+    osc_result_str_str result;
+    if (listen((SOCKET)sock, (int)backlog) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_listen: listen failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_accept(int32_t sock)
+osc_result_i32_str osc_socket_accept(int32_t sock)
 {
+    osc_result_i32_str result;
     SOCKET s = accept((SOCKET)sock, NULL, NULL);
-    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+    if (s == INVALID_SOCKET) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_accept: accept failed"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)s; return result;
 }
 
-int32_t osc_socket_send(int32_t sock, osc_str data)
+osc_result_i32_str osc_socket_send(int32_t sock, osc_str data)
 {
-    return (int32_t)send((SOCKET)sock, data.data, data.len, 0);
+    osc_result_i32_str result;
+    int32_t n = (int32_t)send((SOCKET)sock, data.data, data.len, 0);
+    if (n < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_send: send failed"); return result; }
+    result.is_ok = 1; result.value.ok = n; return result;
 }
 
 osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
@@ -3710,11 +3794,13 @@ void osc_socket_close(int32_t sock)
     closesocket((SOCKET)sock);
 }
 
-int32_t osc_socket_udp(void)
+osc_result_i32_str osc_socket_udp(void)
 {
+    osc_result_i32_str result;
     osc_wsa_init();
     SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
-    return s == INVALID_SOCKET ? -1 : (int32_t)s;
+    if (s == INVALID_SOCKET) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_udp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)s; return result;
 }
 
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)
@@ -3748,41 +3834,56 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-int32_t osc_socket_tcp(void)
+osc_result_i32_str osc_socket_tcp(void)
 {
-    return (int32_t)socket(AF_INET, SOCK_STREAM, 0);
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_tcp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
+osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
 {
+    osc_result_str_str result;
     struct sockaddr_in sa;
-    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) return -1;
-    return connect(sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+    if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: cannot resolve address"); return result; }
+    if (connect(sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
 {
+    osc_result_str_str result;
     struct sockaddr_in sa;
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_port = htons((unsigned short)port);
     sa.sin_addr.s_addr = INADDR_ANY;
-    return bind(sock, (struct sockaddr *)&sa, sizeof(sa)) == 0 ? 0 : -1;
+    if (bind(sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_listen(int32_t sock, int32_t backlog)
+osc_result_str_str osc_socket_listen(int32_t sock, int32_t backlog)
 {
-    return listen(sock, (int)backlog) == 0 ? 0 : -1;
+    osc_result_str_str result;
+    if (listen(sock, (int)backlog) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_listen: listen failed"); return result; }
+    result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-int32_t osc_socket_accept(int32_t sock)
+osc_result_i32_str osc_socket_accept(int32_t sock)
 {
-    return (int32_t)accept(sock, NULL, NULL);
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)accept(sock, NULL, NULL);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_accept: accept failed"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
-int32_t osc_socket_send(int32_t sock, osc_str data)
+osc_result_i32_str osc_socket_send(int32_t sock, osc_str data)
 {
-    return (int32_t)send(sock, data.data, (size_t)data.len, 0);
+    osc_result_i32_str result;
+    int32_t n = (int32_t)send(sock, data.data, (size_t)data.len, 0);
+    if (n < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_send: send failed"); return result; }
+    result.is_ok = 1; result.value.ok = n; return result;
 }
 
 osc_str osc_socket_recv(osc_arena *arena, int32_t sock, int32_t max_len)
@@ -3805,9 +3906,12 @@ void osc_socket_close(int32_t sock)
     close(sock);
 }
 
-int32_t osc_socket_udp(void)
+osc_result_i32_str osc_socket_udp(void)
 {
-    return (int32_t)socket(AF_INET, SOCK_DGRAM, 0);
+    osc_result_i32_str result;
+    int32_t fd = (int32_t)socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_udp: cannot create socket"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
 }
 
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port)

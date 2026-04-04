@@ -15,7 +15,10 @@ let WIN_W: i32 = 400;
 let WIN_H: i32 = 360;
 
 fn! main() {
-    canvas_open(WIN_W, WIN_H, "Oscan UI Demo");
+    match canvas_open(WIN_W, WIN_H, "Oscan UI Demo") {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
 
     let mut click_count: i32 = 0;
     let mut checked: bool = false;

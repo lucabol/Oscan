@@ -5,26 +5,47 @@ fn! main() {
     let tcp_port: i32 = 38451;
     let udp_port: i32 = 38452;
 
-    let server: i32 = socket_tcp();
-    let client: i32 = socket_tcp();
+    let server: i32 = match socket_tcp() {
+        Result::Ok(s) => { s },
+        Result::Err(_) => { -1 },
+    };
+    let client: i32 = match socket_tcp() {
+        Result::Ok(s) => { s },
+        Result::Err(_) => { -1 },
+    };
     if server < 0 or client < 0 {
         println("tcp setup failed");
     } else {
-        let bind_status: i32 = socket_bind(server, tcp_port);
-        let listen_status: i32 = socket_listen(server, 1);
+        let bind_ok: bool = match socket_bind(server, tcp_port) {
+            Result::Ok(_) => { true },
+            Result::Err(_) => { false },
+        };
+        let listen_ok: bool = match socket_listen(server, 1) {
+            Result::Ok(_) => { true },
+            Result::Err(_) => { false },
+        };
         let mut peer: i32 = -1;
 
-        if bind_status == 0 and listen_status == 0 {
-            let connect_status: i32 = socket_connect(client, "localhost", tcp_port);
-            if connect_status == 0 {
-                peer = socket_accept(server);
+        if bind_ok and listen_ok {
+            let connect_ok: bool = match socket_connect(client, "localhost", tcp_port) {
+                Result::Ok(_) => { true },
+                Result::Err(_) => { false },
+            };
+            if connect_ok {
+                peer = match socket_accept(server) {
+                    Result::Ok(p) => { p },
+                    Result::Err(_) => { -1 },
+                };
             };
         };
 
         if peer < 0 {
             println("tcp localhost failed");
         } else {
-            socket_send(client, "tcp localhost ok");
+            match socket_send(client, "tcp localhost ok") {
+                Result::Ok(_) => { },
+                Result::Err(_) => { },
+            };
             println(socket_recv(peer, 64));
             socket_close(peer);
         };
@@ -33,13 +54,22 @@ fn! main() {
         socket_close(server);
     };
 
-    let receiver: i32 = socket_udp();
-    let sender: i32 = socket_udp();
+    let receiver: i32 = match socket_udp() {
+        Result::Ok(s) => { s },
+        Result::Err(_) => { -1 },
+    };
+    let sender: i32 = match socket_udp() {
+        Result::Ok(s) => { s },
+        Result::Err(_) => { -1 },
+    };
     if receiver < 0 or sender < 0 {
         println("udp setup failed");
     } else {
-        let bind_status: i32 = socket_bind(receiver, udp_port);
-        let sent: i32 = if bind_status == 0 {
+        let bind_ok: bool = match socket_bind(receiver, udp_port) {
+            Result::Ok(_) => { true },
+            Result::Err(_) => { false },
+        };
+        let sent: i32 = if bind_ok {
             socket_sendto(sender, "udp localhost ok", "localhost", udp_port)
         } else {
             -1
