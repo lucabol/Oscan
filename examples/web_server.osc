@@ -52,11 +52,16 @@ fn! main() {
         let client_result: Result<i32, str> = socket_accept(server);
         match client_result {
         Result::Ok(client) => {
-            request_count = request_count + 1;
             arena {
                 let request: str = socket_recv(client, 4096);
 
-                let now: i64 = time_now();
+                // Skip favicon requests from browsers
+                if str_contains(request, "favicon.ico") {
+                    socket_close(client);
+                } else {
+                    request_count = request_count + 1;
+
+                    let now: i64 = time_now();
                 let date_str: str = time_format(now, "%Y-%m-%d");
                 let time_str: str = time_format(now, "%H:%M:%S");
                 let ts_str: str = str_from_i64(now);
@@ -132,6 +137,7 @@ fn! main() {
                 socket_close(client);
 
                 println("Request #{request_count} served at {date_str} {time_str}");
+                };
             };
         },
         Result::Err(_) => { },
