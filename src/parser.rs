@@ -1009,6 +1009,11 @@ impl Parser {
                 self.expect(&TokenKind::RParen)?;
                 Ok(expr)
             }
+            TokenKind::Arena => {
+                self.advance();
+                let body = self.parse_block()?;
+                Ok(Expr::Arena { body, span })
+            }
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 // Check for enum constructor: Ident::Ident(...)

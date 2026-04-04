@@ -11,7 +11,8 @@
 fn! main() {
     let W: i32 = 400;
     let H: i32 = 400;
-    match canvas_open(W, H, "Oscan Spirograph") {
+    let co: Result<str, str> = canvas_open(W, H, "Oscan Spirograph");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -28,33 +29,35 @@ fn! main() {
     canvas_clear(rgb(0, 0, 0));
 
     while canvas_alive() {
-        if canvas_key() == 27 { break; };
+        arena {
+            if canvas_key() == 27 { break; };
 
-        // Draw many points per frame for smooth curves
-        let mut i: i32 = 0;
-        while i < 100 {
-            let diff: f64 = R - r;
-            let ratio: f64 = diff / r;
-            let x: f64 = cx + diff * math_cos(t) + d * math_cos(ratio * t);
-            let y: f64 = cy + diff * math_sin(t) + d * math_sin(ratio * t);
+            // Draw many points per frame for smooth curves
+            let mut i: i32 = 0;
+            while i < 100 {
+                let diff: f64 = R - r;
+                let ratio: f64 = diff / r;
+                let x: f64 = cx + diff * math_cos(t) + d * math_cos(ratio * t);
+                let y: f64 = cy + diff * math_sin(t) + d * math_sin(ratio * t);
 
-            // Color cycles based on angle
-            let red: i32 = 128 + (127.0 * math_sin(t * 0.1)) as i32;
-            let green: i32 = 128 + (127.0 * math_sin(t * 0.1 + 2.0)) as i32;
-            let blue: i32 = 128 + (127.0 * math_sin(t * 0.1 + 4.0)) as i32;
+                // Color cycles based on angle
+                let red: i32 = 128 + (127.0 * math_sin(t * 0.1)) as i32;
+                let green: i32 = 128 + (127.0 * math_sin(t * 0.1 + 2.0)) as i32;
+                let blue: i32 = 128 + (127.0 * math_sin(t * 0.1 + 4.0)) as i32;
 
-            let px: i32 = x as i32;
-            let py: i32 = y as i32;
-            if px >= 0 and px < W and py >= 0 and py < H {
-                gfx_pixel(px, py, rgb(red, green, blue));
+                let px: i32 = x as i32;
+                let py: i32 = y as i32;
+                if px >= 0 and px < W and py >= 0 and py < H {
+                    gfx_pixel(px, py, rgb(red, green, blue));
+                };
+
+                t = t + dt;
+                i += 1;
             };
 
-            t = t + dt;
-            i += 1;
+            canvas_flush();
+            sleep_ms(16);
         };
-
-        canvas_flush();
-        sleep_ms(16);
     };
 
     canvas_close()

@@ -21,7 +21,8 @@ fn! main() {
     };
 
     // Cleanup
-    match file_delete("_test_rw.txt") {
+    let del: Result<str, str> = file_delete("_test_rw.txt");
+    match del {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };

@@ -27,20 +27,23 @@ fn! main() {
         path = arg_get(3);
     };
 
-    let sock: i32 = match socket_tcp() {
+    let sock_result: Result<i32, str> = socket_tcp();
+    let sock: i32 = match sock_result {
         Result::Ok(s) => { s },
         Result::Err(e) => { println("Error: failed to create socket: {e}"); exit(1); 0 },
     };
     defer socket_close(sock);
 
-    match socket_connect(sock, host, port) {
+    let conn_result: Result<str, str> = socket_connect(sock, host, port);
+    match conn_result {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: failed to connect to {host}:{port}: {e}"); exit(1); },
     };
 
     // Build and send HTTP GET request
     let request: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nConnection: close\r\n\r\n";
-    match socket_send(sock, request) {
+    let send_result: Result<i32, str> = socket_send(sock, request);
+    match send_result {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: failed to send request: {e}"); exit(1); },
     };

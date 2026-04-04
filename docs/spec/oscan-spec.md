@@ -31,7 +31,7 @@
 
 ## 1. Keywords & Tokens
 
-### 1.1 Reserved Words (25 total)
+### 1.1 Reserved Words (26 total)
 
 | Keyword    | Purpose                                      |
 |------------|----------------------------------------------|
@@ -54,6 +54,7 @@
 | `defer`    | Deferred cleanup call                        |
 | `use`      | Import declarations from another file        |
 | `extern`   | C-FFI declaration block                      |
+| `arena`    | Scoped arena for per-block memory reclamation |
 | `as`       | Explicit type cast                           |
 | `and`      | Logical AND                                  |
 | `or`       | Logical OR                                   |
@@ -61,7 +62,7 @@
 | `true`     | Boolean literal                              |
 | `false`    | Boolean literal                              |
 
-**Note:** The table above lists 25 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `defer` is only valid immediately after the keyword and followed by a function call. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
+**Note:** The table above lists 26 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `defer` is only valid immediately after the keyword and followed by a function call. `arena` introduces a scoped arena block for per-block memory reclamation. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
 
 ### 1.2 Operators and Precedence
 
@@ -1128,7 +1129,51 @@ let val: i32 = r;              // COMPILE ERROR: cannot use Result as i32
 - **Nothing regarding memory.** The LLM writes standard Oscan code. All memory management is implicit.
 - Dynamic arrays are created via literals or `push` and automatically use the arena.
 - The LLM never writes `alloc`, `free`, `new`, or `delete`.
-### 8.4 Runtime Representation (for Morpheus)
+
+### 8.3.1 Scoped Arenas: Per-Frame and Per-Request Cleanup
+
+For long-running programs (servers, game loops), a single program-wide arena can accumulate memory without reclamation. To address this, Oscan provides **scoped arenas**: a syntax for creating child arenas that are automatically freed at the end of a block.
+
+```oscan
+fn! handle_request(client: i32) {
+    arena {
+        let request: str = socket_recv(client, 4096);
+        let response: str = format_response(request);
+        socket_send(client, response);
+    };  // child arena freed — all allocations reclaimed
+}
+```
+
+**Semantics:**
+
+- `arena { ... };` creates a child arena for all allocations inside the block.
+- When the block exits, the child arena is destroyed and all allocations within it are reclaimed.
+- Arena blocks are only allowed in `fn!` (side-effecting) functions.
+- `defer` statements inside arena blocks run before destruction (see §5.15).
+
+**Escape Analysis (Safety):**
+
+Arena blocks cannot return arena-allocated types. This prevents use-after-free by ensuring that no pointers to freed memory escape the block:
+
+- **Prohibited escapes:** `str`, `[T]`, `map`, structs containing arena-allocated types.
+- **Allowed escapes:** primitives (`i32`, `i64`, `f64`, `bool`, `unit`), and enum variants containing only primitives.
+- This is enforced at compile time by the type checker.
+
+**Example:**
+
+```oscan
+fn! process_data() -> i32 {
+    let count: i32;
+    arena {
+        let items: [str] = read_lines("data.txt");
+        count = len(items);   // ✓ i32 escapes
+        // items is consumed within the arena
+    };  // arena freed; items inaccessible
+    count   // ✓ returns primitive
+}
+```
+
+### 8.5 Runtime Representation (for Morpheus)
 
 The runtime library provides:
 
@@ -1149,7 +1194,7 @@ void      osc_arena_destroy(osc_arena* arena);
 - Growth strategy: double when full.
 - All generated C code receives the arena as a hidden first parameter to functions that allocate.
 
-### 8.5 String Representation
+### 8.6 String Representation
 
 Strings (`str`) are immutable UTF-8 byte sequences stored in the arena:
 
@@ -1163,7 +1208,7 @@ typedef struct {
 - String literals are stored in static data (not the arena).
 - String concatenation creates a new arena-allocated string.
 
-### 8.6 Dynamic Array Representation
+### 8.7 Dynamic Array Representation
 
 ```c
 typedef struct {
@@ -1177,7 +1222,7 @@ typedef struct {
 - `push` grows the array within the arena (may relocate).
 - Arrays carry their length for bounds checking.
 
-### 8.7 Panic Behavior
+### 8.8 Panic Behavior
 
 When a runtime error occurs (overflow, bounds check, division by zero, failed cast):
 1. Print an error message to stderr with source location (file:line).

@@ -8,7 +8,8 @@ fn! main() {
     println("--- Low-level I/O ---");
 
     // Write using low-level functions
-    let fd_w: i32 = match file_open_write(filename) {
+    let fd_w_result: Result<i32, str> = file_open_write(filename);
+    let fd_w: i32 = match fd_w_result {
         Result::Ok(fd) => { fd },
         Result::Err(e) => { println("Error: cannot create file: {e}"); exit(1); 0 },
     };
@@ -20,7 +21,8 @@ fn! main() {
     println("Wrote file.");
 
     // Read back byte by byte
-    let fd_r: i32 = match file_open_read(filename) {
+    let fd_r_result: Result<i32, str> = file_open_read(filename);
+    let fd_r: i32 = match fd_r_result {
         Result::Ok(fd) => { fd },
         Result::Err(e) => { println("Error: cannot read file: {e}"); exit(1); 0 },
     };
@@ -36,7 +38,8 @@ fn! main() {
     println("Total bytes: {count}");
 
     // Delete the file
-    match file_delete(filename) {
+    let del_result: Result<str, str> = file_delete(filename);
+    match del_result {
         Result::Ok(_) => { println("File deleted successfully."); },
         Result::Err(_) => { println("Error: could not delete file."); },
     };
@@ -63,7 +66,8 @@ fn! main() {
     };
 
     // Clean up
-    match file_delete(filename) {
+    let del2_result: Result<str, str> = file_delete(filename);
+    match del2_result {
         Result::Ok(_) => { println("File deleted successfully."); },
         Result::Err(_) => { println("Error: could not delete file."); },
     };

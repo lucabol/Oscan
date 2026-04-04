@@ -15,7 +15,8 @@ let WIN_W: i32 = 400;
 let WIN_H: i32 = 360;
 
 fn! main() {
-    match canvas_open(WIN_W, WIN_H, "Oscan UI Demo") {
+    let co: Result<str, str> = canvas_open(WIN_W, WIN_H, "Oscan UI Demo");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -28,65 +29,67 @@ fn! main() {
     let mut text_focused: bool = false;
 
     while canvas_alive() {
-        // Always poll key to pump the event queue (updates mouse state too)
-        let key: i32 = canvas_key();
-        if not text_focused {
-            if key == 27 { break; };
+        arena {
+            // Always poll key to pump the event queue (updates mouse state too)
+            let key: i32 = canvas_key();
+            if not text_focused {
+                if key == 27 { break; };
+            };
+
+            canvas_clear(rgb(30, 30, 34));
+
+            // Background panel
+            ui_panel(10, 10, WIN_W - 20, WIN_H - 20);
+
+            // Title
+            gfx_draw_text(24, 20, "UI Widget Demo", UI_ACCENT);
+
+            // Label
+            ui_label(30, 50, "A simple label");
+
+            // Buttons row
+            if ui_button(30, 68, 100, 24, "Click Me", prev_btn) {
+                click_count = click_count + 1;
+            };
+            if ui_button(140, 68, 100, 24, "Reset", prev_btn) {
+                click_count = 0;
+                checked = false;
+                volume = 50;
+            };
+
+            // Checkbox
+            checked = ui_checkbox(30, 102, "Enable feature", checked, prev_btn);
+
+            // Slider with label
+            ui_label(30, 124, "Volume:");
+            volume = ui_slider(30, 140, 200, volume, 0, 100);
+
+            // Separator
+            ui_separator(30, 166, WIN_W - 80);
+
+            // Status display
+            let checkbox_label: str = if checked { "ON" } else { "OFF" };
+            ui_label(30, 178, "Clicks: {click_count}");
+            ui_label(30, 194, "Checkbox: {checkbox_label}");
+            ui_label(30, 210, "Volume: {volume}");
+
+            // Separator before textbox section
+            ui_separator(30, 230, WIN_W - 80);
+
+            // Textbox
+            ui_label(30, 242, "Type here:");
+            text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn, key);
+
+            // Display typed text
+            let typed_text: str = str_from_chars(text_buf);
+            ui_label(30, 286, "Typed: {typed_text}");
+
+            // Save button state for next frame transition detection
+            prev_btn = canvas_mouse_btn();
+
+            canvas_flush();
+            sleep_ms(16);
         };
-
-        canvas_clear(rgb(30, 30, 34));
-
-        // Background panel
-        ui_panel(10, 10, WIN_W - 20, WIN_H - 20);
-
-        // Title
-        gfx_draw_text(24, 20, "UI Widget Demo", UI_ACCENT);
-
-        // Label
-        ui_label(30, 50, "A simple label");
-
-        // Buttons row
-        if ui_button(30, 68, 100, 24, "Click Me", prev_btn) {
-            click_count = click_count + 1;
-        };
-        if ui_button(140, 68, 100, 24, "Reset", prev_btn) {
-            click_count = 0;
-            checked = false;
-            volume = 50;
-        };
-
-        // Checkbox
-        checked = ui_checkbox(30, 102, "Enable feature", checked, prev_btn);
-
-        // Slider with label
-        ui_label(30, 124, "Volume:");
-        volume = ui_slider(30, 140, 200, volume, 0, 100);
-
-        // Separator
-        ui_separator(30, 166, WIN_W - 80);
-
-        // Status display
-        let checkbox_label: str = if checked { "ON" } else { "OFF" };
-        ui_label(30, 178, "Clicks: {click_count}");
-        ui_label(30, 194, "Checkbox: {checkbox_label}");
-        ui_label(30, 210, "Volume: {volume}");
-
-        // Separator before textbox section
-        ui_separator(30, 230, WIN_W - 80);
-
-        // Textbox
-        ui_label(30, 242, "Type here:");
-        text_focused = ui_textbox(30, 258, 200, text_buf, text_focused, prev_btn, key);
-
-        // Display typed text
-        let typed_text: str = str_from_chars(text_buf);
-        ui_label(30, 286, "Typed: {typed_text}");
-
-        // Save button state for next frame transition detection
-        prev_btn = canvas_mouse_btn();
-
-        canvas_flush();
-        sleep_ms(16);
     };
 
     canvas_close()

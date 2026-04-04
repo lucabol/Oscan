@@ -578,6 +578,51 @@ impl CodeGenerator {
         }
     }
 
+    fn emit_arena(&mut self, body: &Block) -> String {
+        let ty = self.block_type(body);
+        if ty == BcType::Unit {
+            // No return value
+            self.line("{");
+            self.indent += 1;
+            self.line("osc_arena *_parent_arena = _arena;");
+            self.line("osc_arena *_arena = osc_arena_create(0);");
+            self.push_scope();
+            let body_val = self.emit_block_body(body);
+            if body_val != "(void)0" {
+                self.line(&format!("{};", body_val));
+            }
+            self.pop_scope();
+            self.line("osc_arena_destroy(_arena);");
+            self.line("_arena = _parent_arena;");
+            self.indent -= 1;
+            self.line("}");
+            "(void)0".to_string()
+        } else {
+            // Returns a value (must be a primitive per escape analysis)
+            let tmp = self.fresh_tmp();
+            let c_ty = self.type_to_c(&ty);
+            self.line(&format!("{} {};", c_ty, tmp));
+            self.line("{");
+            self.indent += 1;
+            self.line("osc_arena *_parent_arena = _arena;");
+            self.line("osc_arena *_arena = osc_arena_create(0);");
+            self.push_scope();
+            for s in &body.stmts {
+                self.emit_stmt(s);
+            }
+            if let Some(tail) = &body.tail_expr {
+                let v = self.emit_expr(tail);
+                self.line(&format!("{} = {};", tmp, v));
+            }
+            self.pop_scope();
+            self.line("osc_arena_destroy(_arena);");
+            self.line("_arena = _parent_arena;");
+            self.indent -= 1;
+            self.line("}");
+            tmp
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Statement emission
     // -----------------------------------------------------------------------
@@ -974,6 +1019,8 @@ impl CodeGenerator {
                 args,
                 ..
             } => self.emit_enum_constructor(enum_name, variant, args),
+
+            Expr::Arena { body, .. } => self.emit_arena(body),
         }
     }
 
@@ -2412,6 +2459,7 @@ impl CodeGenerator {
                     BcType::Enum(enum_name.clone())
                 }
             }
+            Expr::Arena { body, .. } => self.block_type(body),
         }
     }
 

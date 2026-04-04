@@ -1,0 +1,12 @@
+fn! main() {
+    let mut total: i32 = 0;
+    let mut i: i32 = 0;
+    while i < 3 {
+        arena {
+            let text: str = "hello";
+            total = total + str_len(text);
+        };
+        i = i + 1;
+    };
+    println("total: {total}");
+}

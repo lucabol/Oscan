@@ -18,8 +18,8 @@ Oscan prevents **10 of the 12 major categories of bugs** that plague C programs 
 | Type confusion | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Format string attack | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Data races | ❌ | ✅ | ✅ | ❌ | ❌ |
-| Resource leaks | ❌ | ⚠️ | ✅ | ⚠️ | ⚠️ |
-| **Prevented:** | **0/11** | **10/11** | **11/11** | **7/11** | **8/11** |
+| Resource leaks | ❌ | ✅ | ✅ | ⚠️ | ⚠️ |
+| **Prevented:** | **0/11** | **11/11** | **11/11** | **7/11** | **8/11** |
 
 **Legend:** ✅ = prevented by design, ⚠️ = partially prevented, ❌ = not prevented
 
@@ -320,6 +320,49 @@ The `defer` statement registers cleanup to run automatically when the function e
 
 ---
 
+## Unbounded Memory Growth (Long-Running Programs)
+
+### The Problem
+
+Oscan's arena allocator collects all allocations into a single arena that persists for the entire program. For short-lived programs, this is efficient and leak-free. However, long-running programs (servers handling thousands of requests, game loops running for hours) can accumulate unbounded memory.
+
+```oscan
+fn! handle_request(client: i32) {
+    let request: str = socket_recv(client, 4096);      // allocated
+    let response: str = format_response(request);      // allocated
+    socket_send(client, response);
+}   // function exits, but memory is NOT reclaimed
+```
+
+Each request adds memory to the global arena. If the server runs for days, memory grows without bound.
+
+### How Oscan Addresses It: Arena Blocks
+
+Oscan provides **scoped arenas** — child arenas created for a specific scope that are freed when the scope exits:
+
+```oscan
+fn! handle_request(client: i32) {
+    arena {
+        let request: str = socket_recv(client, 4096);
+        let response: str = format_response(request);
+        socket_send(client, response);
+    };  // child arena freed — per-request memory reclaimed
+}
+```
+
+**Benefits:**
+
+- ✅ Per-request or per-frame memory is reclaimed automatically
+- ✅ No use-after-free: the type system prevents arena-allocated values from escaping the block
+- ✅ Simple to use: just wrap the code in `arena { ... };`
+- ✅ Works with `defer` and early returns
+
+**Scope:** Arena blocks are only allowed in `fn!` (side-effecting) functions and cannot return `str` or `[T]` types (arrays/maps/strings). Primitives like `i32` can escape freely, making it safe to return counts, flags, or decision values computed from arena-allocated data.
+
+See [docs/guide.md](guide.md) for examples and [docs/spec/oscan-spec.md](spec/oscan-spec.md) section 8.3.1 for formal semantics.
+
+---
+
 ## What Oscan Does NOT Prevent
 
 ### Stack Overflow from Deep Recursion
@@ -363,7 +406,7 @@ extern {
 | **Checked arithmetic** | ✅ All ops | ⚠️ Debug mode only | ⚠️ No checks | ✅ Checked exceptions |
 | **No data races** | ✅ Single-threaded | ✅ Type system | ⚠️ Runtime + convention | ⚠️ Convention only |
 | **Resource safety (RAII)** | ❌ No RAII | ✅ | ⚠️ GC | ⚠️ GC |
-| **Simplicity (for LLMs)** | ✅ 25 keywords | ❌ Complex | ⚠️ Medium | ❌ Large |
+| **Simplicity (for LLMs)** | ✅ 26 keywords | ❌ Complex | ⚠️ Medium | ❌ Large |
 
 **Oscan's unique position:** Matches Rust's memory safety guarantees with a simpler grammar. Achieves Go's straightforwardness while preventing null pointer dereferences. Provides deterministic resource cleanup (arena) without RAII boilerplate.
 
@@ -371,7 +414,7 @@ extern {
 
 ## Summary
 
-**For a pure Oscan program (no `extern`), memory corruption is impossible.** The language eliminates 10 of the 12 major bug categories that plague C:
+**For a pure Oscan program (no `extern`), memory corruption is impossible.** The language eliminates 11 of the 12 major bug categories that plague C:
 
 - ✅ Buffer overflow
 - ✅ Use-after-free
@@ -383,7 +426,8 @@ extern {
 - ✅ Type confusion
 - ✅ Format string attacks
 - ✅ Data races
+- ✅ Resource leaks (via `defer` and arena blocks)
 
-The two gaps (stack overflow and FFI unsafety) are structural, affect only edge cases, and match the behavior of other modern languages like Rust, Go, and Java.
+The one gap (stack overflow) is structural, affects only edge cases, and matches the behavior of other modern languages like Rust, Go, and Java.
 
 This safety is the foundation for **confident LLM code generation**: the compiler catches mistakes before they become bugs, and the generated C can be audited for correctness.

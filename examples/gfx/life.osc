@@ -42,7 +42,8 @@ fn! randomize(grid: [i32]) {
 }
 
 fn! main() {
-    match canvas_open(W, H, "Game of Life") {
+    let co: Result<str, str> = canvas_open(W, H, "Game of Life");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -64,57 +65,59 @@ fn! main() {
     let mut paused: bool = false;
 
     while canvas_alive() {
-        let key: i32 = canvas_key();
-        if key == 27 { break; };                     // ESC
-        if key == 32 { paused = not paused; };          // Space
-        if key == 114 or key == 82 {                // 'r' or 'R'
-            randomize(grid);
-        };
-        if key == 99 or key == 67 {                 // 'c' or 'C'
-            for i in 0..size {
-                grid[i] = 0;
+        arena {
+            let key: i32 = canvas_key();
+            if key == 27 { break; };                     // ESC
+            if key == 32 { paused = not paused; };          // Space
+            if key == 114 or key == 82 {                // 'r' or 'R'
+                randomize(grid);
             };
-        };
+            if key == 99 or key == 67 {                 // 'c' or 'C'
+                for i in 0..size {
+                    grid[i] = 0;
+                };
+            };
 
-        // Step simulation
-        if not paused {
-            for y in 0..GH {
-                for x in 0..GW {
-                    let n: i32 = count_neighbors(grid, x, y);
-                    let idx: i32 = y * GW + x;
-                    if grid[idx] == 1 {
-                        if n == 2 or n == 3 {
-                            next[idx] = 1;
+            // Step simulation
+            if not paused {
+                for y in 0..GH {
+                    for x in 0..GW {
+                        let n: i32 = count_neighbors(grid, x, y);
+                        let idx: i32 = y * GW + x;
+                        if grid[idx] == 1 {
+                            if n == 2 or n == 3 {
+                                next[idx] = 1;
+                            } else {
+                                next[idx] = 0;
+                            };
                         } else {
-                            next[idx] = 0;
-                        };
-                    } else {
-                        if n == 3 {
-                            next[idx] = 1;
-                        } else {
-                            next[idx] = 0;
+                            if n == 3 {
+                                next[idx] = 1;
+                            } else {
+                                next[idx] = 0;
+                            };
                         };
                     };
                 };
-            };
-            for i in 0..size {
-                grid[i] = next[i];
-            };
-        };
-
-        // Draw
-        canvas_clear(rgb(0, 0, 0));
-        for y in 0..GH {
-            for x in 0..GW {
-                if grid[y * GW + x] == 1 {
-                    gfx_fill_rect(x * CELL, y * CELL, CELL, CELL, rgb(0, 255, 0));
+                for i in 0..size {
+                    grid[i] = next[i];
                 };
             };
-        };
-        gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128));
-        canvas_flush();
 
-        sleep_ms(16);
+            // Draw
+            canvas_clear(rgb(0, 0, 0));
+            for y in 0..GH {
+                for x in 0..GW {
+                    if grid[y * GW + x] == 1 {
+                        gfx_fill_rect(x * CELL, y * CELL, CELL, CELL, rgb(0, 255, 0));
+                    };
+                };
+            };
+            gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128));
+            canvas_flush();
+
+            sleep_ms(16);
+        };
     };
 
     canvas_close()

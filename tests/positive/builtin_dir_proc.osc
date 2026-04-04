@@ -1,15 +1,18 @@
 fn! main() {
     // dir_list
-    match dir_create("_oscan_test_ls") {
+    let dc: Result<str, str> = dir_create("_oscan_test_ls");
+    match dc {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };
-    let fd1: i32 = match file_open_write("_oscan_test_ls/a.txt") {
+    let r1: Result<i32, str> = file_open_write("_oscan_test_ls/a.txt");
+    let fd1: i32 = match r1 {
         Result::Ok(fd) => { fd },
         Result::Err(_) => { -1 },
     };
     file_close(fd1);
-    let fd2: i32 = match file_open_write("_oscan_test_ls/b.txt") {
+    let r2: Result<i32, str> = file_open_write("_oscan_test_ls/b.txt");
+    let fd2: i32 = match r2 {
         Result::Ok(fd) => { fd },
         Result::Err(_) => { -1 },
     };
@@ -20,15 +23,18 @@ fn! main() {
     println("");
 
     // Cleanup
-    match file_delete("_oscan_test_ls/a.txt") {
+    let d1: Result<str, str> = file_delete("_oscan_test_ls/a.txt");
+    match d1 {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };
-    match file_delete("_oscan_test_ls/b.txt") {
+    let d2: Result<str, str> = file_delete("_oscan_test_ls/b.txt");
+    match d2 {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };
-    match dir_remove("_oscan_test_ls") {
+    let dr: Result<str, str> = dir_remove("_oscan_test_ls");
+    match dr {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };

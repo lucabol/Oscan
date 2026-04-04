@@ -1,0 +1,7 @@
+fn! main() {
+    let len: i32 = arena {
+        let text: str = "hello world";
+        str_len(text)
+    };
+    println("len: {len}");
+}

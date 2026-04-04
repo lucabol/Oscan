@@ -1,5 +1,6 @@
 fn! main() {
-    let sock: i32 = match socket_tcp() {
+    let r: Result<i32, str> = socket_tcp();
+    let sock: i32 = match r {
         Result::Ok(s) => { s },
         Result::Err(_) => { -1 },
     };

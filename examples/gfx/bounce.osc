@@ -12,7 +12,8 @@ let H: i32 = 240;
 let R: i32 = 10;
 
 fn! main() {
-    match canvas_open(W, H, "Bounce") {
+    let co: Result<str, str> = canvas_open(W, H, "Bounce");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -23,11 +24,13 @@ fn! main() {
     let mut dy: i32 = 1;
 
     while canvas_alive() {
-        if canvas_key() == 27 { break; };
+        arena {
+            if canvas_key() == 27 { break; };
 
-        canvas_clear(rgb(0, 0, 0));
-        gfx_fill_circle(x, y, R, rgb(255, 0, 0));
-        canvas_flush();
+            canvas_clear(rgb(0, 0, 0));
+            gfx_fill_circle(x, y, R, rgb(255, 0, 0));
+            canvas_flush();
+        };
 
         x = x + dx;
         y = y + dy;

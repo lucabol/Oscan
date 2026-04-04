@@ -1658,6 +1658,7 @@ impl SemanticAnalyzer {
                 }
             }
             Expr::Try { call, .. } => Self::collect_calls_in_expr(call, out),
+            Expr::Arena { body, .. } => Self::collect_calls_in_block(body, out),
             Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StringLit(..)
             | Expr::BoolLit(..) | Expr::Ident(..) => {}
         }
@@ -2211,6 +2212,27 @@ impl SemanticAnalyzer {
 
             Expr::Block(block) => self.check_block(block, expected),
 
+            Expr::Arena { body, span } => {
+                if self.in_pure_fn {
+                    return Err(CompileError::new(
+                        *span,
+                        "arena blocks are only allowed in impure functions (fn!)",
+                    ));
+                }
+                let ty = self.check_block(body, expected)?;
+                // Escape analysis: only primitives can escape the arena block
+                if !Self::is_arena_safe_type(&ty) {
+                    return Err(CompileError::new(
+                        *span,
+                        format!(
+                            "arena block cannot return arena-allocated type '{}' — only primitives can escape",
+                            ty
+                        ),
+                    ));
+                }
+                Ok(ty)
+            }
+
             Expr::If {
                 condition,
                 then_block,
@@ -2520,6 +2542,7 @@ impl SemanticAnalyzer {
                 }
                 Ok(())
             }
+            Expr::Arena { body, .. } => self.ensure_interpolation_block_pure(body),
         }
     }
 
@@ -3190,6 +3213,12 @@ impl SemanticAnalyzer {
                 format!("index on non-array type {}", ty),
             )),
         }
+    }
+
+    /// Returns true if a type is safe to escape from an arena block.
+    /// Only primitives (i32, i64, f64, bool, unit) are safe.
+    fn is_arena_safe_type(ty: &BcType) -> bool {
+        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit)
     }
 }
 

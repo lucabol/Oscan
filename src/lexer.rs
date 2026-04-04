@@ -272,6 +272,7 @@ impl Lexer {
             "continue" => TokenKind::Continue,
             "use" => TokenKind::Use,
             "defer" => TokenKind::Defer,
+            "arena" => TokenKind::Arena,
             "_" => TokenKind::Underscore,
             _ => TokenKind::Ident(ident),
         };

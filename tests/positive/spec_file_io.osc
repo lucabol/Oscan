@@ -4,7 +4,8 @@
 
 fn! main() {
     // === Test 1: write_str and read back byte-by-byte ===
-    let fd_w: i32 = match file_open_write("_test_io_tmp.txt") {
+    let r_w: Result<i32, str> = file_open_write("_test_io_tmp.txt");
+    let fd_w: i32 = match r_w {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_write failed: {e}"); exit(1); 0 },
     };
@@ -14,7 +15,8 @@ fn! main() {
     file_close(fd_w);
     println("write_str done");
 
-    let fd_r: i32 = match file_open_read("_test_io_tmp.txt") {
+    let r_r: Result<i32, str> = file_open_read("_test_io_tmp.txt");
+    let fd_r: i32 = match r_r {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_read failed: {e}"); exit(1); 0 },
     };
@@ -47,7 +49,8 @@ fn! main() {
     file_close(fd_r);
 
     // === Test 3: write_byte and read back ===
-    let fd_w2: i32 = match file_open_write("_test_io_tmp.txt") {
+    let r_w2: Result<i32, str> = file_open_write("_test_io_tmp.txt");
+    let fd_w2: i32 = match r_w2 {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_write failed: {e}"); exit(1); 0 },
     };
@@ -56,7 +59,8 @@ fn! main() {
     write_byte(fd_w2, 67);
     file_close(fd_w2);
 
-    let fd_r2: i32 = match file_open_read("_test_io_tmp.txt") {
+    let r_r2: Result<i32, str> = file_open_read("_test_io_tmp.txt");
+    let fd_r2: i32 = match r_r2 {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_read failed: {e}"); exit(1); 0 },
     };
@@ -79,7 +83,8 @@ fn! main() {
     file_close(fd_r2);
 
     // === Test 4: write_byte with boundary values ===
-    let fd_w3: i32 = match file_open_write("_test_io_tmp.txt") {
+    let r_w3: Result<i32, str> = file_open_write("_test_io_tmp.txt");
+    let fd_w3: i32 = match r_w3 {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_write failed: {e}"); exit(1); 0 },
     };
@@ -88,7 +93,8 @@ fn! main() {
     write_byte(fd_w3, 127);
     file_close(fd_w3);
 
-    let fd_r3: i32 = match file_open_read("_test_io_tmp.txt") {
+    let r_r3: Result<i32, str> = file_open_read("_test_io_tmp.txt");
+    let fd_r3: i32 = match r_r3 {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open_read failed: {e}"); exit(1); 0 },
     };
@@ -104,19 +110,22 @@ fn! main() {
     file_close(fd_r3);
 
     // === Test 5: file_delete returns Ok on success ===
-    match file_delete("_test_io_tmp.txt") {
+    let del_ok: Result<str, str> = file_delete("_test_io_tmp.txt");
+    match del_ok {
         Result::Ok(_) => { println("delete ok: 0"); },
         Result::Err(e) => { println("delete failed: {e}"); },
     };
 
     // === Test 6: open non-existent file returns Err ===
-    match file_open_read("_no_such_file_ever.txt") {
+    let r_bad: Result<i32, str> = file_open_read("_no_such_file_ever.txt");
+    match r_bad {
         Result::Ok(_) => { println("open missing: unexpected"); },
         Result::Err(_) => { println("open missing: -1"); },
     };
 
     // === Test 7: delete non-existent file fails ===
-    match file_delete("_no_such_file_ever.txt") {
+    let del_bad: Result<str, str> = file_delete("_no_such_file_ever.txt");
+    match del_bad {
         Result::Ok(_) => { println("delete missing failed: false"); },
         Result::Err(_) => { println("delete missing failed: true"); },
     };

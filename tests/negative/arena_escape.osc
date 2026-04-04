@@ -1,0 +1,9 @@
+// Test: arena block cannot return arena-allocated types
+// EXPECT ERROR: arena block cannot return arena-allocated type
+
+fn! main() {
+    let text: str = arena {
+        "hello"
+    };
+    println(text);
+}

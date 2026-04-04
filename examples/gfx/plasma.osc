@@ -30,7 +30,8 @@ fn palette_color(idx: i32) -> i32 {
 }
 
 fn! main() {
-    match canvas_open(W, H, "Plasma") {
+    let co: Result<str, str> = canvas_open(W, H, "Plasma");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -44,24 +45,26 @@ fn! main() {
     let mut t: i32 = 0;
 
     while canvas_alive() {
-        if canvas_key() == 27 { break; };
+        arena {
+            if canvas_key() == 27 { break; };
 
-        for y in 0..H {
-            for x in 0..W {
-                // Combine several wave functions at different frequencies
-                let v1: i32 = wave(x + t);
-                let v2: i32 = wave(bshr(y * 3 + t * 2, 1));
-                let v3: i32 = wave(bshr(x + y + t, 1));
-                let v4: i32 = wave(bshr(x * 2 - y + t * 3, 2));
-                let idx: i32 = band(bshr(v1 + v2 + v3 + v4, 2), 255);
-                gfx_pixel(x, y, pal[idx]);
+            for y in 0..H {
+                for x in 0..W {
+                    // Combine several wave functions at different frequencies
+                    let v1: i32 = wave(x + t);
+                    let v2: i32 = wave(bshr(y * 3 + t * 2, 1));
+                    let v3: i32 = wave(bshr(x + y + t, 1));
+                    let v4: i32 = wave(bshr(x * 2 - y + t * 3, 2));
+                    let idx: i32 = band(bshr(v1 + v2 + v3 + v4, 2), 255);
+                    gfx_pixel(x, y, pal[idx]);
+                };
             };
-        };
 
-        gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0));
-        canvas_flush();
-        sleep_ms(16);
-        t = t + 1;
+            gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0));
+            canvas_flush();
+            sleep_ms(16);
+            t = t + 1;
+        };
     };
 
     canvas_close()

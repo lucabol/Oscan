@@ -8,7 +8,8 @@
 //   oscan gfx_demo.osc --run
 
 fn! main() {
-    match canvas_open(320, 240, "GFX Demo") {
+    let co: Result<str, str> = canvas_open(320, 240, "GFX Demo");
+    match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
@@ -38,8 +39,10 @@ fn! main() {
     canvas_flush();
 
     while canvas_alive() {
-        if canvas_key() == 27 { break; };
-        sleep_ms(16);
+        arena {
+            if canvas_key() == 27 { break; };
+            sleep_ms(16);
+        };
     };
 
     canvas_close()

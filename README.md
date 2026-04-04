@@ -14,7 +14,7 @@
 - **Guarded C output.** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.
 - **One allocation model.** Arena-based memory — no manual alloc/free, no GC, deterministic cleanup.
 - **Immutable by default.** `let` is immutable; `let mut` opts in to mutation. Anti-shadowing enforced.
-- **25 reserved words.** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
+- **26 reserved words.** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
 - **Order-independent definitions.** Use functions, types, and constants before they are declared.
 - **162 tests, 25 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
 

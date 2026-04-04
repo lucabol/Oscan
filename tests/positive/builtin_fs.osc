@@ -1,7 +1,8 @@
 fn! main() {
     // file_exists on self (this test file should "exist" but we test something we know)
     // Create a temp file, check it exists, rename it, check the new name exists, delete
-    let fd: i32 = match file_open_write("_oscan_test_fs.tmp") {
+    let ow: Result<i32, str> = file_open_write("_oscan_test_fs.tmp");
+    let fd: i32 = match ow {
         Result::Ok(v) => { v },
         Result::Err(e) => { println("open failed: {e}"); exit(1); 0 },
     };
@@ -18,7 +19,8 @@ fn! main() {
     println("");
 
     // file_rename
-    let rename_ok: bool = match file_rename("_oscan_test_fs.tmp", "_oscan_test_fs2.tmp") {
+    let rn: Result<str, str> = file_rename("_oscan_test_fs.tmp", "_oscan_test_fs2.tmp");
+    let rename_ok: bool = match rn {
         Result::Ok(_) => { true },
         Result::Err(_) => { false },
     };
@@ -32,13 +34,15 @@ fn! main() {
     println("");
 
     // dir_create and dir_remove
-    let create_ok: bool = match dir_create("_oscan_test_dir") {
+    let dc: Result<str, str> = dir_create("_oscan_test_dir");
+    let create_ok: bool = match dc {
         Result::Ok(_) => { true },
         Result::Err(_) => { false },
     };
     print_bool(create_ok);
     println("");
-    let remove_ok: bool = match dir_remove("_oscan_test_dir") {
+    let dr: Result<str, str> = dir_remove("_oscan_test_dir");
+    let remove_ok: bool = match dr {
         Result::Ok(_) => { true },
         Result::Err(_) => { false },
     };
@@ -46,7 +50,8 @@ fn! main() {
     println("");
 
     // Cleanup
-    match file_delete("_oscan_test_fs2.tmp") {
+    let del: Result<str, str> = file_delete("_oscan_test_fs2.tmp");
+    match del {
         Result::Ok(_) => { },
         Result::Err(_) => { },
     };

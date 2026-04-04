@@ -64,7 +64,8 @@ fn! main() {
     println("");
 
     // --- Environment modification ---
-    match env_set("OSC_TEST_VAR_XYZ", "hello_oscan") {
+    let sr: Result<str, str> = env_set("OSC_TEST_VAR_XYZ", "hello_oscan");
+    match sr {
         Result::Ok(_) => { println("env_set: ok"); },
         Result::Err(e) => { println("env_set: {e}"); },
     };
@@ -80,7 +81,8 @@ fn! main() {
     };
 
     // Delete it
-    match env_delete("OSC_TEST_VAR_XYZ") {
+    let dr: Result<str, str> = env_delete("OSC_TEST_VAR_XYZ");
+    match dr {
         Result::Ok(_) => { println("env_del: ok"); },
         Result::Err(e) => { println("env_del: {e}"); },
     };

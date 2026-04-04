@@ -190,6 +190,13 @@ pub struct DeferStmt {
     pub span: Span,
 }
 
+/// Arena block: `arena { ... };`
+#[derive(Debug)]
+pub struct ArenaStmt {
+    pub body: Block,
+    pub span: Span,
+}
+
 /// Compound assignment statement: `x += expr;`
 #[derive(Debug)]
 pub struct CompoundAssignStmt {
@@ -298,6 +305,11 @@ pub enum Expr {
         args: Vec<Expr>,
         span: Span,
     },
+    /// Arena block: `arena { ... }`
+    Arena {
+        body: Block,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -320,7 +332,8 @@ impl Expr {
             | Expr::Try { span, .. }
             | Expr::ArrayLit { span, .. }
             | Expr::StructLit { span, .. }
-            | Expr::EnumConstructor { span, .. } => *span,
+            | Expr::EnumConstructor { span, .. }
+            | Expr::Arena { span, .. } => *span,
             Expr::Block(block) => block.span,
         }
     }

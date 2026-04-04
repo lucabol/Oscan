@@ -321,6 +321,62 @@ This pattern eliminates resource leaks: you register the cleanup immediately aft
 
 ---
 
+## Memory Management: Arena Blocks
+
+Long-running programs (web servers, game loops) can accumulate memory without reclamation. While Oscan's arena allocator handles memory for the entire program, **arena blocks** provide a way to reclaim per-request or per-frame allocations safely.
+
+### What Are Arena Blocks?
+
+An **arena block** is a scope (`arena { ... };`) where all allocations are made to a child arena. When the block exits, the child arena is freed and memory is reclaimed.
+
+```oscan
+fn! handle_request(client: i32) {
+    arena {
+        let request: str = socket_recv(client, 4096);
+        let response: str = format_response(request);
+        socket_send(client, response);
+    };  // child arena freed — memory reclaimed
+}
+```
+
+### When to Use Arena Blocks
+
+Use arena blocks for:
+- **Per-request cleanup** in servers: wrap the request handler body
+- **Per-frame cleanup** in game loops: wrap the frame update/render loop
+- **Temporary allocations** in long-running code: wrap code that creates temporary strings or arrays
+
+### Safety: What Can Escape?
+
+Arena blocks prevent use-after-free by enforcing that **arena-allocated types cannot escape the block**:
+
+- ❌ **Forbidden:** `str`, `[T]` (dynamic arrays), `map`, and structs containing these
+- ✅ **Allowed:** primitives (`i32`, `i64`, `f64`, `bool`, `unit`)
+
+This is checked at compile time.
+
+**Example:**
+
+```oscan
+fn! process() -> i32 {
+    let count: i32;
+    arena {
+        let text: str = read_file("data.txt");
+        count = str_len(text);   // ✓ OK: i32 escapes
+    };  // text is freed; cannot be used after this
+    count   // ✓ OK: returns primitive
+}
+```
+
+### How It Works
+
+- `defer` statements inside arena blocks still work correctly — they run before the arena is freed.
+- Early `return` from a function containing an arena block triggers cleanup normally.
+- Arena blocks are only allowed in `fn!` (side-effecting) functions.
+- Arena blocks can be nested.
+
+---
+
 ## Control Flow
 
 ### If / Else

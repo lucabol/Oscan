@@ -1,0 +1,12 @@
+// Test: arena blocks only allowed in fn!
+// EXPECT ERROR: arena blocks are only allowed in impure functions
+
+fn pure_fn() -> i32 {
+    arena {
+        42
+    }
+}
+
+fn! main() {
+    print_i32(pure_fn());
+}
