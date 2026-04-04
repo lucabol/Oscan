@@ -513,6 +513,7 @@ impl Parser {
                 | TokenKind::Return
                 | TokenKind::Break
                 | TokenKind::Continue
+                | TokenKind::Defer
         ) || self.is_at_assign()
     }
 
@@ -570,6 +571,7 @@ impl Parser {
             TokenKind::While => self.parse_while_stmt(),
             TokenKind::For => self.parse_for_stmt(),
             TokenKind::Return => self.parse_return_stmt(),
+            TokenKind::Defer => self.parse_defer_stmt(),
             TokenKind::Break => {
                 let span = self.peek_span();
                 self.advance();
@@ -736,6 +738,14 @@ impl Parser {
         };
         self.expect(&TokenKind::Semicolon)?;
         Ok(Stmt::Return(ReturnStmt { value, span }))
+    }
+
+    fn parse_defer_stmt(&mut self) -> Result<Stmt, CompileError> {
+        let span = self.peek_span();
+        self.expect(&TokenKind::Defer)?;
+        let expr = self.parse_expr()?;
+        self.expect(&TokenKind::Semicolon)?;
+        Ok(Stmt::Defer(DeferStmt { expr, span }))
     }
 
     // ─── Expressions (precedence climbing) ───────────────────

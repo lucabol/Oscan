@@ -1,0 +1,16 @@
+// Test: defer runs before return
+// Exercises: defer, return, fn!, LIFO with return value
+
+fn! greet(early: bool) -> str {
+    defer println("cleanup");
+    println("working");
+    if early {
+        return "early";
+    };
+    "done"
+}
+
+fn! main() {
+    let result: str = greet(true);
+    println(result);
+}

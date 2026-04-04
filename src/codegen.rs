@@ -18,6 +18,7 @@ pub struct CodeGenerator {
     scopes: Vec<HashMap<String, BcType>>,
     mut_vars: HashSet<String>,
     current_fn_return_type: Option<BcType>,
+    deferred_exprs: Vec<String>,
     result_types: Vec<(BcType, BcType)>,
     expected_array_elem_type: Option<BcType>,
     freestanding: bool,
@@ -36,6 +37,7 @@ impl CodeGenerator {
             scopes: Vec::new(),
             mut_vars: HashSet::new(),
             current_fn_return_type: None,
+            deferred_exprs: Vec::new(),
             result_types: Vec::new(),
             expected_array_elem_type: None,
             freestanding,
@@ -436,6 +438,9 @@ impl CodeGenerator {
             None => Some(BcType::Unit),
         };
 
+        // Save and reset deferred expressions for this function
+        let saved_deferred = std::mem::take(&mut self.deferred_exprs);
+
         self.line(&format!("{} {}({}) {{", ret, name, params));
         self.indent += 1;
 
@@ -453,10 +458,18 @@ impl CodeGenerator {
         if f.body.tail_expr.is_some() {
             let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
             if fn_ret != BcType::Unit {
-                self.line(&format!("return {};", body_val));
-            } else if body_val != "(void)0" {
-                self.line(&format!("{};", body_val));
+                // Emit deferred calls before the implicit return
+                self.emit_deferred_before_return(Some(&body_val), &fn_ret);
+            } else {
+                if body_val != "(void)0" {
+                    self.line(&format!("{};", body_val));
+                }
+                // Emit deferred calls at end of void function
+                self.emit_deferred_calls();
             }
+        } else {
+            // No tail expression — emit deferred calls at end of function
+            self.emit_deferred_calls();
         }
 
         self.pop_scope();
@@ -464,6 +477,44 @@ impl CodeGenerator {
         self.line("}");
         self.blank();
         self.current_fn_return_type = None;
+        self.deferred_exprs = saved_deferred;
+    }
+
+    /// Emit all deferred expressions in LIFO order.
+    fn emit_deferred_calls(&mut self) {
+        for expr in self.deferred_exprs.clone().iter().rev() {
+            self.line(&format!("{};", expr));
+        }
+    }
+
+    /// Emit deferred calls before a return statement.
+    /// If the function returns a value, saves it to a temp first.
+    fn emit_deferred_before_return(&mut self, val: Option<&str>, ret_type: &BcType) {
+        if self.deferred_exprs.is_empty() {
+            // No defers — emit normal return
+            if let Some(v) = val {
+                self.line(&format!("return {};", v));
+            } else {
+                self.line("return;");
+            }
+            return;
+        }
+
+        match val {
+            Some(v) if *ret_type != BcType::Unit => {
+                let c_ty = self.type_to_c(ret_type);
+                let tmp = self.fresh_tmp();
+                self.line(&format!("{} {} = {};", c_ty, tmp, v));
+                self.emit_deferred_calls();
+                self.line(&format!("return {};", tmp));
+            }
+            _ => {
+                self.emit_deferred_calls();
+                if val.is_some() && *ret_type != BcType::Unit {
+                    self.line("return;");
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -701,12 +752,22 @@ impl CodeGenerator {
                 self.line("continue;");
             }
             Stmt::Return(r) => {
+                let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
                 if let Some(val) = &r.value {
                     let v = self.emit_expr(val);
-                    self.line(&format!("return {};", v));
+                    self.emit_deferred_before_return(Some(&v), &fn_ret);
                 } else {
-                    self.line("return;");
+                    if self.deferred_exprs.is_empty() {
+                        self.line("return;");
+                    } else {
+                        self.emit_deferred_calls();
+                        self.line("return;");
+                    }
                 }
+            }
+            Stmt::Defer(d) => {
+                let c_code = self.emit_expr(&d.expr);
+                self.deferred_exprs.push(c_code);
             }
         }
     }

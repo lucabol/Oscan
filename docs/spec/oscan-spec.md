@@ -31,7 +31,7 @@
 
 ## 1. Keywords & Tokens
 
-### 1.1 Reserved Words (24 total)
+### 1.1 Reserved Words (25 total)
 
 | Keyword    | Purpose                                      |
 |------------|----------------------------------------------|
@@ -51,6 +51,7 @@
 | `break`    | Exit the nearest enclosing loop              |
 | `continue` | Skip to next iteration of nearest loop       |
 | `try`      | Error propagation                            |
+| `defer`    | Deferred cleanup call                        |
 | `use`      | Import declarations from another file        |
 | `extern`   | C-FFI declaration block                      |
 | `as`       | Explicit type cast                           |
@@ -60,7 +61,7 @@
 | `true`     | Boolean literal                              |
 | `false`    | Boolean literal                              |
 
-**Note:** The table above lists 24 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
+**Note:** The table above lists 25 reserved words. `fn!` is lexed as a single token (`FN_BANG`), not `fn` followed by `!`. `true` and `false` are reserved keywords, not identifiers. `_` is additionally reserved as a wildcard in `match` patterns (see §1.3). `mut` is only valid immediately after `let`; it is not a standalone keyword elsewhere. `defer` is only valid immediately after the keyword and followed by a function call. `Result` is a reserved type name and cannot be used for user-defined struct or enum names (see §3.3).
 
 ### 1.2 Operators and Precedence
 
@@ -261,7 +262,8 @@ stmt             = let_stmt
                  | for_stmt
                  | return_stmt
                  | break_stmt
-                 | continue_stmt ;
+                 | continue_stmt
+                 | defer_stmt ;
 
 let_stmt         = 'let' 'mut'? IDENT ':' type '=' expr ';' ;
 assign_stmt      = place '=' expr ';' ;
@@ -273,6 +275,7 @@ for_stmt         = 'for' IDENT 'in' expr '..' expr block ';'?
 return_stmt      = 'return' expr? ';' ;
 break_stmt       = 'break' ';' ;
 continue_stmt    = 'continue' ';' ;
+defer_stmt       = 'defer' call_expr ';' ;
 
 place            = IDENT ( '.' IDENT | '[' expr ']' )* ;
 
@@ -940,6 +943,43 @@ let e: Shape = Shape::Empty;
 
 - Use `TypeName::VariantName(args)` syntax.
 - Variant with no payload: `TypeName::VariantName` (no parens).
+
+### 5.15 Defer Statement
+
+```oscan
+fn! process_file(path: str) {
+    let fd: i32 = file_open_read(path);
+    defer file_close(fd);
+    // ... use fd ...
+}   // file_close(fd) runs here automatically
+```
+
+`defer <call>;` registers a function call to execute when the enclosing function returns. Multiple defers execute in LIFO (last-in, first-out) order.
+
+**Rules:**
+
+- Only allowed in `fn!` functions. Using `defer` in a `fn` (pure function) is a compile error.
+- The deferred expression must be a function call (either a simple function name or a dotted qualified path).
+- Defers run on both normal exit and early `return` from the function.
+- Arguments are evaluated **at defer-time** (when the defer statement executes), but the function call itself happens at function-exit time.
+- If multiple defers are registered in a function, they execute in reverse order: the last defer registered runs first.
+
+**Example:**
+
+```oscan
+fn! setup_and_cleanup() {
+    let x: i32 = init_resource();
+    defer cleanup(x);
+    
+    let y: i32 = another_resource();
+    defer another_cleanup(y);
+    
+    // ... code ...
+    
+}   // another_cleanup(y) runs, then cleanup(x)
+```
+
+This is commonly used for resource cleanup: file handles, network connections, temporary allocations, or any operation that must be paired with a corresponding teardown call.
 
 ---
 

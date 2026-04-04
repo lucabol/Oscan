@@ -285,6 +285,40 @@ y = 10;             // OK — explicitly opted in
 
 ---
 
+## Resource Leaks
+
+### The C Bug
+
+```c
+FILE *file = fopen("data.txt", "r");
+if (some_error_condition) {
+    return;     // oops! forgot to close file
+}
+fclose(file);
+```
+
+Forgetting to pair resource acquisition with cleanup leads to leaks. In C, `malloc` without `free`, `open` without `close`, and other resource pairs are easy to forget, especially on early `return` paths.
+
+### How Oscan Prevents It
+
+```oscan
+fn! process_file(path: str) {
+    let fd: i32 = file_open_read(path);
+    defer file_close(fd);    // cleanup registered immediately
+    
+    if some_error_condition {
+        return;              // file_close(fd) still runs!
+    };
+    
+    // ... process file ...
+    
+}   // file_close(fd) runs automatically
+```
+
+The `defer` statement registers cleanup to run automatically when the function exits, whether via normal return or early exit. Cleanup always runs, eliminating the leak. Multiple defers execute in reverse order (LIFO), ensuring correct teardown of nested resources.
+
+---
+
 ## What Oscan Does NOT Prevent
 
 ### Stack Overflow from Deep Recursion
@@ -328,7 +362,7 @@ extern {
 | **Checked arithmetic** | ✅ All ops | ⚠️ Debug mode only | ⚠️ No checks | ✅ Checked exceptions |
 | **No data races** | ✅ Single-threaded | ✅ Type system | ⚠️ Runtime + convention | ⚠️ Convention only |
 | **Resource safety (RAII)** | ❌ No RAII | ✅ | ⚠️ GC | ⚠️ GC |
-| **Simplicity (for LLMs)** | ✅ 24 keywords | ❌ Complex | ⚠️ Medium | ❌ Large |
+| **Simplicity (for LLMs)** | ✅ 25 keywords | ❌ Complex | ⚠️ Medium | ❌ Large |
 
 **Oscan's unique position:** Matches Rust's memory safety guarantees with a simpler grammar. Achieves Go's straightforwardness while preventing null pointer dereferences. Provides deterministic resource cleanup (arena) without RAII boilerplate.
 

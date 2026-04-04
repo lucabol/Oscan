@@ -281,6 +281,46 @@ fn compute(x: i32, y: i32) -> Result<i32, str> {
 
 ---
 
+## Cleanup with Defer
+
+The `defer` statement registers a function call to execute when the enclosing function returns. This is useful for pairing resource acquisition with cleanup, ensuring cleanup happens even if the function returns early.
+
+```
+fn! process_file(path: str) {
+    let fd: i32 = file_open_read(path);
+    defer file_close(fd);    // will close the file when function exits
+    
+    // ... use fd to read and process ...
+    
+}   // file_close(fd) runs automatically here
+```
+
+**Key points:**
+
+- `defer` is only allowed in `fn!` (side-effecting) functions.
+- The deferred call executes when the function returns, whether via normal exit or early `return`.
+- Multiple defers execute in reverse order (LIFO): the last defer registered runs first.
+- Arguments are evaluated immediately (at defer-time), but the function call runs at exit.
+
+**Example with multiple defers:**
+
+```oscan
+fn! setup_resources() {
+    let db: i32 = open_database();
+    defer close_database(db);
+    
+    let file: i32 = open_file("log.txt");
+    defer close_file(file);
+    
+    // ... work with db and file ...
+    
+}   // close_file(file) runs first, then close_database(db)
+```
+
+This pattern eliminates resource leaks: you register the cleanup immediately after acquiring the resource, and the compiler ensures it runs.
+
+---
+
 ## Control Flow
 
 ### If / Else

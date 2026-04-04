@@ -1,0 +1,11 @@
+// Test: defer in pure fn is a compile error
+// EXPECT ERROR: defer is only allowed in impure functions
+
+fn bad() -> i32 {
+    defer println("nope");
+    42
+}
+
+fn! main() {
+    print_i32(bad());
+}

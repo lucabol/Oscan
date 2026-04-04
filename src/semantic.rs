@@ -1595,12 +1595,25 @@ impl SemanticAnalyzer {
                 }
                 Ok(())
             }
+            Stmt::Defer(d) => {
+                if self.in_pure_fn {
+                    return Err(CompileError::new(
+                        d.span,
+                        "defer is only allowed in impure functions (fn!)",
+                    ));
+                }
+                // The deferred expression must be a function call
+                if !matches!(d.expr, Expr::Call { .. }) {
+                    return Err(CompileError::new(
+                        d.span,
+                        "defer requires a function call expression",
+                    ));
+                }
+                self.check_expr(&d.expr, None)?;
+                Ok(())
+            }
         }
     }
-
-    // -----------------------------------------------------------------------
-    // Expression type checking
-    // -----------------------------------------------------------------------
 
     fn check_expr(
         &mut self,
@@ -2187,6 +2200,7 @@ impl SemanticAnalyzer {
                     }
                 }
                 Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Defer(d) => self.ensure_interpolation_expr_pure(&d.expr)?,
             }
         }
 

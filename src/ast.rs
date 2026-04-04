@@ -114,6 +114,7 @@ pub enum Stmt {
     For(ForStmt),
     ForIn(ForInStmt),
     Return(ReturnStmt),
+    Defer(DeferStmt),
     Break(Span),
     Continue(Span),
 }
@@ -179,6 +180,13 @@ pub struct ForStmt {
 #[derive(Debug)]
 pub struct ReturnStmt {
     pub value: Option<Expr>,
+    pub span: Span,
+}
+
+/// Defer statement: `defer call();`
+#[derive(Debug)]
+pub struct DeferStmt {
+    pub expr: Expr,
     pub span: Span,
 }
 
