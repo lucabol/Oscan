@@ -232,16 +232,16 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 | Function | Description |
 |----------|-------------|
-| `fn! file_open_read(path: str) -> i32` | Open file for reading, returns fd |
-| `fn! file_open_write(path: str) -> i32` | Open file for writing, returns fd |
+| `fn! file_open_read(path: str) -> Result<i32, str>` | Open file for reading, returns fd |
+| `fn! file_open_write(path: str) -> Result<i32, str>` | Open file for writing, returns fd |
 | `fn! read_byte(fd: i32) -> i32` | Read one byte from fd |
 | `fn! write_byte(fd: i32, b: i32)` | Write one byte to fd |
 | `fn! write_str(fd: i32, s: str)` | Write string to fd |
 | `fn! file_close(fd: i32)` | Close file descriptor |
-| `fn! file_delete(path: str) -> i32` | Delete a file |
-| `fn! file_rename(old: str, new_path: str) -> i32` | Rename a file |
+| `fn! file_delete(path: str) -> Result<str, str>` | Delete a file |
+| `fn! file_rename(old: str, new_path: str) -> Result<str, str>` | Rename a file |
 | `fn! file_exists(path: str) -> bool` | Check if file exists |
-| `fn! file_open_append(path: str) -> i32` | Open file for appending, returns fd |
+| `fn! file_open_append(path: str) -> Result<i32, str>` | Open file for appending, returns fd |
 | `fn! file_size(path: str) -> i64` | Get file size in bytes |
 | `fn! read_file(path: str) -> Result<str, str>` | Read entire file as string |
 | `fn! write_file(path: str, data: str) -> Result<str, str>` | Write string to file |
@@ -250,10 +250,10 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 | Function | Description |
 |----------|-------------|
-| `fn! dir_create(path: str) -> i32` | Create a directory |
-| `fn! dir_remove(path: str) -> i32` | Remove a directory |
+| `fn! dir_create(path: str) -> Result<str, str>` | Create a directory |
+| `fn! dir_remove(path: str) -> Result<str, str>` | Remove a directory |
 | `fn! dir_current() -> str` | Get current working directory |
-| `fn! dir_change(path: str) -> i32` | Change working directory |
+| `fn! dir_change(path: str) -> Result<str, str>` | Change working directory |
 | `fn! dir_list(path: str) -> [str]` | List directory contents |
 
 ### Path (6 functions)
@@ -271,15 +271,15 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 | Function | Description |
 |----------|-------------|
-| `fn! socket_tcp() -> i32` | Create TCP socket |
-| `fn! socket_connect(sock: i32, addr: str, port: i32) -> i32` | Connect to address and port |
-| `fn! socket_bind(sock: i32, port: i32) -> i32` | Bind socket to port |
-| `fn! socket_listen(sock: i32, backlog: i32) -> i32` | Listen for connections |
-| `fn! socket_accept(sock: i32) -> i32` | Accept incoming connection |
-| `fn! socket_send(sock: i32, data: str) -> i32` | Send data on socket |
+| `fn! socket_tcp() -> Result<i32, str>` | Create TCP socket |
+| `fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>` | Connect to address and port |
+| `fn! socket_bind(sock: i32, port: i32) -> Result<str, str>` | Bind socket to port |
+| `fn! socket_listen(sock: i32, backlog: i32) -> Result<str, str>` | Listen for connections |
+| `fn! socket_accept(sock: i32) -> Result<i32, str>` | Accept incoming connection |
+| `fn! socket_send(sock: i32, data: str) -> Result<i32, str>` | Send data on socket |
 | `fn! socket_recv(sock: i32, max_len: i32) -> str` | Receive data from socket |
 | `fn! socket_close(sock: i32)` | Close socket |
-| `fn! socket_udp() -> i32` | Create UDP socket |
+| `fn! socket_udp() -> Result<i32, str>` | Create UDP socket |
 | `fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32` | Send UDP data to address |
 | `fn! socket_recvfrom(sock: i32, max_len: i32) -> str` | Receive UDP data |
 
@@ -340,8 +340,8 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! env_count() -> i32` | Number of environment variables |
 | `fn! env_key(i: i32) -> str` | Get env variable name by index |
 | `fn! env_value(i: i32) -> str` | Get env variable value by index |
-| `fn! env_set(name: str, value: str) -> i32` | Set environment variable |
-| `fn! env_delete(name: str) -> i32` | Delete environment variable |
+| `fn! env_set(name: str, value: str) -> Result<str, str>` | Set environment variable |
+| `fn! env_delete(name: str) -> Result<str, str>` | Delete environment variable |
 
 ### Terminal (5 functions)
 
@@ -349,8 +349,8 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 |----------|-------------|
 | `fn! term_width() -> i32` | Get terminal width in columns |
 | `fn! term_height() -> i32` | Get terminal height in rows |
-| `fn! term_raw() -> i32` | Enter raw terminal mode |
-| `fn! term_restore() -> i32` | Restore normal terminal mode |
+| `fn! term_raw() -> Result<str, str>` | Enter raw terminal mode |
+| `fn! term_restore() -> Result<str, str>` | Restore normal terminal mode |
 | `fn! read_nonblock() -> i32` | Non-blocking read from stdin |
 
 ### Process (1 functions)
@@ -363,7 +363,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 | Function | Description |
 |----------|-------------|
-| `fn! canvas_open(width: i32, height: i32, title: str) -> i32` | Open graphics canvas |
+| `fn! canvas_open(width: i32, height: i32, title: str) -> Result<str, str>` | Open graphics canvas |
 | `fn! canvas_close()` | Close graphics canvas |
 | `fn! canvas_alive() -> bool` | Check if canvas is still open |
 | `fn! canvas_flush()` | Flush canvas to screen |
