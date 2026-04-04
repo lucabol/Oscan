@@ -14,15 +14,27 @@ jobs:
   # Verify generated docs are up to date
   # ─────────────────────────────────────────────
   docs:
-    name: Verify builtin table
+    name: Update builtin table
     runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Verify builtin table
-        run: python scripts/gen-builtin-table.py --check
+      - name: Regenerate builtin table
+        run: python scripts/gen-builtin-table.py --inject
+
+      - name: Commit if changed
+        run: |
+          git diff --quiet README.md && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "Auto-update builtin table [skip ci]"
+          git push
 
   # ─────────────────────────────────────────────
   # Unit Tests + Integration Tests (Linux)
