@@ -700,3 +700,42 @@ let x: i32 = 1;
 7. **Semicolons after control flow (optional).** `if`/`while`/`for`/`match` used as statements may have a trailing `;` but it is not required.
 8. **Integer literals are `i32`.** For `i64`, write `42 as i64`.
 9. **Panics are for bugs.** Overflow, out-of-bounds, division by zero panic at runtime. Expected failures use `Result`.
+
+---
+
+## Cross-Compilation
+
+Oscan supports cross-compilation to RISC-V and WebAssembly (WASI) targets using the `--target` flag.
+
+### RISC-V 64-bit
+
+Compile for RISC-V 64-bit using freestanding mode:
+
+```bash
+oscan program.osc --target riscv64 -o program.c
+riscv64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static program.c runtime/osc_runtime.c -Iruntime -o program
+# Run under QEMU:
+qemu-riscv64 ./program
+```
+
+**Requirements:**
+- `riscv64-linux-gnu-gcc` — RISC-V cross-compiler
+- `qemu-riscv64` — (optional) QEMU user-mode for local testing
+
+### WebAssembly via WASI
+
+Compile for WebAssembly System Interface (WASI):
+
+```bash
+oscan program.osc --target wasi -o program.c
+clang --target=wasm32-wasi program.c runtime/osc_runtime.c -Iruntime -o program.wasm
+# Run under wasmtime:
+wasmtime ./program.wasm
+```
+
+**Requirements:**
+- `clang` — Compiler with WASI support
+- `wasi-sysroot` — WASI C library headers and runtime
+- `wasmtime` — (optional) WASI runtime for local testing. Alternatives: Node.js (with WASI), wasmer, etc.
+
+**Note:** RISC-V uses freestanding mode and requires manual runtime linking. WASI uses libc-compatible mode and provides standard POSIX APIs through the WASI interface.

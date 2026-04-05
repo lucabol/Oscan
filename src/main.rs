@@ -60,6 +60,7 @@ fn main() {
     let mut run_mode = false;
     let mut emit_c = false;
     let mut use_libc = false;
+    let mut target: Option<CrossTarget> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -69,6 +70,21 @@ fn main() {
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
+            "--target" => {
+                i += 1;
+                let val = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("error: --target requires an argument (riscv64, wasi)");
+                    process::exit(1);
+                });
+                target = Some(match val.as_str() {
+                    "riscv64" => CrossTarget::RiscV64,
+                    "wasi" => CrossTarget::Wasi,
+                    other => {
+                        eprintln!("error: unknown target '{other}' (supported: riscv64, wasi)");
+                        process::exit(1);
+                    }
+                });
+            }
             "-o" => {
                 i += 1;
                 if i < args.len() {
@@ -90,7 +106,8 @@ fn main() {
     let path = match file_path {
         Some(p) => p,
         None => {
-            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [-o output] <file.osc>");
+            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>");
+            eprintln!("  --target <arch>  Cross-compile for target (riscv64, wasi)");
             process::exit(1);
         }
     };
@@ -155,11 +172,17 @@ fn main() {
 
     // Code generation
     // macOS: l_os.h uses Linux syscalls for Unix; freestanding is not possible on macOS
-    let freestanding = if !use_libc && cfg!(target_os = "macos") {
-        eprintln!("note: freestanding mode not supported on macOS; using libc mode");
-        false
-    } else {
-        !use_libc
+    let freestanding = match &target {
+        Some(CrossTarget::RiscV64) => true,   // RISC-V always freestanding
+        Some(CrossTarget::Wasi) => false,      // WASI always libc mode
+        None => {
+            if !use_libc && cfg!(target_os = "macos") {
+                eprintln!("note: freestanding mode not supported on macOS; using libc mode");
+                false
+            } else {
+                !use_libc
+            }
+        }
     };
     let c_code = codegen::CodeGenerator::generate(&program, &info, freestanding);
 
@@ -174,6 +197,10 @@ fn main() {
         .unwrap_or(false);
 
     if run_mode {
+        if target.is_some() {
+            eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
+            process::exit(1);
+        }
         run_program(&path, &c_code, freestanding);
     } else if emit_c || output_ends_in_c {
         // Emit C mode
@@ -193,8 +220,14 @@ fn main() {
         let exe_path = match output_path {
             Some(ref p) => {
                 let pb = PathBuf::from(p);
-                if cfg!(windows) && pb.extension().is_none() {
-                    pb.with_extension("exe")
+                if pb.extension().is_none() {
+                    if matches!(target, Some(CrossTarget::Wasi)) {
+                        pb.with_extension("wasm")
+                    } else if cfg!(windows) {
+                        pb.with_extension("exe")
+                    } else {
+                        pb
+                    }
                 } else {
                     pb
                 }
@@ -205,13 +238,15 @@ fn main() {
                     .unwrap_or_else(|| std::ffi::OsStr::new("output"))
                     .to_os_string();
                 let mut pb = PathBuf::from(stem);
-                if cfg!(windows) {
+                if matches!(target, Some(CrossTarget::Wasi)) {
+                    pb.set_extension("wasm");
+                } else if cfg!(windows) {
                     pb.set_extension("exe");
                 }
                 pb
             }
         };
-        compile_to_executable(&c_code, &exe_path, freestanding);
+        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref());
     }
 }
 
@@ -224,6 +259,30 @@ enum CCompiler {
         cl_path: String,
         vcvars: Option<String>,
     },
+}
+
+#[derive(Clone, Debug)]
+enum CrossTarget {
+    RiscV64,
+    Wasi,
+}
+
+fn find_wasi_sysroot() -> Option<String> {
+    if let Ok(val) = env::var("WASI_SYSROOT") {
+        if Path::new(&val).exists() {
+            return Some(val);
+        }
+    }
+    let candidates = [
+        "/opt/wasi-sdk/share/wasi-sysroot",
+        "/usr/share/wasi-sysroot",
+    ];
+    for c in &candidates {
+        if Path::new(c).exists() {
+            return Some(c.to_string());
+        }
+    }
+    None
 }
 
 fn command_exists(cmd: &str) -> bool {
@@ -408,7 +467,7 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
-fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
+fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
@@ -445,7 +504,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool) {
     };
     include_dirs.push(temp_dir.clone());
 
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding);
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target);
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -500,7 +559,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
     };
     include_dirs.push(temp_dir.clone());
 
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -530,7 +589,42 @@ fn invoke_c_compiler(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     freestanding: bool,
+    target: Option<&CrossTarget>,
 ) -> bool {
+    // Cross-compilation targets bypass normal compiler detection
+    if let Some(ct) = target {
+        match ct {
+            CrossTarget::RiscV64 => {
+                let cmd = "riscv64-linux-gnu-gcc";
+                if !command_exists(cmd) {
+                    eprintln!("error: {cmd} not found");
+                    eprintln!("install with: sudo apt install gcc-riscv64-linux-gnu");
+                    process::exit(1);
+                }
+                eprintln!("Cross-compiling for RISC-V (freestanding)...");
+                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs);
+            }
+            CrossTarget::Wasi => {
+                let cmd = "clang";
+                if !command_exists(cmd) {
+                    eprintln!("error: clang not found (required for WASI target)");
+                    eprintln!("install from: https://releases.llvm.org/");
+                    process::exit(1);
+                }
+                let sysroot = match find_wasi_sysroot() {
+                    Some(s) => s,
+                    None => {
+                        eprintln!("error: WASI sysroot not found");
+                        eprintln!("set WASI_SYSROOT environment variable or install wasi-sdk to /opt/wasi-sdk");
+                        process::exit(1);
+                    }
+                };
+                eprintln!("Cross-compiling for WASI/WebAssembly...");
+                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot);
+            }
+        }
+    }
+
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
@@ -681,6 +775,91 @@ fn compile_with_gcc_or_clang(
     let output = command.output();
 
     match output {
+        Ok(out) => {
+            if !out.status.success() {
+                eprintln!("{cmd} compilation failed:");
+                std::io::stderr().write_all(&out.stderr).ok();
+                false
+            } else {
+                true
+            }
+        }
+        Err(e) => {
+            eprintln!("failed to run {cmd}: {e}");
+            false
+        }
+    }
+}
+
+fn compile_cross_riscv64(
+    cmd: &str,
+    c_file: &Path,
+    exe_file: &Path,
+    include_dirs: &[PathBuf],
+) -> bool {
+    let mut command = Command::new(cmd);
+    // Freestanding single-TU build for RISC-V 64-bit
+    command
+        .arg("-std=gnu11")
+        .arg("-ffreestanding")
+        .arg("-Os") // RISC-V gcc doesn't support -Oz
+        .arg("-fno-builtin")
+        .arg("-fno-asynchronous-unwind-tables")
+        .arg("-fomit-frame-pointer")
+        .arg("-ffunction-sections")
+        .arg("-fdata-sections")
+        .arg("-s")
+        .arg("-march=rv64gc")
+        .arg("-mabi=lp64d")
+        .arg("-nostdlib")
+        .arg("-static")
+        .arg("-Wno-builtin-declaration-mismatch")
+        .arg("-Wl,--gc-sections,--build-id=none");
+    command.arg(c_file);
+    for dir in include_dirs {
+        command.arg(format!("-I{}", dir.display()));
+    }
+    command.arg("-o").arg(exe_file);
+
+    match command.output() {
+        Ok(out) => {
+            if !out.status.success() {
+                eprintln!("{cmd} compilation failed:");
+                std::io::stderr().write_all(&out.stderr).ok();
+                false
+            } else {
+                true
+            }
+        }
+        Err(e) => {
+            eprintln!("failed to run {cmd}: {e}");
+            false
+        }
+    }
+}
+
+fn compile_cross_wasi(
+    cmd: &str,
+    c_file: &Path,
+    exe_file: &Path,
+    runtime_c: &Path,
+    include_dirs: &[PathBuf],
+    sysroot: &str,
+) -> bool {
+    let mut command = Command::new(cmd);
+    // WASI libc mode: two TUs, wasm32 target
+    command
+        .arg("--target=wasm32-wasi")
+        .arg(format!("--sysroot={}", sysroot))
+        .arg("-std=c99")
+        .arg(c_file)
+        .arg(runtime_c);
+    for dir in include_dirs {
+        command.arg(format!("-I{}", dir.display()));
+    }
+    command.arg("-o").arg(exe_file);
+
+    match command.output() {
         Ok(out) => {
             if !out.status.success() {
                 eprintln!("{cmd} compilation failed:");

@@ -1691,6 +1691,56 @@ fn rgb(r: i32, g: i32, b: i32) -> i32                         // Creates an ARGB
 fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32                // Creates an ARGB color with custom alpha.
 ```
 
+---
+
+## 14. CLI Reference
+
+The Oscan compiler is invoked from the command line as:
+
+```
+oscan [OPTIONS] <file.osc>
+```
+
+### Options
+
+| Option          | Description |
+|-----------------|-------------|
+| `-o <path>`     | Output path. Defaults to executable. Use `.c` extension to emit C source only. |
+| `--run`         | Compile and execute immediately. |
+| `--emit-c`      | Emit generated C code to stdout. |
+| `--libc`        | Use hosted libc mode instead of freestanding mode. Enables access to standard C library functions. |
+| `--target <arch>` | Cross-compile for target architecture. Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
+| `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
+| `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |
+
+### Target Architectures
+
+#### RISC-V 64-bit (`riscv64`)
+
+Compiles to freestanding C99 using RISC-V RV64I base ISA with M extension. Requires `riscv64-linux-gnu-gcc` or compatible toolchain.
+
+Example:
+```bash
+oscan program.osc --target riscv64 -o program
+riscv64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static program.c -Iruntime -o program
+# Run under QEMU:
+qemu-riscv64 ./program
+```
+
+#### WebAssembly via WASI (`wasi`)
+
+Compiles to C99 using WASI (WebAssembly System Interface). Requires `clang` and wasi-libc/wasi-sysroot. Produces `.wasm` output that runs under any WASI runtime (e.g., wasmtime, Node.js with WASI support).
+
+Example:
+```bash
+oscan program.osc --target wasi -o program
+clang --target=wasm32-wasi program.c -Iruntime -o program.wasm
+# Run under wasmtime:
+wasmtime ./program.wasm
+```
+
+**Note:** WASI uses libc-compatible mode automatically. RISC-V uses freestanding mode.
+
 **Note:** All graphics functions operate on a single global canvas (no handle parameter needed). Color format is 32-bit ARGB (alpha in high byte, then red, green, blue). The built-in font is 8x8 pixels per character, covering ASCII 32-126.
 
 ---

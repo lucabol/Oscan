@@ -4,7 +4,7 @@
 
 ## Language Highlights
 
-- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls — no libc, no linker surprises. (A `--libc` mode is available when you want it.)
+- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls on x86_64, ARM64, and RISC-V. Also targets WebAssembly via WASI. (A `--libc` mode is available when you want it.)
 - **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [10 of 12 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
@@ -72,6 +72,7 @@ oscan [OPTIONS] <file.osc>
   --run           Compile and execute immediately
   --emit-c        Emit generated C to stdout
   --libc          Use hosted libc mode instead of freestanding mode
+  --target <arch> Cross-compile for target architecture (riscv64, wasi)
   --dump-ast      Print AST (debug)
   --dump-tokens   Print tokens (debug)
 ```

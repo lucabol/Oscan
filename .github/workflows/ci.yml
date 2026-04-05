@@ -654,3 +654,165 @@ jobs:
           done
           echo "Verification: $VPASS passed, $VFAIL failed"
           [ $VFAIL -eq 0 ]
+
+  # ─────────────────────────────────────────────
+  # RISC-V Cross-Compilation (QEMU)
+  # ─────────────────────────────────────────────
+  riscv-qemu:
+    name: Linux RISC-V64 (QEMU cross-compile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install RISC-V cross-compiler and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-linux-gnu qemu-user
+
+      - name: Build oscan (host x86_64)
+        run: cargo build --release
+
+      - name: Integration tests — positive (RISC-V64 via QEMU, freestanding)
+        shell: bash
+        run: |
+          set -euo pipefail
+          oscan="./target/release/oscan"
+          CC="riscv64-linux-gnu-gcc"
+          PASS=0; FAIL=0; TOTAL=0
+          mkdir -p tests/build
+
+          for osc_file in tests/positive/*.osc; do
+            name=$(basename "$osc_file" .osc)
+            expected="tests/expected/${name}.expected"
+            TOTAL=$((TOTAL + 1))
+            [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
+
+            # FFI tests need libc
+            if echo "$name" | grep -q '^ffi'; then
+              "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=c99 -static "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}" -lm 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            else
+              "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+              $CC -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
+            fi
+
+            actual=$(qemu-riscv64 "./tests/build/${name}" 2>&1) || true
+            expected_content=$(cat "$expected")
+            if [ "$actual" = "$expected_content" ]; then
+              echo "PASS: $name (RISC-V64)"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL: $name — output mismatch (RISC-V64)"
+              echo "  Expected: $(head -3 <<< "$expected_content")"
+              echo "  Actual:   $(head -3 <<< "$actual")"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo "RISC-V64 Positive: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
+
+      - name: Freestanding verification (RISC-V64)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== Freestanding Verification (RISC-V64) ==="
+          VPASS=0; VFAIL=0
+          for exe in tests/build/*; do
+            [ -f "$exe" ] || continue
+            name=$(basename "$exe")
+            # Skip non-binary files and FFI tests
+            echo "$name" | grep -qE '\.(c|err)$' && continue
+            echo "$name" | grep -q '^ffi' && continue
+            # Must be an ELF file
+            file "$exe" | grep -q 'ELF' || continue
+
+            size=$(stat -c%s "$exe")
+            file_info=$(file "$exe")
+            dep_ok="PASS"; stdlib_ok="PASS"
+
+            # Check static linking via file command
+            if ! echo "$file_info" | grep -q 'statically linked'; then
+              dep_ok="FAIL"
+            fi
+
+            # Check no stdlib symbols
+            stdlib_count=$(strings "$exe" | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)
+            [ "$stdlib_count" -gt 0 ] && stdlib_ok="FAIL"
+
+            if [ "$dep_ok" = "PASS" ] && [ "$stdlib_ok" = "PASS" ]; then
+              echo "  PASS: $name (${size} bytes, static, no stdlib)"
+              VPASS=$((VPASS + 1))
+            else
+              echo "  FAIL: $name (deps=$dep_ok stdlib=$stdlib_ok, file=$file_info)"
+              VFAIL=$((VFAIL + 1))
+            fi
+          done
+          echo "Verification: $VPASS passed, $VFAIL failed"
+          [ $VFAIL -eq 0 ]
+
+  # ─────────────────────────────────────────────
+  # WebAssembly via WASI
+  # ─────────────────────────────────────────────
+  wasi:
+    name: WebAssembly via WASI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install WASI toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          # Install wasmtime
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          export PATH="$HOME/.wasmtime/bin:$PATH"
+
+      - name: Build oscan (host x86_64)
+        run: cargo build --release
+
+      - name: Integration tests — positive (WASI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.wasmtime/bin:$PATH"
+          oscan="./target/release/oscan"
+          CC="clang --target=wasm32-wasi"
+          PASS=0; FAIL=0; TOTAL=0
+          mkdir -p tests/build
+
+          for osc_file in tests/positive/*.osc; do
+            name=$(basename "$osc_file" .osc)
+            expected="tests/expected/${name}.expected"
+            TOTAL=$((TOTAL + 1))
+            [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
+
+            # WASI uses libc mode for all tests
+            "$oscan" --libc "$osc_file" --target wasi -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+            $CC "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}.wasm" 2>/dev/null || { echo "FAIL: $name — compile"; FAIL=$((FAIL+1)); continue; }
+
+            actual=$(wasmtime "tests/build/${name}.wasm" 2>&1) || true
+            expected_content=$(cat "$expected")
+            if [ "$actual" = "$expected_content" ]; then
+              echo "PASS: $name (WASI)"
+              PASS=$((PASS + 1))
+            else
+              echo "FAIL: $name — output mismatch (WASI)"
+              echo "  Expected: $(head -3 <<< "$expected_content")"
+              echo "  Actual:   $(head -3 <<< "$actual")"
+              FAIL=$((FAIL + 1))
+            fi
+          done
+
+          echo "WASI Positive: $PASS passed, $FAIL failed out of $TOTAL"
+          [ $FAIL -eq 0 ]
