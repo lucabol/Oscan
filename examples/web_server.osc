@@ -55,13 +55,12 @@ fn! main() {
             arena {
                 let request: str = socket_recv(client, 4096);
 
-                // Skip favicon requests from browsers
-                if str_contains(request, "favicon.ico") {
-                    socket_close(client);
-                } else {
+                // Only count actual page requests, not favicon/other browser noise
+                if str_starts_with(request, "GET / ") {
                     request_count = request_count + 1;
+                };
 
-                    let now: i64 = time_now();
+                let now: i64 = time_now();
                 let date_str: str = time_format(now, "%Y-%m-%d");
                 let time_str: str = time_format(now, "%H:%M:%S");
                 let ts_str: str = str_from_i64(now);
@@ -136,8 +135,7 @@ fn! main() {
                 };
                 socket_close(client);
 
-                println("Request #{request_count} served at {date_str} {time_str}");
-                };
+                println("Request #{request_count} served");
             };
         },
         Result::Err(_) => { },
