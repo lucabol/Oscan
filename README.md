@@ -79,14 +79,14 @@ oscan [OPTIONS] <file.osc>
 
 **Supported targets:**
 
-| Target | Mode | Compiler | Sockets | Graphics | Notes |
-|--------|------|----------|---------|----------|-------|
-| x86_64 Linux | Freestanding | gcc / clang | ✅ | ✅ | Default on Linux |
-| x86_64 Windows | Freestanding | clang (VS) | ✅ | ✅ | Default on Windows |
-| ARM64 Linux | Freestanding | aarch64-linux-gnu-gcc | ✅ | ❌ | CI via QEMU |
-| RISC-V 64 Linux | Freestanding | `--target riscv64` | ✅ | ❌ | CI via QEMU |
-| WebAssembly | Libc (WASI) | `--target wasi` | ❌ | ❌ | Runs in wasmtime/wasmer |
-| macOS | Libc | gcc / clang | ✅ | ❌ | No freestanding (Apple policy) |
+| Target | Mode | Compiler | Notes |
+|--------|------|----------|-------|
+| x86_64 Linux | Freestanding | gcc / clang | Default on Linux |
+| x86_64 Windows | Freestanding | clang (VS) | Default on Windows |
+| ARM64 Linux | Freestanding | aarch64-linux-gnu-gcc | CI via QEMU |
+| RISC-V 64 Linux | Freestanding | `--target riscv64` | CI via QEMU |
+| WebAssembly | Libc (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
+| macOS | Libc | gcc / clang | No freestanding (Apple policy) |
 
 ## Examples
 
