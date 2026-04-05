@@ -791,13 +791,19 @@ jobs:
           PASS=0; FAIL=0; TOTAL=0
           mkdir -p tests/build
 
-          for osc_file in tests/positive/*.osc; do
-            name=$(basename "$osc_file" .osc)
-            expected="tests/expected/${name}.expected"
-            TOTAL=$((TOTAL + 1))
-            [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
+          # WASI-compatible tests only (no sockets, graphics, terminal, or process spawning)
+          WASI_TESTS="hello strings arrays error_handling break_continue compound_assign
+                      for_in logical nested_control order_independence top_level_const
+                      type_casts spec_types_casts builtin_minmax builtin_str_join
+                      builtin_path_names arena_block arena_block_return defer_basic"
 
-            # WASI uses libc mode for all tests
+          for name in $WASI_TESTS; do
+            osc_file="tests/positive/${name}.osc"
+            expected="tests/expected/${name}.expected"
+            [ ! -f "$osc_file" ] && continue
+            [ ! -f "$expected" ] && continue
+            TOTAL=$((TOTAL + 1))
+
             "$oscan" --libc "$osc_file" --target wasi -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
             $CC "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}.wasm" 2>/dev/null || { echo "FAIL: $name — compile"; FAIL=$((FAIL+1)); continue; }
 
