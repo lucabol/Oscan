@@ -19,7 +19,11 @@ const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
 const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 
-fn resolve_imports(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String, String> {
+fn resolve_imports(
+    path: &Path,
+    visited: &mut HashSet<PathBuf>,
+    namespaces: &mut Vec<String>,
+) -> Result<String, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("cannot resolve {}: {}", path.display(), e))?;
@@ -37,17 +41,148 @@ fn resolve_imports(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<String
         if trimmed.starts_with("use \"") {
             if let Some(end) = trimmed[5..].find('"') {
                 let import_path = &trimmed[5..5 + end];
+                let after_quote = trimmed[5 + end + 1..].trim();
                 let full_path = base_dir.join(import_path);
-                let imported = resolve_imports(&full_path, visited)?;
-                result.push_str(&imported);
-                result.push('\n');
-                continue;
+
+                if let Some(ns) = parse_as_clause(after_quote) {
+                    // Namespaced import: use a cloned visited set so the same file
+                    // can be imported under different namespaces.
+                    let mut ns_visited = visited.clone();
+                    let mut ns_namespaces = Vec::new();
+                    let imported =
+                        resolve_imports(&full_path, &mut ns_visited, &mut ns_namespaces)?;
+                    let mangled = mangle_top_level_names(&imported, &ns);
+                    result.push_str(&mangled);
+                    result.push('\n');
+                    namespaces.push(ns);
+                    namespaces.extend(ns_namespaces);
+                    continue;
+                } else {
+                    // Flat import (existing behavior)
+                    let imported = resolve_imports(&full_path, visited, namespaces)?;
+                    result.push_str(&imported);
+                    result.push('\n');
+                    continue;
+                }
             }
         }
         result.push_str(line);
         result.push('\n');
     }
     Ok(result)
+}
+
+/// Check if `after_quote` is `as <identifier>` and return the namespace name.
+fn parse_as_clause(after_quote: &str) -> Option<String> {
+    let s = after_quote.strip_prefix("as ")?;
+    let ns = s.trim();
+    if !ns.is_empty()
+        && ns.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+        && ns.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        Some(ns.to_string())
+    } else {
+        None
+    }
+}
+
+/// Find names of top-level declarations (fn, fn!, struct, enum, let) in source text.
+/// Top-level declarations are identified by starting at column 0 (no leading whitespace).
+fn find_top_level_names(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let keywords = ["fn ", "fn! ", "struct ", "enum ", "let "];
+    for line in source.lines() {
+        for kw in &keywords {
+            if line.starts_with(kw) {
+                let rest = &line[kw.len()..];
+                let name_end = rest
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(rest.len());
+                let name = &rest[..name_end];
+                if !name.is_empty() {
+                    names.push(name.to_string());
+                }
+                break;
+            }
+        }
+    }
+    names
+}
+
+/// Prefix all top-level declaration names (and all word-bounded references to them)
+/// in `source` with `ns_`.
+fn mangle_top_level_names(source: &str, ns: &str) -> String {
+    let names = find_top_level_names(source);
+    let mut result = source.to_string();
+    // Sort names longest-first to avoid partial replacement issues
+    let mut names_sorted = names;
+    names_sorted.sort_by(|a, b| b.len().cmp(&a.len()));
+    for name in &names_sorted {
+        let new_name = format!("{}_{}", ns, name);
+        result = replace_word_boundary(&result, name, &new_name);
+    }
+    result
+}
+
+/// Replace all word-bounded occurrences of `word` with `replacement`.
+/// A word boundary means the character before/after is not an identifier character
+/// (ASCII alphanumeric or underscore).
+fn replace_word_boundary(source: &str, word: &str, replacement: &str) -> String {
+    let bytes = source.as_bytes();
+    let word_bytes = word.as_bytes();
+    let word_len = word_bytes.len();
+    let mut result = String::with_capacity(source.len() + source.len() / 4);
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if i + word_len <= bytes.len() && bytes[i..i + word_len] == *word_bytes {
+            let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
+            let after_ok =
+                i + word_len >= bytes.len() || !is_ident_char(bytes[i + word_len]);
+            if before_ok && after_ok {
+                result.push_str(replacement);
+                i += word_len;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+/// Replace `ns.ident` with `ns_ident` for namespace-qualified access.
+/// Only replaces when `ns` appears as a standalone word followed by `.` and an identifier.
+fn replace_ns_dot(source: &str, ns: &str) -> String {
+    let ns_dot = format!("{}.", ns);
+    let ns_under = format!("{}_", ns);
+    let bytes = source.as_bytes();
+    let ns_dot_bytes = ns_dot.as_bytes();
+    let ns_dot_len = ns_dot_bytes.len();
+    let mut result = String::with_capacity(source.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if i + ns_dot_len < bytes.len()
+            && bytes[i..i + ns_dot_len] == *ns_dot_bytes
+        {
+            let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
+            let after_byte = bytes[i + ns_dot_len];
+            let after_ok = after_byte.is_ascii_alphabetic() || after_byte == b'_';
+            if before_ok && after_ok {
+                result.push_str(&ns_under);
+                i += ns_dot_len;
+                continue;
+            }
+        }
+        result.push(bytes[i] as char);
+        i += 1;
+    }
+    result
+}
+
+fn is_ident_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 fn main() {
@@ -115,8 +250,15 @@ fn main() {
     let source = {
         let file_path_buf = PathBuf::from(&path);
         let mut visited = HashSet::new();
-        match resolve_imports(&file_path_buf, &mut visited) {
-            Ok(s) => s,
+        let mut namespaces = Vec::new();
+        match resolve_imports(&file_path_buf, &mut visited, &mut namespaces) {
+            Ok(s) => {
+                let mut s = s;
+                for ns in &namespaces {
+                    s = replace_ns_dot(&s, ns);
+                }
+                s
+            }
             Err(e) => {
                 eprintln!("error: {e}");
                 process::exit(1);

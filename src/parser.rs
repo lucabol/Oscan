@@ -145,7 +145,28 @@ impl Parser {
             TokenKind::StringLit(path) => {
                 let path = path.clone();
                 self.advance();
-                Ok(TopDecl::Use(path))
+                let ns = if *self.peek() == TokenKind::As {
+                    self.advance(); // consume `as`
+                    match self.peek().clone() {
+                        TokenKind::Ident(name) => {
+                            let name = name.clone();
+                            self.advance();
+                            Some(name)
+                        }
+                        _ => {
+                            return Err(CompileError::new(
+                                self.peek_span(),
+                                format!(
+                                    "expected identifier after 'as', found '{}'",
+                                    self.peek()
+                                ),
+                            ))
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(TopDecl::Use(path, ns))
             }
             _ => Err(CompileError::new(
                 span,
@@ -377,6 +398,7 @@ impl Parser {
         let span = self.peek_span();
         match self.peek().clone() {
             TokenKind::LBracket => self.parse_array_type(),
+            TokenKind::Fn => self.parse_fn_ptr_type(),
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 match name.as_str() {
@@ -407,6 +429,26 @@ impl Parser {
                     "map" => {
                         self.advance();
                         Ok(Type::Primitive(PrimitiveType::Map, span))
+                    }
+                    "map_str_i32" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::MapStrI32, span))
+                    }
+                    "map_str_i64" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::MapStrI64, span))
+                    }
+                    "map_str_f64" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::MapStrF64, span))
+                    }
+                    "map_i32_str" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::MapI32Str, span))
+                    }
+                    "map_i32_i32" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::MapI32I32, span))
                     }
                     "Result" => {
                         self.advance();
@@ -456,6 +498,27 @@ impl Parser {
             self.expect(&TokenKind::RBracket)?;
             Ok(Type::DynamicArray(Box::new(elem_type), span))
         }
+    }
+
+    fn parse_fn_ptr_type(&mut self) -> Result<Type, CompileError> {
+        let span = self.peek_span();
+        self.expect(&TokenKind::Fn)?;
+        self.expect(&TokenKind::LParen)?;
+        let mut param_types = Vec::new();
+        while !self.at(&TokenKind::RParen) && !self.at_eof() {
+            if !param_types.is_empty() {
+                self.expect(&TokenKind::Comma)?;
+            }
+            param_types.push(self.parse_type()?);
+        }
+        self.expect(&TokenKind::RParen)?;
+        let ret = if self.at(&TokenKind::Arrow) {
+            self.advance();
+            self.parse_type()?
+        } else {
+            Type::Primitive(PrimitiveType::Unit, span)
+        };
+        Ok(Type::FnPtr(param_types, Box::new(ret), span))
     }
 
     // ─── Block ───────────────────────────────────────────────

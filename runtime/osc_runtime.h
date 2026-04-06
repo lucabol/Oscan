@@ -407,6 +407,50 @@ void      osc_map_delete(osc_map *m, osc_str key);
 int32_t   osc_map_len(osc_map *m);
 
 /* ------------------------------------------------------------------ */
+/*  Typed hash maps (wrappers around osc_map with type conversions)    */
+/* ------------------------------------------------------------------ */
+
+/* str → i32 */
+osc_map  *osc_map_str_i32_new(osc_arena *arena);
+void      osc_map_str_i32_set(osc_arena *arena, osc_map *m, osc_str key, int32_t value);
+int32_t   osc_map_str_i32_get(osc_map *m, osc_str key);
+uint8_t   osc_map_str_i32_has(osc_map *m, osc_str key);
+void      osc_map_str_i32_delete(osc_map *m, osc_str key);
+int32_t   osc_map_str_i32_len(osc_map *m);
+
+/* str → i64 */
+osc_map  *osc_map_str_i64_new(osc_arena *arena);
+void      osc_map_str_i64_set(osc_arena *arena, osc_map *m, osc_str key, int64_t value);
+int64_t   osc_map_str_i64_get(osc_map *m, osc_str key);
+uint8_t   osc_map_str_i64_has(osc_map *m, osc_str key);
+void      osc_map_str_i64_delete(osc_map *m, osc_str key);
+int32_t   osc_map_str_i64_len(osc_map *m);
+
+/* str → f64 */
+osc_map  *osc_map_str_f64_new(osc_arena *arena);
+void      osc_map_str_f64_set(osc_arena *arena, osc_map *m, osc_str key, double value);
+double    osc_map_str_f64_get(osc_map *m, osc_str key);
+uint8_t   osc_map_str_f64_has(osc_map *m, osc_str key);
+void      osc_map_str_f64_delete(osc_map *m, osc_str key);
+int32_t   osc_map_str_f64_len(osc_map *m);
+
+/* i32 → str */
+osc_map  *osc_map_i32_str_new(osc_arena *arena);
+void      osc_map_i32_str_set(osc_arena *arena, osc_map *m, int32_t key, osc_str value);
+osc_str   osc_map_i32_str_get(osc_map *m, int32_t key);
+uint8_t   osc_map_i32_str_has(osc_map *m, int32_t key);
+void      osc_map_i32_str_delete(osc_map *m, int32_t key);
+int32_t   osc_map_i32_str_len(osc_map *m);
+
+/* i32 → i32 */
+osc_map  *osc_map_i32_i32_new(osc_arena *arena);
+void      osc_map_i32_i32_set(osc_arena *arena, osc_map *m, int32_t key, int32_t value);
+int32_t   osc_map_i32_i32_get(osc_map *m, int32_t key);
+uint8_t   osc_map_i32_i32_has(osc_map *m, int32_t key);
+void      osc_map_i32_i32_delete(osc_map *m, int32_t key);
+int32_t   osc_map_i32_i32_len(osc_map *m);
+
+/* ------------------------------------------------------------------ */
 /*  Command-line argument access                                       */
 /* ------------------------------------------------------------------ */
 

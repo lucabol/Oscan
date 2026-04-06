@@ -146,6 +146,54 @@ fn process(arr: [i32]) {
 }
 ```
 
+### Function Pointers
+
+Functions can be passed as values using function pointer types. The syntax for a function pointer type is `fn(param_types) -> return_type`.
+
+```
+fn ascending(a: i32, b: i32) -> bool { a < b }
+fn descending(a: i32, b: i32) -> bool { a > b }
+
+fn! sort_with(arr: [i32], cmp: fn(i32, i32) -> bool) {
+    let n: i32 = len(arr);
+    let mut i: i32 = 0;
+    while i < n - 1 {
+        let mut j: i32 = 0;
+        while j < n - i - 1 {
+            if cmp(arr[j + 1], arr[j]) {
+                let tmp: i32 = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = tmp;
+            };
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+}
+
+fn! main() {
+    let mut nums: [i32] = [5, 3, 8, 1, 9];
+    sort_with(nums, ascending);   // 1 3 5 8 9
+    sort_with(nums, descending);  // 9 8 5 3 1
+}
+```
+
+You can also store function pointers in local variables:
+
+```
+fn add(a: i32, b: i32) -> i32 { a + b }
+
+fn! main() {
+    let op: fn(i32, i32) -> i32 = add;
+    print_i32(op(3, 4));  // prints 7
+}
+```
+
+**Notes:**
+- Only user-defined functions (`fn` and `fn!`) can be used as function pointer values. Builtin and `extern` functions cannot.
+- Functions are not closures — they capture no variables.
+- Type checking is structural: any function matching the signature is accepted.
+
 ---
 
 ## Structs

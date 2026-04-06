@@ -1211,6 +1211,236 @@ impl SemanticAnalyzer {
             builtin(vec![("m", BcType::Map)], BcType::I32, true),
         );
 
+        // Typed HashMap builtins: map_str_i32
+        // @builtin category="HashMap" name="map_str_i32_new" sig="fn! map_str_i32_new() -> map_str_i32" desc="Create empty str→i32 map"
+        self.functions
+            .insert("map_str_i32_new".into(), builtin(vec![], BcType::MapStrI32, false));
+        // @builtin category="HashMap" name="map_str_i32_set" sig="fn! map_str_i32_set(m: map_str_i32, key: str, value: i32)" desc="Set key-value pair"
+        self.functions.insert(
+            "map_str_i32_set".into(),
+            builtin(
+                vec![("m", BcType::MapStrI32), ("key", BcType::Str), ("value", BcType::I32)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i32_get" sig="fn! map_str_i32_get(m: map_str_i32, key: str) -> i32" desc="Get value by key (0 if missing)"
+        self.functions.insert(
+            "map_str_i32_get".into(),
+            builtin(
+                vec![("m", BcType::MapStrI32), ("key", BcType::Str)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i32_has" sig="fn map_str_i32_has(m: map_str_i32, key: str) -> bool" desc="Check if key exists"
+        self.functions.insert(
+            "map_str_i32_has".into(),
+            builtin(
+                vec![("m", BcType::MapStrI32), ("key", BcType::Str)],
+                BcType::Bool,
+                true,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i32_delete" sig="fn! map_str_i32_delete(m: map_str_i32, key: str)" desc="Delete key from map"
+        self.functions.insert(
+            "map_str_i32_delete".into(),
+            builtin(
+                vec![("m", BcType::MapStrI32), ("key", BcType::Str)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i32_len" sig="fn map_str_i32_len(m: map_str_i32) -> i32" desc="Number of entries"
+        self.functions.insert(
+            "map_str_i32_len".into(),
+            builtin(vec![("m", BcType::MapStrI32)], BcType::I32, true),
+        );
+
+        // Typed HashMap builtins: map_str_i64
+        // @builtin category="HashMap" name="map_str_i64_new" sig="fn! map_str_i64_new() -> map_str_i64" desc="Create empty str→i64 map"
+        self.functions
+            .insert("map_str_i64_new".into(), builtin(vec![], BcType::MapStrI64, false));
+        // @builtin category="HashMap" name="map_str_i64_set" sig="fn! map_str_i64_set(m: map_str_i64, key: str, value: i64)" desc="Set key-value pair"
+        self.functions.insert(
+            "map_str_i64_set".into(),
+            builtin(
+                vec![("m", BcType::MapStrI64), ("key", BcType::Str), ("value", BcType::I64)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i64_get" sig="fn! map_str_i64_get(m: map_str_i64, key: str) -> i64" desc="Get value by key (0 if missing)"
+        self.functions.insert(
+            "map_str_i64_get".into(),
+            builtin(
+                vec![("m", BcType::MapStrI64), ("key", BcType::Str)],
+                BcType::I64,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i64_has" sig="fn map_str_i64_has(m: map_str_i64, key: str) -> bool" desc="Check if key exists"
+        self.functions.insert(
+            "map_str_i64_has".into(),
+            builtin(
+                vec![("m", BcType::MapStrI64), ("key", BcType::Str)],
+                BcType::Bool,
+                true,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i64_delete" sig="fn! map_str_i64_delete(m: map_str_i64, key: str)" desc="Delete key from map"
+        self.functions.insert(
+            "map_str_i64_delete".into(),
+            builtin(
+                vec![("m", BcType::MapStrI64), ("key", BcType::Str)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_i64_len" sig="fn map_str_i64_len(m: map_str_i64) -> i32" desc="Number of entries"
+        self.functions.insert(
+            "map_str_i64_len".into(),
+            builtin(vec![("m", BcType::MapStrI64)], BcType::I32, true),
+        );
+
+        // Typed HashMap builtins: map_str_f64
+        // @builtin category="HashMap" name="map_str_f64_new" sig="fn! map_str_f64_new() -> map_str_f64" desc="Create empty str→f64 map"
+        self.functions
+            .insert("map_str_f64_new".into(), builtin(vec![], BcType::MapStrF64, false));
+        // @builtin category="HashMap" name="map_str_f64_set" sig="fn! map_str_f64_set(m: map_str_f64, key: str, value: f64)" desc="Set key-value pair"
+        self.functions.insert(
+            "map_str_f64_set".into(),
+            builtin(
+                vec![("m", BcType::MapStrF64), ("key", BcType::Str), ("value", BcType::F64)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_f64_get" sig="fn! map_str_f64_get(m: map_str_f64, key: str) -> f64" desc="Get value by key (0.0 if missing)"
+        self.functions.insert(
+            "map_str_f64_get".into(),
+            builtin(
+                vec![("m", BcType::MapStrF64), ("key", BcType::Str)],
+                BcType::F64,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_f64_has" sig="fn map_str_f64_has(m: map_str_f64, key: str) -> bool" desc="Check if key exists"
+        self.functions.insert(
+            "map_str_f64_has".into(),
+            builtin(
+                vec![("m", BcType::MapStrF64), ("key", BcType::Str)],
+                BcType::Bool,
+                true,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_f64_delete" sig="fn! map_str_f64_delete(m: map_str_f64, key: str)" desc="Delete key from map"
+        self.functions.insert(
+            "map_str_f64_delete".into(),
+            builtin(
+                vec![("m", BcType::MapStrF64), ("key", BcType::Str)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_str_f64_len" sig="fn map_str_f64_len(m: map_str_f64) -> i32" desc="Number of entries"
+        self.functions.insert(
+            "map_str_f64_len".into(),
+            builtin(vec![("m", BcType::MapStrF64)], BcType::I32, true),
+        );
+
+        // Typed HashMap builtins: map_i32_str
+        // @builtin category="HashMap" name="map_i32_str_new" sig="fn! map_i32_str_new() -> map_i32_str" desc="Create empty i32→str map"
+        self.functions
+            .insert("map_i32_str_new".into(), builtin(vec![], BcType::MapI32Str, false));
+        // @builtin category="HashMap" name="map_i32_str_set" sig="fn! map_i32_str_set(m: map_i32_str, key: i32, value: str)" desc="Set key-value pair"
+        self.functions.insert(
+            "map_i32_str_set".into(),
+            builtin(
+                vec![("m", BcType::MapI32Str), ("key", BcType::I32), ("value", BcType::Str)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_str_get" sig="fn! map_i32_str_get(m: map_i32_str, key: i32) -> str" desc="Get value by key (empty string if missing)"
+        self.functions.insert(
+            "map_i32_str_get".into(),
+            builtin(
+                vec![("m", BcType::MapI32Str), ("key", BcType::I32)],
+                BcType::Str,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_str_has" sig="fn! map_i32_str_has(m: map_i32_str, key: i32) -> bool" desc="Check if key exists"
+        self.functions.insert(
+            "map_i32_str_has".into(),
+            builtin(
+                vec![("m", BcType::MapI32Str), ("key", BcType::I32)],
+                BcType::Bool,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_str_delete" sig="fn! map_i32_str_delete(m: map_i32_str, key: i32)" desc="Delete key from map"
+        self.functions.insert(
+            "map_i32_str_delete".into(),
+            builtin(
+                vec![("m", BcType::MapI32Str), ("key", BcType::I32)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_str_len" sig="fn map_i32_str_len(m: map_i32_str) -> i32" desc="Number of entries"
+        self.functions.insert(
+            "map_i32_str_len".into(),
+            builtin(vec![("m", BcType::MapI32Str)], BcType::I32, true),
+        );
+
+        // Typed HashMap builtins: map_i32_i32
+        // @builtin category="HashMap" name="map_i32_i32_new" sig="fn! map_i32_i32_new() -> map_i32_i32" desc="Create empty i32→i32 map"
+        self.functions
+            .insert("map_i32_i32_new".into(), builtin(vec![], BcType::MapI32I32, false));
+        // @builtin category="HashMap" name="map_i32_i32_set" sig="fn! map_i32_i32_set(m: map_i32_i32, key: i32, value: i32)" desc="Set key-value pair"
+        self.functions.insert(
+            "map_i32_i32_set".into(),
+            builtin(
+                vec![("m", BcType::MapI32I32), ("key", BcType::I32), ("value", BcType::I32)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_i32_get" sig="fn! map_i32_i32_get(m: map_i32_i32, key: i32) -> i32" desc="Get value by key (0 if missing)"
+        self.functions.insert(
+            "map_i32_i32_get".into(),
+            builtin(
+                vec![("m", BcType::MapI32I32), ("key", BcType::I32)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_i32_has" sig="fn! map_i32_i32_has(m: map_i32_i32, key: i32) -> bool" desc="Check if key exists"
+        self.functions.insert(
+            "map_i32_i32_has".into(),
+            builtin(
+                vec![("m", BcType::MapI32I32), ("key", BcType::I32)],
+                BcType::Bool,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_i32_delete" sig="fn! map_i32_i32_delete(m: map_i32_i32, key: i32)" desc="Delete key from map"
+        self.functions.insert(
+            "map_i32_i32_delete".into(),
+            builtin(
+                vec![("m", BcType::MapI32I32), ("key", BcType::I32)],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="HashMap" name="map_i32_i32_len" sig="fn map_i32_i32_len(m: map_i32_i32) -> i32" desc="Number of entries"
+        self.functions.insert(
+            "map_i32_i32_len".into(),
+            builtin(vec![("m", BcType::MapI32I32)], BcType::I32, true),
+        );
+
         // File I/O — whole-file convenience (fn!)
         // @builtin category="File I/O" name="read_file" sig="fn! read_file(path: str) -> Result<str, str>" desc="Read entire file as string"
         self.functions.insert(
@@ -1453,7 +1683,7 @@ impl SemanticAnalyzer {
                     );
                 }
             }
-            TopDecl::Use(_) => {}
+            TopDecl::Use(..) => {}
         }
         Ok(())
     }
@@ -2042,6 +2272,18 @@ impl SemanticAnalyzer {
                 // Global constants
                 if let Some(info) = self.constants.get(name) {
                     return Ok(info.ty.clone());
+                }
+                // Function name used as a value → function pointer
+                if let Some(fi) = self.functions.get(name) {
+                    if fi.is_extern {
+                        return Err(CompileError::new(
+                            *span,
+                            format!("extern function '{}' cannot be used as a value", name),
+                        ));
+                    }
+                    let param_types: Vec<BcType> = fi.params.iter().map(|(_, t)| t.clone()).collect();
+                    let ret_type = fi.return_type.clone();
+                    return Ok(BcType::FnPtr(param_types, Box::new(ret_type)));
                 }
                 Err(CompileError::new(
                     *span,
@@ -2661,6 +2903,46 @@ impl SemanticAnalyzer {
                 )),
             }
         } else {
+            // Check if callee is a local variable with FnPtr type
+            if let Some(info) = self.lookup_var(&name) {
+                if let BcType::FnPtr(param_types, ret_type) = &info.ty {
+                    let param_types = param_types.clone();
+                    let ret_type = (**ret_type).clone();
+                    if args.len() != param_types.len() {
+                        return Err(CompileError::new(
+                            span,
+                            format!(
+                                "function pointer '{}' expects {} args, got {}",
+                                name,
+                                param_types.len(),
+                                args.len()
+                            ),
+                        ));
+                    }
+                    for (i, (arg, expected_ty)) in args.iter().zip(param_types.iter()).enumerate() {
+                        let actual = self.check_expr(arg, Some(expected_ty))?;
+                        if actual != *expected_ty {
+                            return Err(CompileError::new(
+                                arg.span(),
+                                format!(
+                                    "arg {} of '{}': expected {}, got {}",
+                                    i + 1,
+                                    name,
+                                    expected_ty,
+                                    actual
+                                ),
+                            ));
+                        }
+                    }
+                    return Ok(ret_type);
+                } else {
+                    return Err(CompileError::new(
+                        span,
+                        format!("'{}' is not a function", name),
+                    ));
+                }
+            }
+
             let func = self
                 .functions
                 .get(&name)
@@ -3064,6 +3346,11 @@ impl SemanticAnalyzer {
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
                 PrimitiveType::Map => BcType::Map,
+                PrimitiveType::MapStrI32 => BcType::MapStrI32,
+                PrimitiveType::MapStrI64 => BcType::MapStrI64,
+                PrimitiveType::MapStrF64 => BcType::MapStrF64,
+                PrimitiveType::MapI32Str => BcType::MapI32Str,
+                PrimitiveType::MapI32I32 => BcType::MapI32I32,
             }),
             Type::Named(name, span) => {
                 if self.structs.contains_key(name) {
@@ -3089,6 +3376,14 @@ impl SemanticAnalyzer {
                 let o = self.resolve_type(ok)?;
                 let e = self.resolve_type(err)?;
                 Ok(BcType::Result(Box::new(o), Box::new(e)))
+            }
+            Type::FnPtr(params, ret, _) => {
+                let mut param_types = Vec::new();
+                for p in params {
+                    param_types.push(self.resolve_type(p)?);
+                }
+                let ret_type = self.resolve_type(ret)?;
+                Ok(BcType::FnPtr(param_types, Box::new(ret_type)))
             }
         }
     }
@@ -3218,7 +3513,7 @@ impl SemanticAnalyzer {
     /// Returns true if a type is safe to escape from an arena block.
     /// Only primitives (i32, i64, f64, bool, unit) are safe.
     fn is_arena_safe_type(ty: &BcType) -> bool {
-        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit)
+        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit | BcType::FnPtr(_, _))
     }
 }
 

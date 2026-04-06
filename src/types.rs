@@ -10,11 +10,17 @@ pub enum BcType {
     Str,
     Unit,
     Map,
+    MapStrI32,
+    MapStrI64,
+    MapStrF64,
+    MapI32Str,
+    MapI32I32,
     Struct(String),
     Enum(String),
     Array(Box<BcType>),
     FixedArray(Box<BcType>, i64),
     Result(Box<BcType>, Box<BcType>),
+    FnPtr(Vec<BcType>, Box<BcType>),
 }
 
 impl fmt::Display for BcType {
@@ -27,11 +33,26 @@ impl fmt::Display for BcType {
             BcType::Str => write!(f, "str"),
             BcType::Unit => write!(f, "unit"),
             BcType::Map => write!(f, "map"),
+            BcType::MapStrI32 => write!(f, "map_str_i32"),
+            BcType::MapStrI64 => write!(f, "map_str_i64"),
+            BcType::MapStrF64 => write!(f, "map_str_f64"),
+            BcType::MapI32Str => write!(f, "map_i32_str"),
+            BcType::MapI32I32 => write!(f, "map_i32_i32"),
             BcType::Struct(name) => write!(f, "{name}"),
             BcType::Enum(name) => write!(f, "{name}"),
             BcType::Array(elem) => write!(f, "[{elem}]"),
             BcType::FixedArray(elem, size) => write!(f, "[{elem}; {size}]"),
             BcType::Result(ok, err) => write!(f, "Result<{ok}, {err}>"),
+            BcType::FnPtr(params, ret) => {
+                write!(f, "fn(")?;
+                for (i, p) in params.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{p}")?;
+                }
+                write!(f, ") -> {ret}")
+            }
         }
     }
 }

@@ -16,7 +16,7 @@ pub enum TopDecl {
     Enum(EnumDecl),
     Let(LetDecl),
     Extern(ExternBlock),
-    Use(String),
+    Use(String, Option<String>),
 }
 
 /// Function declaration (both `fn` and `fn!`).
@@ -416,6 +416,8 @@ pub enum Type {
     Result(Box<Type>, Box<Type>, Span),
     /// Named type (struct or enum reference)
     Named(String, Span),
+    /// Function pointer type: fn(param_types) -> ret_type
+    FnPtr(Vec<Type>, Box<Type>, Span),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -427,4 +429,9 @@ pub enum PrimitiveType {
     Str,
     Unit,
     Map,
+    MapStrI32,
+    MapStrI64,
+    MapStrF64,
+    MapI32Str,
+    MapI32I32,
 }

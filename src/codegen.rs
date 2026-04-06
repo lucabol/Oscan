@@ -21,6 +21,7 @@ pub struct CodeGenerator {
     deferred_exprs: Vec<String>,
     result_types: Vec<(BcType, BcType)>,
     expected_array_elem_type: Option<BcType>,
+    fn_ptr_types: Vec<BcType>,
     freestanding: bool,
 }
 
@@ -40,16 +41,19 @@ impl CodeGenerator {
             deferred_exprs: Vec::new(),
             result_types: Vec::new(),
             expected_array_elem_type: None,
+            fn_ptr_types: Vec::new(),
             freestanding,
         };
 
         // Collect all unique Result types used in the program
         cg.collect_result_types(program);
+        cg.collect_fn_ptr_types(program);
 
         cg.emit_includes();
         cg.emit_result_typedefs();
         cg.emit_struct_defs(program);
         cg.emit_enum_defs(program);
+        cg.emit_fn_ptr_typedefs();
         cg.emit_forward_decls(program);
         cg.emit_top_level_constants(program);
         cg.emit_function_defs(program);
@@ -134,6 +138,101 @@ impl CodeGenerator {
                 Stmt::While(w) => self.collect_result_types_block(&w.body, seen),
                 _ => {}
             }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Function pointer type collection & emission
+    // -----------------------------------------------------------------------
+
+    fn fn_ptr_typedef_name(&self, ty: &BcType) -> String {
+        format!("osc_{}", self.type_tag(ty))
+    }
+
+    fn collect_fn_ptr_types(&mut self, program: &Program) {
+        let mut seen = HashSet::new();
+        // Collect from function parameters and return types
+        let fns: Vec<FunctionInfo> = self.functions.values().cloned().collect();
+        for fi in &fns {
+            for (_, ty) in &fi.params {
+                self.collect_fn_ptr_from_bctype(ty, &mut seen);
+            }
+            self.collect_fn_ptr_from_bctype(&fi.return_type, &mut seen);
+        }
+        // Collect from AST (let bindings inside functions)
+        for decl in &program.decls {
+            if let TopDecl::Fn(f) = decl {
+                for p in &f.params {
+                    self.collect_fn_ptr_from_ast_type(&p.ty, &mut seen);
+                }
+                self.collect_fn_ptr_from_block(&f.body, &mut seen);
+            }
+        }
+    }
+
+    fn collect_fn_ptr_from_bctype(&mut self, ty: &BcType, seen: &mut HashSet<String>) {
+        if let BcType::FnPtr(params, ret) = ty {
+            let tag = self.type_tag(ty);
+            if seen.insert(tag) {
+                self.fn_ptr_types.push(ty.clone());
+            }
+            for p in params {
+                self.collect_fn_ptr_from_bctype(p, seen);
+            }
+            self.collect_fn_ptr_from_bctype(ret, seen);
+        }
+    }
+
+    fn collect_fn_ptr_from_ast_type(&mut self, ty: &Type, seen: &mut HashSet<String>) {
+        match ty {
+            Type::FnPtr(params, ret, _) => {
+                let bc = self.resolve_ast_type(ty);
+                self.collect_fn_ptr_from_bctype(&bc, seen);
+                for p in params {
+                    self.collect_fn_ptr_from_ast_type(p, seen);
+                }
+                self.collect_fn_ptr_from_ast_type(ret, seen);
+            }
+            Type::DynamicArray(elem, _) | Type::FixedArray(elem, _, _) => {
+                self.collect_fn_ptr_from_ast_type(elem, seen);
+            }
+            Type::Result(ok, err, _) => {
+                self.collect_fn_ptr_from_ast_type(ok, seen);
+                self.collect_fn_ptr_from_ast_type(err, seen);
+            }
+            Type::Primitive(_, _) | Type::Named(_, _) => {}
+        }
+    }
+
+    fn collect_fn_ptr_from_block(&mut self, block: &Block, seen: &mut HashSet<String>) {
+        for stmt in &block.stmts {
+            match stmt {
+                Stmt::Let(ls) => self.collect_fn_ptr_from_ast_type(&ls.ty, seen),
+                Stmt::For(f) => self.collect_fn_ptr_from_block(&f.body, seen),
+                Stmt::ForIn(fi) => self.collect_fn_ptr_from_block(&fi.body, seen),
+                Stmt::While(w) => self.collect_fn_ptr_from_block(&w.body, seen),
+                _ => {}
+            }
+        }
+    }
+
+    fn emit_fn_ptr_typedefs(&mut self) {
+        for ty in &self.fn_ptr_types.clone() {
+            if let BcType::FnPtr(params, ret) = ty {
+                let name = self.fn_ptr_typedef_name(ty);
+                let ret_c = self.type_to_c(ret);
+                let mut param_parts = vec!["osc_arena*".to_string()];
+                for p in params {
+                    param_parts.push(self.type_to_c(p));
+                }
+                self.line(&format!(
+                    "typedef {} (*{})({});",
+                    ret_c, name, param_parts.join(", ")
+                ));
+            }
+        }
+        if !self.fn_ptr_types.is_empty() {
+            self.blank();
         }
     }
 
@@ -655,7 +754,12 @@ impl CodeGenerator {
                         | BcType::Array(_)
                         | BcType::FixedArray(_, _)
                         | BcType::Result(_, _)
-                        | BcType::Map => {
+                        | BcType::Map
+                        | BcType::MapStrI32
+                        | BcType::MapStrI64
+                        | BcType::MapStrF64
+                        | BcType::MapI32Str
+                        | BcType::MapI32I32 => {
                             self.line(&format!("{} {} = {};", c_ty, ls.name, val));
                         }
                         _ => {
@@ -876,7 +980,22 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::Ident(name, _) => name.clone(),
+            Expr::Ident(name, _) => {
+                // If it's a function name used as a value (function pointer),
+                // emit the mangled C function name
+                if self.lookup_type(name).is_none()
+                    && !self.constants.contains_key(name)
+                    && self.functions.contains_key(name)
+                {
+                    if name == "main" {
+                        "oscan_main".to_string()
+                    } else {
+                        Self::mangle_c_name(name)
+                    }
+                } else {
+                    name.clone()
+                }
+            }
 
             Expr::BinaryOp {
                 op, left, right, ..
@@ -1404,6 +1523,56 @@ impl CodeGenerator {
             "map_has" => format!("osc_map_has({}, {})", arg_strs[0], arg_strs[1]),
             "map_delete" => format!("osc_map_delete({}, {})", arg_strs[0], arg_strs[1]),
             "map_len" => format!("osc_map_len({})", arg_strs[0]),
+            // Typed HashMap builtins: map_str_i32
+            "map_str_i32_new" => "osc_map_str_i32_new(_arena)".to_string(),
+            "map_str_i32_set" => format!(
+                "osc_map_str_i32_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "map_str_i32_get" => format!("osc_map_str_i32_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i32_has" => format!("osc_map_str_i32_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i32_delete" => format!("osc_map_str_i32_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i32_len" => format!("osc_map_str_i32_len({})", arg_strs[0]),
+            // Typed HashMap builtins: map_str_i64
+            "map_str_i64_new" => "osc_map_str_i64_new(_arena)".to_string(),
+            "map_str_i64_set" => format!(
+                "osc_map_str_i64_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "map_str_i64_get" => format!("osc_map_str_i64_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i64_has" => format!("osc_map_str_i64_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i64_delete" => format!("osc_map_str_i64_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i64_len" => format!("osc_map_str_i64_len({})", arg_strs[0]),
+            // Typed HashMap builtins: map_str_f64
+            "map_str_f64_new" => "osc_map_str_f64_new(_arena)".to_string(),
+            "map_str_f64_set" => format!(
+                "osc_map_str_f64_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "map_str_f64_get" => format!("osc_map_str_f64_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_f64_has" => format!("osc_map_str_f64_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_f64_delete" => format!("osc_map_str_f64_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_f64_len" => format!("osc_map_str_f64_len({})", arg_strs[0]),
+            // Typed HashMap builtins: map_i32_str
+            "map_i32_str_new" => "osc_map_i32_str_new(_arena)".to_string(),
+            "map_i32_str_set" => format!(
+                "osc_map_i32_str_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "map_i32_str_get" => format!("osc_map_i32_str_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_str_has" => format!("osc_map_i32_str_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_str_delete" => format!("osc_map_i32_str_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_str_len" => format!("osc_map_i32_str_len({})", arg_strs[0]),
+            // Typed HashMap builtins: map_i32_i32
+            "map_i32_i32_new" => "osc_map_i32_i32_new(_arena)".to_string(),
+            "map_i32_i32_set" => format!(
+                "osc_map_i32_i32_set(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "map_i32_i32_get" => format!("osc_map_i32_i32_get({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_i32_has" => format!("osc_map_i32_i32_has({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_i32_delete" => format!("osc_map_i32_i32_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_i32_len" => format!("osc_map_i32_i32_len({})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val
@@ -1456,6 +1625,13 @@ impl CodeGenerator {
             "str_from_chars" => format!("osc_str_from_chars(_arena, {})", arg_strs[0]),
             "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
             _ => {
+                // Check if this is a function pointer variable call
+                if let Some(ty) = self.lookup_type(name) {
+                    if let BcType::FnPtr(_, _) = ty {
+                        arg_strs.insert(0, "_arena".to_string());
+                        return format!("{}({})", name, arg_strs.join(", "));
+                    }
+                }
                 // User-defined or extern function
                 let fi = self.functions.get(name).cloned();
                 let cname = Self::mangle_c_name(name);
@@ -2294,10 +2470,16 @@ impl CodeGenerator {
             BcType::Str => "osc_str".to_string(),
             BcType::Unit => "void".to_string(),
             BcType::Map => "osc_map*".to_string(),
+            BcType::MapStrI32 => "osc_map*".to_string(),
+            BcType::MapStrI64 => "osc_map*".to_string(),
+            BcType::MapStrF64 => "osc_map*".to_string(),
+            BcType::MapI32Str => "osc_map*".to_string(),
+            BcType::MapI32I32 => "osc_map*".to_string(),
             BcType::Struct(name) => name.clone(),
             BcType::Enum(name) => name.clone(),
             BcType::Array(_) | BcType::FixedArray(_, _) => "osc_array*".to_string(),
             BcType::Result(ok, err) => self.result_type_name(ok, err),
+            BcType::FnPtr(_, _) => self.fn_ptr_typedef_name(ty),
         }
     }
 
@@ -2314,11 +2496,20 @@ impl CodeGenerator {
             BcType::Str => "str".to_string(),
             BcType::Unit => "unit".to_string(),
             BcType::Map => "map".to_string(),
+            BcType::MapStrI32 => "map_str_i32".to_string(),
+            BcType::MapStrI64 => "map_str_i64".to_string(),
+            BcType::MapStrF64 => "map_str_f64".to_string(),
+            BcType::MapI32Str => "map_i32_str".to_string(),
+            BcType::MapI32I32 => "map_i32_i32".to_string(),
             BcType::Struct(name) => name.to_lowercase(),
             BcType::Enum(name) => name.to_lowercase(),
             BcType::Array(e) => format!("arr_{}", self.type_tag(e)),
             BcType::FixedArray(e, n) => format!("arr_{}_{}", self.type_tag(e), n),
             BcType::Result(o, e) => format!("result_{}_{}", self.type_tag(o), self.type_tag(e)),
+            BcType::FnPtr(params, ret) => {
+                let p: Vec<String> = params.iter().map(|t| self.type_tag(t)).collect();
+                format!("fnptr_{}_{}", p.join("_"), self.type_tag(ret))
+            }
         }
     }
 
@@ -2330,10 +2521,16 @@ impl CodeGenerator {
             BcType::Bool => "sizeof(uint8_t)".to_string(),
             BcType::Str => "sizeof(osc_str)".to_string(),
             BcType::Map => "sizeof(osc_map*)".to_string(),
+            BcType::MapStrI32 => "sizeof(osc_map*)".to_string(),
+            BcType::MapStrI64 => "sizeof(osc_map*)".to_string(),
+            BcType::MapStrF64 => "sizeof(osc_map*)".to_string(),
+            BcType::MapI32Str => "sizeof(osc_map*)".to_string(),
+            BcType::MapI32I32 => "sizeof(osc_map*)".to_string(),
             BcType::Struct(name) => format!("sizeof({})", name),
             BcType::Enum(name) => format!("sizeof({})", name),
             BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(osc_array*)".to_string(),
             BcType::Result(ok, err) => format!("sizeof({})", self.result_type_name(ok, err)),
+            BcType::FnPtr(_, _) => "sizeof(void*)".to_string(),
             BcType::Unit => "1".to_string(),
         }
     }
@@ -2348,6 +2545,11 @@ impl CodeGenerator {
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
                 PrimitiveType::Map => BcType::Map,
+                PrimitiveType::MapStrI32 => BcType::MapStrI32,
+                PrimitiveType::MapStrI64 => BcType::MapStrI64,
+                PrimitiveType::MapStrF64 => BcType::MapStrF64,
+                PrimitiveType::MapI32Str => BcType::MapI32Str,
+                PrimitiveType::MapI32I32 => BcType::MapI32I32,
             },
             Type::Named(name, _) => {
                 if self.structs.contains_key(name) {
@@ -2364,6 +2566,10 @@ impl CodeGenerator {
                 Box::new(self.resolve_ast_type(ok)),
                 Box::new(self.resolve_ast_type(err)),
             ),
+            Type::FnPtr(params, ret, _) => {
+                let param_types: Vec<BcType> = params.iter().map(|p| self.resolve_ast_type(p)).collect();
+                BcType::FnPtr(param_types, Box::new(self.resolve_ast_type(ret)))
+            }
         }
     }
 
@@ -2375,7 +2581,16 @@ impl CodeGenerator {
             Expr::StringLit(_, _) => BcType::Str,
             Expr::InterpolatedString { .. } => BcType::Str,
             Expr::BoolLit(_, _) => BcType::Bool,
-            Expr::Ident(name, _) => self.lookup_type(name).unwrap_or(BcType::Unit),
+            Expr::Ident(name, _) => {
+                if let Some(ty) = self.lookup_type(name) {
+                    ty
+                } else if let Some(fi) = self.functions.get(name) {
+                    let param_types: Vec<BcType> = fi.params.iter().map(|(_, t)| t.clone()).collect();
+                    BcType::FnPtr(param_types, Box::new(fi.return_type.clone()))
+                } else {
+                    BcType::Unit
+                }
+            }
             Expr::BinaryOp { op, left, .. } => match op {
                 BinOp::Eq
                 | BinOp::Neq
@@ -2401,6 +2616,12 @@ impl CodeGenerator {
                     }
                     if name == "push" {
                         return BcType::Unit;
+                    }
+                    // Check if it's a fn-ptr variable
+                    if let Some(ty) = self.lookup_type(name) {
+                        if let BcType::FnPtr(_, ret) = ty {
+                            return *ret;
+                        }
                     }
                     self.functions
                         .get(name)

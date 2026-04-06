@@ -1,0 +1,56 @@
+// Test: Function pointers — passing functions as values and calling through variables
+// Exercises: fn pointer types, passing functions as arguments, calling through fn-ptr params
+
+fn ascending(a: i32, b: i32) -> bool { a < b }
+fn descending(a: i32, b: i32) -> bool { a > b }
+
+fn! sort_with(arr: [i32], cmp: fn(i32, i32) -> bool) {
+    let n: i32 = len(arr);
+    let mut i: i32 = 0;
+    while i < n - 1 {
+        let mut j: i32 = 0;
+        while j < n - i - 1 {
+            if cmp(arr[j + 1], arr[j]) {
+                let tmp: i32 = arr[j];
+                arr[j] = arr[j + 1];
+                arr[j + 1] = tmp;
+            };
+            j = j + 1;
+        };
+        i = i + 1;
+    };
+}
+
+fn add(a: i32, b: i32) -> i32 { a + b }
+fn mul(a: i32, b: i32) -> i32 { a * b }
+
+fn apply(f: fn(i32, i32) -> i32, x: i32, y: i32) -> i32 {
+    f(x, y)
+}
+
+fn! main() {
+    // Test 1: sort ascending
+    let mut nums: [i32] = [5, 3, 8, 1, 9];
+    sort_with(nums, ascending);
+    for n in nums { print_i32(n); print(" "); };
+    println("");
+
+    // Test 2: sort descending
+    sort_with(nums, descending);
+    for n in nums { print_i32(n); print(" "); };
+    println("");
+
+    // Test 3: apply with different operations
+    let r1: i32 = apply(add, 3, 4);
+    let r2: i32 = apply(mul, 3, 4);
+    print_i32(r1);
+    print(" ");
+    print_i32(r2);
+    println("");
+
+    // Test 4: fn pointer in a local variable
+    let op: fn(i32, i32) -> i32 = add;
+    let r3: i32 = op(10, 20);
+    print_i32(r3);
+    println("");
+}

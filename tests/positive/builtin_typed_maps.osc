@@ -1,0 +1,57 @@
+// Test: Typed HashMap builtins
+// Exercises: map_str_i32, map_str_i64, map_str_f64, map_i32_str, map_i32_i32
+
+fn! main() {
+    // str→i32 map
+    let mut counts: map_str_i32 = map_str_i32_new();
+    map_str_i32_set(counts, "hello", 1);
+    map_str_i32_set(counts, "world", 2);
+    print_i32(map_str_i32_get(counts, "hello")); print(" ");
+    print_i32(map_str_i32_get(counts, "world")); print(" ");
+    print_i32(map_str_i32_len(counts)); println("");
+    // Default for missing key
+    print_i32(map_str_i32_get(counts, "missing")); println("");
+    // Overwrite
+    map_str_i32_set(counts, "hello", 42);
+    print_i32(map_str_i32_get(counts, "hello")); println("");
+    // Has / delete
+    print_bool(map_str_i32_has(counts, "world")); println("");
+    map_str_i32_delete(counts, "world");
+    print_bool(map_str_i32_has(counts, "world")); println("");
+    print_i32(map_str_i32_len(counts)); println("");
+
+    // str→i64 map
+    let mut big: map_str_i64 = map_str_i64_new();
+    map_str_i64_set(big, "x", 1000000000 as i64);
+    print_i64(map_str_i64_get(big, "x")); println("");
+    print_i64(map_str_i64_get(big, "missing")); println("");
+
+    // str→f64 map
+    let mut temps: map_str_f64 = map_str_f64_new();
+    map_str_f64_set(temps, "pi", 3.14159);
+    print_f64(map_str_f64_get(temps, "pi")); println("");
+    print_f64(map_str_f64_get(temps, "missing")); println("");
+
+    // i32→str map
+    let mut names: map_i32_str = map_i32_str_new();
+    map_i32_str_set(names, 1, "Alice");
+    map_i32_str_set(names, 2, "Bob");
+    println(map_i32_str_get(names, 1));
+    println(map_i32_str_get(names, 2));
+    println(map_i32_str_get(names, 99));
+    print_bool(map_i32_str_has(names, 1)); println("");
+    print_i32(map_i32_str_len(names)); println("");
+
+    // i32→i32 map
+    let mut squares: map_i32_i32 = map_i32_i32_new();
+    map_i32_i32_set(squares, 3, 9);
+    map_i32_i32_set(squares, 4, 16);
+    print_i32(map_i32_i32_get(squares, 3)); print(" ");
+    print_i32(map_i32_i32_get(squares, 4)); println("");
+    print_i32(map_i32_i32_get(squares, 99)); println("");
+    // Delete and re-insert
+    map_i32_i32_delete(squares, 3);
+    print_bool(map_i32_i32_has(squares, 3)); println("");
+    map_i32_i32_set(squares, 3, 27);
+    print_i32(map_i32_i32_get(squares, 3)); println("");
+}

@@ -3171,6 +3171,292 @@ int32_t osc_map_len(osc_map *m)
 }
 
 /* ================================================================== */
+/*  Typed hash maps — wrappers around osc_map with type conversions    */
+/* ================================================================== */
+
+/* Internal: find a slot by key, returns pointer or NULL */
+static osc_map_slot *osc_map_find_slot(osc_map *m, const char *kdata, int32_t klen)
+{
+    uint32_t h, mask, idx;
+    if (!m) return NULL;
+    h = osc_map_fnv(kdata, klen);
+    mask = (uint32_t)(m->cap - 1);
+    idx = h & mask;
+    {
+        uint32_t i;
+        for (i = 0; i < (uint32_t)m->cap; i++) {
+            uint32_t si = (idx + i) & mask;
+            osc_map_slot *s = &m->slots[si];
+            if (s->state == 0) return NULL;
+            if (s->state == 1 && s->hash == h &&
+                osc_map_keys_eq(s->key, kdata, klen))
+                return s;
+        }
+    }
+    return NULL;
+}
+
+/* Stack-buffer i32→osc_str (no arena allocation) */
+static osc_str osc_map_i32_key(char *buf, size_t bufsz, int32_t n)
+{
+    osc_str s;
+#ifdef OSC_FREESTANDING
+    int len = snprintf(buf, bufsz, "%d", (int)n);
+#else
+    int len = snprintf(buf, bufsz, "%" PRId32, n);
+#endif
+    s.data = buf;
+    s.len = (int32_t)len;
+    return s;
+}
+
+/* Arena-allocated i32→osc_str for persistent map key storage */
+static osc_str osc_map_i32_key_arena(osc_arena *arena, int32_t n)
+{
+    return osc_i32_to_str(arena, n);
+}
+
+/* Store a raw int32_t as osc_str value (binary, 4 bytes) */
+static osc_str osc_map_val_from_i32(osc_arena *arena, int32_t v)
+{
+    osc_str s;
+    char *buf = (char *)osc_arena_alloc(arena, sizeof(int32_t));
+    memcpy(buf, &v, sizeof(int32_t));
+    s.data = buf;
+    s.len = (int32_t)sizeof(int32_t);
+    return s;
+}
+
+/* Store a raw int64_t as osc_str value (binary, 8 bytes) */
+static osc_str osc_map_val_from_i64(osc_arena *arena, int64_t v)
+{
+    osc_str s;
+    char *buf = (char *)osc_arena_alloc(arena, sizeof(int64_t));
+    memcpy(buf, &v, sizeof(int64_t));
+    s.data = buf;
+    s.len = (int32_t)sizeof(int64_t);
+    return s;
+}
+
+/* Store a raw double as osc_str value (binary, 8 bytes) */
+static osc_str osc_map_val_from_f64(osc_arena *arena, double v)
+{
+    osc_str s;
+    char *buf = (char *)osc_arena_alloc(arena, sizeof(double));
+    memcpy(buf, &v, sizeof(double));
+    s.data = buf;
+    s.len = (int32_t)sizeof(double);
+    return s;
+}
+
+/* Read raw int32_t from osc_str value */
+static int32_t osc_map_val_to_i32(osc_str s)
+{
+    int32_t v;
+    memcpy(&v, s.data, sizeof(int32_t));
+    return v;
+}
+
+/* Read raw int64_t from osc_str value */
+static int64_t osc_map_val_to_i64(osc_str s)
+{
+    int64_t v;
+    memcpy(&v, s.data, sizeof(int64_t));
+    return v;
+}
+
+/* Read raw double from osc_str value */
+static double osc_map_val_to_f64(osc_str s)
+{
+    double v;
+    memcpy(&v, s.data, sizeof(double));
+    return v;
+}
+
+/* --- map_str_i32 --- */
+
+osc_map *osc_map_str_i32_new(osc_arena *arena)
+{
+    return osc_map_new(arena);
+}
+
+void osc_map_str_i32_set(osc_arena *arena, osc_map *m, osc_str key, int32_t value)
+{
+    osc_map_set(arena, m, key, osc_map_val_from_i32(arena, value));
+}
+
+int32_t osc_map_str_i32_get(osc_map *m, osc_str key)
+{
+    osc_map_slot *s = osc_map_find_slot(m, key.data, key.len);
+    if (!s) return 0;
+    return osc_map_val_to_i32(s->value);
+}
+
+uint8_t osc_map_str_i32_has(osc_map *m, osc_str key)
+{
+    return osc_map_has(m, key);
+}
+
+void osc_map_str_i32_delete(osc_map *m, osc_str key)
+{
+    osc_map_delete(m, key);
+}
+
+int32_t osc_map_str_i32_len(osc_map *m)
+{
+    return osc_map_len(m);
+}
+
+/* --- map_str_i64 --- */
+
+osc_map *osc_map_str_i64_new(osc_arena *arena)
+{
+    return osc_map_new(arena);
+}
+
+void osc_map_str_i64_set(osc_arena *arena, osc_map *m, osc_str key, int64_t value)
+{
+    osc_map_set(arena, m, key, osc_map_val_from_i64(arena, value));
+}
+
+int64_t osc_map_str_i64_get(osc_map *m, osc_str key)
+{
+    osc_map_slot *s = osc_map_find_slot(m, key.data, key.len);
+    if (!s) return 0;
+    return osc_map_val_to_i64(s->value);
+}
+
+uint8_t osc_map_str_i64_has(osc_map *m, osc_str key)
+{
+    return osc_map_has(m, key);
+}
+
+void osc_map_str_i64_delete(osc_map *m, osc_str key)
+{
+    osc_map_delete(m, key);
+}
+
+int32_t osc_map_str_i64_len(osc_map *m)
+{
+    return osc_map_len(m);
+}
+
+/* --- map_str_f64 --- */
+
+osc_map *osc_map_str_f64_new(osc_arena *arena)
+{
+    return osc_map_new(arena);
+}
+
+void osc_map_str_f64_set(osc_arena *arena, osc_map *m, osc_str key, double value)
+{
+    osc_map_set(arena, m, key, osc_map_val_from_f64(arena, value));
+}
+
+double osc_map_str_f64_get(osc_map *m, osc_str key)
+{
+    osc_map_slot *s = osc_map_find_slot(m, key.data, key.len);
+    if (!s) return 0.0;
+    return osc_map_val_to_f64(s->value);
+}
+
+uint8_t osc_map_str_f64_has(osc_map *m, osc_str key)
+{
+    return osc_map_has(m, key);
+}
+
+void osc_map_str_f64_delete(osc_map *m, osc_str key)
+{
+    osc_map_delete(m, key);
+}
+
+int32_t osc_map_str_f64_len(osc_map *m)
+{
+    return osc_map_len(m);
+}
+
+/* --- map_i32_str --- */
+
+osc_map *osc_map_i32_str_new(osc_arena *arena)
+{
+    return osc_map_new(arena);
+}
+
+void osc_map_i32_str_set(osc_arena *arena, osc_map *m, int32_t key, osc_str value)
+{
+    osc_map_set(arena, m, osc_map_i32_key_arena(arena, key), value);
+}
+
+osc_str osc_map_i32_str_get(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    osc_map_slot *s = osc_map_find_slot(m, ks.data, ks.len);
+    if (!s) { osc_str empty; empty.data = ""; empty.len = 0; return empty; }
+    return s->value;
+}
+
+uint8_t osc_map_i32_str_has(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    return osc_map_find_slot(m, ks.data, ks.len) != NULL;
+}
+
+void osc_map_i32_str_delete(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    osc_map_delete(m, ks);
+}
+
+int32_t osc_map_i32_str_len(osc_map *m)
+{
+    return osc_map_len(m);
+}
+
+/* --- map_i32_i32 --- */
+
+osc_map *osc_map_i32_i32_new(osc_arena *arena)
+{
+    return osc_map_new(arena);
+}
+
+void osc_map_i32_i32_set(osc_arena *arena, osc_map *m, int32_t key, int32_t value)
+{
+    osc_map_set(arena, m, osc_map_i32_key_arena(arena, key),
+                osc_map_val_from_i32(arena, value));
+}
+
+int32_t osc_map_i32_i32_get(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    osc_map_slot *s = osc_map_find_slot(m, ks.data, ks.len);
+    if (!s) return 0;
+    return osc_map_val_to_i32(s->value);
+}
+
+uint8_t osc_map_i32_i32_has(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    return osc_map_find_slot(m, ks.data, ks.len) != NULL;
+}
+
+void osc_map_i32_i32_delete(osc_map *m, int32_t key)
+{
+    char buf[16];
+    osc_str ks = osc_map_i32_key(buf, sizeof(buf), key);
+    osc_map_delete(m, ks);
+}
+
+int32_t osc_map_i32_i32_len(osc_map *m)
+{
+    return osc_map_len(m);
+}
+
+/* ================================================================== */
 /*  Tier 13: Date/Time                                                 */
 /* ================================================================== */
 

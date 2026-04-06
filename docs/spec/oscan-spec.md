@@ -493,6 +493,26 @@ The dynamic array `[Tree]` provides the heap indirection needed for recursion. T
 
 There are no type aliases. Every type must be referred to by its full name. This maximizes explicitness.
 
+### 3.8 Function Pointer Types
+
+Function pointer types allow passing functions as values. The syntax is:
+
+```
+fn(param_types) -> return_type
+```
+
+Examples:
+```
+fn(i32, i32) -> bool    // comparator
+fn(str) -> i32           // string → integer transform
+fn() -> unit             // no-arg, no-return callback
+```
+
+- Function pointer types are structural: two `fn(i32, i32) -> bool` types from different declarations are the same type.
+- Only user-defined `fn` and `fn!` functions can be used as function pointer values. Builtin and extern functions cannot be taken as values.
+- Functions are not closures — they capture no variables from enclosing scopes.
+- Under the hood, function pointers compile to C function pointers. The implicit `_arena` parameter is included automatically.
+
 ### 3.8 Explicit Casts
 
 The `as` keyword performs explicit type conversion. Only the following casts are permitted:
@@ -554,7 +574,7 @@ fn! greet(name: str) {
 #### Rules Applying to Both
 
 - Functions are NOT closures. They cannot capture variables from enclosing scopes.
-- Functions are NOT first-class values. You cannot pass a function as an argument or return one.
+- Functions can be passed as arguments and stored in variables via function pointer types (see §3.8).
 - All parameters are passed by value. Structs and dynamic arrays are passed by reference under the hood in the C output for efficiency, but semantically they behave as immutable copies (the callee cannot mutate the caller's data unless the parameter is explicitly `mut`). **Clarification:** parameters are immutable within the function body by default. A `mut` parameter annotation is not supported — instead, the function should take the value and the caller binds the return.
 - Recursion is permitted.
 - The `main` function is the program entry point. Its signature must be `fn! main() { ... }` (no parameters, returns unit). For programs that use error handling at the top level, `fn! main() -> Result<unit, str> { ... }` is also accepted.

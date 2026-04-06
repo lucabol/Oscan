@@ -16,6 +16,7 @@
 - **Immutable by default.** `let` is immutable; `let mut` opts in to mutation. Anti-shadowing enforced.
 - **26 reserved words.** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
 - **Order-independent definitions.** Use functions, types, and constants before they are declared.
+- **Namespaced imports.** `use "math.osc" as math` — access imported symbols via `math.add(...)` to avoid name collisions in larger programs.
 - **162 tests, 25 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
 
 ## A Quick Look

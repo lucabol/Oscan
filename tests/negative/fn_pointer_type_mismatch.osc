@@ -1,0 +1,12 @@
+// EXPECT ERROR: Function pointer type mismatch
+// Passing a function with wrong signature should fail type checking.
+
+fn add(a: i32, b: i32) -> i32 { a + b }
+
+fn! apply_bool(f: fn(i32, i32) -> bool, x: i32, y: i32) -> bool {
+    f(x, y)
+}
+
+fn! main() {
+    let r: bool = apply_bool(add, 1, 2);
+}
