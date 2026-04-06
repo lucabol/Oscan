@@ -3219,58 +3219,52 @@ static osc_str osc_map_i32_key_arena(osc_arena *arena, int32_t n)
 /* Store a raw int32_t as osc_str value (binary, 4 bytes) */
 static osc_str osc_map_val_from_i32(osc_arena *arena, int32_t v)
 {
-    osc_str s;
-    char *buf = (char *)osc_arena_alloc(arena, sizeof(int32_t));
-    memcpy(buf, &v, sizeof(int32_t));
-    s.data = buf;
-    s.len = (int32_t)sizeof(int32_t);
-    return s;
+    return osc_str_from_i32(arena, v);
 }
 
 /* Store a raw int64_t as osc_str value (binary, 8 bytes) */
 static osc_str osc_map_val_from_i64(osc_arena *arena, int64_t v)
 {
-    osc_str s;
-    char *buf = (char *)osc_arena_alloc(arena, sizeof(int64_t));
-    memcpy(buf, &v, sizeof(int64_t));
-    s.data = buf;
-    s.len = (int32_t)sizeof(int64_t);
-    return s;
+    return osc_str_from_i64(arena, v);
 }
 
-/* Store a raw double as osc_str value (binary, 8 bytes) */
+/* Store a double as text string value */
 static osc_str osc_map_val_from_f64(osc_arena *arena, double v)
 {
-    osc_str s;
-    char *buf = (char *)osc_arena_alloc(arena, sizeof(double));
-    memcpy(buf, &v, sizeof(double));
-    s.data = buf;
-    s.len = (int32_t)sizeof(double);
-    return s;
+    return osc_str_from_f64(arena, v);
 }
 
 /* Read raw int32_t from osc_str value */
 static int32_t osc_map_val_to_i32(osc_str s)
 {
-    int32_t v;
-    memcpy(&v, s.data, sizeof(int32_t));
-    return v;
+    return osc_parse_i32(s).value.ok;
 }
 
 /* Read raw int64_t from osc_str value */
 static int64_t osc_map_val_to_i64(osc_str s)
 {
-    int64_t v;
-    memcpy(&v, s.data, sizeof(int64_t));
-    return v;
+    return osc_parse_i64(s).value.ok;
 }
 
-/* Read raw double from osc_str value */
+/* Read double from text string value */
 static double osc_map_val_to_f64(osc_str s)
 {
-    double v;
-    memcpy(&v, s.data, sizeof(double));
-    return v;
+    /* Simple manual parse: atof-style */
+    char buf[64];
+    int32_t len = s.len < 63 ? s.len : 63;
+    int i;
+    for (i = 0; i < len; i++) buf[i] = s.data[i];
+    buf[len] = '\0';
+    double result = 0.0;
+    int neg = 0, j = 0;
+    if (buf[0] == '-') { neg = 1; j = 1; }
+    while (buf[j] >= '0' && buf[j] <= '9') { result = result * 10.0 + (buf[j] - '0'); j++; }
+    if (buf[j] == '.') {
+        j++;
+        double frac = 0.1;
+        while (buf[j] >= '0' && buf[j] <= '9') { result += (buf[j] - '0') * frac; frac *= 0.1; j++; }
+    }
+    return neg ? -result : result;
 }
 
 /* --- map_str_i32 --- */
