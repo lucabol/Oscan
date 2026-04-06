@@ -1,4 +1,4 @@
-use "ns_helper.osc" as helper
+use "../libs/ns_helper.osc" as helper
 
 fn! main() {
     let x: i32 = helper.add(3, 4);
