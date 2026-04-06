@@ -814,6 +814,7 @@ jobs:
             # Compile: freestanding single-TU, targeting wasm32-wasi
             $WASI_CC --target=wasm32-wasi --sysroot="$WASI_SYSROOT" \
               -std=gnu11 -ffreestanding -O2 \
+              -Wno-undefined-internal -Wno-parentheses-equality \
               -Iruntime -Ideps/laststanding \
               "tests/build/${name}.c" \
               -o "tests/build/${name}.wasm" 2>&1 || { echo "FAIL: $name — compile"; FAIL=$((FAIL+1)); continue; }
