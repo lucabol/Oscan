@@ -1,7 +1,0 @@
-MAX_VALUE = 100
-PI = 3.14159265358979
-Hello from constant
-IS_ENABLED = true
-COMPUTED = 42
-get_max() = 100
-circle_area(1.0) = 3.14159265358979
