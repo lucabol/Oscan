@@ -476,6 +476,41 @@ let v: str = map_get(m, "key");
 - Managed by the arena allocator.
 - `map_get` panics at runtime if the key is not found; use `map_has` to check first.
 
+#### Typed Map Variants
+
+In addition to the generic `map` (str→str), typed map variants provide type-safe maps with different key and value types. All typed maps share the same internal implementation and are arena-allocated.
+
+| Type | Key | Value | Description |
+|------|-----|-------|-------------|
+| `map_str_i32` | `str` | `i32` | String keys, 32-bit integer values |
+| `map_str_i64` | `str` | `i64` | String keys, 64-bit integer values |
+| `map_str_f64` | `str` | `f64` | String keys, floating-point values |
+| `map_i32_str` | `i32` | `str` | Integer keys, string values |
+| `map_i32_i32` | `i32` | `i32` | Integer keys, integer values |
+
+Each typed map provides the same six operations with a `map_TYPE_` prefix. For example, `map_str_i32` has:
+
+| Function | Signature | Purity | Description |
+|----------|-----------|--------|-------------|
+| `map_str_i32_new()` | `() -> map_str_i32` | `fn!` | Create empty str→i32 map |
+| `map_str_i32_set(m, key, value)` | `(map_str_i32, str, i32) -> unit` | `fn!` | Set key-value pair |
+| `map_str_i32_get(m, key)` | `(map_str_i32, str) -> i32` | `fn!` | Get value (returns 0 if missing) |
+| `map_str_i32_has(m, key)` | `(map_str_i32, str) -> bool` | `fn`/`fn!` | Check if key exists |
+| `map_str_i32_delete(m, key)` | `(map_str_i32, str) -> unit` | `fn!` | Delete key |
+| `map_str_i32_len(m)` | `(map_str_i32) -> i32` | `fn` | Number of entries |
+
+**Default values on missing keys:** Unlike `map_get` which panics, typed map `_get` functions return a default value when the key is not found: `0` for `i32`/`i64`, `0.0` for `f64`, `""` for `str`.
+
+**Purity:** Operations with `str` keys (`map_str_*_has`, `map_str_*_len`) are pure (`fn`). Operations with `i32` keys (`map_i32_*_has`) are `fn!` because they require internal key conversion.
+
+```
+let mut counts: map_str_i32 = map_str_i32_new();
+map_str_i32_set(counts, "apples", 5);
+map_str_i32_set(counts, "bananas", 3);
+let n: i32 = map_str_i32_get(counts, "apples");   // 5
+let m: i32 = map_str_i32_get(counts, "missing");   // 0 (default)
+```
+
 ### 3.6 Boxed Types for Recursion
 
 For recursive data structures, dynamic arrays serve as the indirection mechanism:

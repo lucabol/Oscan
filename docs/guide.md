@@ -719,6 +719,36 @@ See the **Strings** section above for the complete string function tables.
 | `path_basename(path: str) -> str` | Extract filename from path (pure)        |
 | `path_dirname(path: str) -> str`  | Extract directory from path (allocates)  |
 
+### Hash Maps
+
+The basic `map` type stores string keys and string values:
+
+```oscan
+let mut m: map = map_new();
+map_set(m, "name", "Alice");
+println(map_get(m, "name"));       // Alice
+print_bool(map_has(m, "name"));    // true
+```
+
+**Typed map variants** provide type-safe maps with different key/value types. Each variant uses a `map_TYPE_` prefix for all operations:
+
+| Type | Keys | Values | Example |
+|------|------|--------|---------|
+| `map_str_i32` | `str` | `i32` | Word counts |
+| `map_str_i64` | `str` | `i64` | Large counters |
+| `map_str_f64` | `str` | `f64` | Named measurements |
+| `map_i32_str` | `i32` | `str` | ID→name lookups |
+| `map_i32_i32` | `i32` | `i32` | Sparse integer mappings |
+
+```oscan
+let mut counts: map_str_i32 = map_str_i32_new();
+map_str_i32_set(counts, "apple", 3);
+print_i32(map_str_i32_get(counts, "apple"));    // 3
+print_i32(map_str_i32_get(counts, "missing"));   // 0 (default)
+```
+
+Each typed map has: `_new`, `_set`, `_get`, `_has`, `_delete`, `_len`. Unlike `map_get` (which panics on missing keys), typed `_get` functions return a default value: `0` for integers, `0.0` for f64, `""` for strings.
+
 ---
 
 ## Scoping Rules
