@@ -1329,9 +1329,9 @@ The compiler generates `#include` directives based on a pragma or configuration 
 
 - The compiler always generates `#include <stdint.h>`, `#include <stdio.h>`, `#include <stdlib.h>`, and `#include "osc_runtime.h"`.
 - Additional C headers are specified via a build configuration file (not part of the language syntax).
-- The generated C file is compiled with a standard C compiler (gcc/clang) and linked with the Oscan runtime library and any user-specified C libraries.
+- The generated C file is compiled with a standard C compiler toolchain (gcc/clang/MSVC) and linked with the Oscan runtime library and any user-specified C libraries.
 
-**Embedded runtime:** The Oscan compiler binary embeds the runtime files (`osc_runtime.h`, `osc_runtime.c`, and `l_os.h`) directly using Rust's `include_str!()`. This makes the compiler self-contained — no need to distribute `runtime/` or `deps/` directories. The only external dependency is a C compiler (clang preferred, but gcc and MSVC are also supported).
+**Embedded runtime:** The Oscan compiler binary embeds the runtime files (`osc_runtime.h`, `osc_runtime.c`, and `l_os.h`) directly using Rust's `include_str!()`. This makes the compiler self-contained with respect to runtime files — no need to distribute `runtime/` or `deps/` directories. Native compilation still requires access to a C toolchain; on Windows and Linux that toolchain may be bundled with the Oscan distribution, and otherwise host compiler detection is used (clang preferred, but gcc and MSVC are also supported).
 
 For development or customization, if a `runtime/` directory exists next to the oscan binary or in the current working directory, it takes precedence over the embedded files.
 
@@ -1767,6 +1767,25 @@ oscan [OPTIONS] <file.osc>
 | `--target <arch>` | Cross-compile for target architecture. Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
 | `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
 | `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |
+
+### Host Toolchain Resolution (Windows/Linux)
+
+This behavior applies to Windows and Linux host builds only.
+
+For host-native compilation, Oscan resolves the C compiler/toolchain in the following order:
+
+1. `OSCAN_CC` — explicit compiler executable/command override
+2. `OSCAN_TOOLCHAIN_DIR` — bundled toolchain root override
+3. sibling `toolchain/` directory next to the `oscan` executable
+4. `toolchain/` directory in the current working directory
+5. normal host compiler detection/fallback
+
+When a bundled toolchain root is used (`OSCAN_TOOLCHAIN_DIR`, sibling `toolchain/`, or `toolchain/` in the current working directory), Oscan searches platform-specific and generic `bin/` directories:
+
+- Windows: `toolchain/windows/bin/`, then `toolchain/bin/`
+- Linux: `toolchain/linux/bin/`, then `toolchain/bin/`
+
+A Windows/Linux Oscan distribution that includes a bundled `toolchain/` directory therefore does not always require a separately installed system compiler. This does not replace host compiler fallback; if no override or bundled toolchain is present, normal host compiler detection still applies. Cross-compilation targets still require their own target-specific toolchains.
 
 ### Target Architectures
 

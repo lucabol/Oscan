@@ -243,6 +243,11 @@ fn main() {
         None => {
             eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>");
             eprintln!("  --target <arch>  Cross-compile for target (riscv64, wasi)");
+            eprintln!("  OSCAN_CC         Override the detected C compiler command or path");
+            eprintln!(
+                "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
+                toolchain_search_hint()
+            );
             process::exit(1);
         }
     };
@@ -392,14 +397,29 @@ fn main() {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CompilerSource {
+    Override,
+    Bundled,
+    Host,
+}
+
 /// Represents a discovered C compiler with enough info to invoke it.
+#[derive(Debug, PartialEq, Eq)]
 enum CCompiler {
-    Gcc(String),
-    Clang(String),
+    Gcc {
+        cmd: String,
+        source: CompilerSource,
+    },
+    Clang {
+        cmd: String,
+        source: CompilerSource,
+    },
     /// cl.exe path and optional vcvarsall.bat path (needed when cl.exe is not already on PATH)
     Msvc {
         cl_path: String,
         vcvars: Option<String>,
+        source: CompilerSource,
     },
 }
 
@@ -436,6 +456,80 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_var_nonempty(name: &str) -> Option<String> {
+    let value = env::var(name).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn toolchain_search_hint() -> &'static str {
+    if cfg!(windows) {
+        "<exe-dir>\\toolchain, then .\\toolchain"
+    } else {
+        "<exe-dir>/toolchain, then ./toolchain"
+    }
+}
+
+fn bundled_toolchain_platform() -> Option<&'static str> {
+    match env::consts::OS {
+        "windows" => Some("windows"),
+        "linux" => Some("linux"),
+        _ => None,
+    }
+}
+
+fn resource_dir_candidates(
+    resource_name: &str,
+    explicit: Option<PathBuf>,
+    exe_path: Option<&Path>,
+) -> Vec<PathBuf> {
+    if let Some(path) = explicit {
+        return vec![path];
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(exe_dir) = exe_path.and_then(|path| path.parent()) {
+        candidates.push(exe_dir.join(resource_name));
+    }
+    candidates.push(PathBuf::from(resource_name));
+    candidates
+}
+
+fn find_first_existing_dir(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find(|candidate| candidate.is_dir()).cloned()
+}
+
+fn bundled_toolchain_bin_dirs(toolchain_dir: &Path, platform: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if matches!(platform, "windows" | "linux") {
+        dirs.push(toolchain_dir.join(platform).join("bin"));
+    }
+    dirs.push(toolchain_dir.join("bin"));
+    dirs
+}
+
+fn bundled_compiler_names(platform: &str) -> &'static [&'static str] {
+    if platform == "windows" {
+        &["clang.exe", "gcc.exe", "cl.exe"]
+    } else {
+        &["clang", "gcc"]
+    }
+}
+
+fn bundled_compiler_candidate_paths(toolchain_dir: &Path, platform: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    for bin_dir in bundled_toolchain_bin_dirs(toolchain_dir, platform) {
+        for compiler in bundled_compiler_names(platform) {
+            candidates.push(bin_dir.join(compiler));
+        }
+    }
+    candidates
+}
+
 /// Walk up from a cl.exe path to find the sibling vcvarsall.bat.
 fn find_vcvarsall_from_cl(cl_path: &str) -> Option<String> {
     let mut dir = Path::new(cl_path);
@@ -449,6 +543,35 @@ fn find_vcvarsall_from_cl(cl_path: &str) -> Option<String> {
         dir = parent;
     }
     None
+}
+
+fn compiler_from_command(cmd: String, source: CompilerSource) -> CCompiler {
+    let file_name = Path::new(&cmd)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(cmd.as_str())
+        .to_ascii_lowercase();
+
+    if file_name == "cl" || file_name == "cl.exe" {
+        let vcvars = if Path::new(&cmd).exists() {
+            find_vcvarsall_from_cl(&cmd)
+        } else {
+            None
+        };
+        CCompiler::Msvc {
+            cl_path: cmd,
+            vcvars,
+            source,
+        }
+    } else if file_name.contains("clang") {
+        CCompiler::Clang { cmd, source }
+    } else {
+        CCompiler::Gcc { cmd, source }
+    }
+}
+
+fn compiler_override(value: Option<String>) -> Option<CCompiler> {
+    value.map(|cmd| compiler_from_command(cmd, CompilerSource::Override))
 }
 
 /// Try to find Clang bundled with Visual Studio.
@@ -543,33 +666,81 @@ fn find_msvc_cl() -> Option<(String, Option<String>)> {
     None
 }
 
-/// Detect the first available C compiler in priority order:
-/// clang (PATH) → VS-bundled clang → gcc → cl.exe (PATH) → cl.exe (VS installation).
-/// Clang is preferred for smaller binaries and faster compilation.
-fn find_c_compiler() -> Option<CCompiler> {
+fn find_bundled_c_compiler_in_dir(toolchain_dir: &Path, platform: &str) -> Option<CCompiler> {
+    for candidate in bundled_compiler_candidate_paths(toolchain_dir, platform) {
+        if candidate.is_file() {
+            return Some(compiler_from_command(
+                candidate.to_string_lossy().into_owned(),
+                CompilerSource::Bundled,
+            ));
+        }
+    }
+    None
+}
+
+fn find_toolchain_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok();
+    let explicit = env_var_nonempty("OSCAN_TOOLCHAIN_DIR").map(PathBuf::from);
+    let candidates = resource_dir_candidates("toolchain", explicit, exe.as_deref());
+    find_first_existing_dir(&candidates)
+}
+
+fn find_host_c_compiler() -> Option<CCompiler> {
     if command_exists("clang") {
-        return Some(CCompiler::Clang("clang".to_string()));
+        return Some(CCompiler::Clang {
+            cmd: "clang".to_string(),
+            source: CompilerSource::Host,
+        });
     }
     if cfg!(windows) {
         if let Some(clang_path) = find_vs_clang() {
-            return Some(CCompiler::Clang(clang_path));
+            return Some(CCompiler::Clang {
+                cmd: clang_path,
+                source: CompilerSource::Host,
+            });
         }
     }
     if command_exists("gcc") {
-        return Some(CCompiler::Gcc("gcc".to_string()));
+        return Some(CCompiler::Gcc {
+            cmd: "gcc".to_string(),
+            source: CompilerSource::Host,
+        });
     }
     if cfg!(windows) {
         if command_exists("cl.exe") {
             return Some(CCompiler::Msvc {
                 cl_path: "cl.exe".to_string(),
                 vcvars: None,
+                source: CompilerSource::Host,
             });
         }
         if let Some((cl_path, vcvars)) = find_msvc_cl() {
-            return Some(CCompiler::Msvc { cl_path, vcvars });
+            return Some(CCompiler::Msvc {
+                cl_path,
+                vcvars,
+                source: CompilerSource::Host,
+            });
         }
     }
     None
+}
+
+/// Detect the first available C compiler in priority order:
+/// OSCAN_CC override → bundled toolchain → clang (PATH) → VS-bundled clang →
+/// gcc → cl.exe (PATH) → cl.exe (VS installation).
+/// Clang is preferred for smaller binaries and faster compilation.
+fn find_c_compiler() -> Option<CCompiler> {
+    if let Some(override_compiler) = compiler_override(env_var_nonempty("OSCAN_CC")) {
+        return Some(override_compiler);
+    }
+    if let Some(platform) = bundled_toolchain_platform() {
+        if let Some(toolchain_dir) = find_toolchain_dir() {
+            if let Some(compiler) = find_bundled_c_compiler_in_dir(&toolchain_dir, platform) {
+                return Some(compiler);
+            }
+        }
+    }
+    find_host_c_compiler()
 }
 
 /// Find the runtime directory, trying the exe's sibling `runtime/` first,
@@ -577,21 +748,9 @@ fn find_c_compiler() -> Option<CCompiler> {
 /// Returns `None` when no on-disk runtime directory is found (embedded files
 /// will be used as a fallback).
 fn find_runtime_dir() -> Option<PathBuf> {
-    // Try next to the executable first (for installed usage)
-    if let Ok(exe) = env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let candidate = exe_dir.join("runtime");
-            if candidate.exists() {
-                return Some(candidate);
-            }
-        }
-    }
-    // Fallback: cwd-relative (dev / project-root usage)
-    let cwd = PathBuf::from("runtime");
-    if cwd.exists() {
-        return Some(cwd);
-    }
-    None
+    let exe = env::current_exe().ok();
+    let candidates = resource_dir_candidates("runtime", None, exe.as_deref());
+    find_first_existing_dir(&candidates)
 }
 
 /// Discover extra include directories (e.g. git submodule deps).
@@ -770,8 +929,31 @@ fn invoke_c_compiler(
     let compiler = match find_c_compiler() {
         Some(c) => c,
         None => {
+            let bundled_supported = bundled_toolchain_platform().is_some();
             eprintln!("error: no C compiler found");
-            eprintln!("please install one of the following:");
+            eprintln!("searched in this order:");
+            eprintln!("  1. OSCAN_CC override");
+            if bundled_supported {
+                eprintln!(
+                    "  2. bundled toolchain under {}",
+                    toolchain_search_hint()
+                );
+                if cfg!(windows) {
+                    eprintln!("  3. host compiler detection (clang, VS clang, gcc, cl.exe)");
+                } else {
+                    eprintln!("  3. host compiler detection (clang, gcc)");
+                }
+            } else {
+                eprintln!("  2. host compiler detection (clang, gcc)");
+            }
+            eprintln!(
+                "configure {} or install one of the following:",
+                if bundled_supported {
+                    "OSCAN_CC/OSCAN_TOOLCHAIN_DIR"
+                } else {
+                    "OSCAN_CC"
+                }
+            );
             eprintln!("  - GCC:   https://gcc.gnu.org/");
             eprintln!("  - Clang: https://releases.llvm.org/");
             if cfg!(windows) {
@@ -782,10 +964,10 @@ fn invoke_c_compiler(
     };
 
     match &compiler {
-        CCompiler::Gcc(cmd) => {
+        CCompiler::Gcc { cmd, source } => {
             // On Windows, MinGW GCC from PATH may not work with l_os.h freestanding;
             // prefer VS-bundled clang which is MSVC-compatible
-            if freestanding && cfg!(windows) {
+            if freestanding && cfg!(windows) && *source == CompilerSource::Host {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
                     return compile_with_gcc_or_clang(
@@ -804,10 +986,10 @@ fn invoke_c_compiler(
             );
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
-        CCompiler::Clang(cmd) => {
+        CCompiler::Clang { cmd, source } => {
             // On Windows, clang from PATH (e.g. MSYS2) may lack MSVC compat;
             // prefer VS-bundled clang for freestanding
-            if freestanding && cfg!(windows) {
+            if freestanding && cfg!(windows) && *source == CompilerSource::Host {
                 if let Some(clang_path) = find_vs_clang() {
                     eprintln!("Compiling with VS clang (freestanding)...");
                     return compile_with_gcc_or_clang(
@@ -826,10 +1008,14 @@ fn invoke_c_compiler(
             );
             compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
         }
-        CCompiler::Msvc { cl_path, vcvars } => {
+        CCompiler::Msvc {
+            cl_path,
+            vcvars,
+            source,
+        } => {
             if freestanding {
                 // Try VS-bundled clang for true freestanding on Windows
-                if cfg!(windows) {
+                if cfg!(windows) && *source == CompilerSource::Host {
                     if let Some(clang_path) = find_vs_clang() {
                         eprintln!("Compiling with clang (freestanding)...");
                         return compile_with_gcc_or_clang(
@@ -1135,5 +1321,154 @@ fn compile_with_msvc(
                 false
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(name: &str) -> Self {
+            let id = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("test-scratch")
+                .join(format!("{}_{}_{}", name, process::id(), id));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn compiler_override_detects_requested_compiler() {
+        assert_eq!(
+            compiler_override(Some("custom-clang".to_string())),
+            Some(CCompiler::Clang {
+                cmd: "custom-clang".to_string(),
+                source: CompilerSource::Override,
+            })
+        );
+        assert_eq!(
+            compiler_override(Some("x86_64-linux-gnu-gcc".to_string())),
+            Some(CCompiler::Gcc {
+                cmd: "x86_64-linux-gnu-gcc".to_string(),
+                source: CompilerSource::Override,
+            })
+        );
+        assert_eq!(
+            compiler_override(Some("cl.exe".to_string())),
+            Some(CCompiler::Msvc {
+                cl_path: "cl.exe".to_string(),
+                vcvars: None,
+                source: CompilerSource::Override,
+            })
+        );
+    }
+
+    #[test]
+    fn resource_dir_candidates_prefer_explicit_override() {
+        let override_dir = PathBuf::from("custom-toolchain");
+        let exe = PathBuf::from("install").join("oscan");
+
+        assert_eq!(
+            resource_dir_candidates("toolchain", Some(override_dir.clone()), Some(&exe)),
+            vec![override_dir]
+        );
+    }
+
+    #[test]
+    fn toolchain_candidates_mirror_runtime_search_order() {
+        let exe = PathBuf::from("install").join("oscan");
+        let candidates = resource_dir_candidates("toolchain", None, Some(&exe));
+
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("install").join("toolchain"), PathBuf::from("toolchain")]
+        );
+    }
+
+    #[test]
+    fn bundled_windows_compiler_candidates_include_platform_and_generic_bins() {
+        let root = PathBuf::from("toolchain");
+
+        assert_eq!(
+            bundled_compiler_candidate_paths(&root, "windows"),
+            vec![
+                root.join("windows").join("bin").join("clang.exe"),
+                root.join("windows").join("bin").join("gcc.exe"),
+                root.join("windows").join("bin").join("cl.exe"),
+                root.join("bin").join("clang.exe"),
+                root.join("bin").join("gcc.exe"),
+                root.join("bin").join("cl.exe"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bundled_linux_compiler_candidates_include_platform_and_generic_bins() {
+        let root = PathBuf::from("toolchain");
+
+        assert_eq!(
+            bundled_compiler_candidate_paths(&root, "linux"),
+            vec![
+                root.join("linux").join("bin").join("clang"),
+                root.join("linux").join("bin").join("gcc"),
+                root.join("bin").join("clang"),
+                root.join("bin").join("gcc"),
+            ]
+        );
+    }
+
+    #[test]
+    fn bundled_compiler_detection_prefers_platform_specific_bin() {
+        let test_dir = TestDir::new("bundled-platform");
+        let toolchain = test_dir.path.join("toolchain");
+        let platform_clang = toolchain.join("windows").join("bin").join("clang.exe");
+        let generic_gcc = toolchain.join("bin").join("gcc.exe");
+
+        fs::create_dir_all(platform_clang.parent().unwrap()).unwrap();
+        fs::create_dir_all(generic_gcc.parent().unwrap()).unwrap();
+        fs::write(&platform_clang, []).unwrap();
+        fs::write(&generic_gcc, []).unwrap();
+
+        assert_eq!(
+            find_bundled_c_compiler_in_dir(&toolchain, "windows"),
+            Some(CCompiler::Clang {
+                cmd: platform_clang.to_string_lossy().into_owned(),
+                source: CompilerSource::Bundled,
+            })
+        );
+    }
+
+    #[test]
+    fn bundled_compiler_detection_falls_back_to_generic_bin() {
+        let test_dir = TestDir::new("bundled-generic");
+        let toolchain = test_dir.path.join("toolchain");
+        let generic_gcc = toolchain.join("bin").join("gcc");
+
+        fs::create_dir_all(generic_gcc.parent().unwrap()).unwrap();
+        fs::write(&generic_gcc, []).unwrap();
+
+        assert_eq!(
+            find_bundled_c_compiler_in_dir(&toolchain, "linux"),
+            Some(CCompiler::Gcc {
+                cmd: generic_gcc.to_string_lossy().into_owned(),
+                source: CompilerSource::Bundled,
+            })
+        );
     }
 }

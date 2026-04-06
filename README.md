@@ -36,7 +36,9 @@ fn! main() {
 
 ## Getting Started
 
-**Requires:** Rust toolchain (to build the compiler) and a C compiler (GCC, Clang, or MSVC).
+**Build from source:** Rust toolchain.
+
+**Compile host-native Oscan programs:** either a host C compiler (GCC, Clang, or MSVC) or, on Windows and Linux, a bundled toolchain shipped with the Oscan distribution.
 
 **Build the compiler:**
 
@@ -46,7 +48,7 @@ cd Oscan
 cargo build --release
 ```
 
-The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime; you only need the binary and a C compiler to run Oscan programs.
+The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime. Native builds still need access to a C toolchain, but on Windows and Linux that can come from a bundled `toolchain/` directory instead of a separately installed system compiler.
 
 **Your first program:**
 
@@ -78,12 +80,29 @@ oscan [OPTIONS] <file.osc>
   --dump-tokens   Print tokens (debug)
 ```
 
+**Windows/Linux toolchain lookup:**
+
+For host-native builds on Windows and Linux, Oscan resolves the C compiler in this order:
+
+1. `OSCAN_CC` — explicit compiler path/command override
+2. `OSCAN_TOOLCHAIN_DIR` — bundled toolchain root override
+3. sibling `toolchain/` directory next to the `oscan` binary
+4. `toolchain/` directory in the current working directory
+5. normal host compiler detection/fallback
+
+When a bundled toolchain directory is used (`OSCAN_TOOLCHAIN_DIR`, sibling `toolchain/`, or `toolchain/` in the current working directory), Oscan checks platform-specific and generic `bin/` directories:
+
+- Windows: `toolchain/windows/bin/`, then `toolchain/bin/`
+- Linux: `toolchain/linux/bin/`, then `toolchain/bin/`
+
+If your Windows/Linux Oscan distribution includes that bundled `toolchain/` directory, you do not always need to install a separate system compiler. If it does not, host compiler fallback still works as before. Cross-compilation targets such as `--target riscv64` and `--target wasi` still require their own target-specific toolchains.
+
 **Supported targets:**
 
 | Target | Mode | Compiler | Notes |
 |--------|------|----------|-------|
-| x86_64 Linux | Freestanding | gcc / clang | Default on Linux |
-| x86_64 Windows | Freestanding | clang (VS) | Default on Windows |
+| x86_64 Linux | Freestanding | bundled or host gcc / clang | Default on Linux |
+| x86_64 Windows | Freestanding | bundled or host clang / MSVC | Default on Windows |
 | ARM64 Linux | Freestanding | aarch64-linux-gnu-gcc | CI via QEMU |
 | RISC-V 64 Linux | Freestanding | `--target riscv64` | CI via QEMU |
 | WebAssembly | Libc (WASI) | `--target wasi` | Runs in wasmtime/wasmer |

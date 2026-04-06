@@ -781,6 +781,27 @@ let x: i32 = 1;
 
 ---
 
+## Native Toolchain Lookup (Windows/Linux)
+
+For normal host builds on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
+
+Lookup order:
+
+1. `OSCAN_CC` — explicit compiler path/command override
+2. `OSCAN_TOOLCHAIN_DIR` — bundled toolchain root override
+3. sibling `toolchain/` directory next to the `oscan` binary
+4. `toolchain/` directory in the current working directory
+5. normal host compiler detection/fallback
+
+When a bundled toolchain directory is used, Oscan searches platform-specific and generic `bin/` directories:
+
+- Windows: `toolchain/windows/bin/`, then `toolchain/bin/`
+- Linux: `toolchain/linux/bin/`, then `toolchain/bin/`
+
+`OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
+
+---
+
 ## Cross-Compilation
 
 Oscan supports cross-compilation to RISC-V and WebAssembly (WASI) targets using the `--target` flag.
