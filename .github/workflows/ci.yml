@@ -790,7 +790,8 @@ jobs:
         run: |
           set -euo pipefail
           oscan="./target/release/oscan"
-          CC="${WASI_SDK_PATH}/bin/clang --sysroot=${WASI_SDK_PATH}/share/wasi-sysroot"
+          WASI_CC="${WASI_SDK_PATH}/bin/clang"
+          WASI_SYSROOT="${WASI_SDK_PATH}/share/wasi-sysroot"
           PASS=0; FAIL=0; TOTAL=0
           mkdir -p tests/build
 
@@ -807,8 +808,15 @@ jobs:
             [ ! -f "$expected" ] && continue
             TOTAL=$((TOTAL + 1))
 
-            "$oscan" --libc "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
-            $CC "tests/build/${name}.c" runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o "tests/build/${name}.wasm" 2>&1 || { echo "FAIL: $name — compile"; FAIL=$((FAIL+1)); continue; }
+            # Transpile in freestanding mode (l_os.h handles WASI via its own #ifdef __wasi__)
+            "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
+
+            # Compile: freestanding single-TU, targeting wasm32-wasi
+            $WASI_CC --target=wasm32-wasi --sysroot="$WASI_SYSROOT" \
+              -std=gnu11 -ffreestanding -O2 \
+              -Iruntime -Ideps/laststanding \
+              "tests/build/${name}.c" \
+              -o "tests/build/${name}.wasm" 2>&1 || { echo "FAIL: $name — compile"; FAIL=$((FAIL+1)); continue; }
 
             actual=$(wasmtime "tests/build/${name}.wasm" 2>&1) || true
             expected_content=$(cat "$expected")
