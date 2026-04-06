@@ -187,8 +187,11 @@ impl CodeGenerator {
             self.line("#define L_MAINFILE");
             self.line("#define L_WITHSNPRINTF");
             self.line("#define L_WITHSOCKETS");
+            // l_gfx.h uses Linux framebuffer ioctls — not available on WASI
+            self.line("#ifndef __wasi__");
             self.line("#include \"l_gfx.h\"");
             self.line("#define OSC_HAS_GFX");
+            self.line("#endif");
             self.line("#define OSC_HAS_SOCKETS");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");
