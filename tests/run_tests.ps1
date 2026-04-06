@@ -14,6 +14,7 @@ Push-Location $ScriptDir
 
 $Pass = 0; $Fail = 0; $NegPass = 0; $NegFail = 0
 $Failures = [System.Collections.ArrayList]::new()
+$LibcRegressionTests = @('builtin_typed_maps')
 
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
@@ -23,6 +24,7 @@ if (-not (Test-Path "build")) {
 foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     $name = $oscFile.BaseName
     $expectedFile = "expected\$name.expected"
+    $compileArgs = @()
 
     if (-not (Test-Path $expectedFile)) {
         [void]$Failures.Add("$name — missing expected file")
@@ -30,10 +32,9 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     }
 
     if ($name -match '^ffi') {
-        & $Oscan --libc $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
-    } else {
-        & $Oscan $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
+        $compileArgs += '--libc'
     }
+    & $Oscan @compileArgs $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
     if ($LASTEXITCODE -ne 0) {
         [void]$Failures.Add("$name — compile error")
         $Fail++; continue
@@ -43,13 +44,32 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
     $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
 
-    if ($actual -eq $expected) {
-        if ($VerboseOutput) { Write-Host "  PASS: $name" -ForegroundColor Green }
-        $Pass++
-    } else {
+    if ($actual -ne $expected) {
         [void]$Failures.Add("$name — output mismatch")
         $Fail++
+        continue
     }
+
+    if (($LibcRegressionTests -contains $name) -and ($name -notmatch '^ffi')) {
+        & $Oscan --libc $oscFile.FullName -o "build\$name.libc.exe" 2>"build\$name.libc.err"
+        if ($LASTEXITCODE -ne 0) {
+            [void]$Failures.Add("$name — libc compile error")
+            $Fail++
+            continue
+        }
+
+        $actualLibc = & ".\build\$name.libc.exe" 2>&1 | Out-String
+        $actualLibc = $actualLibc.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+
+        if ($actualLibc -ne $expected) {
+            [void]$Failures.Add("$name — libc output mismatch")
+            $Fail++
+            continue
+        }
+    }
+
+    if ($VerboseOutput) { Write-Host "  PASS: $name" -ForegroundColor Green }
+    $Pass++
 }
 
 # --- Negative Tests ---
@@ -69,7 +89,7 @@ foreach ($oscFile in Get-ChildItem "negative\*.osc") {
 $VPass = 0; $VFail = 0
 $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
 foreach ($exe in Get-ChildItem "build\*.exe" -ErrorAction SilentlyContinue) {
-    if ($exe.BaseName -match '^ffi') { continue }
+    if ($exe.BaseName -match '^ffi' -or $exe.BaseName -like '*.libc') { continue }
     $stdlibPatterns = @('msvcrt', 'ucrt', 'vcruntime', 'api-ms-win-crt')
     $ok = $true
 

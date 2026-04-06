@@ -618,6 +618,65 @@ int32_t osc_str_check_index(osc_str s, int32_t idx)
 /*  Micro-lib I/O                                                      */
 /* ================================================================== */
 
+/* Fixed-point float formatting (6 decimal places, trailing zeros trimmed) */
+static void osc_format_f64(char *buf, size_t bufsz, double n)
+{
+    size_t pos = 0;
+
+    /* NaN */
+    if (n != n) {
+        buf[0] = 'N'; buf[1] = 'a'; buf[2] = 'N'; buf[3] = '\0';
+        return;
+    }
+
+    /* Negative */
+    if (n < 0.0) {
+        buf[pos++] = '-';
+        n = -n;
+    }
+
+    /* Very large — use integer-only representation */
+    if (n >= 1e18) {
+        /* Format as large integer (approximate) */
+        unsigned long long ipart = (unsigned long long)n;
+        pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
+        buf[pos] = '\0';
+        return;
+    }
+
+    /* Integer part */
+    unsigned long long ipart = (unsigned long long)n;
+    double frac = n - (double)ipart;
+
+#ifdef OSC_FREESTANDING
+    pos += (size_t)l_snprintf(buf + pos, bufsz - pos, "%llu", ipart);
+#else
+    pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
+#endif
+
+    /* Fractional part: 6 digits */
+    buf[pos++] = '.';
+    {
+        int i;
+        for (i = 0; i < 6 && pos < bufsz - 1; i++) {
+            frac *= 10.0;
+            int digit = (int)frac;
+            if (digit > 9) digit = 9;
+            buf[pos++] = (char)('0' + digit);
+            frac -= (double)digit;
+        }
+    }
+    buf[pos] = '\0';
+
+    /* Trim trailing zeros (keep at least "X.0") */
+    {
+        int end = (int)pos - 1;
+        while (end > 0 && buf[end] == '0') end--;
+        if (buf[end] == '.') end++; /* keep one digit after dot */
+        buf[end + 1] = '\0';
+    }
+}
+
 #ifdef OSC_FREESTANDING
 
 /* Helper: write a buffer to stdout */
@@ -649,61 +708,6 @@ void osc_print_i64(int64_t n)
     char buf[24];
     int len = snprintf(buf, sizeof(buf), "%lld", (long long)n);
     if (len > 0) osc_write_stdout(buf, (size_t)len);
-}
-
-/* Fixed-point float formatting (6 decimal places, trailing zeros trimmed) */
-static void osc_format_f64(char *buf, size_t bufsz, double n)
-{
-    size_t pos = 0;
-
-    /* NaN */
-    if (n != n) {
-        buf[0] = 'N'; buf[1] = 'a'; buf[2] = 'N'; buf[3] = '\0';
-        return;
-    }
-
-    /* Negative */
-    if (n < 0.0) {
-        buf[pos++] = '-';
-        n = -n;
-    }
-
-    /* Very large — use integer-only representation */
-    if (n >= 1e18) {
-        /* Format as large integer (approximate) */
-        unsigned long long ipart = (unsigned long long)n;
-        pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
-        buf[pos] = '\0';
-        return;
-    }
-
-    /* Integer part */
-    unsigned long long ipart = (unsigned long long)n;
-    double frac = n - (double)ipart;
-
-    pos += (size_t)snprintf(buf + pos, bufsz - pos, "%llu", ipart);
-
-    /* Fractional part: 6 digits */
-    buf[pos++] = '.';
-    {
-        int i;
-        for (i = 0; i < 6 && pos < bufsz - 1; i++) {
-            frac *= 10.0;
-            int digit = (int)frac;
-            if (digit > 9) digit = 9;
-            buf[pos++] = (char)('0' + digit);
-            frac -= (double)digit;
-        }
-    }
-    buf[pos] = '\0';
-
-    /* Trim trailing zeros (keep at least "X.0") */
-    {
-        int end = (int)pos - 1;
-        while (end > 0 && buf[end] == '0') end--;
-        if (buf[end] == '.') end++; /* keep one digit after dot */
-        buf[end + 1] = '\0';
-    }
 }
 
 void osc_print_f64(double n)
@@ -793,20 +797,9 @@ void osc_print_i64(int64_t n)
 
 void osc_print_f64(double n)
 {
-    /* Shortest-representation: find the minimum precision that round-trips */
-    char buf[32];
-    int prec;
-    for (prec = 1; prec <= 17; prec++) {
-        double reparsed;
-        snprintf(buf, sizeof(buf), "%.*g", prec, n);
-        sscanf(buf, "%lf", &reparsed);
-        if (reparsed == n) {
-            printf("%s", buf);
-            fflush(stdout);
-            return;
-        }
-    }
-    printf("%.17g", n);
+    char buf[64];
+    osc_format_f64(buf, sizeof(buf), n);
+    printf("%s", buf);
     fflush(stdout);
 }
 
