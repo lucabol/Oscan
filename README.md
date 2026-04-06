@@ -131,7 +131,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**173 built-in functions** across 18 categories.
+**203 built-in functions** across 18 categories.
 
 ### I/O (7 functions)
 
@@ -296,7 +296,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32` | Send UDP data to address |
 | `fn! socket_recvfrom(sock: i32, max_len: i32) -> str` | Receive UDP data |
 
-### HashMap (6 functions)
+### HashMap (36 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -306,6 +306,36 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn map_has(m: map, key: str) -> bool` | Check if key exists |
 | `fn! map_delete(m: map, key: str)` | Delete key from map |
 | `fn map_len(m: map) -> i32` | Number of entries in map |
+| `fn! map_str_i32_new() -> map_str_i32` | Create empty str→i32 map |
+| `fn! map_str_i32_set(m: map_str_i32, key: str, value: i32)` | Set key-value pair |
+| `fn! map_str_i32_get(m: map_str_i32, key: str) -> i32` | Get value by key (0 if missing) |
+| `fn map_str_i32_has(m: map_str_i32, key: str) -> bool` | Check if key exists |
+| `fn! map_str_i32_delete(m: map_str_i32, key: str)` | Delete key from map |
+| `fn map_str_i32_len(m: map_str_i32) -> i32` | Number of entries |
+| `fn! map_str_i64_new() -> map_str_i64` | Create empty str→i64 map |
+| `fn! map_str_i64_set(m: map_str_i64, key: str, value: i64)` | Set key-value pair |
+| `fn! map_str_i64_get(m: map_str_i64, key: str) -> i64` | Get value by key (0 if missing) |
+| `fn map_str_i64_has(m: map_str_i64, key: str) -> bool` | Check if key exists |
+| `fn! map_str_i64_delete(m: map_str_i64, key: str)` | Delete key from map |
+| `fn map_str_i64_len(m: map_str_i64) -> i32` | Number of entries |
+| `fn! map_str_f64_new() -> map_str_f64` | Create empty str→f64 map |
+| `fn! map_str_f64_set(m: map_str_f64, key: str, value: f64)` | Set key-value pair |
+| `fn! map_str_f64_get(m: map_str_f64, key: str) -> f64` | Get value by key (0.0 if missing) |
+| `fn map_str_f64_has(m: map_str_f64, key: str) -> bool` | Check if key exists |
+| `fn! map_str_f64_delete(m: map_str_f64, key: str)` | Delete key from map |
+| `fn map_str_f64_len(m: map_str_f64) -> i32` | Number of entries |
+| `fn! map_i32_str_new() -> map_i32_str` | Create empty i32→str map |
+| `fn! map_i32_str_set(m: map_i32_str, key: i32, value: str)` | Set key-value pair |
+| `fn! map_i32_str_get(m: map_i32_str, key: i32) -> str` | Get value by key (empty string if missing) |
+| `fn! map_i32_str_has(m: map_i32_str, key: i32) -> bool` | Check if key exists |
+| `fn! map_i32_str_delete(m: map_i32_str, key: i32)` | Delete key from map |
+| `fn map_i32_str_len(m: map_i32_str) -> i32` | Number of entries |
+| `fn! map_i32_i32_new() -> map_i32_i32` | Create empty i32→i32 map |
+| `fn! map_i32_i32_set(m: map_i32_i32, key: i32, value: i32)` | Set key-value pair |
+| `fn! map_i32_i32_get(m: map_i32_i32, key: i32) -> i32` | Get value by key (0 if missing) |
+| `fn! map_i32_i32_has(m: map_i32_i32, key: i32) -> bool` | Check if key exists |
+| `fn! map_i32_i32_delete(m: map_i32_i32, key: i32)` | Delete key from map |
+| `fn map_i32_i32_len(m: map_i32_i32) -> i32` | Number of entries |
 
 ### Array (4 functions)
 
