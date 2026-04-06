@@ -49,10 +49,12 @@
 #else
 #include <unistd.h>
 #include <dirent.h>
+#if !defined(__wasi__)
 #include <netdb.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#endif
 #include <fcntl.h>
 #include <fnmatch.h>
 #endif
@@ -3560,7 +3562,7 @@ int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L
 
 /* Shared helper for libc modes: resolve hostname or IPv4 address to sockaddr_in.
    Uses getaddrinfo() for DNS/hostname resolution (requires libc). */
-#ifndef OSC_FREESTANDING
+#if !defined(OSC_FREESTANDING) && !defined(__wasi__)
 static int osc_socket_lookup_ipv4(osc_str addr, int32_t port, struct sockaddr_in *sa)
 {
     char host[256];
