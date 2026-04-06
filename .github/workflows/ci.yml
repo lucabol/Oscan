@@ -812,8 +812,9 @@ jobs:
             "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null || { echo "FAIL: $name — transpile"; FAIL=$((FAIL+1)); continue; }
 
             # Compile: freestanding single-TU, targeting wasm32-wasi
+            # -nostdlib: l_os.h provides _start and WASI imports — skip wasi-sdk CRT
             $WASI_CC --target=wasm32-wasi --sysroot="$WASI_SYSROOT" \
-              -std=gnu11 -ffreestanding -O2 \
+              -std=gnu11 -ffreestanding -nostdlib -O2 \
               -Wno-undefined-internal -Wno-parentheses-equality \
               -Iruntime -Ideps/laststanding \
               "tests/build/${name}.c" \
