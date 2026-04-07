@@ -73,14 +73,9 @@ New-Item -ItemType Directory -Path $ScratchDir -Force | Out-Null
 $ExtractDir = Join-Path $ScratchDir "extract"
 New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
 
-if ($ArchivePath.EndsWith(".zip")) {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $ExtractDir)
-} else {
-    & tar -xf $ArchivePath -C $ExtractDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to extract $ArchivePath"
-    }
+& tar -xf $ArchivePath -C $ExtractDir
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to extract $ArchivePath"
 }
 
 $BundleDir = Get-ChildItem $ExtractDir | Where-Object { $_.PSIsContainer } | Select-Object -First 1
