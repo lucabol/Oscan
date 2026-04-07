@@ -1,9 +1,3 @@
----
-updated_at: 2026-03-27T12:43:05.586Z
-focus_area: Initial setup
-active_issues: []
----
+# Now
 
-# What We're Focused On
-
-Getting started. Updated by coordinator at session start.
+Current focus: implement GitHub Release packaging, bundled Windows/Linux release toolchains, release installers/scripts, smoke tests, and updated install documentation.

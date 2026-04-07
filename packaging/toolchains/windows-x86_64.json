@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "target": "windows-x86_64",
+  "bundle_kind": "full",
+  "toolchain": {
+    "vendor": "llvm-mingw",
+    "version": "20260324",
+    "archive": {
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20260324/llvm-mingw-20260324-ucrt-x86_64.zip",
+      "type": "zip",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "e6d3195ab6ee67f66651ae263b91e395cef3ef3af95d20f1004f84e9fe988116"
+      }
+    },
+    "extract": {
+      "strip_components": 1
+    }
+  },
+  "stage": {
+    "root": "toolchain",
+    "license_globs": [
+      "COPYING*",
+      "LICENSE*"
+    ],
+    "wrappers": []
+  }
+}

@@ -1,0 +1,206 @@
+name: Oscan Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to package (for example 0.1.0 or v0.1.0)"
+        required: true
+        type: string
+      publish:
+        description: "Publish a GitHub release after packaging"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      tag: ${{ steps.meta.outputs.tag }}
+      should_publish: ${{ steps.meta.outputs.should_publish }}
+      matrix: ${{ steps.meta.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve release version and publish mode
+        id: meta
+        shell: pwsh
+        run: |
+          $contractPath = Join-Path $env:GITHUB_WORKSPACE 'packaging/toolchains/release-contract.json'
+          $contract = Get-Content $contractPath -Raw | ConvertFrom-Json -AsHashtable
+          $eventName = '${{ github.event_name }}'
+          $rawVersion = if ($eventName -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
+          $rawVersion = $rawVersion.Trim()
+          if ([string]::IsNullOrWhiteSpace($rawVersion)) {
+            throw 'A release version is required.'
+          }
+
+          if ($rawVersion.StartsWith('v')) {
+            $tag = $rawVersion
+            $version = $rawVersion.Substring(1)
+          } else {
+            $version = $rawVersion
+            $tag = "v$rawVersion"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw 'Resolved version was empty.'
+          }
+
+          $shouldPublish = if ($eventName -eq 'push') { 'true' } elseif ('${{ inputs.publish }}' -eq 'true') { 'true' } else { 'false' }
+
+          $targets = @()
+          $targets += $contract['bundled_targets'].Keys
+          $targets += $contract['binary_only_targets'].Keys
+          $matrixEntries = foreach ($target in ($targets | Sort-Object)) {
+            $platform, $arch = $target.Split('-', 2)
+            $runner = switch ($platform) {
+              'windows' { 'windows-latest' }
+              'linux' { 'ubuntu-latest' }
+              'macos' { 'macos-13' }
+              default { throw "Unsupported platform '$platform' in release contract target '$target'." }
+            }
+            $labelPlatform = switch ($platform) {
+              'windows' { 'Windows' }
+              'linux' { 'Linux' }
+              'macos' { 'macOS' }
+              default { $platform }
+            }
+            @{
+              os = $runner
+              label = "$labelPlatform $arch"
+              target = $target
+              binary_path = if ($platform -eq 'windows') { 'target/release/oscan.exe' } else { 'target/release/oscan' }
+            }
+          }
+          $matrix = @{ include = @($matrixEntries) } | ConvertTo-Json -Compress -Depth 4
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "should_publish=$shouldPublish" >> $env:GITHUB_OUTPUT
+          "matrix=$matrix" >> $env:GITHUB_OUTPUT
+
+  package:
+    name: Package ${{ matrix.label }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Assemble release asset
+        id: assemble
+        shell: pwsh
+        run: |
+          $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
+          $archivePath = & .\scripts\assemble-release.ps1 `
+            -Target '${{ matrix.target }}' `
+            -Version '${{ needs.prepare.outputs.version }}' `
+            -BinaryPath '${{ matrix.binary_path }}' `
+            -OutputDir $outputDir
+          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+
+      - name: Smoke test packaged bundle
+        shell: pwsh
+        run: |
+          $scratchDir = Join-Path $env:RUNNER_TEMP 'oscan-release-smoke-${{ matrix.target }}'
+          & .\scripts\smoke-release.ps1 `
+            -Target '${{ matrix.target }}' `
+            -ArchivePath '${{ steps.assemble.outputs.archive_path }}' `
+            -ScratchDir $scratchDir
+
+      - name: Upload packaged artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-release
+          path: ${{ steps.assemble.outputs.archive_path }}
+
+  checksums:
+    name: Compute release checksums
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Generate SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path upload -Force | Out-Null
+          $files = Get-ChildItem -Path release-artifacts -Recurse -File | Where-Object {
+            $_.Name -match '\.(zip|tar\.gz|tar\.xz)$'
+          } | Sort-Object Name
+          if (-not $files) {
+            throw 'No packaged release assets were downloaded.'
+          }
+          & .\scripts\write-checksums.ps1 -OutputPath .\upload\SHA256SUMS.txt @($files.FullName)
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-checksums
+          path: upload/SHA256SUMS.txt
+
+  publish:
+    name: Publish GitHub Release
+    if: needs.prepare.outputs.should_publish == 'true'
+    needs:
+      - prepare
+      - package
+      - checksums
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Collect release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p upload
+          find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS.txt' \) -exec cp {} upload/ \;
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          generate_release_notes: true
+          files: upload/*

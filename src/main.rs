@@ -466,6 +466,14 @@ fn env_var_nonempty(name: &str) -> Option<String> {
     }
 }
 
+fn compiler_source_label(source: CompilerSource) -> &'static str {
+    match source {
+        CompilerSource::Override => "override",
+        CompilerSource::Bundled => "bundled",
+        CompilerSource::Host => "host",
+    }
+}
+
 fn toolchain_search_hint() -> &'static str {
     if cfg!(windows) {
         "<exe-dir>\\toolchain, then .\\toolchain"
@@ -969,7 +977,10 @@ fn invoke_c_compiler(
             // prefer VS-bundled clang which is MSVC-compatible
             if freestanding && cfg!(windows) && *source == CompilerSource::Host {
                 if let Some(clang_path) = find_vs_clang() {
-                    eprintln!("Compiling with VS clang (freestanding)...");
+                    eprintln!(
+                        "Compiling with VS clang ({}, freestanding)...",
+                        compiler_source_label(CompilerSource::Host)
+                    );
                     return compile_with_gcc_or_clang(
                         &clang_path,
                         c_file,
@@ -977,21 +988,34 @@ fn invoke_c_compiler(
                         runtime_c,
                         include_dirs,
                         freestanding,
+                        CompilerSource::Host,
                     );
                 }
             }
             eprintln!(
-                "Compiling with gcc{}...",
-                if freestanding { " (freestanding)" } else { "" }
+                "Compiling with gcc ({}){}...",
+                compiler_source_label(*source),
+                if freestanding { ", freestanding" } else { "" }
             );
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
+            compile_with_gcc_or_clang(
+                cmd,
+                c_file,
+                exe_file,
+                runtime_c,
+                include_dirs,
+                freestanding,
+                *source,
+            )
         }
         CCompiler::Clang { cmd, source } => {
             // On Windows, clang from PATH (e.g. MSYS2) may lack MSVC compat;
             // prefer VS-bundled clang for freestanding
             if freestanding && cfg!(windows) && *source == CompilerSource::Host {
                 if let Some(clang_path) = find_vs_clang() {
-                    eprintln!("Compiling with VS clang (freestanding)...");
+                    eprintln!(
+                        "Compiling with VS clang ({}, freestanding)...",
+                        compiler_source_label(CompilerSource::Host)
+                    );
                     return compile_with_gcc_or_clang(
                         &clang_path,
                         c_file,
@@ -999,14 +1023,24 @@ fn invoke_c_compiler(
                         runtime_c,
                         include_dirs,
                         freestanding,
+                        CompilerSource::Host,
                     );
                 }
             }
             eprintln!(
-                "Compiling with clang{}...",
-                if freestanding { " (freestanding)" } else { "" }
+                "Compiling with clang ({}){}...",
+                compiler_source_label(*source),
+                if freestanding { ", freestanding" } else { "" }
             );
-            compile_with_gcc_or_clang(cmd, c_file, exe_file, runtime_c, include_dirs, freestanding)
+            compile_with_gcc_or_clang(
+                cmd,
+                c_file,
+                exe_file,
+                runtime_c,
+                include_dirs,
+                freestanding,
+                *source,
+            )
         }
         CCompiler::Msvc {
             cl_path,
@@ -1017,7 +1051,10 @@ fn invoke_c_compiler(
                 // Try VS-bundled clang for true freestanding on Windows
                 if cfg!(windows) && *source == CompilerSource::Host {
                     if let Some(clang_path) = find_vs_clang() {
-                        eprintln!("Compiling with clang (freestanding)...");
+                        eprintln!(
+                            "Compiling with clang ({}, freestanding)...",
+                            compiler_source_label(CompilerSource::Host)
+                        );
                         return compile_with_gcc_or_clang(
                             &clang_path,
                             c_file,
@@ -1025,12 +1062,16 @@ fn invoke_c_compiler(
                             runtime_c,
                             include_dirs,
                             freestanding,
+                            CompilerSource::Host,
                         );
                     }
                 }
                 eprintln!("note: freestanding mode requires GCC/Clang; falling back to libc mode for MSVC");
             }
-            eprintln!("Compiling with MSVC cl.exe...");
+            eprintln!(
+                "Compiling with MSVC cl.exe ({})...",
+                compiler_source_label(*source)
+            );
             // MSVC always uses libc mode; pass OSC_NOFREESTANDING to select libc headers in dual-mode code
             compile_with_msvc(
                 cl_path,
@@ -1053,6 +1094,7 @@ fn compile_with_gcc_or_clang(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     freestanding: bool,
+    source: CompilerSource,
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -1071,8 +1113,17 @@ fn compile_with_gcc_or_clang(
             .arg("-fdata-sections")
             .arg("-s"); // strip symbols
         if cfg!(windows) {
-            // Windows: link kernel32 for Win32 API and ws2_32 for sockets
-            command.arg("-lkernel32").arg("-lws2_32");
+            // Windows: link core Win32, sockets, and GDI windowing support.
+            command
+                .arg("-lkernel32")
+                .arg("-lws2_32")
+                .arg("-luser32")
+                .arg("-lgdi32");
+            if source == CompilerSource::Bundled {
+                command
+                    .arg("-nostartfiles")
+                    .arg("-Wl,--gc-sections,--build-id=none");
+            }
         } else {
             // Unix: fully standalone, no system libraries
             command
@@ -1470,5 +1521,12 @@ mod tests {
                 source: CompilerSource::Bundled,
             })
         );
+    }
+
+    #[test]
+    fn compiler_source_labels_are_stable_for_release_smoke_tests() {
+        assert_eq!(compiler_source_label(CompilerSource::Override), "override");
+        assert_eq!(compiler_source_label(CompilerSource::Bundled), "bundled");
+        assert_eq!(compiler_source_label(CompilerSource::Host), "host");
     }
 }

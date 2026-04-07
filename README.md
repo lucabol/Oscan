@@ -34,23 +34,89 @@ fn! main() {
 }
 ```
 
-## Getting Started
+## Installation
 
-**Build from source:** Rust toolchain.
+### Option 1: GitHub Releases (Recommended for most users)
 
-**Compile host-native Oscan programs:** either a host C compiler (GCC, Clang, or MSVC) or, on Windows and Linux, a bundled toolchain shipped with the Oscan distribution.
+Download the prebuilt binary for your platform from [GitHub Releases](https://github.com/lucabol/Oscan/releases).
+
+**Windows x86_64:**
+
+1. Download `oscan-vX.Y.Z-windows-x86_64-full.zip`
+2. Extract the archive
+3. Run `install.ps1` (or manually add the extracted directory to your PATH)
+4. Verify: `oscan --help`
+
+The Windows release includes a bundled C toolchain, so you do **not** need Visual Studio or MinGW installed.
+
+**Linux x86_64:**
+
+1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz`
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Run `install.sh` (or manually add the extracted directory to your PATH)
+4. Verify: `oscan --help`
+
+The Linux release includes a bundled C toolchain for the tested distribution(s).
+
+**macOS:**
+
+1. Download the macOS release archive
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Copy `oscan` to `/usr/local/bin/` or another directory in your PATH
+4. Verify: `oscan --help`
+
+**macOS requires Xcode Command Line Tools** (or an equivalent C compiler). Install it with:
+
+```bash
+xcode-select --install
+```
+
+### Option 2: Build from Source
+
+**Requirements:**
+- Rust toolchain (for building the compiler)
+- C compiler (GCC, Clang, or MSVC) for compiling Oscan source code
 
 **Build the compiler:**
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/lucabol/Oscan.git
 cd Oscan
 cargo build --release
 ```
 
-The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime. Native builds still need access to a C toolchain, but on Windows and Linux that can come from a bundled `toolchain/` directory instead of a separately installed system compiler.
+The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime.
 
-**Your first program:**
+### Why Bundles Include `toolchain/` on Windows and Linux
+
+On Windows and Linux, the bundled release archives include a `toolchain/` directory that sits alongside the `oscan` binary. This directory contains a pre-configured C compiler and related tools so you don't have to install a separate system toolchain.
+
+**This is not in the Git repository** because:
+
+- Toolchains are large binary artifacts (not source code)
+- They are generated during release builds, not part of development
+- Bundling them in Git would bloat the repository with platform-specific binaries
+
+When you unpack the release, the directory layout looks like:
+
+```text
+oscan-vX.Y.Z-windows-x86_64-full/
+  oscan.exe
+  toolchain/
+    bin/
+      clang.exe
+      ...
+  install.ps1
+  README-install.txt
+```
+
+The `oscan` compiler discovers this bundled `toolchain/` automatically, so your first Oscan programs will compile without any additional setup.
+
+---
+
+## Getting Started
+
+### Compile Your First Oscan Program
 
 Create `hello.osc`:
 

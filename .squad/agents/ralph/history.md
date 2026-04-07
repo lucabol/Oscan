@@ -1,16 +1,6 @@
-# Project Context
-
-- **Project:** Squad
-- **Created:** 2026-03-27
-
-## Core Context
-
-Agent Ralph initialized and ready for work.
-
-## Recent Updates
-
-📌 Team initialized on 2026-03-27
+# Ralph History
 
 ## Learnings
 
-Initial setup complete.
+- Seeded for Luca Bolognese on 2026-04-07.
+- Project: current focus is release packaging and bundled installer work.

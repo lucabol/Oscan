@@ -1,39 +1,51 @@
-{
-  "agents": {
-    "lead": {
-      "persistent_name": "Neo",
-      "universe": "The Matrix",
-      "created_at": "2026-03-27T12:46:15.678Z",
-      "legacy_named": false,
-      "status": "active"
-    },
-    "compiler-dev": {
-      "persistent_name": "Trinity",
-      "universe": "The Matrix",
-      "created_at": "2026-03-27T12:46:15.678Z",
-      "legacy_named": false,
-      "status": "active"
-    },
-    "runtime-dev": {
-      "persistent_name": "Morpheus",
-      "universe": "The Matrix",
-      "created_at": "2026-03-27T12:46:15.678Z",
-      "legacy_named": false,
-      "status": "active"
-    },
-    "tester": {
-      "persistent_name": "Tank",
-      "universe": "The Matrix",
-      "created_at": "2026-03-27T12:46:15.678Z",
-      "legacy_named": false,
-      "status": "active"
-    },
-    "language-spec": {
-      "persistent_name": "Oracle",
-      "universe": "The Matrix",
-      "created_at": "2026-03-27T18:50:24.000Z",
-      "legacy_named": false,
-      "status": "active"
-    }
+[
+  {
+    "persistent_name": "Ripley",
+    "universe": "Alien",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Bishop",
+    "universe": "Alien",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Hicks",
+    "universe": "Alien",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Vasquez",
+    "universe": "Alien",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Newt",
+    "universe": "Alien",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Scribe",
+    "universe": "System",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
+  },
+  {
+    "persistent_name": "Ralph",
+    "universe": "System",
+    "created_at": "2026-04-07T14:03:30Z",
+    "legacy_named": false,
+    "status": "active"
   }
-}
+]

@@ -10,6 +10,7 @@
 
 ## Table of Contents
 
+0. [Installation & Getting Started](#0-installation--getting-started)
 1. [Keywords & Tokens](#1-keywords--tokens)
 2. [Grammar (EBNF)](#2-grammar-ebnf)
 3. [Type System](#3-type-system)
@@ -26,6 +27,144 @@
 - [Appendix A: Available Runtime Primitives (Future Builtins)](#appendix-a-available-runtime-primitives-future-builtins)
 - [Appendix B: Reserved for Future Consideration](#appendix-b-reserved-for-future-consideration)
 - [Appendix C: Design Rationale Summary](#appendix-c-design-rationale-summary)
+
+---
+
+## 0. Installation & Getting Started
+
+### Getting the Oscan Compiler
+
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Each release archive contains the Oscan compiler and, on Windows and Linux, a bundled C toolchain.
+
+#### Windows x86_64
+
+**Full bundle (recommended):**
+
+1. Download `oscan-vX.Y.Z-windows-x86_64-full.zip`
+2. Extract to a stable directory (e.g., `C:\Program Files\oscan\`)
+3. Add the directory to your PATH
+4. Verify: `oscan --help`
+
+The full bundle includes a self-contained C toolchain; no additional compiler installation is required.
+
+**Components:**
+- `oscan.exe` — the Oscan compiler
+- `toolchain/` — C compiler and related tools (Windows-native, bundled)
+- `install.ps1` — optional installation script
+
+#### Linux x86_64
+
+**Full bundle (recommended):**
+
+1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Move to a stable location: `mv oscan-*/ ~/.local/oscan/` or `/opt/oscan/`
+4. Add to PATH: `export PATH=$PATH:~/.local/oscan/`
+5. Verify: `oscan --help`
+
+The full bundle includes a pre-configured C toolchain; no separate compiler installation is required.
+
+**Components:**
+- `oscan` — the Oscan compiler
+- `toolchain/` — C compiler and related tools (Linux x86_64, bundled)
+- `install.sh` — optional installation script
+
+#### macOS
+
+**Binary-only release:**
+
+1. Download the macOS release archive
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Copy `oscan` to `/usr/local/bin/` or another directory in your PATH
+4. Verify: `oscan --help`
+
+**Prerequisite:** Xcode Command Line Tools (Apple's native C compiler).
+
+```bash
+xcode-select --install
+```
+
+macOS does not ship with a bundled C toolchain because Apple's toolchain restrictions make bundling impractical. The Oscan compiler will use your host compiler (from Apple CLT or another installation).
+
+### Building from Source
+
+To build the Oscan compiler from source:
+
+**Requirements:**
+- Rust toolchain (to build the compiler itself)
+- C compiler (GCC, Clang, or MSVC)
+
+```bash
+git clone https://github.com/lucabol/Oscan.git
+cd Oscan
+cargo build --release
+```
+
+Binary: `target/release/oscan` (or `oscan.exe` on Windows).
+
+### Release Archive Structure
+
+On Windows and Linux, the bundled release preserves this layout:
+
+```
+oscan-vX.Y.Z-windows-x86_64-full/
+  oscan.exe
+  toolchain/
+    bin/
+      clang.exe
+      lld.exe
+      ...
+    lib/
+      ...
+  install.ps1
+  LICENSES/
+  README-install.txt
+```
+
+```
+oscan-vX.Y.Z-linux-x86_64-full/
+  oscan
+  toolchain/
+    bin/
+      clang
+      lld
+      ...
+    lib/
+      ...
+  install.sh
+  LICENSES/
+  README-install.txt
+```
+
+**Why `toolchain/` is not in the Git repository:**
+
+- Toolchains are large platform-specific binaries, not source code
+- Committing them would bloat Git history and make clones slow
+- They are generated during release builds, not developed in the repository
+- The `toolchain/` directory is created by the release automation, not by developers
+
+### Compiler Invocation
+
+Once installed, invoke Oscan like this:
+
+```bash
+oscan <file.osc>              # Compile to executable
+oscan <file.osc> --run        # Compile and run immediately
+oscan <file.osc> -o <file.c>  # Emit C code only (`.c` extension)
+oscan <file.osc> --emit-c     # Emit C code to stdout
+oscan <file.osc> --target wasi    # Cross-compile to WebAssembly
+```
+
+On Windows and Linux with a bundled release, the compiler automatically discovers the sibling `toolchain/` directory. If `toolchain/` is not available or you want to override it, use the `OSCAN_TOOLCHAIN_DIR` environment variable or set `OSCAN_CC` to a specific compiler.
+
+### Upgrade and Uninstall
+
+**Phase 1 releases** do not yet use system package managers. To upgrade or uninstall:
+
+- **Upgrade:** Download the new release and extract it to the same location (or a new location and update your PATH)
+- **Uninstall:** Remove the directory containing `oscan` and `toolchain/`
+
+Future releases may support WinGet, Homebrew, and Scoop for easier management.
 
 ---
 

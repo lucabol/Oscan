@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "target": "linux-x86_64",
+  "bundle_kind": "full",
+  "toolchain": {
+    "vendor": "musl.cc",
+    "version": "x86_64-linux-musl-native@sha512",
+    "archive": {
+      "url": "https://musl.cc/x86_64-linux-musl-native.tgz",
+      "type": "tgz",
+      "digest": {
+        "algorithm": "sha512",
+        "value": "44d441ad9aa11a06feddf3daa4c9f53ad7d9ca37af1f5a61379aca07793703d179410cea723c1b7fca94c4de19a321228bdb3656bc5cbdb5e3bea8e2d6dac6c7"
+      }
+    },
+    "extract": {
+      "strip_components": 1
+    }
+  },
+  "stage": {
+    "root": "toolchain",
+    "license_globs": [
+      "COPYING*",
+      "COPYRIGHT*",
+      "LICENSE*"
+    ],
+    "wrappers": [
+      {
+        "path": "bin/gcc",
+        "kind": "posix-exec",
+        "target": "x86_64-linux-musl-gcc"
+      }
+    ]
+  }
+}

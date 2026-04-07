@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "phase": "phase1",
+  "install_surface": "github-releases",
+  "toolchains_committed_to_git": false,
+  "release_layout": {
+    "binary_position": "archive-root",
+    "toolchain_position": "archive-root/toolchain",
+    "binary_and_toolchain_are_siblings": true
+  },
+  "lookup_contract": {
+    "windows": {
+      "search_roots": [
+        "<exe-dir>\\toolchain",
+        ".\\toolchain"
+      ],
+      "bin_directories": [
+        "toolchain\\windows\\bin",
+        "toolchain\\bin"
+      ],
+      "compiler_names": [
+        "clang.exe",
+        "gcc.exe",
+        "cl.exe"
+      ]
+    },
+    "linux": {
+      "search_roots": [
+        "<exe-dir>/toolchain",
+        "./toolchain"
+      ],
+      "bin_directories": [
+        "toolchain/linux/bin",
+        "toolchain/bin"
+      ],
+      "compiler_names": [
+        "clang",
+        "gcc"
+      ]
+    }
+  },
+  "bundled_targets": {
+    "windows-x86_64": {
+      "binary_name": "oscan.exe",
+      "bundle_kind": "full",
+      "archive_format": "zip",
+      "archive_name_template": "oscan-v{version}-windows-x86_64-full.zip",
+      "archive_root_template": "oscan-v{version}-windows-x86_64-full",
+      "toolchain_manifest": "windows-x86_64.json"
+    },
+    "linux-x86_64": {
+      "binary_name": "oscan",
+      "bundle_kind": "full",
+      "archive_format": "tar.xz",
+      "archive_name_template": "oscan-v{version}-linux-x86_64-full.tar.xz",
+      "archive_root_template": "oscan-v{version}-linux-x86_64-full",
+      "toolchain_manifest": "linux-x86_64.json"
+    }
+  },
+  "binary_only_targets": {
+    "macos-x86_64": {
+      "binary_name": "oscan",
+      "bundle_kind": "binary-only",
+      "archive_format": "tar.gz",
+      "archive_name_template": "oscan-v{version}-macos-x86_64.tar.gz",
+      "archive_root_template": "oscan-v{version}-macos-x86_64",
+      "requires_host_compiler": true,
+      "required_host_toolchain": "apple-clt",
+      "note_file": "macos-phase1-note.md"
+    }
+  }
+}

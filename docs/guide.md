@@ -6,6 +6,80 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ---
 
+## Installation
+
+### Download Prebuilt Releases (Recommended)
+
+The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Each release includes the Oscan compiler and, on Windows and Linux, a bundled C toolchain so you can start compiling programs immediately.
+
+**Windows x86_64 (full bundle with toolchain):**
+
+1. Download `oscan-vX.Y.Z-windows-x86_64-full.zip`
+2. Extract to a stable location (e.g., `C:\Program Files\oscan\`)
+3. Add the directory to your PATH (or run the included `install.ps1`)
+4. Verify: `oscan --help`
+
+No separate C compiler installation needed — the bundle includes everything.
+
+**Linux x86_64 (full bundle with toolchain):**
+
+1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Move to a stable location (e.g., `~/.local/oscan/` or `/opt/oscan/`)
+4. Add to PATH or run the included `install.sh`
+5. Verify: `oscan --help`
+
+The Linux bundle ships a tested C toolchain that works alongside your system libraries.
+
+**macOS:**
+
+1. Download the macOS release archive
+2. Extract: `tar xf oscan-*.tar.gz`
+3. Copy the `oscan` binary to `/usr/local/bin/` or another directory in your PATH
+4. Verify: `oscan --help`
+
+**macOS requires Xcode Command Line Tools** (a native C compiler). Install with:
+
+```bash
+xcode-select --install
+```
+
+### Build from Source
+
+If you prefer to build Oscan yourself, you'll need:
+
+- **Rust toolchain** (to compile the Oscan compiler itself)
+- **C compiler** (GCC, Clang, or MSVC) to compile the generated C code from your Oscan programs
+
+```bash
+git clone https://github.com/lucabol/Oscan.git
+cd Oscan
+cargo build --release
+```
+
+The binary is `target/release/oscan` (or `oscan.exe` on Windows).
+
+### Why `toolchain/` Is Not in Git
+
+Release archives on Windows and Linux include a `toolchain/` directory bundled with the Oscan binary. This directory is **not** committed to the Git repository because:
+
+- It contains large platform-specific binaries (not source code)
+- It is generated during release builds, not during development
+- Committing binary toolchains would bloat the repository and make version control unwieldy
+
+The bundled `toolchain/` directory exists only in release artifacts, where it lives alongside the `oscan` binary in the unpacked archive. When you use the bundled release, the Oscan compiler automatically discovers and uses this sibling `toolchain/` directory for C compilation.
+
+### Upgrade and Uninstall (Phase 1)
+
+**Phase 1 releases** do not yet use a system package manager, so upgrades and uninstalls are manual:
+
+- **Upgrade:** Download the new release archive and extract it to the same location (or a new location and update your PATH)
+- **Uninstall:** Remove the directory containing `oscan` and `toolchain/`
+
+A future release may add WinGet, Homebrew, and Scoop support for easier package management.
+
+---
+
 ## Basics
 
 Every Oscan program needs a `fn! main()` entry point. Files use the `.osc` extension.

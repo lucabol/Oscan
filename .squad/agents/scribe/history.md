@@ -1,16 +1,6 @@
-# Project Context
-
-- **Project:** Squad
-- **Created:** 2026-03-27
-
-## Core Context
-
-Agent Scribe initialized and ready for work.
-
-## Recent Updates
-
-📌 Team initialized on 2026-03-27
+# Scribe History
 
 ## Learnings
 
-Initial setup complete.
+- Seeded for Luca Bolognese on 2026-04-07.
+- Project: Squad initialized to implement release packaging and bundled distribution work for Oscan.
