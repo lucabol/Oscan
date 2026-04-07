@@ -69,7 +69,7 @@ jobs:
             $runner = switch ($platform) {
               'windows' { 'windows-latest' }
               'linux' { 'ubuntu-latest' }
-              'macos' { 'macos-13' }
+              'macos' { 'macos-15-intel' }
               default { throw "Unsupported platform '$platform' in release contract target '$target'." }
             }
             $labelPlatform = switch ($platform) {

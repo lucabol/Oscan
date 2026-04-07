@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tarfile
 import textwrap
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path, PurePosixPath
@@ -24,6 +26,8 @@ ARCHIVE_SUFFIXES = {
     "tar.gz": ".tar.gz",
     "tar.xz": ".tar.xz",
 }
+DOWNLOAD_RETRIES = 5
+DOWNLOAD_RETRY_BASE_DELAY_SECONDS = 2
 
 
 def fail(message: str) -> "NoReturn":
@@ -233,8 +237,26 @@ def download_file(url: str, destination: Path) -> None:
             "Accept": "*/*",
         },
     )
-    with urllib.request.urlopen(request) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output)
+    last_error: BaseException | None = None
+    for attempt in range(1, DOWNLOAD_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(request) as response, destination.open("wb") as output:
+                shutil.copyfileobj(response, output)
+            return
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            last_error = exc
+            if destination.exists():
+                destination.unlink()
+            if attempt == DOWNLOAD_RETRIES:
+                break
+            delay_seconds = DOWNLOAD_RETRY_BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+            print(
+                f"warning: download attempt {attempt}/{DOWNLOAD_RETRIES} failed for {url}: {exc}; "
+                f"retrying in {delay_seconds}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay_seconds)
+    fail(f"failed to download {url} after {DOWNLOAD_RETRIES} attempts: {last_error}")
 
 
 def copy_path(source: Path, destination: Path) -> None:
