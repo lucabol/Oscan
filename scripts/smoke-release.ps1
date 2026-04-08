@@ -119,6 +119,21 @@ fn! main() {
 }
 '@
 
+# Diagnostics: verify toolchain health before compile
+if ($expectsBundled -and $platform -ne "windows") {
+    $tcBin = Join-Path $InstallDir "toolchain" "bin"
+    Write-Host "Toolchain bin dir: $tcBin"
+    if (Test-Path $tcBin) {
+        Get-ChildItem $tcBin | ForEach-Object { Write-Host "  $($_.Name) $(if ($_.LinkType) { '-> ' + $_.Target } else { '' })" }
+    }
+    $gccBin = Join-Path $tcBin "x86_64-linux-musl-gcc"
+    if (Test-Path $gccBin) {
+        Write-Host "GCC version check:"
+        $verOut = & $gccBin --version 2>&1 | Out-String
+        Write-Host $verOut
+    }
+}
+
 Push-Location $ScratchDir
 try {
     $compileArgs = @()
@@ -126,9 +141,23 @@ try {
         $compileArgs += "--libc"
     }
     $compileArgs += @($SampleSource, "-o", $SampleOutput)
-    & $OscanCommand @compileArgs 2> $CompileLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Release smoke compile failed:`n$((Get-Content $CompileLog -Raw))"
+    Write-Host "Running: $OscanCommand $($compileArgs -join ' ')"
+    if ($platform -ne "windows") {
+        # Use timeout to prevent hanging (5 minutes max)
+        $timeoutSec = 300
+        $proc = Start-Process -FilePath $OscanCommand -ArgumentList $compileArgs -RedirectStandardError $CompileLog -PassThru -NoNewWindow
+        if (-not $proc.WaitForExit($timeoutSec * 1000)) {
+            $proc.Kill()
+            throw "Smoke compile timed out after ${timeoutSec}s.`nStderr so far:`n$((Get-Content $CompileLog -Raw -ErrorAction SilentlyContinue))"
+        }
+        if ($proc.ExitCode -ne 0) {
+            throw "Release smoke compile failed (exit $($proc.ExitCode)):`n$((Get-Content $CompileLog -Raw))"
+        }
+    } else {
+        & $OscanCommand @compileArgs 2> $CompileLog
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release smoke compile failed:`n$((Get-Content $CompileLog -Raw))"
+        }
     }
 } finally {
     Pop-Location
