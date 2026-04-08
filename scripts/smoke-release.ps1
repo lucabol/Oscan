@@ -39,8 +39,9 @@ if (-not $ArchivePath.EndsWith($expectedArchiveSuffix)) {
 $expectsBundled = $targetSpec["bundle_kind"] -eq "full"
 $requiresHostCompiler = [bool]($targetSpec["requires_host_compiler"] ?? $false)
 $expectedNoteFile = if ($targetSpec.ContainsKey("note_file")) { [string]$targetSpec["note_file"] } else { $null }
-# Linux bundled: smoke uses --libc (host compiler) because musl native GCC is not relocatable
-$expectedCompilerSource = if ($expectsBundled -and $platform -ne "linux") { "bundled" } else { "host" }
+# Linux bundled: smoke uses OSCAN_CC override because musl native GCC is not relocatable
+$useHostOverride = $expectsBundled -and $platform -eq "linux"
+$expectedCompilerSource = if ($useHostOverride) { "override" } elseif ($expectsBundled) { "bundled" } else { "host" }
 
 function Get-DefaultScratchDir {
     param(
@@ -123,10 +124,12 @@ fn! main() {
 Push-Location $ScratchDir
 try {
     $compileArgs = @()
+    if ($requiresHostCompiler) {
+        $compileArgs += "--libc"
+    }
     # Bundled Linux toolchain (musl native GCC) has hardcoded absolute paths
     # and is not relocatable. Override with host compiler for the smoke test.
-    # The bundled toolchain directory existence is verified separately above.
-    if ($requiresHostCompiler -or ($expectsBundled -and $platform -eq "linux")) {
+    if ($expectsBundled -and $platform -eq "linux") {
         $compileArgs += "--libc"
         $env:OSCAN_CC = "gcc"
     }
