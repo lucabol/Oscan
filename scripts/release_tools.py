@@ -361,20 +361,27 @@ def remove_path(path: Path) -> None:
     shutil.rmtree(path, onerror=handle_remove_readonly)
 
 
+def _extract_with_system_tar(archive_path: Path, dest: Path) -> bool:
+    """Extract using system tar. Handles absolute symlinks that Python 3.14+ rejects."""
+    tar_bin = shutil.which("tar")
+    if not tar_bin:
+        return False
+    result = subprocess.run(
+        [tar_bin, "-xf", str(archive_path), "-C", str(dest)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def extract_archive(archive_path: Path, archive_type: str, destination: Path, strip_components: int) -> None:
     temp_root = archive_path.parent / f".extract-{archive_path.stem}"
     ensure_clean_dir(temp_root)
     try:
-        if os.name == "nt" and archive_type == "zip":
-            result = subprocess.run(
-                ["tar", "-xf", str(archive_path), "-C", str(temp_root)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
-            if result.returncode != 0:
-                fail(f"failed to extract {archive_path.name}: {result.stderr.strip()}")
+        if _extract_with_system_tar(archive_path, temp_root):
+            pass  # system tar succeeded
         else:
             shutil.unpack_archive(
                 str(archive_path),
