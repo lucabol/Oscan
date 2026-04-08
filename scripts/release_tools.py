@@ -449,6 +449,65 @@ def fix_absolute_symlinks(root: Path) -> None:
             os.symlink(new_target, path)
 
 
+def prune_toolchain(root: Path, prune_config: dict) -> None:
+    """Remove unnecessary files from extracted toolchain to reduce bundle size."""
+    remove_globs = prune_config.get("remove_globs", [])
+    strip_debug = prune_config.get("strip_debug", False)
+    keep_globs = prune_config.get("keep_globs", [])
+
+    if not remove_globs and not strip_debug:
+        return
+
+    # Build keep set first (files that must not be deleted even if matched by remove)
+    keep_paths: set[Path] = set()
+    for pattern in keep_globs:
+        for match in root.rglob(pattern):
+            keep_paths.add(match.resolve())
+
+    # Remove files matching remove_globs (dirs are removed if emptied)
+    removed_count = 0
+    for pattern in remove_globs:
+        for match in sorted(root.rglob(pattern), key=lambda p: p.as_posix(), reverse=True):
+            if match.resolve() in keep_paths:
+                continue
+            if match.is_symlink() or match.is_file():
+                match.unlink()
+                removed_count += 1
+            elif match.is_dir():
+                remove_path(match)
+                removed_count += 1
+
+    # Clean up empty directories left behind
+    for dirpath in sorted(root.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+        if dirpath.is_dir() and not any(dirpath.iterdir()):
+            dirpath.rmdir()
+
+    # Strip debug symbols from binaries and archives
+    if strip_debug and os.name != "nt":
+        strip_bin = shutil.which("strip")
+        if strip_bin:
+            for path in root.rglob("*"):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                suffix = path.suffix.lower()
+                if suffix in (".a", ".o"):
+                    subprocess.run(
+                        [strip_bin, "--strip-debug", str(path)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                elif suffix in ("", ".so") and os.access(path, os.X_OK):
+                    subprocess.run(
+                        [strip_bin, "--strip-unneeded", str(path)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+
+    print(f"Pruned toolchain: removed {removed_count} entries", file=sys.stderr)
+
+
 def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
     manifest = load_manifest(manifest_path)
     archive = manifest["toolchain"]["archive"]
@@ -475,6 +534,19 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
     strip_components = int(manifest["toolchain"].get("extract", {}).get("strip_components", 0))
     extract_archive(download_path, archive["type"], destination, strip_components)
     fix_absolute_symlinks(destination)
+
+    # Ensure all files are writable (zip archives may preserve read-only attributes)
+    if os.name == "nt":
+        for path in destination.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                try:
+                    path.chmod(stat.S_IREAD | stat.S_IWRITE)
+                except OSError:
+                    pass
+
+    prune_config = manifest["toolchain"].get("prune", {})
+    if prune_config:
+        prune_toolchain(destination, prune_config)
 
     for wrapper in manifest["stage"].get("wrappers", []):
         create_wrapper(destination, wrapper)

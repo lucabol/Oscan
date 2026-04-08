@@ -15,6 +15,30 @@
     },
     "extract": {
       "strip_components": 1
+    },
+    "prune": {
+      "remove_globs": [
+        "lib/libstdc++*",
+        "lib/libsupc++*",
+        "lib/libgomp*",
+        "lib/libatomic*",
+        "lib/libitm*",
+        "lib/libssp*",
+        "lib/libquadmath*",
+        "lib/libgfortran*",
+        "lib/libasan*",
+        "lib/liblsan*",
+        "lib/libtsan*",
+        "lib/libubsan*",
+        "lib/libsanitizer*",
+        "include/c++",
+        "share/doc",
+        "share/info",
+        "share/man",
+        "share/locale",
+        "share/gcc-*"
+      ],
+      "strip_debug": true
     }
   },
   "stage": {
