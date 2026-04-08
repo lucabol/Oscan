@@ -428,6 +428,27 @@ def create_wrapper(destination_root: Path, wrapper_spec: dict) -> None:
     fail(f"unsupported wrapper kind '{kind}'")
 
 
+def fix_absolute_symlinks(root: Path) -> None:
+    """Convert absolute symlinks to relative ones when the target exists in the tree."""
+    if os.name == "nt":
+        return
+    for path in root.rglob("*"):
+        if not path.is_symlink():
+            continue
+        target = os.readlink(path)
+        if not os.path.isabs(target):
+            continue
+        # Try to find the target within the extracted tree
+        relative_target = Path(target).relative_to("/") if target.startswith("/") else None
+        if relative_target is None:
+            continue
+        candidate = root / relative_target
+        if candidate.exists() or candidate.is_symlink():
+            new_target = os.path.relpath(candidate, path.parent)
+            path.unlink()
+            os.symlink(new_target, path)
+
+
 def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
     manifest = load_manifest(manifest_path)
     archive = manifest["toolchain"]["archive"]
@@ -453,6 +474,7 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
 
     strip_components = int(manifest["toolchain"].get("extract", {}).get("strip_components", 0))
     extract_archive(download_path, archive["type"], destination, strip_components)
+    fix_absolute_symlinks(destination)
 
     for wrapper in manifest["stage"].get("wrappers", []):
         create_wrapper(destination, wrapper)
