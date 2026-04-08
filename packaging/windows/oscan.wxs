@@ -19,6 +19,11 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
+    <!-- Minimal UI: progress bar during install + completion dialog -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="Oscan has been installed successfully. Open a new terminal and run 'oscan --help' to get started." />
+
     <!-- Install to Program Files\Oscan -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Oscan" />

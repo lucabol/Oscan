@@ -31,6 +31,10 @@ if (-not $wixCmd) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to install WiX" }
 }
 
+# Accept EULA and install UI extension
+wix eula accept wix7 2>$null
+wix extension add WixToolset.UI.wixext 2>$null
+
 # Harvest the toolchain directory into a WiX fragment
 $ToolchainDir = Join-Path $BundleDir "toolchain"
 $HarvestWxs = Join-Path $env:TEMP "oscan-toolchain-harvest.wxs"
@@ -124,6 +128,7 @@ if (-not (Test-Path $parentDir)) {
 wix build $WxsPath $HarvestWxs `
     -arch x64 `
     -acceptEula wix7 `
+    -ext WixToolset.UI.wixext `
     -d "BundleDir=$BundleDir" `
     -d "Version=$Version" `
     -out $OutputPath

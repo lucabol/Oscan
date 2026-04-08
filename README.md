@@ -42,12 +42,20 @@ Download the prebuilt binary for your platform from [GitHub Releases](https://gi
 
 **Windows x86_64:**
 
+*Option A — MSI installer (simplest):*
+
+1. Download `oscan-vX.Y.Z-windows-x86_64.msi`
+2. Double-click to install (or run `msiexec /i oscan-*.msi /quiet` for silent install)
+3. Open a **new** terminal and verify: `oscan --help`
+
+*Option B — Zip archive:*
+
 1. Download `oscan-vX.Y.Z-windows-x86_64-full.zip`
 2. Extract the archive
 3. Run `install.ps1` (or manually add the extracted directory to your PATH)
 4. Verify: `oscan --help`
 
-The Windows release includes a bundled C toolchain, so you do **not** need Visual Studio or MinGW installed.
+Both options include a bundled C toolchain, so you do **not** need Visual Studio or MinGW installed.
 
 **Linux x86_64:**
 
