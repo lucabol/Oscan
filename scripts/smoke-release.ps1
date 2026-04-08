@@ -124,17 +124,18 @@ Push-Location $ScratchDir
 try {
     $compileArgs = @()
     # Bundled Linux toolchain (musl native GCC) has hardcoded absolute paths
-    # and is not relocatable. The smoke test uses --libc (host compiler) to
-    # verify oscan itself works. The bundled toolchain directory existence is
-    # checked separately above.
+    # and is not relocatable. Override with host compiler for the smoke test.
+    # The bundled toolchain directory existence is verified separately above.
     if ($requiresHostCompiler -or ($expectsBundled -and $platform -eq "linux")) {
         $compileArgs += "--libc"
+        $env:OSCAN_CC = "gcc"
     }
     $compileArgs += @($SampleSource, "-o", $SampleOutput)
     & $OscanCommand @compileArgs 2> $CompileLog
     if ($LASTEXITCODE -ne 0) {
         throw "Release smoke compile failed:`n$((Get-Content $CompileLog -Raw))"
     }
+    if ($env:OSCAN_CC) { Remove-Item Env:\OSCAN_CC -ErrorAction SilentlyContinue }
 } finally {
     Pop-Location
 }
