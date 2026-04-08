@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <!-- Variables passed via -d on the command line:
+       BundleDir  = path to the staged release bundle directory
+       Version    = semantic version (e.g. 0.0.1)  -->
+
+  <Package Name="Oscan"
+           Manufacturer="Oscan Project"
+           Version="$(var.Version)"
+           UpgradeCode="F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B"
+           Scope="perMachine"
+           Compressed="yes">
+
+    <SummaryInformation Description="Oscan programming language" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Oscan is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Install to Program Files\Oscan -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Oscan" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="OscanFiles" Directory="INSTALLFOLDER">
+      <!-- Main binary -->
+      <Component Id="OscanExe" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+        <File Id="oscan.exe" Source="$(var.BundleDir)\oscan.exe" KeyPath="yes" />
+      </Component>
+
+      <!-- Add install dir to system PATH -->
+      <Component Id="PathEntry" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
+        <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]"
+                     Permanent="no" Part="last" Action="set" System="yes" />
+      </Component>
+
+      <!-- Install readme -->
+      <Component Id="InstallReadme" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
+        <File Id="README_install.txt" Source="$(var.BundleDir)\README-install.txt" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Toolchain directory harvested dynamically by build script -->
+    <ComponentGroupRef Id="ToolchainFiles" />
+
+    <Feature Id="Complete" Title="Oscan" Level="1">
+      <ComponentGroupRef Id="OscanFiles" />
+      <ComponentGroupRef Id="ToolchainFiles" />
+    </Feature>
+
+  </Package>
+</Wix>

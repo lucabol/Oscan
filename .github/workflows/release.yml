@@ -142,6 +142,30 @@ jobs:
           name: ${{ matrix.target }}-release
           path: ${{ steps.assemble.outputs.archive_path }}
 
+      - name: Build MSI installer (Windows only)
+        if: startsWith(matrix.target, 'windows')
+        id: msi
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix
+          $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
+          $stageDir = Join-Path $outputDir 'stage'
+          $bundleDir = (Get-ChildItem $stageDir -Directory | Select-Object -First 1).FullName
+          $msiName = 'oscan-v${{ needs.prepare.outputs.version }}-${{ matrix.target }}.msi'
+          $msiPath = Join-Path $outputDir $msiName
+          & .\scripts\build-msi.ps1 `
+            -BundleDir $bundleDir `
+            -Version '${{ needs.prepare.outputs.version }}' `
+            -OutputPath $msiPath
+          "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
+
+      - name: Upload MSI artifact (Windows only)
+        if: startsWith(matrix.target, 'windows')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-msi
+          path: ${{ steps.msi.outputs.msi_path }}
+
   checksums:
     name: Compute release checksums
     needs: package
@@ -164,7 +188,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path upload -Force | Out-Null
           $files = Get-ChildItem -Path release-artifacts -Recurse -File | Where-Object {
-            $_.Name -match '\.(zip|tar\.gz|tar\.xz)$'
+            $_.Name -match '\.(zip|msi|tar\.gz|tar\.xz)$'
           } | Sort-Object Name
           if (-not $files) {
             throw 'No packaged release assets were downloaded.'
@@ -196,7 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p upload
-          find release-assets -type f \( -name '*.zip' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS.txt' \) -exec cp {} upload/ \;
+          find release-assets -type f \( -name '*.zip' -o -name '*.msi' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS.txt' \) -exec cp {} upload/ \;
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
