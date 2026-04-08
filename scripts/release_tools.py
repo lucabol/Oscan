@@ -228,8 +228,46 @@ def python_unpack_format(archive_type: str) -> str:
         fail(f"unsupported archive type '{archive_type}'")
 
 
+def _download_with_curl(url: str, destination: Path) -> bool:
+    """Try downloading with curl (preferred on CI). Returns True on success."""
+    curl = shutil.which("curl")
+    if not curl:
+        return False
+    result = subprocess.run(
+        [
+            curl,
+            "--proto", "=https",
+            "--tlsv1.2",
+            "--retry", str(DOWNLOAD_RETRIES),
+            "--retry-connrefused",
+            "--retry-delay", "2",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--output", str(destination),
+            url,
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode == 0 and destination.exists():
+        return True
+    if destination.exists():
+        destination.unlink()
+    print(
+        f"warning: curl download failed for {url}: {result.stderr.strip()}",
+        file=sys.stderr,
+    )
+    return False
+
+
 def download_file(url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if _download_with_curl(url, destination):
+        return
     request = urllib.request.Request(
         url,
         headers={

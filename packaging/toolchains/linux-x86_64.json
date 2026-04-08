@@ -6,7 +6,7 @@
     "vendor": "musl.cc",
     "version": "x86_64-linux-musl-native@sha512",
     "archive": {
-      "url": "https://musl.cc/x86_64-linux-musl-native.tgz",
+      "url": "https://joeyparrish.github.io/musl-cc-mirror/x86_64-linux-musl-native.tgz",
       "type": "tgz",
       "digest": {
         "algorithm": "sha512",
