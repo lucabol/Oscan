@@ -3843,7 +3843,42 @@ int32_t osc_canvas_mouse_btn(void) { return (int32_t)osc_gfx_canvas.mouse_btn; }
 int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)L_RGB(r, g, b); }
 int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L_RGBA(r, g, b, a); }
 
+#else /* !OSC_HAS_GFX — stub implementations for platforms without graphics */
+
+osc_result_str_str osc_canvas_open(int32_t width, int32_t height, osc_str title) {
+    (void)width; (void)height; (void)title;
+    osc_result_str_str r; r.is_ok = 0; r.value.err = osc_str_from_cstr("canvas_open: not supported on this platform"); return r;
+}
+void    osc_canvas_close(void) {}
+uint8_t osc_canvas_alive(void) { return 0; }
+void    osc_canvas_flush(void) {}
+void    osc_canvas_clear(int32_t color) { (void)color; }
+void    osc_gfx_pixel(int32_t x, int32_t y, int32_t color) { (void)x; (void)y; (void)color; }
+int32_t osc_gfx_get_pixel(int32_t x, int32_t y) { (void)x; (void)y; return 0; }
+void    osc_gfx_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t color) { (void)x0; (void)y0; (void)x1; (void)y1; (void)color; }
+void    osc_gfx_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) { (void)x; (void)y; (void)w; (void)h; (void)color; }
+void    osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) { (void)x; (void)y; (void)w; (void)h; (void)color; }
+void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void)cx; (void)cy; (void)r; (void)color; }
+void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void)cx; (void)cy; (void)r; (void)color; }
+void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) { (void)x; (void)y; (void)text; (void)color; }
+void    osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy) { (void)x; (void)y; (void)text; (void)color; (void)sx; (void)sy; }
+void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_arr_i32 pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
+void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_arr_i32 pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
+int32_t osc_canvas_key(void) { return 0; }
+int32_t osc_canvas_mouse_x(void) { return 0; }
+int32_t osc_canvas_mouse_y(void) { return 0; }
+int32_t osc_canvas_mouse_btn(void) { return 0; }
+int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)(0xFF000000u | ((uint32_t)r<<16) | ((uint32_t)g<<8) | (uint32_t)b); }
+int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)(((uint32_t)a<<24) | ((uint32_t)r<<16) | ((uint32_t)g<<8) | (uint32_t)b); }
+
 #endif /* OSC_HAS_GFX */
+
+#ifndef OSC_HAS_IMG
+osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data) {
+    (void)arena; (void)data;
+    osc_result_arr_i32_str r; r.is_ok = 0; r.value.err = osc_str_from_cstr("img_load: not supported on this platform"); return r;
+}
+#endif /* !OSC_HAS_IMG */
 
 /* ================================================================== */
 /*  Socket wrappers                                                    */
