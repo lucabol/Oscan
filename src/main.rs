@@ -185,6 +185,25 @@ fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
+fn print_usage(to_stderr: bool) {
+    let print_line = |line: &str| {
+        if to_stderr {
+            eprintln!("{line}");
+        } else {
+            println!("{line}");
+        }
+    };
+    print_line(
+        "usage: oscan [--help] [-h] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
+    );
+    print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
+    print_line("  OSCAN_CC         Override the detected C compiler command or path");
+    print_line(&format!(
+        "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
+        toolchain_search_hint()
+    ));
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -205,6 +224,10 @@ fn main() {
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
+            "--help" | "-h" => {
+                print_usage(false);
+                return;
+            }
             "--target" => {
                 i += 1;
                 let val = args.get(i).cloned().unwrap_or_else(|| {
@@ -241,13 +264,7 @@ fn main() {
     let path = match file_path {
         Some(p) => p,
         None => {
-            eprintln!("usage: oscan [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>");
-            eprintln!("  --target <arch>  Cross-compile for target (riscv64, wasi)");
-            eprintln!("  OSCAN_CC         Override the detected C compiler command or path");
-            eprintln!(
-                "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
-                toolchain_search_hint()
-            );
+            print_usage(true);
             process::exit(1);
         }
     };
