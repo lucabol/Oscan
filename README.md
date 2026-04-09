@@ -19,6 +19,16 @@
 - **Namespaced imports.** `use "math.osc" as math` — access imported symbols via `math.add(...)` to avoid name collisions in larger programs.
 - **162 tests, 25 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
 
+## For AI Coding Agents
+
+Oscan is a new language — LLMs are not pre-trained on it. If you're using an AI coding agent (GitHub Copilot, Claude, Cursor, etc.), point it at the **language reference** before writing `.osc` code:
+
+📄 [`.github/instructions/oscan.instructions.md`](.github/instructions/oscan.instructions.md) — critical syntax differences, common anti-patterns, annotated examples, and the full built-in function table.
+
+GitHub Copilot picks this up automatically via `applyTo: "**/*.osc"`. For other tools, include it in your context or system prompt.
+
+This file is **auto-generated** from the compiler source and example programs — run `python scripts/gen-copilot-instructions.py --inject` to update it, or let CI do it on push.
+
 ## A Quick Look
 
 ```oscan
