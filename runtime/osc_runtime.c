@@ -4001,11 +4001,17 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
 osc_result_i32_str osc_socket_unix_connect(osc_str path)
 {
     osc_result_i32_str result;
+#ifdef _WIN32
+    (void)path;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: not supported on Windows");
+#else
     char buf[256];
     osc_str_to_cstr_buf(path, buf, sizeof(buf));
     int32_t fd = (int32_t)l_socket_unix_connect(buf);
     if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: connection failed"); return result; }
-    result.is_ok = 1; result.value.ok = fd; return result;
+    result.is_ok = 1; result.value.ok = fd;
+#endif
+    return result;
 }
 
 #elif defined(_WIN32) /* Windows libc mode */
