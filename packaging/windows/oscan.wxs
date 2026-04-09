@@ -19,9 +19,10 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <!-- Full UI: welcome, install dir, progress, finish with Finish button -->
+    <!-- Full UI: welcome, license, install dir, progress, finish with Finish button -->
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <ui:WixUI Id="WixUI_InstallDir" />
+    <WixVariable Id="WixUILicenseRtf" Value="packaging\windows\license.rtf" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
               Value="Oscan has been installed successfully. Open a new terminal and run 'oscan --help' to get started." />
 

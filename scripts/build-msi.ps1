@@ -129,6 +129,7 @@ wix build $WxsPath $HarvestWxs `
     -arch x64 `
     -acceptEula wix7 `
     -ext WixToolset.UI.wixext `
+    -b $RepoRoot `
     -d "BundleDir=$BundleDir" `
     -d "Version=$Version" `
     -out $OutputPath
