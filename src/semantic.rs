@@ -17,6 +17,7 @@ const RESOURCE_PAIRS: &[(&str, &str)] = &[
     ("socket_tcp", "socket_close"),
     ("socket_udp", "socket_close"),
     ("socket_accept", "socket_close"),
+    ("socket_unix_connect", "socket_close"),
     ("term_raw", "term_restore"),
 ];
 
@@ -482,6 +483,17 @@ impl SemanticAnalyzer {
             builtin(
                 vec![("sock", BcType::I32), ("max_len", BcType::I32)],
                 BcType::Str,
+                false,
+            ),
+        );
+
+        // Unix domain sockets (fn!)
+        // @builtin category="Socket" name="socket_unix_connect" sig="fn! socket_unix_connect(path: str) -> Result<i32, str>" desc="Connect to Unix domain socket"
+        self.functions.insert(
+            "socket_unix_connect".into(),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
                 false,
             ),
         );
@@ -1119,6 +1131,52 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Graphics" name="gfx_draw_text_scaled" sig="fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)" desc="Draw scaled text on canvas"
+        self.functions.insert(
+            "gfx_draw_text_scaled".into(),
+            builtin(
+                vec![
+                    ("x", BcType::I32),
+                    ("y", BcType::I32),
+                    ("text", BcType::Str),
+                    ("color", BcType::I32),
+                    ("sx", BcType::I32),
+                    ("sy", BcType::I32),
+                ],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="Graphics" name="gfx_blit" sig="fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])" desc="Blit pixel buffer to canvas"
+        self.functions.insert(
+            "gfx_blit".into(),
+            builtin(
+                vec![
+                    ("dx", BcType::I32),
+                    ("dy", BcType::I32),
+                    ("w", BcType::I32),
+                    ("h", BcType::I32),
+                    ("pixels", BcType::Array(Box::new(BcType::I32))),
+                ],
+                BcType::Unit,
+                false,
+            ),
+        );
+        // @builtin category="Graphics" name="gfx_blit_alpha" sig="fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])" desc="Alpha-blended blit to canvas"
+        self.functions.insert(
+            "gfx_blit_alpha".into(),
+            builtin(
+                vec![
+                    ("dx", BcType::I32),
+                    ("dy", BcType::I32),
+                    ("w", BcType::I32),
+                    ("h", BcType::I32),
+                    ("pixels", BcType::Array(Box::new(BcType::I32))),
+                ],
+                BcType::Unit,
+                false,
+            ),
+        );
 
         // Graphics: Input (fn!)
         // @builtin category="Graphics" name="canvas_key" sig="fn! canvas_key() -> i32" desc="Get last key press"
@@ -1158,6 +1216,20 @@ impl SemanticAnalyzer {
                 ],
                 BcType::I32,
                 true,
+            ),
+        );
+
+        // Image (fn!)
+        // @builtin category="Image" name="img_load" sig="fn! img_load(data: str) -> Result<[i32], str>" desc="Decode PNG/JPEG/BMP/GIF image from memory"
+        self.functions.insert(
+            "img_load".into(),
+            builtin(
+                vec![("data", BcType::Str)],
+                BcType::Result(
+                    Box::new(BcType::Array(Box::new(BcType::I32))),
+                    Box::new(BcType::Str),
+                ),
+                false,
             ),
         );
 

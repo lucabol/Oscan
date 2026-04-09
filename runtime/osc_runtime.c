@@ -3819,6 +3819,22 @@ void osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) {
     l_draw_text(&osc_gfx_canvas, x, y, buf, (uint32_t)color);
 }
 
+void osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy) {
+    char buf[4096];
+    osc_str_to_cstr_buf(text, buf, sizeof(buf));
+    l_draw_text_scaled(&osc_gfx_canvas, x, y, buf, (uint32_t)color, sx, sy);
+}
+
+void osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) {
+    if (!pixels || w <= 0 || h <= 0 || pixels->len < w * h) return;
+    l_blit(&osc_gfx_canvas, dx, dy, w, h, (const uint32_t *)pixels->data, w * 4);
+}
+
+void osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) {
+    if (!pixels || w <= 0 || h <= 0 || pixels->len < w * h) return;
+    l_blit_alpha(&osc_gfx_canvas, dx, dy, w, h, (const uint32_t *)pixels->data, w * 4);
+}
+
 int32_t osc_canvas_key(void) { return (int32_t)l_canvas_key(&osc_gfx_canvas); }
 int32_t osc_canvas_mouse_x(void) { return (int32_t)osc_gfx_canvas.mouse_x; }
 int32_t osc_canvas_mouse_y(void) { return (int32_t)osc_gfx_canvas.mouse_y; }
@@ -3982,6 +3998,16 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
     return result;
 }
 
+osc_result_i32_str osc_socket_unix_connect(osc_str path)
+{
+    osc_result_i32_str result;
+    char buf[256];
+    osc_str_to_cstr_buf(path, buf, sizeof(buf));
+    int32_t fd = (int32_t)l_socket_unix_connect(buf);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = fd; return result;
+}
+
 #elif defined(_WIN32) /* Windows libc mode */
 
 #pragma comment(lib, "ws2_32.lib")
@@ -4104,8 +4130,17 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
     return result;
 }
 
+osc_result_i32_str osc_socket_unix_connect(osc_str path)
+{
+    (void)path;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: not supported on Windows");
+    return result;
+}
+
 #else /* POSIX libc */
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -4215,4 +4250,67 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len)
     return result;
 }
 
+osc_result_i32_str osc_socket_unix_connect(osc_str path)
+{
+    osc_result_i32_str result;
+    char buf[256];
+    struct sockaddr_un sa;
+    osc_str_to_cstr_buf(path, buf, sizeof(buf));
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: cannot create socket"); return result; }
+    memset(&sa, 0, sizeof(sa));
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, buf, sizeof(sa.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) { close(fd); result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)fd; return result;
+}
+
 #endif /* OSC_HAS_SOCKETS / _WIN32 / POSIX */
+
+/* ================================================================== */
+/*  Image decoding wrappers (requires l_img.h)                         */
+/* ================================================================== */
+
+#ifdef OSC_HAS_IMG
+
+osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data)
+{
+    osc_result_arr_i32_str result;
+    int w, h;
+    uint32_t *pixels = l_img_load_mem((const unsigned char *)data.data, data.len, &w, &h);
+    if (!pixels) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("img_load: failed to decode image");
+        return result;
+    }
+    if (w <= 0 || h <= 0 || (int64_t)w * h > 0x7FFFFFFE) {
+        l_img_free_pixels(pixels, w, h);
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("img_load: invalid image dimensions");
+        return result;
+    }
+    int total = w * h + 2;
+    osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), total);
+    int32_t *d = (int32_t *)arr->data;
+    d[0] = (int32_t)w;
+    d[1] = (int32_t)h;
+    for (int i = 0; i < w * h; i++) d[i + 2] = (int32_t)pixels[i];
+    arr->len = total;
+    l_img_free_pixels(pixels, w, h);
+    result.is_ok = 1;
+    result.value.ok = arr;
+    return result;
+}
+
+#else /* no image support */
+
+osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data)
+{
+    (void)arena; (void)data;
+    osc_result_arr_i32_str result;
+    result.is_ok = 0;
+    result.value.err = osc_str_from_cstr("img_load: not supported in this build");
+    return result;
+}
+
+#endif /* OSC_HAS_IMG */

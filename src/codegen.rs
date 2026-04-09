@@ -290,7 +290,9 @@ impl CodeGenerator {
             // l_gfx.h includes l_os.h, so on WASI we include l_os.h directly
             self.line("#ifndef __wasi__");
             self.line("#include \"l_gfx.h\"");
+            self.line("#include \"l_img.h\"");
             self.line("#define OSC_HAS_GFX");
+            self.line("#define OSC_HAS_IMG");
             self.line("#else");
             self.line("#include \"l_os.h\"");
             self.line("#endif");
@@ -328,6 +330,7 @@ impl CodeGenerator {
             if name == "osc_result_str_str"
                 || name == "osc_result_i32_str"
                 || name == "osc_result_i64_str"
+                || name == "osc_result_arr_i32_str"
             {
                 continue; // Already in runtime
             }
@@ -1358,6 +1361,7 @@ impl CodeGenerator {
             "socket_send" => format!("osc_socket_send({}, {})", arg_strs[0], arg_strs[1]),
             "socket_recv" => format!("osc_socket_recv(_arena, {}, {})", arg_strs[0], arg_strs[1]),
             "socket_close" => format!("osc_socket_close({})", arg_strs[0]),
+            "socket_unix_connect" => format!("osc_socket_unix_connect({})", arg_strs[0]),
             // UDP Socket I/O
             "socket_udp" => "osc_socket_udp()".to_string(),
             "socket_sendto" => format!(
@@ -1497,6 +1501,18 @@ impl CodeGenerator {
                 "osc_gfx_draw_text({}, {}, {}, {})",
                 arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
             ),
+            "gfx_draw_text_scaled" => format!(
+                "osc_gfx_draw_text_scaled({}, {}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5]
+            ),
+            "gfx_blit" => format!(
+                "osc_gfx_blit({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
+            ),
+            "gfx_blit_alpha" => format!(
+                "osc_gfx_blit_alpha({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
+            ),
             // Graphics: Input
             "canvas_key" => "osc_canvas_key()".to_string(),
             "canvas_mouse_x" => "osc_canvas_mouse_x()".to_string(),
@@ -1624,6 +1640,8 @@ impl CodeGenerator {
             "path_dirname" => format!("osc_path_dirname(_arena, {})", arg_strs[0]),
             "str_from_chars" => format!("osc_str_from_chars(_arena, {})", arg_strs[0]),
             "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
+            // Image
+            "img_load" => format!("osc_img_load(_arena, {})", arg_strs[0]),
             _ => {
                 // Check if this is a function pointer variable call
                 if let Some(ty) = self.lookup_type(name) {

@@ -601,7 +601,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (203 functions, 18 categories)
+## Built-in Functions (208 functions, 19 categories)
 
 ### I/O
 
@@ -764,6 +764,7 @@ fn! socket_close(sock: i32)
 fn! socket_udp() -> Result<i32, str>
 fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32
 fn! socket_recvfrom(sock: i32, max_len: i32) -> str
+fn! socket_unix_connect(path: str) -> Result<i32, str>
 ```
 
 ### HashMap
@@ -888,12 +889,21 @@ fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)
 fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)
 fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)
 fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)
+fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)
+fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])
+fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])
 fn! canvas_key() -> i32
 fn! canvas_mouse_x() -> i32
 fn! canvas_mouse_y() -> i32
 fn! canvas_mouse_btn() -> i32
 fn rgb(r: i32, g: i32, b: i32) -> i32
 fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32
+```
+
+### Image
+
+```
+fn! img_load(data: str) -> Result<[i32], str>
 ```
 
 <!-- END OSCAN INSTRUCTIONS -->

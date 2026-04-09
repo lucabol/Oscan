@@ -234,7 +234,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**203 built-in functions** across 18 categories.
+**208 built-in functions** across 19 categories.
 
 ### I/O (7 functions)
 
@@ -383,7 +383,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn path_basename(path: str) -> str` | Get filename from path |
 | `fn! path_dirname(path: str) -> str` | Get directory from path |
 
-### Socket (11 functions)
+### Socket (12 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -398,6 +398,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! socket_udp() -> Result<i32, str>` | Create UDP socket |
 | `fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32` | Send UDP data to address |
 | `fn! socket_recvfrom(sock: i32, max_len: i32) -> str` | Receive UDP data |
+| `fn! socket_unix_connect(path: str) -> Result<i32, str>` | Connect to Unix domain socket |
 
 ### HashMap (36 functions)
 
@@ -505,7 +506,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 |----------|-------------|
 | `fn! proc_run(cmd: str, args: [str]) -> i32` | Run external process |
 
-### Graphics (19 functions)
+### Graphics (22 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -522,12 +523,21 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw circle outline |
 | `fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw filled circle |
 | `fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)` | Draw text on canvas |
+| `fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)` | Draw scaled text on canvas |
+| `fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Blit pixel buffer to canvas |
+| `fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Alpha-blended blit to canvas |
 | `fn! canvas_key() -> i32` | Get last key press |
 | `fn! canvas_mouse_x() -> i32` | Get mouse X position |
 | `fn! canvas_mouse_y() -> i32` | Get mouse Y position |
 | `fn! canvas_mouse_btn() -> i32` | Get mouse button state |
 | `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
 | `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
+
+### Image (1 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! img_load(data: str) -> Result<[i32], str>` | Decode PNG/JPEG/BMP/GIF image from memory |
 
 <!-- END BUILTIN TABLE -->
 

@@ -117,6 +117,9 @@ OSC_RESULT_DECL(osc_str, osc_str, osc_result_str_str);
 /* Result<i32, str> used by file/socket I/O */
 OSC_RESULT_DECL(int32_t, osc_str, osc_result_i32_str);
 
+/* Result<[i32], str> used by img_load */
+OSC_RESULT_DECL(osc_array*, osc_str, osc_result_arr_i32_str);
+
 /* ------------------------------------------------------------------ */
 /*  Checked arithmetic — i32                                           */
 /* ------------------------------------------------------------------ */
@@ -189,6 +192,9 @@ void    osc_socket_close(int32_t sock);
 osc_result_i32_str osc_socket_udp(void);
 int32_t osc_socket_sendto(int32_t sock, osc_str data, osc_str addr, int32_t port);
 osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len);
+
+/* Unix domain sockets */
+osc_result_i32_str osc_socket_unix_connect(osc_str path);
 
 /* ------------------------------------------------------------------ */
 /*  Conversion functions                                               */
@@ -486,6 +492,9 @@ void    osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t co
 void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
 void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
 void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color);
+void    osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy);
+void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels);
+void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels);
 
 /* ------------------------------------------------------------------ */
 /*  Graphics — Input                                                   */
@@ -502,6 +511,12 @@ int32_t osc_canvas_mouse_btn(void);
 
 int32_t osc_rgb(int32_t r, int32_t g, int32_t b);
 int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a);
+
+/* ------------------------------------------------------------------ */
+/*  Image                                                              */
+/* ------------------------------------------------------------------ */
+
+osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data);
 
 #ifdef __cplusplus
 }
