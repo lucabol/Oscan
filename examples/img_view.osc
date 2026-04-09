@@ -1,0 +1,70 @@
+// Image Viewer
+// Loads a PNG/JPEG/BMP/GIF file and displays it in a canvas window.
+// Demonstrates: img_load, gfx_pixel, read_file, arg_count, arg_get
+// Press Escape to exit.
+//
+// To compile and run:
+//   oscan compile examples/img_view.osc -o examples/img_view.exe
+//   ./examples/img_view photo.png
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: img_view <image-file>");
+        exit(1);
+    };
+
+    let path: str = arg_get(1);
+    println("Loading {path} ...");
+
+    let data: str = match read_file(path) {
+        Result::Ok(d) => { d },
+        Result::Err(e) => { println("Error reading file: {e}"); exit(1); "" },
+    };
+
+    let pixels: [i32] = match img_load(data) {
+        Result::Ok(px) => { px },
+        Result::Err(e) => { println("Error decoding image: {e}"); exit(1); [] },
+    };
+
+    let w: i32 = pixels[0];
+    let h: i32 = pixels[1];
+    println("Image size: {w} x {h}");
+
+    // Cap canvas dimensions to something reasonable
+    let mut cw: i32 = w;
+    let mut ch: i32 = h;
+    if cw > 1024 { cw = 1024; };
+    if ch > 768  { ch = 768;  };
+
+    let co: Result<str, str> = canvas_open(cw, ch, path);
+    match co {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error opening canvas: {e}"); exit(1); },
+    };
+
+    canvas_clear(rgb(0, 0, 0));
+
+    // Draw pixels one by one (img_load returns [width, height, pixel0, ...])
+    let draw_h: i32 = if h < ch { h } else { ch };
+    let draw_w: i32 = if w < cw { w } else { cw };
+    for y in 0..draw_h {
+        for x in 0..draw_w {
+            gfx_pixel(x, y, pixels[2 + y * w + x]);
+        };
+    };
+
+    // Overlay filename
+    gfx_draw_text(4, ch - 12, path, rgb(255, 255, 255));
+
+    canvas_flush();
+
+    // Wait for ESC
+    while canvas_alive() {
+        arena {
+            if canvas_key() == 27 { break; };
+            sleep_ms(16);
+        };
+    };
+
+    canvas_close()
+}

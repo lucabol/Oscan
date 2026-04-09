@@ -1,0 +1,49 @@
+// Scaled Text Demo
+// Demonstrates gfx_draw_text_scaled — renders text at multiple sizes.
+// Shows: canvas_open, gfx_draw_text, gfx_draw_text_scaled, canvas_key
+// Press Escape to exit.
+//
+// To compile and run:
+//   oscan compile examples/scaled_text.osc -o examples/scaled_text.exe
+//   ./examples/scaled_text
+
+let W: i32 = 640;
+let H: i32 = 400;
+
+fn! main() {
+    let co: Result<str, str> = canvas_open(W, H, "Scaled Text");
+    match co {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
+
+    while canvas_alive() {
+        arena {
+            if canvas_key() == 27 { break; };
+
+            canvas_clear(rgb(0, 0, 0));
+
+            // Normal size (1x) — uses gfx_draw_text
+            gfx_draw_text(10, 20, "1x: Hello, Oscan!", rgb(255, 255, 255));
+
+            // 2x scale — green
+            gfx_draw_text_scaled(10, 50, "2x: Hello!", rgb(0, 255, 0), 2, 2);
+
+            // 3x scale — cyan
+            gfx_draw_text_scaled(10, 90, "3x: Hello!", rgb(0, 255, 255), 3, 3);
+
+            // 4x scale — yellow
+            gfx_draw_text_scaled(10, 150, "4x: Big!", rgb(255, 255, 0), 4, 4);
+
+            // Non-uniform scaling: sx=4, sy=2 — wide text in magenta
+            gfx_draw_text_scaled(10, 220, "Wide!", rgb(255, 0, 255), 4, 2);
+
+            gfx_draw_text(10, H - 12, "Press ESC to quit", rgb(128, 128, 128));
+
+            canvas_flush();
+            sleep_ms(16);
+        };
+    };
+
+    canvas_close()
+}
