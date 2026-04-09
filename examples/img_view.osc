@@ -44,12 +44,12 @@ fn! main() {
 
     canvas_clear(rgb(0, 0, 0));
 
-    // Draw pixels one by one (img_load returns [width, height, pixel0, ...])
-    let draw_h: i32 = if h < ch { h } else { ch };
-    let draw_w: i32 = if w < cw { w } else { cw };
-    for y in 0..draw_h {
-        for x in 0..draw_w {
-            gfx_pixel(x, y, pixels[2 + y * w + x]);
+    // Draw pixels with nearest-neighbor scaling if image is larger than canvas
+    for dy in 0..ch {
+        let sy: i32 = (dy * h) / ch;
+        for dx in 0..cw {
+            let sx: i32 = (dx * w) / cw;
+            gfx_pixel(dx, dy, pixels[2 + sy * w + sx]);
         };
     };
 
