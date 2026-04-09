@@ -27,4 +27,5 @@ fn short_help_flag_prints_usage_and_succeeds() {
     assert!(output.status.success(), "expected -h to exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("usage: oscan"));
+    assert!(stdout.contains("--target <arch>"));
 }
