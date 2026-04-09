@@ -14,7 +14,7 @@ jobs:
   # Verify generated docs are up to date
   # ─────────────────────────────────────────────
   docs:
-    name: Update builtin table
+    name: Update generated docs
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
@@ -27,13 +27,16 @@ jobs:
       - name: Regenerate builtin table
         run: python scripts/gen-builtin-table.py --inject
 
+      - name: Regenerate Copilot instructions
+        run: python scripts/gen-copilot-instructions.py --inject
+
       - name: Commit if changed
         run: |
-          git diff --quiet README.md && exit 0
+          git diff --quiet README.md .github/instructions/ && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "Auto-update builtin table [skip ci]"
+          git add README.md .github/instructions/
+          git commit -m "Auto-update generated docs [skip ci]"
           git push
 
   # ─────────────────────────────────────────────
