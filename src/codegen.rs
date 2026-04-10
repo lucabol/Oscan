@@ -290,9 +290,14 @@ impl CodeGenerator {
             // l_gfx.h includes l_os.h, so on WASI we include l_os.h directly
             self.line("#ifndef __wasi__");
             self.line("#include \"l_gfx.h\"");
-            self.line("#include \"l_img.h\"");
             self.line("#define OSC_HAS_GFX");
+            // l_img.h embeds stb_image.h (~8000 lines) which includes system headers
+            // that conflict with freestanding macros on cross-compile toolchains.
+            // Only include on native x86_64 and Windows builds where it's tested.
+            self.line("#if defined(__x86_64__) || defined(_WIN32)");
+            self.line("#include \"l_img.h\"");
             self.line("#define OSC_HAS_IMG");
+            self.line("#endif");
             self.line("#else");
             self.line("#include \"l_os.h\"");
             self.line("#endif");
