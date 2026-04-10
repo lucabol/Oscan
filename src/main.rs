@@ -196,7 +196,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
     );
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
@@ -226,6 +226,10 @@ fn main() {
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
+            "--version" | "-V" => {
+                println!("oscan {}", env!("GIT_VERSION"));
+                return;
+            }
             "--help" | "-h" => {
                 print_usage(false);
                 return;
