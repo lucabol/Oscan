@@ -3862,9 +3862,8 @@ void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void
 void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void)cx; (void)cy; (void)r; (void)color; }
 void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) { (void)x; (void)y; (void)text; (void)color; }
 void    osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy) { (void)x; (void)y; (void)text; (void)color; (void)sx; (void)sy; }
-typedef struct { int32_t *data; int32_t len; int32_t cap; } osc_arr_i32_stub_;
-void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_arr_i32_stub_ pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
-void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_arr_i32_stub_ pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
+void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
+void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
 int32_t osc_canvas_key(void) { return 0; }
 int32_t osc_canvas_mouse_x(void) { return 0; }
 int32_t osc_canvas_mouse_y(void) { return 0; }
