@@ -806,7 +806,13 @@ impl CodeGenerator {
             Stmt::Expr(es) => {
                 let val = self.emit_expr(&es.expr);
                 if val != "(void)0" {
-                    self.line(&format!("{};", val));
+                    // Cast discarded results to (void) to suppress -Wunused-value
+                    let ty = self.type_of(&es.expr);
+                    if ty != BcType::Unit {
+                        self.line(&format!("(void)({});", val));
+                    } else {
+                        self.line(&format!("{};", val));
+                    }
                 }
             }
             Stmt::While(w) => {
@@ -1012,7 +1018,7 @@ impl CodeGenerator {
             Expr::UnaryOp { op, operand, .. } => {
                 let val = self.emit_expr(operand);
                 match op {
-                    UnaryOp::Not => format!("(!{})", val),
+                    UnaryOp::Not => format!("(!({}))", val),
                     UnaryOp::Neg => {
                         let ty = self.type_of(operand);
                         match ty {
@@ -1196,29 +1202,29 @@ impl CodeGenerator {
             },
             BinOp::Eq => match ty {
                 BcType::Str => format!("osc_str_eq({}, {})", lv, rv),
-                BcType::Enum(_) => format!("({}.tag == {}.tag)", lv, rv),
-                _ => format!("({} == {})", lv, rv),
+                BcType::Enum(_) => format!("{}.tag == {}.tag", lv, rv),
+                _ => format!("{} == {}", lv, rv),
             },
             BinOp::Neq => match ty {
                 BcType::Str => format!("(!osc_str_eq({}, {}))", lv, rv),
-                BcType::Enum(_) => format!("({}.tag != {}.tag)", lv, rv),
-                _ => format!("({} != {})", lv, rv),
+                BcType::Enum(_) => format!("{}.tag != {}.tag", lv, rv),
+                _ => format!("{} != {}", lv, rv),
             },
             BinOp::Lt => match ty {
                 BcType::Str => format!("(osc_str_compare({}, {}) < 0)", lv, rv),
-                _ => format!("({} < {})", lv, rv),
+                _ => format!("{} < {}", lv, rv),
             },
             BinOp::Gt => match ty {
                 BcType::Str => format!("(osc_str_compare({}, {}) > 0)", lv, rv),
-                _ => format!("({} > {})", lv, rv),
+                _ => format!("{} > {}", lv, rv),
             },
             BinOp::LtEq => match ty {
                 BcType::Str => format!("(osc_str_compare({}, {}) <= 0)", lv, rv),
-                _ => format!("({} <= {})", lv, rv),
+                _ => format!("{} <= {}", lv, rv),
             },
             BinOp::GtEq => match ty {
                 BcType::Str => format!("(osc_str_compare({}, {}) >= 0)", lv, rv),
-                _ => format!("({} >= {})", lv, rv),
+                _ => format!("{} >= {}", lv, rv),
             },
             BinOp::And => format!("({} && {})", lv, rv),
             BinOp::Or => format!("({} || {})", lv, rv),
@@ -2328,7 +2334,7 @@ impl CodeGenerator {
     fn emit_comparison(&self, lhs: &str, ty: &BcType, rhs: &str) -> String {
         match ty {
             BcType::Str => format!("osc_str_eq({}, {})", lhs, rhs),
-            _ => format!("({} == {})", lhs, rhs),
+            _ => format!("{} == {}", lhs, rhs),
         }
     }
 
