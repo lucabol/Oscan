@@ -1128,6 +1128,7 @@ fn compile_with_gcc_or_clang(
         command
             .arg("-std=gnu11")
             .arg("-ffreestanding")
+            .arg("-w") // suppress warnings from generated code
             .arg("-Oz") // aggressive size optimization
             .arg("-fno-builtin")
             .arg("-fno-asynchronous-unwind-tables")
@@ -1152,7 +1153,6 @@ fn compile_with_gcc_or_clang(
             command
                 .arg("-nostdlib")
                 .arg("-static")
-                .arg("-Wno-builtin-declaration-mismatch")
                 .arg("-Wl,--gc-sections,--build-id=none");
         }
         command.arg(c_file);
@@ -1162,7 +1162,7 @@ fn compile_with_gcc_or_clang(
         command.arg("-o").arg(exe_file);
     } else {
         // libc mode: two TUs (generated + runtime), link libc + libm
-        command.arg("-std=c99").arg(c_file).arg(runtime_c);
+        command.arg("-std=c99").arg("-w").arg(c_file).arg(runtime_c);
         for dir in include_dirs {
             command.arg(format!("-I{}", dir.display()));
         }
@@ -1204,6 +1204,7 @@ fn compile_cross_riscv64(
     command
         .arg("-std=gnu11")
         .arg("-ffreestanding")
+        .arg("-w") // suppress warnings from generated code
         .arg("-Os") // RISC-V gcc doesn't support -Oz
         .arg("-fno-builtin")
         .arg("-fno-asynchronous-unwind-tables")
@@ -1215,7 +1216,6 @@ fn compile_cross_riscv64(
         .arg("-mabi=lp64d")
         .arg("-nostdlib")
         .arg("-static")
-        .arg("-Wno-builtin-declaration-mismatch")
         .arg("-Wl,--gc-sections,--build-id=none");
     command.arg(c_file);
     for dir in include_dirs {
@@ -1254,6 +1254,7 @@ fn compile_cross_wasi(
         .arg("--target=wasm32-wasi")
         .arg(format!("--sysroot={}", sysroot))
         .arg("-std=c99")
+        .arg("-w") // suppress warnings from generated code
         .arg(c_file)
         .arg(runtime_c);
     for dir in include_dirs {
@@ -1308,14 +1309,14 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /w /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
                 vcvars_path, cl_path,
                 all_includes, c_file.display(), exe_file.display(),
             )
         } else {
             // libc mode: two TUs, default CRT
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /w /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
                 vcvars_path, cl_path, nofree_flag,
                 all_includes, c_file.display(), runtime_c.display(), exe_file.display(),
             )
@@ -1350,6 +1351,7 @@ fn compile_with_msvc(
         if freestanding {
             command
                 .arg("/nologo")
+                .arg("/w") // suppress warnings from generated code
                 .arg("/std:c11")
                 .arg("/Os") // optimize for size
                 .arg("/GS-");
@@ -1364,7 +1366,7 @@ fn compile_with_msvc(
                 .arg("kernel32.lib")
                 .arg("ws2_32.lib");
         } else {
-            command.arg("/nologo").arg("/std:c11");
+            command.arg("/nologo").arg("/w").arg("/std:c11");
             if needs_nofreestanding {
                 command.arg("/DOSC_NOFREESTANDING");
             }
