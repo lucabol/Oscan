@@ -21,7 +21,37 @@ const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
-const EMBEDDED_BEARSSL_AMALG_C: &str = include_str!("../deps/laststanding/bearssl_amalg.c");
+
+// BearSSL public headers (for l_tls.h on Linux)
+const EMBEDDED_BEARSSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl.h");
+const EMBEDDED_BEARSSL_HASH_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_hash.h");
+const EMBEDDED_BEARSSL_HMAC_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_hmac.h");
+const EMBEDDED_BEARSSL_KDF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_kdf.h");
+const EMBEDDED_BEARSSL_RAND_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_rand.h");
+const EMBEDDED_BEARSSL_PRF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_prf.h");
+const EMBEDDED_BEARSSL_BLOCK_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_block.h");
+const EMBEDDED_BEARSSL_AEAD_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_aead.h");
+const EMBEDDED_BEARSSL_RSA_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_rsa.h");
+const EMBEDDED_BEARSSL_EC_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ec.h");
+const EMBEDDED_BEARSSL_SSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ssl.h");
+const EMBEDDED_BEARSSL_X509_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_x509.h");
+const EMBEDDED_BEARSSL_PEM_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_pem.h");
+
+const BEARSSL_HEADERS: &[(&str, &str)] = &[
+    ("bearssl.h", EMBEDDED_BEARSSL_H),
+    ("bearssl_hash.h", EMBEDDED_BEARSSL_HASH_H),
+    ("bearssl_hmac.h", EMBEDDED_BEARSSL_HMAC_H),
+    ("bearssl_kdf.h", EMBEDDED_BEARSSL_KDF_H),
+    ("bearssl_rand.h", EMBEDDED_BEARSSL_RAND_H),
+    ("bearssl_prf.h", EMBEDDED_BEARSSL_PRF_H),
+    ("bearssl_block.h", EMBEDDED_BEARSSL_BLOCK_H),
+    ("bearssl_aead.h", EMBEDDED_BEARSSL_AEAD_H),
+    ("bearssl_rsa.h", EMBEDDED_BEARSSL_RSA_H),
+    ("bearssl_ec.h", EMBEDDED_BEARSSL_EC_H),
+    ("bearssl_ssl.h", EMBEDDED_BEARSSL_SSL_H),
+    ("bearssl_x509.h", EMBEDDED_BEARSSL_X509_H),
+    ("bearssl_pem.h", EMBEDDED_BEARSSL_PEM_H),
+];
 
 fn resolve_imports(
     path: &Path,
@@ -802,6 +832,17 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Search for libbearssl.a in include dirs (deps/laststanding/bearssl/build/).
+fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
+    for dir in include_dirs {
+        let lib = dir.join("bearssl").join("build").join("libbearssl.a");
+        if lib.exists() {
+            return Some(lib.display().to_string());
+        }
+    }
+    None
+}
+
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
 fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
@@ -825,10 +866,19 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
-        ("bearssl_amalg.c", EMBEDDED_BEARSSL_AMALG_C),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
+            process::exit(1);
+        }
+    }
+
+    // Write BearSSL public headers to bearssl/inc/ subdirectory (for l_tls.h)
+    let bearssl_inc_dir = temp_dir.join("bearssl").join("inc");
+    let _ = fs::create_dir_all(&bearssl_inc_dir);
+    for (name, content) in BEARSSL_HEADERS {
+        if let Err(e) = fs::write(bearssl_inc_dir.join(name), content) {
+            eprintln!("error writing BearSSL header {name}: {e}");
             process::exit(1);
         }
     }
@@ -878,10 +928,19 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
-        ("bearssl_amalg.c", EMBEDDED_BEARSSL_AMALG_C),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
+            process::exit(1);
+        }
+    }
+
+    // Write BearSSL public headers to bearssl/inc/ subdirectory (for l_tls.h)
+    let bearssl_inc_dir = temp_dir.join("bearssl").join("inc");
+    let _ = fs::create_dir_all(&bearssl_inc_dir);
+    for (name, content) in BEARSSL_HEADERS {
+        if let Err(e) = fs::write(bearssl_inc_dir.join(name), content) {
+            eprintln!("error writing BearSSL header {name}: {e}");
             process::exit(1);
         }
     }
@@ -1179,6 +1238,10 @@ fn compile_with_gcc_or_clang(
                 .arg("-nostdlib")
                 .arg("-static")
                 .arg("-Wl,--gc-sections,--build-id=none");
+            // Link libbearssl.a for TLS support if available
+            if let Some(lib) = find_bearssl_lib(include_dirs) {
+                command.arg(lib);
+            }
         }
         command.arg(c_file);
         for dir in include_dirs {
