@@ -234,7 +234,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**208 built-in functions** across 19 categories.
+**214 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -538,6 +538,17 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | Function | Description |
 |----------|-------------|
 | `fn! img_load(data: str) -> Result<[i32], str>` | Decode PNG/JPEG/BMP/GIF image from memory |
+
+### TLS (6 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! tls_connect(host: str, port: i32) -> Result<i32, str>` | Connect to host over TLS |
+| `fn! tls_send(handle: i32, data: str) -> Result<i32, str>` | Send data over TLS |
+| `fn! tls_recv(handle: i32, max_len: i32) -> str` | Receive data over TLS |
+| `fn! tls_recv_byte(handle: i32) -> i32` | Receive single byte over TLS (-1 on close) |
+| `fn! tls_close(handle: i32)` | Close TLS connection |
+| `fn! tls_cleanup()` | Clean up TLS subsystem |
 
 <!-- END BUILTIN TABLE -->
 

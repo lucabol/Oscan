@@ -601,7 +601,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (208 functions, 19 categories)
+## Built-in Functions (214 functions, 20 categories)
 
 ### I/O
 
@@ -904,6 +904,17 @@ fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32
 
 ```
 fn! img_load(data: str) -> Result<[i32], str>
+```
+
+### TLS
+
+```
+fn! tls_connect(host: str, port: i32) -> Result<i32, str>
+fn! tls_send(handle: i32, data: str) -> Result<i32, str>
+fn! tls_recv(handle: i32, max_len: i32) -> str
+fn! tls_recv_byte(handle: i32) -> i32
+fn! tls_close(handle: i32)
+fn! tls_cleanup()
 ```
 
 <!-- END OSCAN INSTRUCTIONS -->
