@@ -334,7 +334,7 @@ fn main() {
     }
 
     // Semantic analysis
-    let info = match semantic::SemanticAnalyzer::analyze(&program, show_warnings) {
+    let info = match semantic::SemanticAnalyzer::analyze(&program) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("{}", e.with_file(&path));
