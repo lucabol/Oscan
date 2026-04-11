@@ -44,10 +44,11 @@ pub struct SemanticAnalyzer {
     current_fn_return_type: Option<BcType>,
     in_pure_fn: bool,
     loop_depth: usize,
+    show_warnings: bool,
 }
 
 impl SemanticAnalyzer {
-    pub fn analyze(program: &Program) -> Result<SemanticInfo, CompileError> {
+    pub fn analyze(program: &Program, show_warnings: bool) -> Result<SemanticInfo, CompileError> {
         let mut sa = Self {
             structs: HashMap::new(),
             enums: HashMap::new(),
@@ -57,6 +58,7 @@ impl SemanticAnalyzer {
             current_fn_return_type: None,
             in_pure_fn: false,
             loop_depth: 0,
+            show_warnings,
         };
         sa.register_builtins();
 
@@ -1827,7 +1829,9 @@ impl SemanticAnalyzer {
         }
 
         // Check for resource-acquiring calls without matching defer cleanup
-        Self::check_resource_leaks(&func.body, &func.name);
+        if self.show_warnings {
+            Self::check_resource_leaks(&func.body, &func.name);
+        }
 
         self.scopes.pop();
         self.current_fn_return_type = None;
@@ -3604,7 +3608,7 @@ mod tests {
         let tokens = lex.tokenize().unwrap();
         let mut par = Parser::new(tokens);
         let program = par.parse_program().unwrap();
-        SemanticAnalyzer::analyze(&program)
+        SemanticAnalyzer::analyze(&program, false)
     }
 
     fn expect_ok(src: &str) {

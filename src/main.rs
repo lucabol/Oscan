@@ -196,7 +196,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
     );
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
@@ -216,6 +216,7 @@ fn main() {
     let mut run_mode = false;
     let mut emit_c = false;
     let mut use_libc = false;
+    let mut show_warnings = false;
     let mut target: Option<CrossTarget> = None;
 
     let mut i = 1;
@@ -226,6 +227,7 @@ fn main() {
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
+            "--warnings" | "-W" => show_warnings = true,
             "--version" | "-V" => {
                 println!("oscan {}", env!("GIT_VERSION"));
                 return;
@@ -332,7 +334,7 @@ fn main() {
     }
 
     // Semantic analysis
-    let info = match semantic::SemanticAnalyzer::analyze(&program) {
+    let info = match semantic::SemanticAnalyzer::analyze(&program, show_warnings) {
         Ok(info) => info,
         Err(e) => {
             eprintln!("{}", e.with_file(&path));
@@ -371,7 +373,7 @@ fn main() {
             eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
             process::exit(1);
         }
-        run_program(&path, &c_code, freestanding);
+        run_program(&path, &c_code, freestanding, show_warnings);
     } else if emit_c || output_ends_in_c {
         // Emit C mode
         if let Some(out_path) = output_path {
@@ -416,7 +418,7 @@ fn main() {
                 pb
             }
         };
-        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref());
+        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref(), show_warnings);
     }
 }
 
@@ -799,7 +801,7 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
-fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>) {
+fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
@@ -838,7 +840,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     };
     include_dirs.push(temp_dir.clone());
 
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target);
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target, show_warnings);
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -850,7 +852,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     eprintln!("Compiled {}", exe_path.display());
 }
 
-fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
+fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
@@ -895,7 +897,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool) {
     };
     include_dirs.push(temp_dir.clone());
 
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None, show_warnings);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -926,6 +928,7 @@ fn invoke_c_compiler(
     include_dirs: &[PathBuf],
     freestanding: bool,
     target: Option<&CrossTarget>,
+    show_warnings: bool,
 ) -> bool {
     // Cross-compilation targets bypass normal compiler detection
     if let Some(ct) = target {
@@ -938,7 +941,7 @@ fn invoke_c_compiler(
                     process::exit(1);
                 }
                 eprintln!("Cross-compiling for RISC-V (freestanding)...");
-                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs);
+                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs, show_warnings);
             }
             CrossTarget::Wasi => {
                 let cmd = "clang";
@@ -956,7 +959,7 @@ fn invoke_c_compiler(
                     }
                 };
                 eprintln!("Cross-compiling for WASI/WebAssembly...");
-                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot);
+                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot, show_warnings);
             }
         }
     }
@@ -1016,6 +1019,7 @@ fn invoke_c_compiler(
                         include_dirs,
                         freestanding,
                         CompilerSource::Host,
+                        show_warnings,
                     );
                 }
             }
@@ -1032,6 +1036,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 freestanding,
                 *source,
+                show_warnings,
             )
         }
         CCompiler::Clang { cmd, source } => {
@@ -1051,6 +1056,7 @@ fn invoke_c_compiler(
                         include_dirs,
                         freestanding,
                         CompilerSource::Host,
+                        show_warnings,
                     );
                 }
             }
@@ -1067,6 +1073,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 freestanding,
                 *source,
+                show_warnings,
             )
         }
         CCompiler::Msvc {
@@ -1090,6 +1097,7 @@ fn invoke_c_compiler(
                             include_dirs,
                             freestanding,
                             CompilerSource::Host,
+                            show_warnings,
                         );
                     }
                 }
@@ -1109,6 +1117,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 false,
                 freestanding,
+                show_warnings,
             )
         }
     }
@@ -1122,6 +1131,7 @@ fn compile_with_gcc_or_clang(
     include_dirs: &[PathBuf],
     freestanding: bool,
     source: CompilerSource,
+    show_warnings: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -1131,8 +1141,11 @@ fn compile_with_gcc_or_clang(
         // Size optimization flags matching laststanding build scripts
         command
             .arg("-std=gnu11")
-            .arg("-ffreestanding")
-            .arg("-w") // suppress warnings from generated code
+            .arg("-ffreestanding");
+        if !show_warnings {
+            command.arg("-w");
+        }
+        command
             .arg("-Oz") // aggressive size optimization
             .arg("-fno-builtin")
             .arg("-fno-asynchronous-unwind-tables")
@@ -1166,7 +1179,11 @@ fn compile_with_gcc_or_clang(
         command.arg("-o").arg(exe_file);
     } else {
         // libc mode: two TUs (generated + runtime), link libc + libm
-        command.arg("-std=c99").arg("-w").arg(c_file).arg(runtime_c);
+        command.arg("-std=c99");
+        if !show_warnings {
+            command.arg("-w");
+        }
+        command.arg(c_file).arg(runtime_c);
         for dir in include_dirs {
             command.arg(format!("-I{}", dir.display()));
         }
@@ -1187,6 +1204,9 @@ fn compile_with_gcc_or_clang(
                 std::io::stderr().write_all(&out.stderr).ok();
                 false
             } else {
+                if show_warnings && !out.stderr.is_empty() {
+                    std::io::stderr().write_all(&out.stderr).ok();
+                }
                 true
             }
         }
@@ -1202,13 +1222,17 @@ fn compile_cross_riscv64(
     c_file: &Path,
     exe_file: &Path,
     include_dirs: &[PathBuf],
+    show_warnings: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
     // Freestanding single-TU build for RISC-V 64-bit
     command
         .arg("-std=gnu11")
-        .arg("-ffreestanding")
-        .arg("-w") // suppress warnings from generated code
+        .arg("-ffreestanding");
+    if !show_warnings {
+        command.arg("-w");
+    }
+    command
         .arg("-Os") // RISC-V gcc doesn't support -Oz
         .arg("-fno-builtin")
         .arg("-fno-asynchronous-unwind-tables")
@@ -1251,14 +1275,18 @@ fn compile_cross_wasi(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     sysroot: &str,
+    show_warnings: bool,
 ) -> bool {
     let mut command = Command::new(cmd);
     // WASI libc mode: two TUs, wasm32 target
     command
         .arg("--target=wasm32-wasi")
         .arg(format!("--sysroot={}", sysroot))
-        .arg("-std=c99")
-        .arg("-w") // suppress warnings from generated code
+        .arg("-std=c99");
+    if !show_warnings {
+        command.arg("-w");
+    }
+    command
         .arg(c_file)
         .arg(runtime_c);
     for dir in include_dirs {
@@ -1292,6 +1320,7 @@ fn compile_with_msvc(
     include_dirs: &[PathBuf],
     freestanding: bool,
     needs_nofreestanding: bool,
+    show_warnings: bool,
 ) -> bool {
     // When codegen emitted dual-mode headers but we're compiling with MSVC (libc),
     // define OSC_NOFREESTANDING to select the libc path.
@@ -1300,6 +1329,7 @@ fn compile_with_msvc(
     } else {
         ""
     };
+    let warn_flag = if show_warnings { "" } else { " /w" };
 
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
@@ -1313,15 +1343,15 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /w /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
-                vcvars_path, cl_path,
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
+                vcvars_path, cl_path, warn_flag,
                 all_includes, c_file.display(), exe_file.display(),
             )
         } else {
             // libc mode: two TUs, default CRT
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo /w /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
-                vcvars_path, cl_path, nofree_flag,
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+                vcvars_path, cl_path, warn_flag, nofree_flag,
                 all_includes, c_file.display(), runtime_c.display(), exe_file.display(),
             )
         };
@@ -1353,9 +1383,11 @@ fn compile_with_msvc(
         let mut command = Command::new(cl_path);
 
         if freestanding {
+            command.arg("/nologo");
+            if !show_warnings {
+                command.arg("/w");
+            }
             command
-                .arg("/nologo")
-                .arg("/w") // suppress warnings from generated code
                 .arg("/std:c11")
                 .arg("/Os") // optimize for size
                 .arg("/GS-");
@@ -1370,7 +1402,11 @@ fn compile_with_msvc(
                 .arg("kernel32.lib")
                 .arg("ws2_32.lib");
         } else {
-            command.arg("/nologo").arg("/w").arg("/std:c11");
+            command.arg("/nologo");
+            if !show_warnings {
+                command.arg("/w");
+            }
+            command.arg("/std:c11");
             if needs_nofreestanding {
                 command.arg("/DOSC_NOFREESTANDING");
             }
