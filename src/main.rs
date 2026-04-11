@@ -21,6 +21,7 @@ const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
+const EMBEDDED_BEARSSL_AMALG_C: &str = include_str!("../deps/laststanding/bearssl_amalg.c");
 
 fn resolve_imports(
     path: &Path,
@@ -824,6 +825,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
+        ("bearssl_amalg.c", EMBEDDED_BEARSSL_AMALG_C),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
@@ -876,6 +878,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
+        ("bearssl_amalg.c", EMBEDDED_BEARSSL_AMALG_C),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
