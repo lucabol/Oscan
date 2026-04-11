@@ -18,6 +18,7 @@ const RESOURCE_PAIRS: &[(&str, &str)] = &[
     ("socket_udp", "socket_close"),
     ("socket_accept", "socket_close"),
     ("socket_unix_connect", "socket_close"),
+    ("tls_connect", "tls_close"),
     ("term_raw", "term_restore"),
 ];
 
@@ -497,6 +498,48 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+
+        // TLS (encrypted sockets)
+        // @builtin category="TLS" name="tls_connect" sig="fn! tls_connect(host: str, port: i32) -> Result<i32, str>" desc="Connect to host over TLS"
+        self.functions.insert(
+            "tls_connect".into(),
+            builtin(
+                vec![("host", BcType::Str), ("port", BcType::I32)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+        // @builtin category="TLS" name="tls_send" sig="fn! tls_send(handle: i32, data: str) -> Result<i32, str>" desc="Send data over TLS"
+        self.functions.insert(
+            "tls_send".into(),
+            builtin(
+                vec![("handle", BcType::I32), ("data", BcType::Str)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+        // @builtin category="TLS" name="tls_recv" sig="fn! tls_recv(handle: i32, max_len: i32) -> str" desc="Receive data over TLS"
+        self.functions.insert(
+            "tls_recv".into(),
+            builtin(
+                vec![("handle", BcType::I32), ("max_len", BcType::I32)],
+                BcType::Str,
+                false,
+            ),
+        );
+        // @builtin category="TLS" name="tls_recv_byte" sig="fn! tls_recv_byte(handle: i32) -> i32" desc="Receive single byte over TLS (-1 on close)"
+        self.functions.insert(
+            "tls_recv_byte".into(),
+            builtin(vec![("handle", BcType::I32)], BcType::I32, false),
+        );
+        // @builtin category="TLS" name="tls_close" sig="fn! tls_close(handle: i32)" desc="Close TLS connection"
+        self.functions.insert(
+            "tls_close".into(),
+            builtin(vec![("handle", BcType::I32)], BcType::Unit, false),
+        );
+        // @builtin category="TLS" name="tls_cleanup" sig="fn! tls_cleanup()" desc="Clean up TLS subsystem"
+        self.functions
+            .insert("tls_cleanup".into(), builtin(vec![], BcType::Unit, false));
 
         // Command-line arguments (fn!)
         // @builtin category="System" name="arg_count" sig="fn! arg_count() -> i32" desc="Number of command-line arguments"

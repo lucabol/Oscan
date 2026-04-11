@@ -196,6 +196,14 @@ osc_str osc_socket_recvfrom(osc_arena *arena, int32_t sock, int32_t max_len);
 /* Unix domain sockets */
 osc_result_i32_str osc_socket_unix_connect(osc_str path);
 
+/* TLS (encrypted sockets) */
+osc_result_i32_str osc_tls_connect(osc_str host, int32_t port);
+osc_result_i32_str osc_tls_send(int32_t handle, osc_str data);
+osc_str  osc_tls_recv(osc_arena *arena, int32_t handle, int32_t max_len);
+int32_t  osc_tls_recv_byte(int32_t handle);
+void     osc_tls_close(int32_t handle);
+void     osc_tls_cleanup(void);
+
 /* ------------------------------------------------------------------ */
 /*  Conversion functions                                               */
 /* ------------------------------------------------------------------ */

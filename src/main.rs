@@ -20,6 +20,7 @@ const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
+const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
 
 fn resolve_imports(
     path: &Path,
@@ -822,6 +823,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
+        ("l_tls.h", EMBEDDED_L_TLS_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
@@ -873,6 +875,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
+        ("l_tls.h", EMBEDDED_L_TLS_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
@@ -1154,12 +1157,14 @@ fn compile_with_gcc_or_clang(
             .arg("-fdata-sections")
             .arg("-s"); // strip symbols
         if cfg!(windows) {
-            // Windows: link core Win32, sockets, and GDI windowing support.
+            // Windows: link core Win32, sockets, GDI windowing, and TLS support.
             command
                 .arg("-lkernel32")
                 .arg("-lws2_32")
                 .arg("-luser32")
-                .arg("-lgdi32");
+                .arg("-lgdi32")
+                .arg("-lsecur32")
+                .arg("-lcrypt32");
             if source == CompilerSource::Bundled {
                 command
                     .arg("-nostartfiles")
@@ -1343,7 +1348,7 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib secur32.lib crypt32.lib\r\n",
                 vcvars_path, cl_path, warn_flag,
                 all_includes, c_file.display(), exe_file.display(),
             )
@@ -1400,7 +1405,9 @@ fn compile_with_msvc(
                 .arg("/link")
                 .arg("/NODEFAULTLIB")
                 .arg("kernel32.lib")
-                .arg("ws2_32.lib");
+                .arg("ws2_32.lib")
+                .arg("secur32.lib")
+                .arg("crypt32.lib");
         } else {
             command.arg("/nologo");
             if !show_warnings {

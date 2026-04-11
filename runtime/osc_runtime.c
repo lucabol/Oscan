@@ -4042,6 +4042,51 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     return result;
 }
 
+osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
+{
+    osc_result_i32_str result;
+    char hostname[256];
+    osc_str_to_cstr_buf(host, hostname, sizeof(hostname));
+    int h = l_tls_connect(hostname, (int)port);
+    if (h < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_connect: connection failed"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)h; return result;
+}
+
+osc_result_i32_str osc_tls_send(int32_t handle, osc_str data)
+{
+    osc_result_i32_str result;
+    int n = l_tls_send((int)handle, data.data, (int)data.len);
+    if (n < 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_send: send failed"); return result; }
+    result.is_ok = 1; result.value.ok = (int32_t)n; return result;
+}
+
+osc_str osc_tls_recv(osc_arena *arena, int32_t handle, int32_t max_len)
+{
+    osc_str result;
+    char *buf;
+    if (max_len <= 0 || max_len > 65536) max_len = 4096;
+    buf = (char *)osc_arena_alloc(arena, (size_t)max_len);
+    if (!buf) { result.data = ""; result.len = 0; return result; }
+    int n = l_tls_recv((int)handle, buf, (int)max_len);
+    if (n <= 0) { result.data = ""; result.len = 0; return result; }
+    result.data = buf; result.len = (int32_t)n; return result;
+}
+
+int32_t osc_tls_recv_byte(int32_t handle)
+{
+    return (int32_t)l_tls_recv_byte((int)handle);
+}
+
+void osc_tls_close(int32_t handle)
+{
+    l_tls_close((int)handle);
+}
+
+void osc_tls_cleanup(void)
+{
+    l_tls_cleanup();
+}
+
 #elif defined(_WIN32) /* Windows libc mode */
 
 #pragma comment(lib, "ws2_32.lib")
@@ -4172,6 +4217,36 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     return result;
 }
 
+osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
+{
+    (void)host; (void)port;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_connect: not supported in libc mode");
+    return result;
+}
+
+osc_result_i32_str osc_tls_send(int32_t handle, osc_str data)
+{
+    (void)handle; (void)data;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_send: not supported in libc mode");
+    return result;
+}
+
+osc_str osc_tls_recv(osc_arena *arena, int32_t handle, int32_t max_len)
+{
+    (void)arena; (void)handle; (void)max_len;
+    osc_str result; result.data = ""; result.len = 0; return result;
+}
+
+int32_t osc_tls_recv_byte(int32_t handle)
+{
+    (void)handle; return -1;
+}
+
+void osc_tls_close(int32_t handle) { (void)handle; }
+void osc_tls_cleanup(void) {}
+
 #else /* POSIX libc */
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -4298,6 +4373,36 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0) { close(fd); result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_unix_connect: connection failed"); return result; }
     result.is_ok = 1; result.value.ok = (int32_t)fd; return result;
 }
+
+osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
+{
+    (void)host; (void)port;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_connect: not supported in libc mode");
+    return result;
+}
+
+osc_result_i32_str osc_tls_send(int32_t handle, osc_str data)
+{
+    (void)handle; (void)data;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_send: not supported in libc mode");
+    return result;
+}
+
+osc_str osc_tls_recv(osc_arena *arena, int32_t handle, int32_t max_len)
+{
+    (void)arena; (void)handle; (void)max_len;
+    osc_str result; result.data = ""; result.len = 0; return result;
+}
+
+int32_t osc_tls_recv_byte(int32_t handle)
+{
+    (void)handle; return -1;
+}
+
+void osc_tls_close(int32_t handle) { (void)handle; }
+void osc_tls_cleanup(void) {}
 
 #endif /* OSC_HAS_SOCKETS / _WIN32 / POSIX */
 

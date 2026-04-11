@@ -302,6 +302,8 @@ impl CodeGenerator {
             self.line("#include \"l_os.h\"");
             self.line("#endif");
             self.line("#define OSC_HAS_SOCKETS");
+            // l_tls.h provides TLS via SChannel on Windows, stubs elsewhere
+            self.line("#include \"l_tls.h\"");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");
             self.line("#else");
@@ -1383,6 +1385,13 @@ impl CodeGenerator {
                 "osc_socket_recvfrom(_arena, {}, {})",
                 arg_strs[0], arg_strs[1]
             ),
+            // TLS (encrypted sockets)
+            "tls_connect" => format!("osc_tls_connect({}, {})", arg_strs[0], arg_strs[1]),
+            "tls_send" => format!("osc_tls_send({}, {})", arg_strs[0], arg_strs[1]),
+            "tls_recv" => format!("osc_tls_recv(_arena, {}, {})", arg_strs[0], arg_strs[1]),
+            "tls_recv_byte" => format!("osc_tls_recv_byte({})", arg_strs[0]),
+            "tls_close" => format!("osc_tls_close({})", arg_strs[0]),
+            "tls_cleanup" => "osc_tls_cleanup()".to_string(),
             "arg_count" => "osc_arg_count()".to_string(),
             "arg_get" => format!("osc_arg_get(_arena, {})", arg_strs[0]),
             // Tier 1: Character classification
