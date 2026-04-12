@@ -1,0 +1,70 @@
+name: Build BearSSL
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build libbearssl.a (musl x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Fetch musl toolchain
+        shell: bash
+        run: |
+          TOOLCHAIN_DIR="$RUNNER_TEMP/musl-toolchain"
+          python3 scripts/release_tools.py fetch-toolchain \
+            --manifest packaging/toolchains/linux-x86_64.json \
+            --download-dir "$RUNNER_TEMP/downloads" \
+            --destination "$TOOLCHAIN_DIR"
+          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> $GITHUB_ENV
+
+      - name: Build libbearssl.a
+        shell: bash
+        run: |
+          BEARSSL_SRC=deps/laststanding/bearssl/src
+          BEARSSL_INC=deps/laststanding/bearssl/inc
+          OUTDIR="$RUNNER_TEMP/bearssl-build"
+
+          MUSL_GCC=$(find "$TOOLCHAIN_DIR/bin" -name '*-gcc' -o -name 'gcc' 2>/dev/null | head -1)
+          MUSL_AR=$(find "$TOOLCHAIN_DIR/bin" -name '*-ar' -o -name 'ar' 2>/dev/null | head -1)
+          echo "Using compiler: $MUSL_GCC"
+          echo "Using archiver: $MUSL_AR"
+
+          mkdir -p "$OUTDIR"
+          FILE_COUNT=$(find $BEARSSL_SRC -name '*.c' | wc -l)
+          echo "Compiling BearSSL ($FILE_COUNT files)..."
+          for f in $BEARSSL_SRC/*/*.c; do
+            "$MUSL_GCC" -c -I$BEARSSL_INC -I$BEARSSL_SRC -Oz -ffreestanding -fno-builtin \
+                -ffunction-sections -fdata-sections -w \
+                "$f" -o "$OUTDIR/$(basename ${f%.c}.o)" || exit 1
+          done
+          "$MUSL_AR" rcs "$OUTDIR/libbearssl.a" "$OUTDIR"/*.o
+          echo "Built libbearssl.a ($(du -h "$OUTDIR/libbearssl.a" | cut -f1))"
+
+          cp "$OUTDIR/libbearssl.a" packaging/prebuilt/linux-x86_64/libbearssl.a
+
+      - name: Commit pre-built library
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packaging/prebuilt/linux-x86_64/libbearssl.a
+          if git diff --cached --quiet; then
+            echo "No changes — libbearssl.a is up to date"
+          else
+            git commit -m "Update pre-built libbearssl.a (musl x86_64)"
+            git push
+            echo "Committed and pushed updated libbearssl.a"
+          fi
