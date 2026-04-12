@@ -69,9 +69,24 @@ Both options include a bundled C toolchain, so you do **not** need Visual Studio
 
 **Linux x86_64:**
 
-1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz`
-2. Extract: `tar xf oscan-*.tar.gz`
-3. Run `install.sh` (or manually add the extracted directory to your PATH)
+*Quick install (downloads and installs the latest release):*
+
+```bash
+set -eu
+ASSET=$(curl -fsSL https://api.github.com/repos/lucabol/Oscan/releases/latest \
+  | grep -o '"browser_download_url": *"[^"]*linux-x86_64-full.tar.xz"' \
+  | head -1 | cut -d'"' -f4)
+curl -fsSL -L "$ASSET" -o /tmp/oscan.tar.xz
+tar -xJf /tmp/oscan.tar.xz -C /tmp
+/tmp/oscan-*/install.sh
+rm -rf /tmp/oscan.tar.xz /tmp/oscan-*
+```
+
+*Manual install:*
+
+1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.xz`
+2. Extract: `tar xf oscan-*.tar.xz`
+3. Run `./install.sh` (or manually add the extracted directory to your PATH)
 4. Verify: `oscan --help`
 
 The Linux release includes a bundled C toolchain for the tested distribution(s).
