@@ -4046,12 +4046,19 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
 /*  libc stubs for BearSSL in freestanding mode                        */
 /*  BearSSL is compiled separately and expects standard libc symbols.  */
 /*  In freestanding mode (-nostdlib), these are missing. We provide    */
-/*  thin wrappers over l_os.h's inline syscall implementations.        */
+/*  thin wrappers using raw syscalls.                                  */
+/*  l_os.h macros (#define close l_close, etc.) must be #undef'd       */
+/*  first to avoid name collisions.                                    */
 /* ================================================================== */
 #if defined(OSC_FREESTANDING) && defined(__x86_64__) && defined(__linux__)
 #include <stdarg.h>
 
-/* Use raw l_syscall — l_os.h macros may have redefined names */
+/* Undo l_os.h macro redirects so we can define real linkable symbols */
+#undef open
+#undef close
+#undef read
+#undef time
+
 int open(const char *path, int flags, ...) {
     int mode = 0;
     if (flags & 0100) { /* O_CREAT */
@@ -4072,7 +4079,6 @@ long long time(long long *t) {
     return l_time(t);
 }
 
-/* BearSSL uses getentropy() for seeding its RNG */
 int getentropy(void *buf, unsigned long buflen) {
     /* Linux getrandom syscall (318 on x86_64) */
     long ret = l_syscall3(318, (long)(unsigned long)buf, (long)buflen, 0);
@@ -4083,6 +4089,10 @@ static int osc_bearssl_errno;
 int *__errno_location(void) {
     return &osc_bearssl_errno;
 }
+
+/* Restore l_os.h macros for any code that follows */
+#define close l_close
+#define read l_read
 #endif /* OSC_FREESTANDING && __x86_64__ && __linux__ */
 
 #if defined(__x86_64__) || defined(_WIN32)
