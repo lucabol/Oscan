@@ -80,13 +80,14 @@ def load_manifest(path: Path) -> dict:
             fail(f"manifest {path} is missing '{key}'")
     toolchain = data["toolchain"]
     archive = toolchain.get("archive", {})
-    digest = archive.get("digest", {})
-    for key in ("url", "type", "digest"):
+    digest = archive.get("digest")
+    for key in ("url", "type"):
         if key not in archive:
             fail(f"manifest {path} is missing toolchain.archive.{key}")
-    for key in ("algorithm", "value"):
-        if key not in digest:
-            fail(f"manifest {path} is missing toolchain.archive.digest.{key}")
+    if digest is not None and isinstance(digest, dict):
+        for key in ("algorithm", "value"):
+            if key not in digest:
+                fail(f"manifest {path} is missing toolchain.archive.digest.{key}")
     stage = data["stage"]
     stage.setdefault("root", "toolchain")
     stage.setdefault("license_globs", [])
@@ -511,25 +512,29 @@ def prune_toolchain(root: Path, prune_config: dict) -> None:
 def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
     manifest = load_manifest(manifest_path)
     archive = manifest["toolchain"]["archive"]
-    digest = archive["digest"]
+    digest = archive.get("digest")
     url = archive["url"]
     file_name = Path(urllib.parse.urlparse(url).path).name
     if not file_name:
         fail(f"cannot derive archive file name from {url}")
     download_path = download_dir / file_name
-    expected = digest["value"].lower()
-    algorithm = digest["algorithm"].lower()
 
-    if not download_path.exists() or compute_digest(download_path, algorithm) != expected:
-        if download_path.exists():
-            download_path.unlink()
-        download_file(url, download_path)
-
-    actual = compute_digest(download_path, algorithm)
-    if actual.lower() != expected:
-        fail(
-            f"digest mismatch for {download_path.name}: expected {expected}, got {actual}"
-        )
+    if digest is not None and isinstance(digest, dict):
+        expected = digest["value"].lower()
+        algorithm = digest["algorithm"].lower()
+        if not download_path.exists() or compute_digest(download_path, algorithm) != expected:
+            if download_path.exists():
+                download_path.unlink()
+            download_file(url, download_path)
+        actual = compute_digest(download_path, algorithm)
+        if actual.lower() != expected:
+            fail(
+                f"digest mismatch for {download_path.name}: expected {expected}, got {actual}"
+            )
+    else:
+        # No digest validation — download if not cached
+        if not download_path.exists():
+            download_file(url, download_path)
 
     strip_components = int(manifest["toolchain"].get("extract", {}).get("strip_components", 0))
     extract_archive(download_path, archive["type"], destination, strip_components)
@@ -604,7 +609,12 @@ def copy_license_files(source_root: Path, destination_root: Path, globs: list[st
 
 
 def write_provenance_file(path: Path, manifest: dict, copied_licenses: list[str]) -> None:
-    digest = manifest["toolchain"]["archive"]["digest"]
+    digest = manifest["toolchain"]["archive"].get("digest")
+    digest_line = (
+        f"Archive digest ({digest['algorithm']}): {digest['value']}"
+        if digest and isinstance(digest, dict)
+        else "Archive digest: not verified"
+    )
     licenses = "\n".join(f"- {entry}" for entry in copied_licenses) or "- none matched configured globs"
     text = textwrap.dedent(
         f"""\
@@ -612,7 +622,7 @@ def write_provenance_file(path: Path, manifest: dict, copied_licenses: list[str]
         Toolchain version: {manifest["toolchain"]["version"]}
         Target: {manifest["target"]}
         Archive URL: {manifest["toolchain"]["archive"]["url"]}
-        Archive digest ({digest["algorithm"]}): {digest["value"]}
+        {digest_line}
 
         Copied license files:
         {licenses}

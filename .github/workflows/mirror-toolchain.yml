@@ -1,0 +1,53 @@
+name: Mirror musl toolchain
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    name: Download and mirror musl cross toolchain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download x86_64-linux-musl-cross.tgz from musl.cc
+        shell: bash
+        run: |
+          # musl.cc blocks GitHub Actions, so this workflow must be run
+          # from a self-hosted runner or triggered manually after download.
+          # Try direct download first, fall back to manual instructions.
+          URL="https://musl.cc/x86_64-linux-musl-cross.tgz"
+          OUT="$RUNNER_TEMP/x86_64-linux-musl-cross.tgz"
+
+          echo "Downloading $URL..."
+          if curl -fSL --retry 3 --retry-delay 5 -o "$OUT" "$URL"; then
+            echo "Downloaded successfully ($(du -h "$OUT" | cut -f1))"
+          else
+            echo "::error::Failed to download from musl.cc (likely blocked for GitHub Actions)."
+            echo "::error::Download manually: curl -fSL -o x86_64-linux-musl-cross.tgz $URL"
+            echo "::error::Then create the release manually:"
+            echo "::error::  gh release create toolchains --title 'Toolchains' --notes 'Pre-downloaded toolchains' x86_64-linux-musl-cross.tgz"
+            exit 1
+          fi
+
+          echo "TOOLCHAIN_FILE=$OUT" >> $GITHUB_ENV
+
+      - name: Create or update toolchains release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create the release if it doesn't exist
+          if ! gh release view toolchains >/dev/null 2>&1; then
+            gh release create toolchains \
+              --title "Toolchains" \
+              --notes "Pre-downloaded musl cross-compilation toolchains for release packaging." \
+              --latest=false
+          fi
+
+          # Upload (overwrite if exists)
+          gh release upload toolchains "$TOOLCHAIN_FILE" --clobber
+          echo "Uploaded to: https://github.com/${{ github.repository }}/releases/download/toolchains/x86_64-linux-musl-cross.tgz"
