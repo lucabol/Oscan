@@ -118,27 +118,6 @@ jobs:
         env:
           OSCAN_VERSION: ${{ needs.prepare.outputs.tag }}
 
-      - name: Build BearSSL static library (Linux only)
-        if: startsWith(matrix.target, 'linux')
-        shell: bash
-        run: |
-          BEARSSL_SRC=deps/laststanding/bearssl/src
-          BEARSSL_INC=deps/laststanding/bearssl/inc
-          OUTDIR=deps/laststanding/bearssl/build
-          if [ ! -d "$BEARSSL_SRC" ]; then
-            echo "BearSSL source not found — skipping"
-            exit 0
-          fi
-          mkdir -p "$OUTDIR"
-          echo "Compiling BearSSL ($(find $BEARSSL_SRC -name '*.c' | wc -l) files)..."
-          for f in $BEARSSL_SRC/*/*.c; do
-            gcc -c -I$BEARSSL_INC -I$BEARSSL_SRC -Oz -ffreestanding -fno-builtin \
-                -ffunction-sections -fdata-sections -w \
-                "$f" -o "$OUTDIR/$(basename ${f%.c}.o)" || exit 1
-          done
-          ar rcs "$OUTDIR/libbearssl.a" "$OUTDIR"/*.o
-          echo "Built $OUTDIR/libbearssl.a ($(du -h "$OUTDIR/libbearssl.a" | cut -f1))"
-
       - name: Assemble release asset
         id: assemble
         shell: pwsh
@@ -151,15 +130,19 @@ jobs:
             -OutputDir $outputDir
           "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
 
-      - name: Inject libbearssl.a into release bundle (Linux only)
+      - name: Build BearSSL & inject into bundle (Linux only)
         if: startsWith(matrix.target, 'linux')
         shell: bash
         run: |
-          BEARSSL_LIB=deps/laststanding/bearssl/build/libbearssl.a
-          if [ ! -f "$BEARSSL_LIB" ]; then
-            echo "No libbearssl.a — skipping injection"
+          BEARSSL_SRC=deps/laststanding/bearssl/src
+          BEARSSL_INC=deps/laststanding/bearssl/inc
+          OUTDIR=deps/laststanding/bearssl/build
+          if [ ! -d "$BEARSSL_SRC" ]; then
+            echo "BearSSL source not found — skipping"
             exit 0
           fi
+
+          # Find the musl GCC toolchain from the assembled bundle
           ARCHIVE="${{ steps.assemble.outputs.archive_path }}"
           STAGE_DIR="$(dirname "$ARCHIVE")/stage"
           BUNDLE_DIR=$(find "$STAGE_DIR" -maxdepth 1 -mindepth 1 -type d | head -1)
@@ -167,11 +150,33 @@ jobs:
             echo "Could not find bundle directory in $STAGE_DIR"
             exit 1
           fi
-          # Place libbearssl.a in toolchain/lib/ inside the bundle
+
+          # Use the bundled musl GCC so libbearssl.a matches the shipped compiler
+          MUSL_GCC=$(find "$BUNDLE_DIR/toolchain/bin" -name '*-gcc' -o -name 'gcc' 2>/dev/null | head -1)
+          MUSL_AR=$(find "$BUNDLE_DIR/toolchain/bin" -name '*-ar' -o -name 'ar' 2>/dev/null | head -1)
+          if [ -z "$MUSL_GCC" ] || [ -z "$MUSL_AR" ]; then
+            echo "Bundled musl GCC not found — falling back to system gcc"
+            MUSL_GCC=gcc
+            MUSL_AR=ar
+          else
+            echo "Using bundled compiler: $MUSL_GCC"
+            echo "Using bundled archiver: $MUSL_AR"
+          fi
+
+          mkdir -p "$OUTDIR"
+          echo "Compiling BearSSL ($(find $BEARSSL_SRC -name '*.c' | wc -l) files)..."
+          for f in $BEARSSL_SRC/*/*.c; do
+            "$MUSL_GCC" -c -I$BEARSSL_INC -I$BEARSSL_SRC -Oz -ffreestanding -fno-builtin \
+                -ffunction-sections -fdata-sections -w \
+                "$f" -o "$OUTDIR/$(basename ${f%.c}.o)" || exit 1
+          done
+          "$MUSL_AR" rcs "$OUTDIR/libbearssl.a" "$OUTDIR"/*.o
+          echo "Built $OUTDIR/libbearssl.a ($(du -h "$OUTDIR/libbearssl.a" | cut -f1))"
+
+          # Inject libbearssl.a into the bundle and re-package
           mkdir -p "$BUNDLE_DIR/toolchain/lib"
-          cp "$BEARSSL_LIB" "$BUNDLE_DIR/toolchain/lib/libbearssl.a"
+          cp "$OUTDIR/libbearssl.a" "$BUNDLE_DIR/toolchain/lib/libbearssl.a"
           echo "Injected libbearssl.a into $(basename $BUNDLE_DIR)/toolchain/lib/"
-          # Re-create the archive
           ARCHIVE_NAME=$(basename "$ARCHIVE")
           ARCHIVE_DIR=$(dirname "$ARCHIVE")
           rm -f "$ARCHIVE"

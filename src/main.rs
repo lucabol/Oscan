@@ -1298,16 +1298,19 @@ fn compile_with_gcc_or_clang(
                 .arg("-nostdlib")
                 .arg("-static")
                 .arg("-Wl,--gc-sections,--build-id=none");
-            // Link libbearssl.a for TLS support if available
-            if let Some(lib) = find_bearssl_lib(include_dirs) {
-                command.arg(lib);
-            }
         }
         command.arg(c_file);
         for dir in include_dirs {
             command.arg(format!("-I{}", dir.display()));
         }
         command.arg("-o").arg(exe_file);
+        // Link libbearssl.a AFTER source file — linker processes left-to-right,
+        // so the archive must come after the object that references its symbols.
+        if !cfg!(windows) {
+            if let Some(lib) = find_bearssl_lib(include_dirs) {
+                command.arg(&lib);
+            }
+        }
     } else {
         // libc mode: two TUs (generated + runtime), link libc + libm
         command.arg("-std=c99");
