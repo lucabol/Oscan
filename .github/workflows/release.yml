@@ -115,6 +115,8 @@ jobs:
 
       - name: Build release binary
         run: cargo build --release
+        env:
+          OSCAN_VERSION: ${{ needs.prepare.outputs.tag }}
 
       - name: Assemble release asset
         id: assemble
