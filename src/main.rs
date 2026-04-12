@@ -13,6 +13,22 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+fn is_verbose() -> bool {
+    VERBOSE.load(Ordering::Relaxed)
+}
+
+/// Log a Command's full command line when --verbose is active.
+fn verbose_command(label: &str, cmd: &Command) {
+    if is_verbose() {
+        let prog = cmd.get_program().to_string_lossy();
+        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        eprintln!("[verbose] {label}: {prog} {}", args.join(" "));
+    }
+}
 
 const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
 const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
@@ -228,7 +244,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
     );
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
@@ -249,6 +265,7 @@ fn main() {
     let mut emit_c = false;
     let mut use_libc = false;
     let mut show_warnings = false;
+    let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
 
     let mut i = 1;
@@ -260,6 +277,7 @@ fn main() {
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
             "--warnings" | "-W" => show_warnings = true,
+            "--verbose" => verbose = true,
             "--version" | "-V" => {
                 println!("oscan {}", env!("GIT_VERSION"));
                 return;
@@ -309,7 +327,11 @@ fn main() {
         }
     };
 
+    // Set global verbose flag so all functions can use is_verbose()
+    VERBOSE.store(verbose, Ordering::Relaxed);
+
     let source = {
+        if is_verbose() { eprintln!("[verbose] Resolving imports for {}", path); }
         let file_path_buf = PathBuf::from(&path);
         let mut visited = HashSet::new();
         let mut namespaces = Vec::new();
@@ -329,6 +351,7 @@ fn main() {
     };
 
     // Lex
+    if is_verbose() { eprintln!("[verbose] Lexing..."); }
     let mut lex = lexer::Lexer::new(&source);
     let tokens = match lex.tokenize() {
         Ok(t) => t,
@@ -345,6 +368,7 @@ fn main() {
     }
 
     // Parse
+    if is_verbose() { eprintln!("[verbose] Parsing..."); }
     let mut par = parser::Parser::new(tokens);
     let program = match par.parse_program() {
         Ok(p) => p,
@@ -366,6 +390,7 @@ fn main() {
     }
 
     // Semantic analysis
+    if is_verbose() { eprintln!("[verbose] Semantic analysis..."); }
     let info = match semantic::SemanticAnalyzer::analyze(&program) {
         Ok(info) => info,
         Err(e) => {
@@ -389,6 +414,7 @@ fn main() {
         }
     };
     let c_code = codegen::CodeGenerator::generate(&program, &info, freestanding);
+    if is_verbose() { eprintln!("[verbose] Generated C code ({} bytes, freestanding={})", c_code.len(), freestanding); }
 
     // Determine the output mode:
     //   --run           → compile and execute
@@ -861,6 +887,7 @@ fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
 fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
+    if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -901,14 +928,25 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let runtime_c = if let Some(ref rd) = find_runtime_dir() {
+        if is_verbose() { eprintln!("[verbose] Using on-disk runtime: {}", rd.display()); }
         include_dirs.push(rd.clone());
         include_dirs.extend(find_extra_include_dirs(rd));
         rd.join("osc_runtime.c")
     } else {
+        if is_verbose() { eprintln!("[verbose] Using embedded runtime files"); }
         temp_dir.join("osc_runtime.c")
     };
     include_dirs.push(temp_dir.clone());
+    if is_verbose() {
+        eprintln!("[verbose] Include dirs: {:?}", include_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>());
+        if let Some(lib) = find_bearssl_lib(&include_dirs) {
+            eprintln!("[verbose] Found libbearssl.a: {}", lib);
+        } else {
+            eprintln!("[verbose] libbearssl.a not found (TLS will use stubs on Linux)");
+        }
+    }
 
+    if is_verbose() { eprintln!("[verbose] Invoking C compiler..."); }
     let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target, show_warnings);
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
@@ -923,6 +961,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
 
 fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
+    if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -969,14 +1008,20 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
     // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let runtime_c = if let Some(ref rd) = find_runtime_dir() {
+        if is_verbose() { eprintln!("[verbose] Using on-disk runtime: {}", rd.display()); }
         include_dirs.push(rd.clone());
         include_dirs.extend(find_extra_include_dirs(rd));
         rd.join("osc_runtime.c")
     } else {
+        if is_verbose() { eprintln!("[verbose] Using embedded runtime files"); }
         temp_dir.join("osc_runtime.c")
     };
     include_dirs.push(temp_dir.clone());
+    if is_verbose() {
+        eprintln!("[verbose] Include dirs: {:?}", include_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>());
+    }
 
+    if is_verbose() { eprintln!("[verbose] Invoking C compiler (run mode)..."); }
     let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None, show_warnings);
 
     if !compiled {
@@ -1281,6 +1326,7 @@ fn compile_with_gcc_or_clang(
         }
     }
 
+    verbose_command("C compiler", &command);
     let output = command.output();
 
     match output {
@@ -1337,6 +1383,7 @@ fn compile_cross_riscv64(
     }
     command.arg("-o").arg(exe_file);
 
+    verbose_command("RISC-V cross-compile", &command);
     match command.output() {
         Ok(out) => {
             if !out.status.success() {
@@ -1380,6 +1427,7 @@ fn compile_cross_wasi(
     }
     command.arg("-o").arg(exe_file);
 
+    verbose_command("WASI cross-compile", &command);
     match command.output() {
         Ok(out) => {
             if !out.status.success() {
@@ -1446,6 +1494,9 @@ fn compile_with_msvc(
             eprintln!("failed to write compile script: {e}");
             return false;
         }
+        if is_verbose() {
+            eprintln!("[verbose] MSVC bat compile: {}", bat_content.trim());
+        }
         let output = Command::new("cmd").arg("/c").arg(&bat_file).output();
         let _ = fs::remove_file(&bat_file);
         match output {
@@ -1508,6 +1559,7 @@ fn compile_with_msvc(
                 .arg("/link");
         }
 
+        verbose_command("MSVC cl.exe", &command);
         let output = command.output();
         match output {
             Ok(out) => {
