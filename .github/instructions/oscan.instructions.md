@@ -601,7 +601,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (214 functions, 20 categories)
+## Built-in Functions (220 functions, 20 categories)
 
 ### I/O
 
@@ -725,6 +725,8 @@ fn! file_rename(old: str, new_path: str) -> Result<str, str>
 fn! file_exists(path: str) -> bool
 fn! file_open_append(path: str) -> Result<i32, str>
 fn! file_size(path: str) -> i64
+fn! fd_dup(fd: i32) -> i32
+fn! fd_dup2(oldfd: i32, newfd: i32) -> i32
 fn! read_file(path: str) -> Result<str, str>
 fn! write_file(path: str, data: str) -> Result<str, str>
 ```
@@ -746,6 +748,7 @@ fn! path_join(dir: str, file: str) -> str
 fn path_ext(path: str) -> str
 fn! path_exists(path: str) -> bool
 fn! path_is_dir(path: str) -> bool
+fn! path_find_exec(name: str) -> Result<str, str>
 fn path_basename(path: str) -> str
 fn! path_dirname(path: str) -> str
 ```
@@ -871,6 +874,9 @@ fn! read_nonblock() -> i32
 
 ```
 fn! proc_run(cmd: str, args: [str]) -> i32
+fn! proc_spawn(cmd: str, args: [str]) -> i32
+fn! proc_wait(pid: i32) -> i32
+fn! pipe_create() -> [i32]
 ```
 
 ### Graphics

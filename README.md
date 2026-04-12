@@ -249,7 +249,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**214 built-in functions** across 20 categories.
+**220 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -359,7 +359,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn bshr(a: i32, n: i32) -> i32` | Bitwise shift right |
 | `fn bnot(a: i32) -> i32` | Bitwise NOT |
 
-### File I/O (13 functions)
+### File I/O (15 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -374,6 +374,8 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! file_exists(path: str) -> bool` | Check if file exists |
 | `fn! file_open_append(path: str) -> Result<i32, str>` | Open file for appending, returns fd |
 | `fn! file_size(path: str) -> i64` | Get file size in bytes |
+| `fn! fd_dup(fd: i32) -> i32` | Duplicate file descriptor |
+| `fn! fd_dup2(oldfd: i32, newfd: i32) -> i32` | Redirect file descriptor |
 | `fn! read_file(path: str) -> Result<str, str>` | Read entire file as string |
 | `fn! write_file(path: str, data: str) -> Result<str, str>` | Write string to file |
 
@@ -387,7 +389,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! dir_change(path: str) -> Result<str, str>` | Change working directory |
 | `fn! dir_list(path: str) -> [str]` | List directory contents |
 
-### Path (6 functions)
+### Path (7 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -395,6 +397,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn path_ext(path: str) -> str` | Get file extension |
 | `fn! path_exists(path: str) -> bool` | Check if path exists |
 | `fn! path_is_dir(path: str) -> bool` | Check if path is a directory |
+| `fn! path_find_exec(name: str) -> Result<str, str>` | Find executable in PATH |
 | `fn path_basename(path: str) -> str` | Get filename from path |
 | `fn! path_dirname(path: str) -> str` | Get directory from path |
 
@@ -515,11 +518,14 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! term_restore() -> Result<str, str>` | Restore normal terminal mode |
 | `fn! read_nonblock() -> i32` | Non-blocking read from stdin |
 
-### Process (1 functions)
+### Process (4 functions)
 
 | Function | Description |
 |----------|-------------|
 | `fn! proc_run(cmd: str, args: [str]) -> i32` | Run external process |
+| `fn! proc_spawn(cmd: str, args: [str]) -> i32` | Spawn process, returns PID |
+| `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
+| `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
 
 ### Graphics (22 functions)
 
