@@ -26,7 +26,8 @@ jobs:
           FILE_COUNT=$(find $BEARSSL_SRC -name '*.c' | wc -l)
           echo "Compiling BearSSL ($FILE_COUNT files) with system gcc (freestanding)..."
           for f in $BEARSSL_SRC/*/*.c; do
-            gcc -c -I$BEARSSL_INC -I$BEARSSL_SRC -Oz -ffreestanding -fno-builtin \
+            gcc -c -I$BEARSSL_INC -I$BEARSSL_SRC -Os -ffreestanding -fno-builtin \
+                -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
                 -ffunction-sections -fdata-sections -w \
                 "$f" -o "$OUTDIR/$(basename ${f%.c}.o)" || exit 1
           done
