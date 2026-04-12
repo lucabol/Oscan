@@ -1,0 +1,411 @@
+// led — a simple line editor with visual display
+// Usage: led [filename]
+// Commands: arrow keys to move, typing inserts text, Ctrl-S save, Ctrl-Q quit
+// A simplified editor showcasing Oscan's terminal builtins.
+
+fn! esc(s: str) {
+    write_byte(1, 27); // ESC
+    write_str(1, "[");
+    write_str(1, s);
+}
+
+fn! clear_screen() {
+    esc("2J");
+    esc("H");
+}
+
+fn! move_cursor(row: i32, col: i32) {
+    let r: str = i32_to_str(row + 1);
+    let c: str = i32_to_str(col + 1);
+    esc("{r};{c}H");
+}
+
+fn! hide_cursor() { esc("?25l"); }
+fn! show_cursor() { esc("?25h"); }
+
+fn! invert_on() { esc("7m"); }
+fn! invert_off() { esc("0m"); }
+
+// Split text into lines
+fn! text_to_lines(text: str) -> [str] {
+    let normalized: str = str_replace(text, "\r\n", "\n");
+    let parts: [str] = str_split(normalized, "\n");
+    let mut result: [str] = [];
+    let n: i32 = len(parts);
+    // Remove trailing empty line from final newline
+    let mut limit: i32 = n;
+    if n > 1 {
+        let last: str = parts[n - 1];
+        if str_len(last) == 0 {
+            limit = n - 1;
+        };
+    };
+    for i in 0..limit {
+        push(result, parts[i]);
+    };
+    result
+}
+
+fn! lines_to_text(lines: [str]) -> str {
+    str_join(lines, "\n")
+}
+
+fn! draw(lines: [str], cx: i32, cy: i32, scroll_y: i32, rows: i32, cols: i32,
+         filename: str, modified: bool, message: str) {
+    hide_cursor();
+    move_cursor(0, 0);
+
+    let num_lines: i32 = len(lines);
+    let edit_rows: i32 = rows - 1; // last row is status bar
+
+    for screen_row in 0..edit_rows {
+        let file_row: i32 = screen_row + scroll_y;
+        esc("2K"); // clear line
+        if file_row < num_lines {
+            let line: str = lines[file_row];
+            let line_len: i32 = str_len(line);
+            if line_len > cols {
+                write_str(1, str_slice(line, 0, cols));
+            } else {
+                write_str(1, line);
+            };
+        } else {
+            write_str(1, "~");
+        };
+        if screen_row < edit_rows - 1 {
+            write_str(1, "\r\n");
+        };
+    };
+
+    // Status bar
+    write_str(1, "\r\n");
+    esc("2K");
+    invert_on();
+
+    let row_str: str = i32_to_str(cy + 1);
+    let col_str: str = i32_to_str(cx + 1);
+    let total_str: str = i32_to_str(num_lines);
+    let mod_str: str = if modified { " [+]" } else { "" };
+
+    let status: str = " {filename}{mod_str} | Ln {row_str}, Col {col_str} | {total_str} lines";
+
+    let status_len: i32 = str_len(status);
+    if status_len > cols {
+        write_str(1, str_slice(status, 0, cols));
+    } else {
+        write_str(1, status);
+        // Pad the rest with spaces
+        let mut pad: i32 = status_len;
+        while pad < cols {
+            write_str(1, " ");
+            pad += 1;
+        };
+    };
+
+    invert_off();
+
+    // Show message briefly if any
+    if str_len(message) > 0 {
+        move_cursor(rows - 1, 0);
+        esc("2K");
+        invert_on();
+        write_str(1, " ");
+        write_str(1, message);
+        let msg_len: i32 = str_len(message) + 1;
+        let mut mp: i32 = msg_len;
+        while mp < cols {
+            write_str(1, " ");
+            mp += 1;
+        };
+        invert_off();
+    };
+
+    // Position cursor
+    move_cursor(cy - scroll_y, cx);
+    show_cursor();
+}
+
+fn! ensure_scroll(cy: i32, scroll_y: i32, rows: i32) -> i32 {
+    let edit_rows: i32 = rows - 1;
+    if cy < scroll_y {
+        cy
+    } else if cy >= scroll_y + edit_rows {
+        cy - edit_rows + 1
+    } else {
+        scroll_y
+    }
+}
+
+fn! insert_char_in_line(line: str, cx: i32, ch: i32) -> str {
+    let before: str = str_slice(line, 0, cx);
+    let after: str = str_slice(line, cx, str_len(line));
+    let mut chars: [i32] = [ch];
+    let ch_str: str = str_from_chars(chars);
+    str_concat(str_concat(before, ch_str), after)
+}
+
+fn! delete_char_in_line(line: str, cx: i32) -> str {
+    if cx <= 0 { line }
+    else {
+        str_concat(str_slice(line, 0, cx - 1), str_slice(line, cx, str_len(line)))
+    }
+}
+
+fn! main() {
+    let mut filename: str = "untitled";
+    let mut lines: [str] = [""];
+    let mut modified: bool = false;
+
+    if arg_count() > 1 {
+        filename = arg_get(1);
+        match read_file(filename) {
+            Result::Ok(text) => {
+                lines = text_to_lines(text);
+                if len(lines) == 0 { lines = [""]; };
+            },
+            Result::Err(_) => {
+                // New file
+                lines = [""];
+            },
+        };
+    };
+
+    match term_raw() {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("Cannot enter raw mode: {e}"); exit(1); },
+    };
+    defer term_restore();
+
+    let mut cx: i32 = 0;
+    let mut cy: i32 = 0;
+    let mut scroll_y: i32 = 0;
+    let mut running: bool = true;
+    let mut message: str = "Ctrl-S: save | Ctrl-Q: quit | Ctrl-G: goto line";
+
+    while running {
+        let rows: i32 = term_height();
+        let cols: i32 = term_width();
+        scroll_y = ensure_scroll(cy, scroll_y, rows);
+        draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
+        message = "";
+
+        let b: i32 = read_byte(0);
+
+        if b == 17 {
+            // Ctrl-Q: quit
+            if modified {
+                message = "Unsaved changes! Press Ctrl-Q again to quit without saving.";
+                draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
+                let b2: i32 = read_byte(0);
+                if b2 == 17 {
+                    running = false;
+                } else {
+                    message = "";
+                };
+            } else {
+                running = false;
+            };
+        } else if b == 19 {
+            // Ctrl-S: save
+            let text: str = lines_to_text(lines);
+            let save_text: str = str_concat(text, "\n");
+            match write_file(filename, save_text) {
+                Result::Ok(_) => {
+                    modified = false;
+                    let sz: str = i32_to_str(str_len(save_text));
+                    message = "Saved {filename} ({sz} bytes)";
+                },
+                Result::Err(e) => {
+                    message = "Error saving: {e}";
+                },
+            };
+        } else if b == 7 {
+            // Ctrl-G: goto line
+            message = "Go to line: (type number, then Enter)";
+            draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
+            // Read digits
+            let mut num_str: str = "";
+            let mut reading: bool = true;
+            while reading {
+                let d: i32 = read_byte(0);
+                if d == 13 {
+                    // Enter
+                    reading = false;
+                } else if d == 27 {
+                    // Escape - cancel
+                    num_str = "";
+                    reading = false;
+                } else if d >= 48 {
+                    if d <= 57 {
+                        let mut digit_chars: [i32] = [d];
+                        num_str = str_concat(num_str, str_from_chars(digit_chars));
+                        message = "Go to line: {num_str}";
+                        draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
+                    };
+                };
+            };
+            if str_len(num_str) > 0 {
+                match parse_i32(num_str) {
+                    Result::Ok(n) => {
+                        let target: i32 = n - 1;
+                        if target >= 0 {
+                            if target < len(lines) {
+                                cy = target;
+                                cx = 0;
+                                message = "";
+                            } else {
+                                message = "Line out of range";
+                            };
+                        } else {
+                            message = "Line out of range";
+                        };
+                    },
+                    Result::Err(_) => { message = "Invalid number"; },
+                };
+            } else {
+                message = "";
+            };
+        } else if b == 27 {
+            // Escape sequence (arrow keys etc.)
+            let b2: i32 = read_byte(0);
+            if b2 == 91 {
+                let b3: i32 = read_byte(0);
+                if b3 == 65 {
+                    // Up
+                    if cy > 0 {
+                        cy -= 1;
+                        let ll: i32 = str_len(lines[cy]);
+                        if cx > ll { cx = ll; };
+                    };
+                } else if b3 == 66 {
+                    // Down
+                    if cy < len(lines) - 1 {
+                        cy += 1;
+                        let ll: i32 = str_len(lines[cy]);
+                        if cx > ll { cx = ll; };
+                    };
+                } else if b3 == 67 {
+                    // Right
+                    let ll: i32 = str_len(lines[cy]);
+                    if cx < ll {
+                        cx += 1;
+                    } else if cy < len(lines) - 1 {
+                        cy += 1;
+                        cx = 0;
+                    };
+                } else if b3 == 68 {
+                    // Left
+                    if cx > 0 {
+                        cx -= 1;
+                    } else if cy > 0 {
+                        cy -= 1;
+                        cx = str_len(lines[cy]);
+                    };
+                } else if b3 == 72 {
+                    // Home
+                    cx = 0;
+                } else if b3 == 70 {
+                    // End
+                    cx = str_len(lines[cy]);
+                } else if b3 == 53 {
+                    // Page Up (ESC [ 5 ~)
+                    let _tilde: i32 = read_byte(0);
+                    let jump: i32 = rows - 2;
+                    cy = max_i32(0, cy - jump);
+                    let ll: i32 = str_len(lines[cy]);
+                    if cx > ll { cx = ll; };
+                } else if b3 == 54 {
+                    // Page Down (ESC [ 6 ~)
+                    let _tilde: i32 = read_byte(0);
+                    let jump: i32 = rows - 2;
+                    cy = min_i32(len(lines) - 1, cy + jump);
+                    let ll: i32 = str_len(lines[cy]);
+                    if cx > ll { cx = ll; };
+                } else if b3 == 51 {
+                    // Delete key (ESC [ 3 ~)
+                    let _tilde: i32 = read_byte(0);
+                    let ll: i32 = str_len(lines[cy]);
+                    if cx < ll {
+                        // Delete char at cursor
+                        lines[cy] = delete_char_in_line(lines[cy], cx + 1);
+                        modified = true;
+                    } else if cy < len(lines) - 1 {
+                        // Join with next line
+                        lines[cy] = str_concat(lines[cy], lines[cy + 1]);
+                        // Remove next line
+                        let mut new_lines: [str] = [];
+                        for i in 0..len(lines) {
+                            if i != cy + 1 {
+                                push(new_lines, lines[i]);
+                            };
+                        };
+                        lines = new_lines;
+                        modified = true;
+                    };
+                };
+            };
+        } else if b == 13 {
+            // Enter: split line
+            let before: str = str_slice(lines[cy], 0, cx);
+            let after: str = str_slice(lines[cy], cx, str_len(lines[cy]));
+            let mut new_lines: [str] = [];
+            for i in 0..len(lines) {
+                if i == cy {
+                    push(new_lines, before);
+                    push(new_lines, after);
+                } else {
+                    push(new_lines, lines[i]);
+                };
+            };
+            lines = new_lines;
+            cy += 1;
+            cx = 0;
+            modified = true;
+        } else if b == 127 {
+            // Backspace
+            if cx > 0 {
+                lines[cy] = delete_char_in_line(lines[cy], cx);
+                cx -= 1;
+                modified = true;
+            } else if cy > 0 {
+                // Join with previous line
+                let prev_len: i32 = str_len(lines[cy - 1]);
+                lines[cy - 1] = str_concat(lines[cy - 1], lines[cy]);
+                let mut new_lines: [str] = [];
+                for i in 0..len(lines) {
+                    if i != cy {
+                        push(new_lines, lines[i]);
+                    };
+                };
+                lines = new_lines;
+                cy -= 1;
+                cx = prev_len;
+                modified = true;
+            };
+        } else if b == 8 {
+            // Backspace (alternative)
+            if cx > 0 {
+                lines[cy] = delete_char_in_line(lines[cy], cx);
+                cx -= 1;
+                modified = true;
+            };
+        } else if b == 9 {
+            // Tab: insert spaces
+            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
+            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
+            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
+            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
+            cx += 4;
+            modified = true;
+        } else if b >= 32 {
+            if b < 127 {
+                // Printable character
+                lines[cy] = insert_char_in_line(lines[cy], cx, b);
+                cx += 1;
+                modified = true;
+            };
+        };
+    };
+
+    clear_screen();
+}

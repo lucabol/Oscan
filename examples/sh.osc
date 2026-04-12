@@ -1,0 +1,162 @@
+// sh — a simple interactive shell
+// Usage: sh [--help]
+// Builtins: cd, pwd, exit, echo, export, env
+// External commands via PATH search (proc_run).
+
+fn! print_prompt() {
+    let cwd: str = dir_current();
+    let base: str = path_basename(cwd);
+    print("{base}$ ");
+}
+
+fn! builtin_cd(parts: [str]) {
+    if len(parts) > 1 {
+        match dir_change(parts[1]) {
+            Result::Ok(_) => {},
+            Result::Err(e) => { println("sh: cd: {e}"); },
+        };
+    } else {
+        match env_get("HOME") {
+            Result::Ok(home) => {
+                match dir_change(home) {
+                    Result::Ok(_) => {},
+                    Result::Err(e) => { println("sh: cd: {e}"); },
+                };
+            },
+            Result::Err(_) => { println("sh: cd: HOME not set"); },
+        };
+    };
+}
+
+fn! builtin_echo(parts: [str]) {
+    let mut i: i32 = 1;
+    while i < len(parts) {
+        if i > 1 { print(" "); };
+        print(parts[i]);
+        i += 1;
+    };
+    println("");
+}
+
+fn! builtin_export(parts: [str]) {
+    if len(parts) < 2 {
+        println("usage: export VAR=value");
+    } else {
+        let mut i: i32 = 1;
+        while i < len(parts) {
+            let arg: str = parts[i];
+            let eq_parts: [str] = str_split(arg, "=");
+            if len(eq_parts) >= 2 {
+                let name: str = eq_parts[0];
+                // Rejoin everything after first = in case value contains =
+                let mut val: str = eq_parts[1];
+                let mut j: i32 = 2;
+                while j < len(eq_parts) {
+                    val = str_concat(val, "=");
+                    val = str_concat(val, eq_parts[j]);
+                    j += 1;
+                };
+                match env_set(name, val) {
+                    Result::Ok(_) => {},
+                    Result::Err(e) => { println("sh: export: {e}"); },
+                };
+            } else {
+                println("sh: export: invalid format (use VAR=value)");
+            };
+            i += 1;
+        };
+    };
+}
+
+fn! builtin_env() {
+    let n: i32 = env_count();
+    for i in 0..n {
+        let k: str = env_key(i);
+        let v: str = env_value(i);
+        println("{k}={v}");
+    };
+}
+
+fn! run_external(parts: [str]) {
+    let cmd: str = parts[0];
+    let mut args: [str] = [];
+    let mut i: i32 = 1;
+    while i < len(parts) {
+        push(args, parts[i]);
+        i += 1;
+    };
+    let rc: i32 = proc_run(cmd, args);
+    if rc != 0 {
+        println("sh: {cmd}: exited with code {rc}");
+    };
+}
+
+fn! usage() {
+    println("Usage: sh [--help]");
+    println("A simple shell built in Oscan.");
+    println("");
+    println("Built-in commands:");
+    println("  cd [dir]          change directory (default: $HOME)");
+    println("  pwd               print working directory");
+    println("  exit [code]       exit the shell");
+    println("  echo [...]        print arguments");
+    println("  export VAR=value  set environment variable");
+    println("  env               list environment variables");
+    println("");
+    println("External commands are run via PATH search.");
+}
+
+fn! main() {
+    if arg_count() > 1 {
+        let a: str = arg_get(1);
+        if str_eq(a, "--help") {
+            usage();
+            exit(0);
+        };
+    };
+
+    let mut running: bool = true;
+    while running {
+        print_prompt();
+        let line_result: Result<str, str> = read_line();
+        match line_result {
+            Result::Ok(line) => {
+                let trimmed: str = str_trim(line);
+                if str_len(trimmed) == 0 {
+                    // empty line, just re-prompt
+                } else {
+                    let parts: [str] = str_split(trimmed, " ");
+                    let cmd: str = parts[0];
+                    if str_eq(cmd, "exit") {
+                        if len(parts) > 1 {
+                            let code_result: Result<i32, str> = parse_i32(parts[1]);
+                            match code_result {
+                                Result::Ok(code) => { exit(code); },
+                                Result::Err(_) => { exit(0); },
+                            };
+                        } else {
+                            running = false;
+                        };
+                    } else if str_eq(cmd, "cd") {
+                        builtin_cd(parts);
+                    } else if str_eq(cmd, "pwd") {
+                        println(dir_current());
+                    } else if str_eq(cmd, "echo") {
+                        builtin_echo(parts);
+                    } else if str_eq(cmd, "export") {
+                        builtin_export(parts);
+                    } else if str_eq(cmd, "env") {
+                        builtin_env();
+                    } else {
+                        run_external(parts);
+                    };
+                };
+            },
+            Result::Err(_) => {
+                // EOF
+                running = false;
+            },
+        };
+    };
+    println("");
+}
