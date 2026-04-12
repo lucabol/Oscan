@@ -591,9 +591,9 @@ Release builds are handled by GitHub Actions workflows. Two manual workflows mus
 
 ### Mirror musl toolchain (one-time setup)
 
-The Linux release bundle ships a musl cross-compiler so users can compile freestanding programs without installing gcc. The toolchain comes from [musl.cc](https://musl.cc/) but that site blocks GitHub Actions, so we self-host it.
+The Linux release bundle ships a musl cross-compiler so users can compile freestanding programs without installing gcc. The toolchain comes from [musl.cc](https://musl.cc/) but that site blocks GitHub Actions, so we self-host it as a GitHub release asset.
 
-**Run once** (from Actions → "Mirror musl toolchain" → Run workflow), or manually:
+**Run once from your local machine** (musl.cc blocks GitHub Actions, so the workflow won't work):
 
 ```bash
 curl -fSL -o x86_64-linux-musl-cross.tgz https://musl.cc/x86_64-linux-musl-cross.tgz
