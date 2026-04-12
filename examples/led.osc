@@ -318,19 +318,13 @@ fn! main() {
         let cols: i32 = term_width();
         scroll_y = ensure_scroll(cy, scroll_y, rows);
 
-        if dirty {
-            render(lines, cx, cy, scroll_y, rows, cols, filename, modified,
-                   mode, status_msg, crlf, cmd_buf);
-            dirty = false;
-        };
+        render(lines, cx, cy, scroll_y, rows, cols, filename, modified,
+               mode, status_msg, crlf, cmd_buf);
 
-        let b: i32 = read_nonblock();
-        if b < 0 {
-            sleep_ms(20);
-        } else {
-            dirty = true;
+        // Blocking read — reliable across all platforms
+        let b: i32 = read_byte(0);
 
-            if mode == 2 {
+        if mode == 2 {
                 // --- COMMAND MODE ---
                 if b == 27 {
                     // ESC: cancel command
@@ -887,7 +881,6 @@ fn! main() {
                     };
                 };
             };
-        };
     };
 
     // Cleanup
