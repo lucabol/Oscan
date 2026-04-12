@@ -4064,15 +4064,15 @@ int open(const char *path, int flags, ...) {
     if (flags & 0100) { /* O_CREAT */
         va_list ap; va_start(ap, flags); mode = va_arg(ap, int); va_end(ap);
     }
-    return (int)l_syscall3(2, (long)(unsigned long)path, (long)flags, (long)mode);
+    return (int)my_syscall3(2, (long)(unsigned long)path, (long)flags, (long)mode);
 }
 
 int close(int fd) {
-    return (int)l_syscall1(3, (long)fd);
+    return (int)my_syscall1(3, (long)fd);
 }
 
 long read(int fd, void *buf, unsigned long count) {
-    return (long)l_syscall3(0, (long)fd, (long)(unsigned long)buf, (long)count);
+    return (long)my_syscall3(0, (long)fd, (long)(unsigned long)buf, (long)count);
 }
 
 long long time(long long *t) {
@@ -4081,7 +4081,7 @@ long long time(long long *t) {
 
 int getentropy(void *buf, unsigned long buflen) {
     /* Linux getrandom syscall (318 on x86_64) */
-    long ret = l_syscall3(318, (long)(unsigned long)buf, (long)buflen, 0);
+    long ret = my_syscall3(318, (long)(unsigned long)buf, (long)buflen, 0);
     return (ret == (long)buflen) ? 0 : -1;
 }
 
