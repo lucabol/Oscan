@@ -6,6 +6,21 @@
 // --- Constants ---
 // Mode values: 0 = NORMAL, 1 = INSERT, 2 = COMMAND
 
+// Read next byte with short timeout (for escape sequences)
+fn! read_key_timeout() -> i32 {
+    let mut result: i32 = -1;
+    let mut attempts: i32 = 0;
+    while attempts < 5 {
+        if result < 0 {
+            let c: i32 = read_nonblock();
+            if c >= 0 { result = c; };
+            if result < 0 { sleep_ms(10); };
+        };
+        attempts += 1;
+    };
+    result
+}
+
 // --- ANSI helpers (ESC = byte 27) ---
 
 fn! esc(s: str) {
@@ -321,8 +336,12 @@ fn! main() {
         render(lines, cx, cy, scroll_y, rows, cols, filename, modified,
                mode, status_msg, crlf, cmd_buf);
 
-        // Blocking read — reliable across all platforms
-        let b: i32 = read_byte(0);
+        // Use non-blocking read + sleep loop (l_term_raw sets VMIN=0 on Linux)
+        let mut b: i32 = read_nonblock();
+        while b < 0 {
+            sleep_ms(20);
+            b = read_nonblock();
+        };
 
         if mode == 2 {
                 // --- COMMAND MODE ---
@@ -461,9 +480,9 @@ fn! main() {
 
                 if b == 27 {
                     // Escape sequence (arrows etc.)
-                    let b2: i32 = read_byte(0);
+                    let b2: i32 = read_key_timeout();
                     if b2 == 91 {
-                        let b3: i32 = read_byte(0);
+                        let b3: i32 = read_key_timeout();
                         if b3 == 65 {
                             // Up arrow
                             if cy > 0 { cy -= 1; };
@@ -486,17 +505,17 @@ fn! main() {
                             cx = max_i32(0, ll - 1);
                         } else if b3 == 53 {
                             // Page Up
-                            let _t: i32 = read_byte(0);
+                            let _t: i32 = read_key_timeout();
                             let jump: i32 = rows - 2;
                             cy = max_i32(0, cy - jump);
                         } else if b3 == 54 {
                             // Page Down
-                            let _t: i32 = read_byte(0);
+                            let _t: i32 = read_key_timeout();
                             let jump: i32 = rows - 2;
                             cy = min_i32(len(lines) - 1, cy + jump);
                         } else if b3 == 51 {
                             // Delete key
-                            let _t: i32 = read_byte(0);
+                            let _t: i32 = read_key_timeout();
                             let ll: i32 = str_len(lines[cy]);
                             if cx < ll {
                                 lines[cy] = delete_char_at(lines[cy], cx);
