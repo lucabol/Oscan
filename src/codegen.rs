@@ -302,8 +302,11 @@ impl CodeGenerator {
             self.line("#include \"l_os.h\"");
             self.line("#endif");
             self.line("#define OSC_HAS_SOCKETS");
-            // l_tls.h provides TLS via SChannel on Windows, stubs elsewhere
+            // l_tls.h needs BearSSL on Linux (requires libbearssl.a).
+            // Only include on x86_64 and Windows where TLS is available.
+            self.line("#if defined(__x86_64__) || defined(_WIN32)");
             self.line("#include \"l_tls.h\"");
+            self.line("#endif");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");
             self.line("#else");
