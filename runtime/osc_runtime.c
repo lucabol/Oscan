@@ -4042,6 +4042,8 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     return result;
 }
 
+#if defined(__x86_64__) || defined(_WIN32)
+/* TLS wrappers — l_tls.h is included on these platforms */
 osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
 {
     osc_result_i32_str result;
@@ -4086,6 +4088,38 @@ void osc_tls_cleanup(void)
 {
     l_tls_cleanup();
 }
+#else
+/* TLS stubs for platforms without l_tls.h (ARM, RISC-V, WASI) */
+osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
+{
+    (void)host; (void)port;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_connect: not supported on this platform");
+    return result;
+}
+
+osc_result_i32_str osc_tls_send(int32_t handle, osc_str data)
+{
+    (void)handle; (void)data;
+    osc_result_i32_str result;
+    result.is_ok = 0; result.value.err = osc_str_from_cstr("tls_send: not supported on this platform");
+    return result;
+}
+
+osc_str osc_tls_recv(osc_arena *arena, int32_t handle, int32_t max_len)
+{
+    (void)arena; (void)handle; (void)max_len;
+    osc_str result; result.data = ""; result.len = 0; return result;
+}
+
+int32_t osc_tls_recv_byte(int32_t handle)
+{
+    (void)handle; return -1;
+}
+
+void osc_tls_close(int32_t handle) { (void)handle; }
+void osc_tls_cleanup(void) {}
+#endif
 
 #elif defined(_WIN32) /* Windows libc mode */
 
