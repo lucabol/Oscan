@@ -1314,8 +1314,10 @@ fn compile_with_gcc_or_clang(
         if !show_warnings {
             command.arg("-w");
         }
+        // -Oz is Clang-only; GCC uses -Os for size optimization
+        let size_opt = if cmd.contains("clang") { "-Oz" } else { "-Os" };
         command
-            .arg("-Oz") // aggressive size optimization
+            .arg(size_opt)
             .arg("-fno-builtin")
             .arg("-fno-asynchronous-unwind-tables")
             .arg("-fomit-frame-pointer")
