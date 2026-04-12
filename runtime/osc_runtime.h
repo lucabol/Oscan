@@ -335,6 +335,12 @@ osc_array *osc_str_to_chars(osc_arena *arena, osc_str s);
 
 osc_array *osc_dir_list(osc_arena *arena, osc_str path);
 int32_t    osc_proc_run(osc_str cmd, osc_array *args);
+int32_t    osc_fd_dup(int32_t fd);
+int32_t    osc_fd_dup2(int32_t oldfd, int32_t newfd);
+int32_t    osc_proc_spawn(osc_str cmd, osc_array *args);
+int32_t    osc_proc_wait(int32_t pid);
+osc_array *osc_pipe_create(osc_arena *arena);
+osc_result_str_str osc_path_find_exec(osc_arena *arena, osc_str name);
 int32_t    osc_term_width(void);
 int32_t    osc_term_height(void);
 

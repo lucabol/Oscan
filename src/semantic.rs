@@ -852,6 +852,45 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="File I/O" name="fd_dup" sig="fn! fd_dup(fd: i32) -> i32" desc="Duplicate file descriptor"
+        self.functions
+            .insert("fd_dup".into(), builtin(vec![("fd", BcType::I32)], BcType::I32, false));
+        // @builtin category="File I/O" name="fd_dup2" sig="fn! fd_dup2(oldfd: i32, newfd: i32) -> i32" desc="Redirect file descriptor"
+        self.functions.insert(
+            "fd_dup2".into(),
+            builtin(
+                vec![("oldfd", BcType::I32), ("newfd", BcType::I32)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="Process" name="proc_spawn" sig="fn! proc_spawn(cmd: str, args: [str]) -> i32" desc="Spawn process, returns PID"
+        self.functions.insert(
+            "proc_spawn".into(),
+            builtin(
+                vec![
+                    ("cmd", BcType::Str),
+                    ("args", BcType::Array(Box::new(BcType::Str))),
+                ],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="Process" name="proc_wait" sig="fn! proc_wait(pid: i32) -> i32" desc="Wait for process, returns exit code"
+        self.functions
+            .insert("proc_wait".into(), builtin(vec![("pid", BcType::I32)], BcType::I32, false));
+        // @builtin category="Process" name="pipe_create" sig="fn! pipe_create() -> [i32]" desc="Create pipe, returns [read_fd, write_fd]"
+        self.functions
+            .insert("pipe_create".into(), builtin(vec![], BcType::Array(Box::new(BcType::I32)), false));
+        // @builtin category="Path" name="path_find_exec" sig="fn! path_find_exec(name: str) -> Result<str, str>" desc="Find executable in PATH"
+        self.functions.insert(
+            "path_find_exec".into(),
+            builtin(
+                vec![("name", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
         // @builtin category="Terminal" name="term_width" sig="fn! term_width() -> i32" desc="Get terminal width in columns"
         self.functions
             .insert("term_width".into(), builtin(vec![], BcType::I32, false));

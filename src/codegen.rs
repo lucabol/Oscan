@@ -1455,6 +1455,12 @@ impl CodeGenerator {
             // Tier 7: Directory listing & process control
             "dir_list" => format!("osc_dir_list(_arena, {})", arg_strs[0]),
             "proc_run" => format!("osc_proc_run({}, {})", arg_strs[0], arg_strs[1]),
+            "fd_dup" => format!("osc_fd_dup({})", arg_strs[0]),
+            "fd_dup2" => format!("osc_fd_dup2({}, {})", arg_strs[0], arg_strs[1]),
+            "proc_spawn" => format!("osc_proc_spawn({}, {})", arg_strs[0], arg_strs[1]),
+            "proc_wait" => format!("osc_proc_wait({})", arg_strs[0]),
+            "pipe_create" => "osc_pipe_create(_arena)".to_string(),
+            "path_find_exec" => format!("osc_path_find_exec(_arena, {})", arg_strs[0]),
             "term_width" => "osc_term_width()".to_string(),
             "term_height" => "osc_term_height()".to_string(),
             // Tier 8: Raw terminal I/O

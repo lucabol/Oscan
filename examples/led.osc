@@ -1,66 +1,156 @@
-// led — a simple line editor with visual display
-// Usage: led [filename]
-// Commands: arrow keys to move, typing inserts text, Ctrl-S save, Ctrl-Q quit
-// A simplified editor showcasing Oscan's terminal builtins.
+// led — a modal text editor with vim keybindings
+// Usage: led <filename>
+// Modes: NORMAL (navigation), INSERT (typing), COMMAND (:commands)
+// A vim-like editor showcasing Oscan's terminal builtins.
+
+// --- Constants ---
+// Mode values: 0 = NORMAL, 1 = INSERT, 2 = COMMAND
+
+// --- ANSI helpers (ESC = byte 27) ---
 
 fn! esc(s: str) {
-    write_byte(1, 27); // ESC
+    write_byte(1, 27);
     write_str(1, "[");
     write_str(1, s);
-}
-
-fn! clear_screen() {
-    esc("2J");
-    esc("H");
 }
 
 fn! move_cursor(row: i32, col: i32) {
     let r: str = i32_to_str(row + 1);
     let c: str = i32_to_str(col + 1);
-    esc("{r};{c}H");
+    write_byte(1, 27);
+    write_str(1, "[");
+    write_str(1, r);
+    write_str(1, ";");
+    write_str(1, c);
+    write_str(1, "H");
 }
 
 fn! hide_cursor() { esc("?25l"); }
 fn! show_cursor() { esc("?25h"); }
-
+fn! clear_screen() { esc("2J"); esc("H"); }
+fn! clear_line() { esc("2K"); }
 fn! invert_on() { esc("7m"); }
 fn! invert_off() { esc("0m"); }
 
-// Split text into lines
-fn! text_to_lines(text: str) -> [str] {
-    let normalized: str = str_replace(text, "\r\n", "\n");
-    let parts: [str] = str_split(normalized, "\n");
-    let mut result: [str] = [];
-    let n: i32 = len(parts);
-    // Remove trailing empty line from final newline
-    let mut limit: i32 = n;
-    if n > 1 {
-        let last: str = parts[n - 1];
-        if str_len(last) == 0 {
-            limit = n - 1;
-        };
-    };
-    for i in 0..limit {
-        push(result, parts[i]);
-    };
-    result
+fn! set_cursor_block() {
+    write_byte(1, 27);
+    write_str(1, "[1 q");
 }
 
-fn! lines_to_text(lines: [str]) -> str {
-    str_join(lines, "\n")
+fn! set_cursor_bar() {
+    write_byte(1, 27);
+    write_str(1, "[5 q");
 }
 
-fn! draw(lines: [str], cx: i32, cy: i32, scroll_y: i32, rows: i32, cols: i32,
-         filename: str, modified: bool, message: str) {
+// --- File loading ---
+
+fn! load_file(path: str) -> [str] {
+    match read_file(path) {
+        Result::Ok(text) => {
+            let normalized: str = str_replace(text, "\r\n", "\n");
+            let parts: [str] = str_split(normalized, "\n");
+            let n: i32 = len(parts);
+            let mut result: [str] = [];
+            // Remove trailing empty line from final newline
+            let mut limit: i32 = n;
+            if n > 1 {
+                if str_len(parts[n - 1]) == 0 {
+                    limit = n - 1;
+                };
+            };
+            for i in 0..limit {
+                push(result, parts[i]);
+            };
+            if len(result) == 0 { push(result, ""); };
+            result
+        },
+        Result::Err(_) => {
+            let mut r: [str] = [];
+            push(r, "");
+            r
+        },
+    }
+}
+
+fn! detect_crlf(path: str) -> bool {
+    match read_file(path) {
+        Result::Ok(text) => {
+            let chars: [i32] = str_to_chars(text);
+            let n: i32 = len(chars);
+            let mut i: i32 = 0;
+            let mut found: bool = false;
+            while i < n {
+                if found == false {
+                    if chars[i] == 10 {
+                        found = false; // LF without preceding CR
+                        i = n; // stop
+                    } else if chars[i] == 13 {
+                        if i + 1 < n {
+                            if chars[i + 1] == 10 {
+                                found = true;
+                                i = n; // stop
+                            };
+                        };
+                    };
+                };
+                i += 1;
+            };
+            found
+        },
+        Result::Err(_) => { false },
+    }
+}
+
+// --- Save ---
+
+fn! save_file(path: str, lines: [str], crlf: bool) -> str {
+    let eol: str = if crlf { "\r\n" } else { "\n" };
+    let text: str = str_join(lines, eol);
+    let save_text: str = str_concat(text, eol);
+    match write_file(path, save_text) {
+        Result::Ok(_) => {
+            let sz: str = i32_to_str(str_len(save_text));
+            "Saved ({sz} bytes)"
+        },
+        Result::Err(e) => {
+            "Error: {e}"
+        },
+    }
+}
+
+// --- Line editing ---
+
+fn! insert_char(line: str, col: i32, ch: i32) -> str {
+    let before: str = str_slice(line, 0, col);
+    let after: str = str_slice(line, col, str_len(line));
+    let mut chars: [i32] = [ch];
+    let ch_str: str = str_from_chars(chars);
+    str_concat(str_concat(before, ch_str), after)
+}
+
+fn! delete_char_at(line: str, col: i32) -> str {
+    let ll: i32 = str_len(line);
+    if col < 0 { line }
+    else if col >= ll { line }
+    else {
+        str_concat(str_slice(line, 0, col), str_slice(line, col + 1, ll))
+    }
+}
+
+// --- Rendering ---
+
+fn! render(lines: [str], cx: i32, cy: i32, scroll_y: i32,
+           rows: i32, cols: i32, filename: str, modified: bool,
+           mode: i32, status_msg: str, crlf: bool, cmd_buf: str) {
     hide_cursor();
     move_cursor(0, 0);
 
     let num_lines: i32 = len(lines);
-    let edit_rows: i32 = rows - 1; // last row is status bar
+    let edit_rows: i32 = rows - 1;
 
     for screen_row in 0..edit_rows {
         let file_row: i32 = screen_row + scroll_y;
-        esc("2K"); // clear line
+        clear_line();
         if file_row < num_lines {
             let line: str = lines[file_row];
             let line_len: i32 = str_len(line);
@@ -79,45 +169,50 @@ fn! draw(lines: [str], cx: i32, cy: i32, scroll_y: i32, rows: i32, cols: i32,
 
     // Status bar
     write_str(1, "\r\n");
-    esc("2K");
+    clear_line();
     invert_on();
 
+    let mode_str: str = if mode == 0 { " NORMAL" }
+                        else if mode == 1 { " INSERT" }
+                        else { " COMMAND" };
+
+    let mod_str: str = if modified { " [+]" } else { "" };
     let row_str: str = i32_to_str(cy + 1);
     let col_str: str = i32_to_str(cx + 1);
     let total_str: str = i32_to_str(num_lines);
-    let mod_str: str = if modified { " [+]" } else { "" };
+    let eol_str: str = if crlf { "CRLF" } else { "LF" };
 
-    let status: str = " {filename}{mod_str} | Ln {row_str}, Col {col_str} | {total_str} lines";
+    write_str(1, mode_str);
+    write_str(1, " | ");
+    write_str(1, filename);
+    write_str(1, mod_str);
+    write_str(1, " | L");
+    write_str(1, row_str);
+    write_str(1, ",C");
+    write_str(1, col_str);
+    write_str(1, " | ");
+    write_str(1, total_str);
+    write_str(1, " lines | ");
+    write_str(1, eol_str);
 
-    let status_len: i32 = str_len(status);
-    if status_len > cols {
-        write_str(1, str_slice(status, 0, cols));
-    } else {
-        write_str(1, status);
-        // Pad the rest with spaces
-        let mut pad: i32 = status_len;
-        while pad < cols {
-            write_str(1, " ");
-            pad += 1;
-        };
+    if str_len(status_msg) > 0 {
+        write_str(1, " | ");
+        write_str(1, status_msg);
+    };
+    if mode == 2 {
+        write_str(1, " | :");
+        write_str(1, cmd_buf);
     };
 
+    // Pad rest of status bar
+    write_str(1, "                              ");
     invert_off();
 
-    // Show message briefly if any
-    if str_len(message) > 0 {
-        move_cursor(rows - 1, 0);
-        esc("2K");
-        invert_on();
-        write_str(1, " ");
-        write_str(1, message);
-        let msg_len: i32 = str_len(message) + 1;
-        let mut mp: i32 = msg_len;
-        while mp < cols {
-            write_str(1, " ");
-            mp += 1;
-        };
-        invert_off();
+    // Cursor shape
+    if mode == 1 {
+        set_cursor_bar();
+    } else {
+        set_cursor_block();
     };
 
     // Position cursor
@@ -125,50 +220,90 @@ fn! draw(lines: [str], cx: i32, cy: i32, scroll_y: i32, rows: i32, cols: i32,
     show_cursor();
 }
 
+// --- Scroll ---
+
 fn! ensure_scroll(cy: i32, scroll_y: i32, rows: i32) -> i32 {
     let edit_rows: i32 = rows - 1;
-    if cy < scroll_y {
-        cy
-    } else if cy >= scroll_y + edit_rows {
-        cy - edit_rows + 1
-    } else {
-        scroll_y
-    }
+    if cy < scroll_y { cy }
+    else if cy >= scroll_y + edit_rows { cy - edit_rows + 1 }
+    else { scroll_y }
 }
 
-fn! insert_char_in_line(line: str, cx: i32, ch: i32) -> str {
-    let before: str = str_slice(line, 0, cx);
-    let after: str = str_slice(line, cx, str_len(line));
-    let mut chars: [i32] = [ch];
-    let ch_str: str = str_from_chars(chars);
-    str_concat(str_concat(before, ch_str), after)
+// --- Word movement ---
+
+fn! next_word(line: str, cx: i32) -> i32 {
+    let ll: i32 = str_len(line);
+    let chars: [i32] = str_to_chars(line);
+    let mut pos: i32 = cx;
+    // Skip current non-space
+    let mut moving: bool = true;
+    while moving {
+        if pos < ll {
+            if chars[pos] != 32 {
+                pos += 1;
+            } else { moving = false; };
+        } else { moving = false; };
+    };
+    // Skip spaces
+    moving = true;
+    while moving {
+        if pos < ll {
+            if chars[pos] == 32 {
+                pos += 1;
+            } else { moving = false; };
+        } else { moving = false; };
+    };
+    pos
 }
 
-fn! delete_char_in_line(line: str, cx: i32) -> str {
-    if cx <= 0 { line }
-    else {
-        str_concat(str_slice(line, 0, cx - 1), str_slice(line, cx, str_len(line)))
-    }
+fn! prev_word(line: str, cx: i32) -> i32 {
+    let chars: [i32] = str_to_chars(line);
+    let mut pos: i32 = cx;
+    if pos > 0 { pos -= 1; };
+    // Skip spaces backward
+    let mut moving: bool = true;
+    while moving {
+        if pos > 0 {
+            if chars[pos] == 32 {
+                pos -= 1;
+            } else { moving = false; };
+        } else { moving = false; };
+    };
+    // Skip non-spaces backward
+    moving = true;
+    while moving {
+        if pos > 0 {
+            if chars[pos - 1] != 32 {
+                pos -= 1;
+            } else { moving = false; };
+        } else { moving = false; };
+    };
+    pos
 }
+
+// --- Main ---
 
 fn! main() {
-    let mut filename: str = "untitled";
-    let mut lines: [str] = [""];
-    let mut modified: bool = false;
-
-    if arg_count() > 1 {
-        filename = arg_get(1);
-        match read_file(filename) {
-            Result::Ok(text) => {
-                lines = text_to_lines(text);
-                if len(lines) == 0 { lines = [""]; };
-            },
-            Result::Err(_) => {
-                // New file
-                lines = [""];
-            },
-        };
+    if arg_count() < 2 {
+        println("Usage: led <filename>");
+        exit(0);
     };
+
+    let mut filename: str = arg_get(1);
+    let mut lines: [str] = load_file(filename);
+    let mut crlf: bool = detect_crlf(filename);
+    let mut modified: bool = false;
+    let mut mode: i32 = 0; // 0=NORMAL, 1=INSERT, 2=COMMAND
+    let mut cx: i32 = 0;
+    let mut cy: i32 = 0;
+    let mut scroll_y: i32 = 0;
+    let mut status_msg: str = "";
+    let mut cmd_buf: str = "";
+    let mut running: bool = true;
+    let mut dirty: bool = true;
+    let mut pending: i32 = 0; // for dd, yy, gg
+    let mut count: i32 = 0;   // numeric prefix
+    let mut yank: [str] = [];  // yank buffer
 
     match term_raw() {
         Result::Ok(_) => {},
@@ -176,236 +311,586 @@ fn! main() {
     };
     defer term_restore();
 
-    let mut cx: i32 = 0;
-    let mut cy: i32 = 0;
-    let mut scroll_y: i32 = 0;
-    let mut running: bool = true;
-    let mut message: str = "Ctrl-S: save | Ctrl-Q: quit | Ctrl-G: goto line";
+    clear_screen();
 
     while running {
         let rows: i32 = term_height();
         let cols: i32 = term_width();
         scroll_y = ensure_scroll(cy, scroll_y, rows);
-        draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
-        message = "";
 
-        let b: i32 = read_byte(0);
+        if dirty {
+            render(lines, cx, cy, scroll_y, rows, cols, filename, modified,
+                   mode, status_msg, crlf, cmd_buf);
+            dirty = false;
+        };
 
-        if b == 17 {
-            // Ctrl-Q: quit
-            if modified {
-                message = "Unsaved changes! Press Ctrl-Q again to quit without saving.";
-                draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
-                let b2: i32 = read_byte(0);
-                if b2 == 17 {
-                    running = false;
-                } else {
-                    message = "";
-                };
-            } else {
-                running = false;
-            };
-        } else if b == 19 {
-            // Ctrl-S: save
-            let text: str = lines_to_text(lines);
-            let save_text: str = str_concat(text, "\n");
-            match write_file(filename, save_text) {
-                Result::Ok(_) => {
-                    modified = false;
-                    let sz: str = i32_to_str(str_len(save_text));
-                    message = "Saved {filename} ({sz} bytes)";
-                },
-                Result::Err(e) => {
-                    message = "Error saving: {e}";
-                },
-            };
-        } else if b == 7 {
-            // Ctrl-G: goto line
-            message = "Go to line: (type number, then Enter)";
-            draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
-            // Read digits
-            let mut num_str: str = "";
-            let mut reading: bool = true;
-            while reading {
-                let d: i32 = read_byte(0);
-                if d == 13 {
-                    // Enter
-                    reading = false;
-                } else if d == 27 {
-                    // Escape - cancel
-                    num_str = "";
-                    reading = false;
-                } else if d >= 48 {
-                    if d <= 57 {
-                        let mut digit_chars: [i32] = [d];
-                        num_str = str_concat(num_str, str_from_chars(digit_chars));
-                        message = "Go to line: {num_str}";
-                        draw(lines, cx, cy, scroll_y, rows, cols, filename, modified, message);
-                    };
-                };
-            };
-            if str_len(num_str) > 0 {
-                match parse_i32(num_str) {
-                    Result::Ok(n) => {
-                        let target: i32 = n - 1;
-                        if target >= 0 {
-                            if target < len(lines) {
-                                cy = target;
-                                cx = 0;
-                                message = "";
-                            } else {
-                                message = "Line out of range";
-                            };
+        let b: i32 = read_nonblock();
+        if b < 0 {
+            sleep_ms(20);
+        } else {
+            dirty = true;
+
+            if mode == 2 {
+                // --- COMMAND MODE ---
+                if b == 27 {
+                    // ESC: cancel command
+                    mode = 0;
+                    cmd_buf = "";
+                    status_msg = "";
+                } else if b == 13 {
+                    // Enter: execute command
+                    mode = 0;
+                    if str_eq(cmd_buf, "q") {
+                        if modified {
+                            status_msg = "Unsaved changes (use :q! to force)";
                         } else {
-                            message = "Line out of range";
+                            running = false;
                         };
-                    },
-                    Result::Err(_) => { message = "Invalid number"; },
-                };
-            } else {
-                message = "";
-            };
-        } else if b == 27 {
-            // Escape sequence (arrow keys etc.)
-            let b2: i32 = read_byte(0);
-            if b2 == 91 {
-                let b3: i32 = read_byte(0);
-                if b3 == 65 {
-                    // Up
-                    if cy > 0 {
-                        cy -= 1;
-                        let ll: i32 = str_len(lines[cy]);
-                        if cx > ll { cx = ll; };
-                    };
-                } else if b3 == 66 {
-                    // Down
-                    if cy < len(lines) - 1 {
-                        cy += 1;
-                        let ll: i32 = str_len(lines[cy]);
-                        if cx > ll { cx = ll; };
-                    };
-                } else if b3 == 67 {
-                    // Right
-                    let ll: i32 = str_len(lines[cy]);
-                    if cx < ll {
-                        cx += 1;
-                    } else if cy < len(lines) - 1 {
-                        cy += 1;
+                    } else if str_eq(cmd_buf, "q!") {
+                        running = false;
+                    } else if str_eq(cmd_buf, "w") {
+                        status_msg = save_file(filename, lines, crlf);
+                        modified = false;
+                    } else if str_eq(cmd_buf, "wq") {
+                        status_msg = save_file(filename, lines, crlf);
+                        modified = false;
+                        running = false;
+                    } else if str_eq(cmd_buf, "x") {
+                        status_msg = save_file(filename, lines, crlf);
+                        modified = false;
+                        running = false;
+                    } else if str_starts_with(cmd_buf, "e ") {
+                        let new_file: str = str_slice(cmd_buf, 2, str_len(cmd_buf));
+                        filename = new_file;
+                        lines = load_file(filename);
+                        crlf = detect_crlf(filename);
+                        modified = false;
                         cx = 0;
+                        cy = 0;
+                        scroll_y = 0;
+                        status_msg = "";
+                    } else {
+                        status_msg = "Unknown command";
                     };
-                } else if b3 == 68 {
-                    // Left
+                    cmd_buf = "";
+                } else if b == 127 {
+                    // Backspace
+                    if str_len(cmd_buf) > 0 {
+                        cmd_buf = str_slice(cmd_buf, 0, str_len(cmd_buf) - 1);
+                    } else {
+                        mode = 0;
+                        status_msg = "";
+                    };
+                } else if b == 8 {
+                    if str_len(cmd_buf) > 0 {
+                        cmd_buf = str_slice(cmd_buf, 0, str_len(cmd_buf) - 1);
+                    } else {
+                        mode = 0;
+                        status_msg = "";
+                    };
+                } else if b >= 32 {
+                    if b < 127 {
+                        let mut ch: [i32] = [b];
+                        cmd_buf = str_concat(cmd_buf, str_from_chars(ch));
+                    };
+                };
+
+            } else if mode == 1 {
+                // --- INSERT MODE ---
+                if b == 27 {
+                    // ESC: back to normal
+                    mode = 0;
+                    if cx > 0 { cx -= 1; };
+                    status_msg = "";
+                } else if b == 127 {
+                    // Backspace
                     if cx > 0 {
+                        lines[cy] = delete_char_at(lines[cy], cx - 1);
                         cx -= 1;
-                    } else if cy > 0 {
-                        cy -= 1;
-                        cx = str_len(lines[cy]);
-                    };
-                } else if b3 == 72 {
-                    // Home
-                    cx = 0;
-                } else if b3 == 70 {
-                    // End
-                    cx = str_len(lines[cy]);
-                } else if b3 == 53 {
-                    // Page Up (ESC [ 5 ~)
-                    let _tilde: i32 = read_byte(0);
-                    let jump: i32 = rows - 2;
-                    cy = max_i32(0, cy - jump);
-                    let ll: i32 = str_len(lines[cy]);
-                    if cx > ll { cx = ll; };
-                } else if b3 == 54 {
-                    // Page Down (ESC [ 6 ~)
-                    let _tilde: i32 = read_byte(0);
-                    let jump: i32 = rows - 2;
-                    cy = min_i32(len(lines) - 1, cy + jump);
-                    let ll: i32 = str_len(lines[cy]);
-                    if cx > ll { cx = ll; };
-                } else if b3 == 51 {
-                    // Delete key (ESC [ 3 ~)
-                    let _tilde: i32 = read_byte(0);
-                    let ll: i32 = str_len(lines[cy]);
-                    if cx < ll {
-                        // Delete char at cursor
-                        lines[cy] = delete_char_in_line(lines[cy], cx + 1);
                         modified = true;
-                    } else if cy < len(lines) - 1 {
-                        // Join with next line
-                        lines[cy] = str_concat(lines[cy], lines[cy + 1]);
-                        // Remove next line
+                    } else if cy > 0 {
+                        let prev_len: i32 = str_len(lines[cy - 1]);
+                        lines[cy - 1] = str_concat(lines[cy - 1], lines[cy]);
                         let mut new_lines: [str] = [];
                         for i in 0..len(lines) {
-                            if i != cy + 1 {
-                                push(new_lines, lines[i]);
-                            };
+                            if i != cy { push(new_lines, lines[i]); };
                         };
                         lines = new_lines;
+                        cy -= 1;
+                        cx = prev_len;
+                        modified = true;
+                    };
+                } else if b == 8 {
+                    // Backspace alt
+                    if cx > 0 {
+                        lines[cy] = delete_char_at(lines[cy], cx - 1);
+                        cx -= 1;
+                        modified = true;
+                    };
+                } else if b == 13 {
+                    // Enter: split line
+                    let before: str = str_slice(lines[cy], 0, cx);
+                    let after: str = str_slice(lines[cy], cx, str_len(lines[cy]));
+                    let mut new_lines: [str] = [];
+                    for i in 0..len(lines) {
+                        if i == cy {
+                            push(new_lines, before);
+                            push(new_lines, after);
+                        } else {
+                            push(new_lines, lines[i]);
+                        };
+                    };
+                    lines = new_lines;
+                    cy += 1;
+                    cx = 0;
+                    modified = true;
+                } else if b == 9 {
+                    // Tab: 4 spaces
+                    let mut si: i32 = 0;
+                    while si < 4 {
+                        lines[cy] = insert_char(lines[cy], cx, 32);
+                        cx += 1;
+                        si += 1;
+                    };
+                    modified = true;
+                } else if b >= 32 {
+                    if b < 127 {
+                        lines[cy] = insert_char(lines[cy], cx, b);
+                        cx += 1;
                         modified = true;
                     };
                 };
-            };
-        } else if b == 13 {
-            // Enter: split line
-            let before: str = str_slice(lines[cy], 0, cx);
-            let after: str = str_slice(lines[cy], cx, str_len(lines[cy]));
-            let mut new_lines: [str] = [];
-            for i in 0..len(lines) {
-                if i == cy {
-                    push(new_lines, before);
-                    push(new_lines, after);
+
+            } else {
+                // --- NORMAL MODE ---
+                status_msg = "";
+
+                if b == 27 {
+                    // Escape sequence (arrows etc.)
+                    let b2: i32 = read_byte(0);
+                    if b2 == 91 {
+                        let b3: i32 = read_byte(0);
+                        if b3 == 65 {
+                            // Up arrow
+                            if cy > 0 { cy -= 1; };
+                        } else if b3 == 66 {
+                            // Down arrow
+                            if cy < len(lines) - 1 { cy += 1; };
+                        } else if b3 == 67 {
+                            // Right arrow
+                            let ll: i32 = str_len(lines[cy]);
+                            if cx < ll - 1 { cx += 1; };
+                        } else if b3 == 68 {
+                            // Left arrow
+                            if cx > 0 { cx -= 1; };
+                        } else if b3 == 72 {
+                            // Home
+                            cx = 0;
+                        } else if b3 == 70 {
+                            // End
+                            let ll: i32 = str_len(lines[cy]);
+                            cx = max_i32(0, ll - 1);
+                        } else if b3 == 53 {
+                            // Page Up
+                            let _t: i32 = read_byte(0);
+                            let jump: i32 = rows - 2;
+                            cy = max_i32(0, cy - jump);
+                        } else if b3 == 54 {
+                            // Page Down
+                            let _t: i32 = read_byte(0);
+                            let jump: i32 = rows - 2;
+                            cy = min_i32(len(lines) - 1, cy + jump);
+                        } else if b3 == 51 {
+                            // Delete key
+                            let _t: i32 = read_byte(0);
+                            let ll: i32 = str_len(lines[cy]);
+                            if cx < ll {
+                                lines[cy] = delete_char_at(lines[cy], cx);
+                                modified = true;
+                            } else if cy < len(lines) - 1 {
+                                lines[cy] = str_concat(lines[cy], lines[cy + 1]);
+                                let mut nl: [str] = [];
+                                for i in 0..len(lines) {
+                                    if i != cy + 1 { push(nl, lines[i]); };
+                                };
+                                lines = nl;
+                                modified = true;
+                            };
+                        };
+                    };
+                    // Clamp cursor after arrow movement
+                    let ll_clamp: i32 = str_len(lines[cy]);
+                    let max_cx: i32 = max_i32(0, ll_clamp - 1);
+                    if cx > max_cx { cx = max_cx; };
+                    pending = 0;
+                    count = 0;
+
                 } else {
-                    push(new_lines, lines[i]);
-                };
-            };
-            lines = new_lines;
-            cy += 1;
-            cx = 0;
-            modified = true;
-        } else if b == 127 {
-            // Backspace
-            if cx > 0 {
-                lines[cy] = delete_char_in_line(lines[cy], cx);
-                cx -= 1;
-                modified = true;
-            } else if cy > 0 {
-                // Join with previous line
-                let prev_len: i32 = str_len(lines[cy - 1]);
-                lines[cy - 1] = str_concat(lines[cy - 1], lines[cy]);
-                let mut new_lines: [str] = [];
-                for i in 0..len(lines) {
-                    if i != cy {
-                        push(new_lines, lines[i]);
+                    // Non-escape normal mode keys
+                    let n: i32 = if count > 0 { count } else { 1 };
+
+                    // Numeric prefix (1-9 starts, 0-9 continues)
+                    if b >= 49 {
+                        if b <= 57 {
+                            if pending == 0 {
+                                // Start or continue count
+                                count = count * 10 + (b - 48);
+                                // Don't reset pending, don't process further
+                            } else {
+                                // pending is set (d or y), treat as count for pending
+                                count = count * 10 + (b - 48);
+                            };
+                        } else {
+                            // Process command keys below
+                            count = 0;
+                            if b == 58 {
+                                // : — enter command mode
+                                mode = 2;
+                                cmd_buf = "";
+                                pending = 0;
+                            } else if b == 104 {
+                                // h — left
+                                let mut mi: i32 = 0;
+                                while mi < n { if cx > 0 { cx -= 1; }; mi += 1; };
+                                pending = 0;
+                            } else if b == 106 {
+                                // j — down
+                                let mut mi: i32 = 0;
+                                while mi < n {
+                                    if cy < len(lines) - 1 { cy += 1; };
+                                    mi += 1;
+                                };
+                                pending = 0;
+                            } else if b == 107 {
+                                // k — up
+                                let mut mi: i32 = 0;
+                                while mi < n {
+                                    if cy > 0 { cy -= 1; };
+                                    mi += 1;
+                                };
+                                pending = 0;
+                            } else if b == 108 {
+                                // l — right
+                                let ll: i32 = str_len(lines[cy]);
+                                let mut mi: i32 = 0;
+                                while mi < n {
+                                    if cx < ll - 1 { cx += 1; };
+                                    mi += 1;
+                                };
+                                pending = 0;
+                            } else if b == 105 {
+                                // i — insert before cursor
+                                mode = 1;
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 97 {
+                                // a — insert after cursor
+                                mode = 1;
+                                let ll: i32 = str_len(lines[cy]);
+                                if ll > 0 { cx += 1; };
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 65 {
+                                // A — insert at end of line
+                                mode = 1;
+                                cx = str_len(lines[cy]);
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 73 {
+                                // I — insert at beginning
+                                mode = 1;
+                                cx = 0;
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 111 {
+                                // o — open line below
+                                let mut nl: [str] = [];
+                                for i in 0..len(lines) {
+                                    push(nl, lines[i]);
+                                    if i == cy { push(nl, ""); };
+                                };
+                                lines = nl;
+                                cy += 1;
+                                cx = 0;
+                                mode = 1;
+                                modified = true;
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 79 {
+                                // O — open line above
+                                let mut nl: [str] = [];
+                                for i in 0..len(lines) {
+                                    if i == cy { push(nl, ""); };
+                                    push(nl, lines[i]);
+                                };
+                                cx = 0;
+                                mode = 1;
+                                modified = true;
+                                status_msg = "-- INSERT --";
+                                pending = 0;
+                            } else if b == 120 {
+                                // x — delete char under cursor
+                                let mut mi: i32 = 0;
+                                while mi < n {
+                                    let ll: i32 = str_len(lines[cy]);
+                                    if ll > 0 {
+                                        if cx < ll {
+                                            lines[cy] = delete_char_at(lines[cy], cx);
+                                            modified = true;
+                                        };
+                                    };
+                                    mi += 1;
+                                };
+                                pending = 0;
+                            } else if b == 100 {
+                                // d — first d or dd
+                                if pending == 100 {
+                                    // dd — delete lines
+                                    yank = [];
+                                    let mut mi: i32 = 0;
+                                    while mi < n {
+                                        if cy < len(lines) {
+                                            push(yank, lines[cy]);
+                                            if len(lines) <= 1 {
+                                                lines[0] = "";
+                                            } else {
+                                                let mut nl: [str] = [];
+                                                for i in 0..len(lines) {
+                                                    if i != cy { push(nl, lines[i]); };
+                                                };
+                                                lines = nl;
+                                                if cy >= len(lines) { cy = len(lines) - 1; };
+                                            };
+                                            modified = true;
+                                        };
+                                        mi += 1;
+                                    };
+                                    cx = 0;
+                                    pending = 0;
+                                    let yc: str = i32_to_str(len(yank));
+                                    status_msg = "{yc} lines deleted";
+                                } else {
+                                    pending = 100;
+                                    count = n; // preserve count for dd
+                                };
+                            } else if b == 121 {
+                                // y — first y or yy
+                                if pending == 121 {
+                                    // yy — yank lines
+                                    yank = [];
+                                    let mut mi: i32 = 0;
+                                    while mi < n {
+                                        if cy + mi < len(lines) {
+                                            push(yank, lines[cy + mi]);
+                                        };
+                                        mi += 1;
+                                    };
+                                    pending = 0;
+                                    let yc: str = i32_to_str(len(yank));
+                                    status_msg = "{yc} lines yanked";
+                                } else {
+                                    pending = 121;
+                                    count = n;
+                                };
+                            } else if b == 112 {
+                                // p — paste below
+                                if len(yank) > 0 {
+                                    let mut ri: i32 = 0;
+                                    while ri < n {
+                                        let mut yi: i32 = 0;
+                                        while yi < len(yank) {
+                                            let mut nl: [str] = [];
+                                            for i in 0..len(lines) {
+                                                push(nl, lines[i]);
+                                                if i == cy {
+                                                    push(nl, yank[yi]);
+                                                };
+                                            };
+                                            lines = nl;
+                                            cy += 1;
+                                            yi += 1;
+                                        };
+                                        ri += 1;
+                                    };
+                                    cx = 0;
+                                    modified = true;
+                                };
+                                pending = 0;
+                            } else if b == 80 {
+                                // P — paste above
+                                if len(yank) > 0 {
+                                    let mut ri: i32 = 0;
+                                    while ri < n {
+                                        let mut yi: i32 = len(yank) - 1;
+                                        let mut pasting: bool = true;
+                                        while pasting {
+                                            let mut nl: [str] = [];
+                                            for i in 0..len(lines) {
+                                                if i == cy {
+                                                    push(nl, yank[yi]);
+                                                };
+                                                push(nl, lines[i]);
+                                            };
+                                            lines = nl;
+                                            if yi <= 0 {
+                                                pasting = false;
+                                            } else {
+                                                yi -= 1;
+                                            };
+                                        };
+                                        ri += 1;
+                                    };
+                                    cx = 0;
+                                    modified = true;
+                                };
+                                pending = 0;
+                            } else if b == 74 {
+                                // J — join lines
+                                if cy < len(lines) - 1 {
+                                    let ll: i32 = str_len(lines[cy]);
+                                    lines[cy] = str_concat(str_concat(lines[cy], " "), lines[cy + 1]);
+                                    let mut nl: [str] = [];
+                                    for i in 0..len(lines) {
+                                        if i != cy + 1 { push(nl, lines[i]); };
+                                    };
+                                    lines = nl;
+                                    cx = ll;
+                                    modified = true;
+                                };
+                                pending = 0;
+                            } else if b == 126 {
+                                // ~ — toggle case
+                                let ll: i32 = str_len(lines[cy]);
+                                let mut mi: i32 = 0;
+                                while mi < n {
+                                    if cx < ll {
+                                        let chars: [i32] = str_to_chars(lines[cy]);
+                                        let ch: i32 = chars[cx];
+                                        if ch >= 97 {
+                                            if ch <= 122 {
+                                                chars[cx] = ch - 32;
+                                                lines[cy] = str_from_chars(chars);
+                                                modified = true;
+                                            };
+                                        } else if ch >= 65 {
+                                            if ch <= 90 {
+                                                chars[cx] = ch + 32;
+                                                lines[cy] = str_from_chars(chars);
+                                                modified = true;
+                                            };
+                                        };
+                                        cx += 1;
+                                    };
+                                    mi += 1;
+                                };
+                                pending = 0;
+                            } else if b == 119 {
+                                // w — next word
+                                let ll: i32 = str_len(lines[cy]);
+                                let new_cx: i32 = next_word(lines[cy], cx);
+                                if new_cx >= ll {
+                                    if cy < len(lines) - 1 {
+                                        cy += 1;
+                                        cx = 0;
+                                    };
+                                } else {
+                                    cx = new_cx;
+                                };
+                                pending = 0;
+                            } else if b == 98 {
+                                // b — previous word
+                                if cx == 0 {
+                                    if cy > 0 {
+                                        cy -= 1;
+                                        cx = max_i32(0, str_len(lines[cy]) - 1);
+                                    };
+                                } else {
+                                    cx = prev_word(lines[cy], cx);
+                                };
+                                pending = 0;
+                            } else if b == 103 {
+                                // g — first g or gg
+                                if pending == 103 {
+                                    // gg — go to top
+                                    cy = 0;
+                                    cx = 0;
+                                    pending = 0;
+                                } else {
+                                    pending = 103;
+                                };
+                            } else if b == 71 {
+                                // G — go to bottom
+                                cy = len(lines) - 1;
+                                cx = 0;
+                                pending = 0;
+                            } else if b == 6 {
+                                // Ctrl-F — page down
+                                let jump: i32 = rows - 2;
+                                cy = min_i32(len(lines) - 1, cy + jump);
+                                scroll_y += jump;
+                                pending = 0;
+                            } else if b == 2 {
+                                // Ctrl-B — page up
+                                let jump: i32 = rows - 2;
+                                cy = max_i32(0, cy - jump);
+                                scroll_y = max_i32(0, scroll_y - jump);
+                                pending = 0;
+                            } else {
+                                // Unknown key
+                                pending = 0;
+                            };
+                        };
+                    } else if b == 48 {
+                        // 0 — beginning of line OR continue count
+                        if count > 0 {
+                            count = count * 10;
+                        } else {
+                            cx = 0;
+                            pending = 0;
+                        };
+                    } else {
+                        // Keys below ASCII 48 or non-digit/non-alpha
+                        count = 0;
+                        if b == 36 {
+                            // $ — end of line
+                            let ll: i32 = str_len(lines[cy]);
+                            cx = max_i32(0, ll - 1);
+                            pending = 0;
+                        } else if b == 58 {
+                            // : — enter command mode
+                            mode = 2;
+                            cmd_buf = "";
+                            pending = 0;
+                        } else if b == 6 {
+                            // Ctrl-F — page down
+                            let jump: i32 = rows - 2;
+                            cy = min_i32(len(lines) - 1, cy + jump);
+                            scroll_y += jump;
+                            pending = 0;
+                        } else if b == 2 {
+                            // Ctrl-B — page up
+                            let jump: i32 = rows - 2;
+                            cy = max_i32(0, cy - jump);
+                            scroll_y = max_i32(0, scroll_y - jump);
+                            pending = 0;
+                        } else {
+                            pending = 0;
+                        };
+                    };
+
+                    // Clamp cursor in normal mode
+                    if mode == 0 {
+                        let ll_c: i32 = str_len(lines[cy]);
+                        let max_c: i32 = max_i32(0, ll_c - 1);
+                        if cx > max_c { cx = max_c; };
+                        if cx < 0 { cx = 0; };
                     };
                 };
-                lines = new_lines;
-                cy -= 1;
-                cx = prev_len;
-                modified = true;
-            };
-        } else if b == 8 {
-            // Backspace (alternative)
-            if cx > 0 {
-                lines[cy] = delete_char_in_line(lines[cy], cx);
-                cx -= 1;
-                modified = true;
-            };
-        } else if b == 9 {
-            // Tab: insert spaces
-            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
-            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
-            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
-            lines[cy] = insert_char_in_line(lines[cy], cx, 32);
-            cx += 4;
-            modified = true;
-        } else if b >= 32 {
-            if b < 127 {
-                // Printable character
-                lines[cy] = insert_char_in_line(lines[cy], cx, b);
-                cx += 1;
-                modified = true;
             };
         };
     };
 
+    // Cleanup
+    set_cursor_block();
     clear_screen();
 }

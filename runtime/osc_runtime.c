@@ -45,6 +45,8 @@
 #include <windows.h>
 #include <direct.h>
 #include <io.h>
+#include <fcntl.h>
+#include <process.h>
 #include <conio.h>
 #else
 #include <unistd.h>
@@ -2438,6 +2440,196 @@ int32_t osc_proc_run(osc_str cmd, osc_array *args)
     }
 #endif
 #endif
+}
+
+int32_t osc_fd_dup(int32_t fd)
+{
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_dup((L_FD)fd);
+#else
+#ifdef _WIN32
+    return (int32_t)_dup((int)fd);
+#else
+    return (int32_t)dup((int)fd);
+#endif
+#endif
+}
+
+int32_t osc_fd_dup2(int32_t oldfd, int32_t newfd)
+{
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_dup2((L_FD)oldfd, (L_FD)newfd);
+#else
+#ifdef _WIN32
+    return (int32_t)_dup2((int)oldfd, (int)newfd);
+#else
+    return (int32_t)dup2((int)oldfd, (int)newfd);
+#endif
+#endif
+}
+
+int32_t osc_proc_spawn(osc_str cmd, osc_array *args)
+{
+    char cbuf[1024];
+    osc_str_to_cstr_buf(cmd, cbuf, 1024);
+    int32_t nargs = args->len;
+    char *argv_ptrs[66];
+    static char abuf[64][256];
+    int32_t max_args = nargs < 64 ? nargs : 64;
+    int32_t i;
+
+    argv_ptrs[0] = cbuf;
+    for (i = 0; i < max_args; i++) {
+        osc_str *s = (osc_str *)((char *)args->data + (size_t)i * sizeof(osc_str));
+        osc_str_to_cstr_buf(*s, abuf[i], 256);
+        argv_ptrs[i + 1] = abuf[i];
+    }
+    argv_ptrs[max_args + 1] = 0;
+
+#ifdef OSC_FREESTANDING
+    return (int32_t)l_spawn(cbuf, argv_ptrs, 0);
+#else
+#ifdef _WIN32
+    return (int32_t)_spawnvp(_P_NOWAIT, cbuf, (const char *const *)argv_ptrs);
+#else
+    {
+        pid_t pid = fork();
+        if (pid < 0) return -1;
+        if (pid == 0) {
+            execvp(cbuf, argv_ptrs);
+            _exit(127);
+        }
+        return (int32_t)pid;
+    }
+#endif
+#endif
+}
+
+int32_t osc_proc_wait(int32_t pid)
+{
+#ifdef OSC_FREESTANDING
+    {
+        int exitcode = 0;
+        if (l_wait((L_PID)pid, &exitcode) < 0) return -1;
+        return (int32_t)exitcode;
+    }
+#else
+#ifdef _WIN32
+    {
+        DWORD ec = 0;
+        HANDLE h = (HANDLE)(intptr_t)pid;
+        WaitForSingleObject(h, INFINITE);
+        GetExitCodeProcess(h, &ec);
+        CloseHandle(h);
+        return (int32_t)ec;
+    }
+#else
+    {
+        int status = 0;
+        if (waitpid((pid_t)pid, &status, 0) < 0) return -1;
+        return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+#endif
+#endif
+}
+
+osc_array *osc_pipe_create(osc_arena *arena)
+{
+    osc_array *arr = osc_array_new(arena, sizeof(int32_t), 2);
+    int32_t fds[2] = {-1, -1};
+
+#ifdef OSC_FREESTANDING
+    {
+        L_FD pfd[2];
+        if (l_pipe(pfd) == 0) {
+            fds[0] = (int32_t)pfd[0];
+            fds[1] = (int32_t)pfd[1];
+        }
+    }
+#else
+#ifdef _WIN32
+    _pipe((int *)fds, 4096, _O_BINARY);
+#else
+    pipe((int *)fds);
+#endif
+#endif
+
+    osc_array_push(arena, arr, &fds[0]);
+    osc_array_push(arena, arr, &fds[1]);
+    return arr;
+}
+
+osc_result_str_str osc_path_find_exec(osc_arena *arena, osc_str name)
+{
+    char nbuf[1024];
+    char outbuf[4096];
+    osc_str_to_cstr_buf(name, nbuf, 1024);
+
+#ifdef OSC_FREESTANDING
+    if (l_find_executable(nbuf, outbuf, sizeof(outbuf))) {
+        osc_result_str_str r;
+        int32_t len = (int32_t)strlen(outbuf);
+        char *copy = (char *)osc_arena_alloc(arena, (size_t)len + 1);
+        int i;
+        for (i = 0; i <= len; i++) copy[i] = outbuf[i];
+        r.is_ok = 1;
+        r.value.ok.data = copy;
+        r.value.ok.len = len;
+        return r;
+    }
+#else
+#ifdef _WIN32
+    {
+        DWORD len = SearchPathA(NULL, nbuf, ".exe", sizeof(outbuf), outbuf, NULL);
+        if (len > 0 && len < sizeof(outbuf)) {
+            osc_result_str_str r;
+            int32_t slen = (int32_t)strlen(outbuf);
+            char *copy = (char *)osc_arena_alloc(arena, (size_t)slen + 1);
+            int i;
+            for (i = 0; i <= slen; i++) copy[i] = outbuf[i];
+            r.is_ok = 1;
+            r.value.ok.data = copy;
+            r.value.ok.len = slen;
+            return r;
+        }
+    }
+#else
+    {
+        const char *path = getenv("PATH");
+        if (path) {
+            const char *p = path;
+            while (*p) {
+                const char *end = p;
+                while (*end && *end != ':') end++;
+                size_t dirlen = (size_t)(end - p);
+                if (dirlen > 0 && dirlen + strlen(nbuf) + 2 < sizeof(outbuf)) {
+                    memcpy(outbuf, p, dirlen);
+                    outbuf[dirlen] = '/';
+                    strcpy(outbuf + dirlen + 1, nbuf);
+                    if (access(outbuf, X_OK) == 0) {
+                        osc_result_str_str r;
+                        int32_t slen = (int32_t)strlen(outbuf);
+                        char *copy = (char *)osc_arena_alloc(arena, (size_t)slen + 1);
+                        int i;
+                        for (i = 0; i <= slen; i++) copy[i] = outbuf[i];
+                        r.is_ok = 1;
+                        r.value.ok.data = copy;
+                        r.value.ok.len = slen;
+                        return r;
+                    }
+                }
+                p = *end ? end + 1 : end;
+            }
+        }
+    }
+#endif
+#endif
+    {
+        osc_result_str_str r;
+        r.is_ok = 0;
+        r.value.err = osc_str_from_cstr("not found");
+        return r;
+    }
 }
 
 int32_t osc_term_width(void)

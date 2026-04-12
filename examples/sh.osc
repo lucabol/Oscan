@@ -1,7 +1,7 @@
 // sh — a simple interactive shell
 // Usage: sh [--help]
 // Builtins: cd, pwd, exit, echo, export, env
-// External commands via PATH search (proc_run).
+// Features: I/O redirection (>, >>, <), pipes (cmd1 | cmd2), quoted arguments
 
 fn! print_prompt() {
     let cwd: str = dir_current();
@@ -48,7 +48,6 @@ fn! builtin_export(parts: [str]) {
             let eq_parts: [str] = str_split(arg, "=");
             if len(eq_parts) >= 2 {
                 let name: str = eq_parts[0];
-                // Rejoin everything after first = in case value contains =
                 let mut val: str = eq_parts[1];
                 let mut j: i32 = 2;
                 while j < len(eq_parts) {
@@ -77,7 +76,114 @@ fn! builtin_env() {
     };
 }
 
-fn! run_external(parts: [str]) {
+fn! is_builtin(cmd: str) -> bool {
+    if str_eq(cmd, "cd") { return true; };
+    if str_eq(cmd, "pwd") { return true; };
+    if str_eq(cmd, "exit") { return true; };
+    if str_eq(cmd, "echo") { return true; };
+    if str_eq(cmd, "export") { return true; };
+    if str_eq(cmd, "env") { return true; };
+    false
+}
+
+fn! run_builtin(parts: [str]) {
+    let cmd: str = parts[0];
+    if str_eq(cmd, "cd") {
+        builtin_cd(parts);
+    } else if str_eq(cmd, "pwd") {
+        println(dir_current());
+    } else if str_eq(cmd, "exit") {
+        if len(parts) > 1 {
+            match parse_i32(parts[1]) {
+                Result::Ok(code) => { exit(code); },
+                Result::Err(_) => { exit(0); },
+            };
+        } else {
+            exit(0);
+        };
+    } else if str_eq(cmd, "echo") {
+        builtin_echo(parts);
+    } else if str_eq(cmd, "export") {
+        builtin_export(parts);
+    } else if str_eq(cmd, "env") {
+        builtin_env();
+    };
+}
+
+// Parse input line into tokens, respecting single and double quotes.
+// Pipe, redirection operators are emitted as separate tokens.
+fn! parse_tokens(line: str) -> [str] {
+    let mut tokens: [str] = [];
+    let slen: i32 = str_len(line);
+    let mut i: i32 = 0;
+    let mut current: str = "";
+    let mut in_single: bool = false;
+    let mut in_double: bool = false;
+
+    while i < slen {
+        let ch: str = str_slice(line, i, i + 1);
+        if in_single {
+            if str_eq(ch, "'") {
+                in_single = false;
+            } else {
+                current = str_concat(current, ch);
+            };
+        } else if in_double {
+            if str_eq(ch, "\"") {
+                in_double = false;
+            } else {
+                current = str_concat(current, ch);
+            };
+        } else if str_eq(ch, "'") {
+            in_single = true;
+        } else if str_eq(ch, "\"") {
+            in_double = true;
+        } else if str_eq(ch, " ") {
+            if str_len(current) > 0 {
+                push(tokens, current);
+                current = "";
+            };
+        } else if str_eq(ch, "|") {
+            if str_len(current) > 0 {
+                push(tokens, current);
+                current = "";
+            };
+            push(tokens, "|");
+        } else if str_eq(ch, ">") {
+            if str_len(current) > 0 {
+                push(tokens, current);
+                current = "";
+            };
+            if i + 1 < slen {
+                let next: str = str_slice(line, i + 1, i + 2);
+                if str_eq(next, ">") {
+                    push(tokens, ">>");
+                    i += 1;
+                } else {
+                    push(tokens, ">");
+                };
+            } else {
+                push(tokens, ">");
+            };
+        } else if str_eq(ch, "<") {
+            if str_len(current) > 0 {
+                push(tokens, current);
+                current = "";
+            };
+            push(tokens, "<");
+        } else {
+            current = str_concat(current, ch);
+        };
+        i += 1;
+    };
+    if str_len(current) > 0 {
+        push(tokens, current);
+    };
+    tokens
+}
+
+// Spawn an external command and wait for it. Returns exit code.
+fn! exec_external(parts: [str]) -> i32 {
     let cmd: str = parts[0];
     let mut args: [str] = [];
     let mut i: i32 = 1;
@@ -85,9 +191,254 @@ fn! run_external(parts: [str]) {
         push(args, parts[i]);
         i += 1;
     };
-    let rc: i32 = proc_run(cmd, args);
-    if rc != 0 {
-        println("sh: {cmd}: exited with code {rc}");
+    let pid: i32 = proc_spawn(cmd, args);
+    if pid < 0 {
+        println("sh: {cmd}: command not found");
+        return -1;
+    };
+    proc_wait(pid)
+}
+
+// Run a single command segment (tokens[start..end]) with I/O redirection.
+fn! run_segment(tokens: [str], start: i32, end: i32) -> i32 {
+    let mut parts: [str] = [];
+    let mut redir_in: str = "";
+    let mut redir_out: str = "";
+    let mut append: bool = false;
+    let mut i: i32 = start;
+    let mut parse_ok: bool = true;
+
+    while i < end {
+        let tok: str = tokens[i];
+        if str_eq(tok, "<") {
+            if i + 1 < end {
+                redir_in = tokens[i + 1];
+                i += 2;
+            } else {
+                println("sh: syntax error near '<'");
+                parse_ok = false;
+                i += 1;
+            };
+        } else if str_eq(tok, ">>") {
+            if i + 1 < end {
+                redir_out = tokens[i + 1];
+                append = true;
+                i += 2;
+            } else {
+                println("sh: syntax error near '>>'");
+                parse_ok = false;
+                i += 1;
+            };
+        } else if str_eq(tok, ">") {
+            if i + 1 < end {
+                redir_out = tokens[i + 1];
+                append = false;
+                i += 2;
+            } else {
+                println("sh: syntax error near '>'");
+                parse_ok = false;
+                i += 1;
+            };
+        } else {
+            push(parts, tok);
+            i += 1;
+        };
+    };
+
+    if not parse_ok { return 1; };
+    if len(parts) == 0 { return 0; };
+
+    // Set up input redirection
+    let mut saved_stdin: i32 = -1;
+    let mut in_fd: i32 = -1;
+    let mut redir_ok: bool = true;
+    if str_len(redir_in) > 0 {
+        match file_open_read(redir_in) {
+            Result::Ok(fd) => {
+                in_fd = fd;
+                saved_stdin = fd_dup(0);
+                fd_dup2(fd, 0);
+            },
+            Result::Err(e) => {
+                println("sh: {redir_in}: {e}");
+                redir_ok = false;
+            },
+        };
+    };
+
+    // Set up output redirection
+    let mut saved_stdout: i32 = -1;
+    let mut out_fd: i32 = -1;
+    if redir_ok {
+        if str_len(redir_out) > 0 {
+            if append {
+                match file_open_append(redir_out) {
+                    Result::Ok(fd) => {
+                        out_fd = fd;
+                        saved_stdout = fd_dup(1);
+                        fd_dup2(fd, 1);
+                    },
+                    Result::Err(e) => {
+                        println("sh: {redir_out}: {e}");
+                        redir_ok = false;
+                    },
+                };
+            } else {
+                match file_open_write(redir_out) {
+                    Result::Ok(fd) => {
+                        out_fd = fd;
+                        saved_stdout = fd_dup(1);
+                        fd_dup2(fd, 1);
+                    },
+                    Result::Err(e) => {
+                        println("sh: {redir_out}: {e}");
+                        redir_ok = false;
+                    },
+                };
+            };
+        };
+    };
+
+    // Run the command
+    let mut rc: i32 = 0;
+    if redir_ok {
+        let cmd: str = parts[0];
+        if is_builtin(cmd) {
+            run_builtin(parts);
+        } else {
+            rc = exec_external(parts);
+        };
+    } else {
+        rc = 1;
+    };
+
+    // Restore redirections
+    if saved_stdout >= 0 {
+        fd_dup2(saved_stdout, 1);
+        file_close(saved_stdout);
+        file_close(out_fd);
+    };
+    if saved_stdin >= 0 {
+        fd_dup2(saved_stdin, 0);
+        file_close(saved_stdin);
+        file_close(in_fd);
+    };
+
+    rc
+}
+
+// Run a pipeline of commands connected by pipes.
+fn! run_pipeline(tokens: [str]) {
+    let mut pipe_indices: [i32] = [];
+    let mut i: i32 = 0;
+    while i < len(tokens) {
+        if str_eq(tokens[i], "|") {
+            push(pipe_indices, i);
+        };
+        i += 1;
+    };
+
+    // No pipes: run as single command with redirections
+    if len(pipe_indices) == 0 {
+        run_segment(tokens, 0, len(tokens));
+        return;
+    };
+
+    let n_pipes: i32 = len(pipe_indices);
+    let n_cmds: i32 = n_pipes + 1;
+
+    // Create all pipes (flat array: [read0, write0, read1, write1, ...])
+    let mut pipe_fds: [i32] = [];
+    let mut p: i32 = 0;
+    while p < n_pipes {
+        let pfds: [i32] = pipe_create();
+        push(pipe_fds, pfds[0]);
+        push(pipe_fds, pfds[1]);
+        p += 1;
+    };
+
+    // Spawn all commands in the pipeline
+    let mut pids: [i32] = [];
+    let mut cmd_idx: i32 = 0;
+    while cmd_idx < n_cmds {
+        let mut seg_start: i32 = 0;
+        if cmd_idx > 0 {
+            seg_start = pipe_indices[cmd_idx - 1] + 1;
+        };
+        let mut seg_end: i32 = len(tokens);
+        if cmd_idx < n_pipes {
+            seg_end = pipe_indices[cmd_idx];
+        };
+
+        // Build command parts for this segment
+        let mut parts: [str] = [];
+        let mut ti: i32 = seg_start;
+        while ti < seg_end {
+            push(parts, tokens[ti]);
+            ti += 1;
+        };
+
+        if len(parts) == 0 {
+            push(pids, -1);
+        } else {
+            // Redirect stdin from previous pipe
+            let mut saved_stdin: i32 = -1;
+            if cmd_idx > 0 {
+                saved_stdin = fd_dup(0);
+                fd_dup2(pipe_fds[(cmd_idx - 1) * 2], 0);
+            };
+
+            // Redirect stdout to next pipe
+            let mut saved_stdout: i32 = -1;
+            if cmd_idx < n_pipes {
+                saved_stdout = fd_dup(1);
+                fd_dup2(pipe_fds[cmd_idx * 2 + 1], 1);
+            };
+
+            let cmd: str = parts[0];
+            if is_builtin(cmd) {
+                run_builtin(parts);
+                push(pids, -1);
+            } else {
+                let mut args: [str] = [];
+                let mut ai: i32 = 1;
+                while ai < len(parts) {
+                    push(args, parts[ai]);
+                    ai += 1;
+                };
+                let pid: i32 = proc_spawn(cmd, args);
+                push(pids, pid);
+            };
+
+            // Restore stdout
+            if saved_stdout >= 0 {
+                fd_dup2(saved_stdout, 1);
+                file_close(saved_stdout);
+            };
+
+            // Restore stdin
+            if saved_stdin >= 0 {
+                fd_dup2(saved_stdin, 0);
+                file_close(saved_stdin);
+            };
+        };
+        cmd_idx += 1;
+    };
+
+    // Close all pipe fds in parent
+    let mut pi: i32 = 0;
+    while pi < len(pipe_fds) {
+        file_close(pipe_fds[pi]);
+        pi += 1;
+    };
+
+    // Wait for all spawned processes
+    let mut wi: i32 = 0;
+    while wi < len(pids) {
+        if pids[wi] >= 0 {
+            proc_wait(pids[wi]);
+        };
+        wi += 1;
     };
 }
 
@@ -103,7 +454,12 @@ fn! usage() {
     println("  export VAR=value  set environment variable");
     println("  env               list environment variables");
     println("");
-    println("External commands are run via PATH search.");
+    println("Features:");
+    println("  cmd > file        redirect stdout to file");
+    println("  cmd >> file       append stdout to file");
+    println("  cmd < file        redirect stdin from file");
+    println("  cmd1 | cmd2       pipe output of cmd1 to cmd2");
+    println("  'quoted args'     single-quoted arguments");
 }
 
 fn! main() {
@@ -122,38 +478,14 @@ fn! main() {
         match line_result {
             Result::Ok(line) => {
                 let trimmed: str = str_trim(line);
-                if str_len(trimmed) == 0 {
-                    // empty line, just re-prompt
-                } else {
-                    let parts: [str] = str_split(trimmed, " ");
-                    let cmd: str = parts[0];
-                    if str_eq(cmd, "exit") {
-                        if len(parts) > 1 {
-                            let code_result: Result<i32, str> = parse_i32(parts[1]);
-                            match code_result {
-                                Result::Ok(code) => { exit(code); },
-                                Result::Err(_) => { exit(0); },
-                            };
-                        } else {
-                            running = false;
-                        };
-                    } else if str_eq(cmd, "cd") {
-                        builtin_cd(parts);
-                    } else if str_eq(cmd, "pwd") {
-                        println(dir_current());
-                    } else if str_eq(cmd, "echo") {
-                        builtin_echo(parts);
-                    } else if str_eq(cmd, "export") {
-                        builtin_export(parts);
-                    } else if str_eq(cmd, "env") {
-                        builtin_env();
-                    } else {
-                        run_external(parts);
+                if str_len(trimmed) > 0 {
+                    let tokens: [str] = parse_tokens(trimmed);
+                    if len(tokens) > 0 {
+                        run_pipeline(tokens);
                     };
                 };
             },
             Result::Err(_) => {
-                // EOF
                 running = false;
             },
         };
