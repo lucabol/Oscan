@@ -1276,6 +1276,22 @@ impl SemanticAnalyzer {
             builtin(vec![], BcType::I32, false),
         );
 
+        // Graphics: Clipboard (fn!)
+        // @builtin category="Graphics" name="clipboard_set" sig="fn! clipboard_set(text: str) -> i32" desc="Copy text to system clipboard (requires canvas)"
+        self.functions.insert(
+            "clipboard_set".into(),
+            builtin(vec![("text", BcType::Str)], BcType::I32, false),
+        );
+        // @builtin category="Graphics" name="clipboard_get" sig="fn! clipboard_get() -> Result<str, str>" desc="Get text from system clipboard (requires canvas)"
+        self.functions.insert(
+            "clipboard_get".into(),
+            builtin(
+                vec![],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+
         // Graphics: Color (pure)
         // @builtin category="Graphics" name="rgb" sig="fn rgb(r: i32, g: i32, b: i32) -> i32" desc="Create RGB color value"
         self.functions.insert(

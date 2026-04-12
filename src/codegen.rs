@@ -1547,6 +1547,9 @@ impl CodeGenerator {
             "canvas_mouse_x" => "osc_canvas_mouse_x()".to_string(),
             "canvas_mouse_y" => "osc_canvas_mouse_y()".to_string(),
             "canvas_mouse_btn" => "osc_canvas_mouse_btn()".to_string(),
+            // Graphics: Clipboard
+            "clipboard_set" => format!("osc_clipboard_set({})", arg_strs[0]),
+            "clipboard_get" => "osc_clipboard_get(_arena)".to_string(),
             // Graphics: Color
             "rgb" => format!("osc_rgb({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
             "rgba" => format!(

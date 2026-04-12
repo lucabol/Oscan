@@ -249,7 +249,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**220 built-in functions** across 20 categories.
+**222 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -527,7 +527,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
 | `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
 
-### Graphics (22 functions)
+### Graphics (24 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -551,6 +551,8 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! canvas_mouse_x() -> i32` | Get mouse X position |
 | `fn! canvas_mouse_y() -> i32` | Get mouse Y position |
 | `fn! canvas_mouse_btn() -> i32` | Get mouse button state |
+| `fn! clipboard_set(text: str) -> i32` | Copy text to system clipboard (requires canvas) |
+| `fn! clipboard_get() -> Result<str, str>` | Get text from system clipboard (requires canvas) |
 | `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
 | `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
 

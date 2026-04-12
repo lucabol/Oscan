@@ -4032,6 +4032,29 @@ int32_t osc_canvas_mouse_x(void) { return (int32_t)osc_gfx_canvas.mouse_x; }
 int32_t osc_canvas_mouse_y(void) { return (int32_t)osc_gfx_canvas.mouse_y; }
 int32_t osc_canvas_mouse_btn(void) { return (int32_t)osc_gfx_canvas.mouse_btn; }
 
+int32_t osc_clipboard_set(osc_str text) {
+    char buf[4096];
+    osc_str_to_cstr_buf(text, buf, (int32_t)sizeof(buf));
+    return l_clipboard_set(&osc_gfx_canvas, buf, (int)text.len) == 0 ? 0 : -1;
+}
+
+osc_result_str_str osc_clipboard_get(osc_arena *arena) {
+    osc_result_str_str result;
+    char buf[4096];
+    int n = l_clipboard_get(&osc_gfx_canvas, buf, (int)sizeof(buf));
+    if (n < 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("clipboard_get: failed to read clipboard");
+        return result;
+    }
+    char *copy = (char *)osc_arena_alloc(arena, (size_t)n + 1);
+    memcpy(copy, buf, (size_t)n + 1);
+    result.is_ok = 1;
+    result.value.ok.data = copy;
+    result.value.ok.len = (int32_t)n;
+    return result;
+}
+
 int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)L_RGB(r, g, b); }
 int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)L_RGBA(r, g, b, a); }
 
@@ -4060,6 +4083,11 @@ int32_t osc_canvas_key(void) { return 0; }
 int32_t osc_canvas_mouse_x(void) { return 0; }
 int32_t osc_canvas_mouse_y(void) { return 0; }
 int32_t osc_canvas_mouse_btn(void) { return 0; }
+int32_t osc_clipboard_set(osc_str text) { (void)text; return -1; }
+osc_result_str_str osc_clipboard_get(osc_arena *arena) {
+    (void)arena;
+    osc_result_str_str r; r.is_ok = 0; r.value.err = osc_str_from_cstr("clipboard: not supported on this platform"); return r;
+}
 int32_t osc_rgb(int32_t r, int32_t g, int32_t b) { return (int32_t)(0xFF000000u | ((uint32_t)r<<16) | ((uint32_t)g<<8) | (uint32_t)b); }
 int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a) { return (int32_t)(((uint32_t)a<<24) | ((uint32_t)r<<16) | ((uint32_t)g<<8) | (uint32_t)b); }
 
