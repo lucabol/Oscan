@@ -832,12 +832,27 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Search for libbearssl.a in include dirs (deps/laststanding/bearssl/build/).
+/// Search for libbearssl.a in multiple locations:
+/// 1. Include dirs (deps/laststanding/bearssl/build/ for dev mode)
+/// 2. <exe-dir>/toolchain/lib/ (release bundle layout)
+/// 3. <exe-dir>/lib/ (minimal install layout)
 fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
+    // Dev mode: search include dirs
     for dir in include_dirs {
         let lib = dir.join("bearssl").join("build").join("libbearssl.a");
         if lib.exists() {
             return Some(lib.display().to_string());
+        }
+    }
+    // Release bundle: search relative to the oscan binary
+    if let Ok(exe) = env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            for sub in &["toolchain/lib", "lib"] {
+                let lib = exe_dir.join(sub).join("libbearssl.a");
+                if lib.exists() {
+                    return Some(lib.display().to_string());
+                }
+            }
         }
     }
     None
