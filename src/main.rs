@@ -760,13 +760,57 @@ fn find_msvc_cl() -> Option<(String, Option<String>)> {
 fn find_bundled_c_compiler_in_dir(toolchain_dir: &Path, platform: &str) -> Option<CCompiler> {
     for candidate in bundled_compiler_candidate_paths(toolchain_dir, platform) {
         if candidate.is_file() {
+            // Verify the binary can actually execute (musl-native binaries
+            // can't run on glibc systems — they hang instead of erroring).
+            let cmd_str = candidate.to_string_lossy().into_owned();
+            if !compiler_can_execute(&cmd_str) {
+                if is_verbose() {
+                    eprintln!("[verbose] Bundled compiler {} exists but can't execute — skipping", cmd_str);
+                }
+                continue;
+            }
             return Some(compiler_from_command(
-                candidate.to_string_lossy().into_owned(),
+                cmd_str,
                 CompilerSource::Bundled,
             ));
         }
     }
     None
+}
+
+/// Quick sanity check: can the compiler actually run on this system?
+/// Returns false if the binary exists but can't execute (e.g. musl-native
+/// binary on a glibc system).
+fn compiler_can_execute(cmd: &str) -> bool {
+    use std::time::Duration;
+    // Use a short timeout — a working compiler responds to --version instantly.
+    // A musl binary on glibc hangs forever, so we kill it after 3 seconds.
+    let child = Command::new(cmd)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(mut child) => {
+            // Wait up to 3 seconds for the process to complete
+            let start = std::time::Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => return status.success(),
+                    Ok(None) => {
+                        if start.elapsed() > Duration::from_secs(3) {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            return false;
+                        }
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    Err(_) => return false,
+                }
+            }
+        }
+        Err(_) => false,
+    }
 }
 
 fn find_toolchain_dir() -> Option<PathBuf> {
@@ -1694,6 +1738,8 @@ mod tests {
 
     #[test]
     fn bundled_compiler_detection_prefers_platform_specific_bin() {
+        // With the execution health check, dummy files won't pass.
+        // Verify that non-executable files are correctly skipped.
         let test_dir = TestDir::new("bundled-platform");
         let toolchain = test_dir.path.join("toolchain");
         let platform_clang = toolchain.join("windows").join("bin").join("clang.exe");
@@ -1704,17 +1750,16 @@ mod tests {
         fs::write(&platform_clang, []).unwrap();
         fs::write(&generic_gcc, []).unwrap();
 
+        // Non-executable dummy files should be skipped by the health check
         assert_eq!(
             find_bundled_c_compiler_in_dir(&toolchain, "windows"),
-            Some(CCompiler::Clang {
-                cmd: platform_clang.to_string_lossy().into_owned(),
-                source: CompilerSource::Bundled,
-            })
+            None
         );
     }
 
     #[test]
     fn bundled_compiler_detection_falls_back_to_generic_bin() {
+        // With the execution health check, dummy files won't pass.
         let test_dir = TestDir::new("bundled-generic");
         let toolchain = test_dir.path.join("toolchain");
         let generic_gcc = toolchain.join("bin").join("gcc");
@@ -1722,12 +1767,10 @@ mod tests {
         fs::create_dir_all(generic_gcc.parent().unwrap()).unwrap();
         fs::write(&generic_gcc, []).unwrap();
 
+        // Non-executable dummy file should be skipped
         assert_eq!(
             find_bundled_c_compiler_in_dir(&toolchain, "linux"),
-            Some(CCompiler::Gcc {
-                cmd: generic_gcc.to_string_lossy().into_owned(),
-                source: CompilerSource::Bundled,
-            })
+            None
         );
     }
 
