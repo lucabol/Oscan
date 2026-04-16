@@ -37,6 +37,7 @@ const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
 const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
+const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/math.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
 
 // BearSSL public headers (for l_tls.h on Linux)
@@ -969,6 +970,16 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         }
     }
 
+    // Write compat/math.h for l_svg.h float shims
+    {
+        let compat_dir = temp_dir.join("compat");
+        let _ = fs::create_dir_all(&compat_dir);
+        if let Err(e) = fs::write(compat_dir.join("math.h"), EMBEDDED_COMPAT_MATH_H) {
+            eprintln!("error writing compat/math.h: {e}");
+            process::exit(1);
+        }
+    }
+
     // Write BearSSL public headers to bearssl/inc/ subdirectory (for l_tls.h)
     let bearssl_inc_dir = temp_dir.join("bearssl").join("inc");
     let _ = fs::create_dir_all(&bearssl_inc_dir);
@@ -1042,6 +1053,14 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
             eprintln!("error writing embedded runtime file {name}: {e}");
             process::exit(1);
         }
+    }
+
+    // Write compat/math.h for l_svg.h float shims
+    let compat_dir = temp_dir.join("compat");
+    let _ = fs::create_dir_all(&compat_dir);
+    if let Err(e) = fs::write(compat_dir.join("math.h"), EMBEDDED_COMPAT_MATH_H) {
+        eprintln!("error writing compat/math.h: {e}");
+        process::exit(1);
     }
 
     // Write BearSSL public headers to bearssl/inc/ subdirectory (for l_tls.h)
