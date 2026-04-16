@@ -268,6 +268,7 @@ fn main() {
     let mut show_warnings = false;
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
+    let mut program_args: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -311,7 +312,14 @@ fn main() {
                     process::exit(1);
                 }
             }
-            _ if !args[i].starts_with('-') => file_path = Some(args[i].clone()),
+            _ if !args[i].starts_with('-') => {
+                if file_path.is_none() {
+                    file_path = Some(args[i].clone());
+                } else {
+                    // Extra positional args → program arguments for --run
+                    program_args.push(args[i].clone());
+                }
+            }
             other => {
                 eprintln!("unknown flag: {other}");
                 process::exit(1);
@@ -432,7 +440,7 @@ fn main() {
             eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
             process::exit(1);
         }
-        run_program(&path, &c_code, freestanding, show_warnings);
+        run_program(&path, &c_code, freestanding, show_warnings, &program_args);
     } else if emit_c || output_ends_in_c {
         // Emit C mode
         if let Some(out_path) = output_path {
@@ -1005,7 +1013,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     eprintln!("Compiled {}", exe_path.display());
 }
 
-fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool) {
+fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool, program_args: &[String]) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
@@ -1077,7 +1085,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
     }
 
     eprintln!("\n=== Running {} ===\n", source_path);
-    let status = Command::new(&exe_file).status();
+    let status = Command::new(&exe_file).args(program_args).status();
 
     match status {
         Ok(exit_status) => {
