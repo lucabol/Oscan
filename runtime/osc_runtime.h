@@ -538,6 +538,7 @@ int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a);
 /* ------------------------------------------------------------------ */
 
 osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data);
+osc_result_arr_i32_str osc_svg_load(osc_arena *arena, osc_str data, int32_t width, int32_t height);
 
 #ifdef __cplusplus
 }

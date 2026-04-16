@@ -4760,3 +4760,55 @@ osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data)
 }
 
 #endif /* OSC_HAS_IMG */
+
+/* ================================================================== */
+/*  SVG rasterization wrappers (requires l_svg.h)                      */
+/* ================================================================== */
+
+#ifdef OSC_HAS_SVG
+
+osc_result_arr_i32_str osc_svg_load(osc_arena *arena, osc_str data, int32_t width, int32_t height)
+{
+    osc_result_arr_i32_str result;
+    L_SvgOptions opt;
+    opt.width  = (int)width;
+    opt.height = (int)height;
+    opt.dpi    = 96.0f;
+    int w, h;
+    uint32_t *pixels = l_svg_load_mem((const unsigned char *)data.data, data.len, &opt, &w, &h);
+    if (!pixels) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("svg_load: failed to rasterize SVG");
+        return result;
+    }
+    if (w <= 0 || h <= 0 || (int64_t)w * h > 0x7FFFFFFE) {
+        l_svg_free_pixels(pixels, w, h);
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("svg_load: invalid image dimensions");
+        return result;
+    }
+    int total = w * h + 2;
+    osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), total);
+    int32_t *d = (int32_t *)arr->data;
+    d[0] = (int32_t)w;
+    d[1] = (int32_t)h;
+    for (int i = 0; i < w * h; i++) d[i + 2] = (int32_t)pixels[i];
+    arr->len = total;
+    l_svg_free_pixels(pixels, w, h);
+    result.is_ok = 1;
+    result.value.ok = arr;
+    return result;
+}
+
+#else /* no SVG support */
+
+osc_result_arr_i32_str osc_svg_load(osc_arena *arena, osc_str data, int32_t width, int32_t height)
+{
+    (void)arena; (void)data; (void)width; (void)height;
+    osc_result_arr_i32_str result;
+    result.is_ok = 0;
+    result.value.err = osc_str_from_cstr("svg_load: not supported in this build");
+    return result;
+}
+
+#endif /* OSC_HAS_SVG */

@@ -297,6 +297,8 @@ impl CodeGenerator {
             self.line("#if defined(__x86_64__) || defined(_WIN32)");
             self.line("#include \"l_img.h\"");
             self.line("#define OSC_HAS_IMG");
+            self.line("#include \"l_svg.h\"");
+            self.line("#define OSC_HAS_SVG");
             self.line("#endif");
             self.line("#else");
             self.line("#include \"l_os.h\"");
@@ -1674,6 +1676,7 @@ impl CodeGenerator {
             "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
             // Image
             "img_load" => format!("osc_img_load(_arena, {})", arg_strs[0]),
+            "svg_load" => format!("osc_svg_load(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
             _ => {
                 // Check if this is a function pointer variable call
                 if let Some(ty) = self.lookup_type(name) {

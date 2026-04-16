@@ -36,6 +36,7 @@ const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
+const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
 
 // BearSSL public headers (for l_tls.h on Linux)
@@ -951,6 +952,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
+        ("l_svg.h", EMBEDDED_L_SVG_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
@@ -1025,6 +1027,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
+        ("l_svg.h", EMBEDDED_L_SVG_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {

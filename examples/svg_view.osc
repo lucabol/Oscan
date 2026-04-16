@@ -1,0 +1,73 @@
+// SVG Viewer — display SVG files in a graphical window
+// Usage: svg_view <svgfile> [width] [height]
+// Demonstrates: svg_load, gfx_pixel, canvas_open, read_file
+// Press Escape to exit.
+//
+// To compile and run:
+//   oscan compile examples/svg_view.osc -o examples/svg_view.exe
+//   ./examples/svg_view logo.svg 512 512
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: svg_view <svgfile> [width] [height]");
+        exit(0);
+    };
+
+    let path: str = arg_get(1);
+    let mut w: i32 = 512;
+    let mut h: i32 = 512;
+
+    if arg_count() > 2 {
+        match parse_i32(arg_get(2)) {
+            Result::Ok(v) => { w = v; },
+            Result::Err(_) => {},
+        };
+    };
+    if arg_count() > 3 {
+        match parse_i32(arg_get(3)) {
+            Result::Ok(v) => { h = v; },
+            Result::Err(_) => {},
+        };
+    };
+
+    println("Loading {path} ...");
+
+    let data: str = match read_file(path) {
+        Result::Ok(d) => { d },
+        Result::Err(e) => { println("Error reading file: {e}"); exit(1); "" },
+    };
+
+    let pixels: [i32] = match svg_load(data, w, h) {
+        Result::Ok(px) => { px },
+        Result::Err(e) => { println("Error rasterizing SVG: {e}"); exit(1); [] },
+    };
+
+    let pw: i32 = pixels[0];
+    let ph: i32 = pixels[1];
+    println("Rasterized size: {pw} x {ph}");
+
+    match canvas_open(pw, ph, path) {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("Error opening canvas: {e}"); exit(1); },
+    };
+
+    canvas_clear(rgb(0, 0, 0));
+
+    for dy in 0..ph {
+        for dx in 0..pw {
+            gfx_pixel(dx, dy, pixels[2 + dy * pw + dx]);
+        };
+    };
+
+    gfx_draw_text(4, ph - 12, path, rgb(255, 255, 255));
+    canvas_flush();
+
+    while canvas_alive() {
+        arena {
+            if canvas_key() == 27 { break; };
+            sleep_ms(16);
+        };
+    };
+
+    canvas_close()
+}

@@ -601,7 +601,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (222 functions, 20 categories)
+## Built-in Functions (223 functions, 20 categories)
 
 ### I/O
 
@@ -912,6 +912,7 @@ fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32
 
 ```
 fn! img_load(data: str) -> Result<[i32], str>
+fn! svg_load(data: str, width: i32, height: i32) -> Result<[i32], str>
 ```
 
 ### TLS

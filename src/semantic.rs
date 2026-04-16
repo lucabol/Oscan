@@ -1330,6 +1330,22 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
+        // @builtin category="Image" name="svg_load" sig="fn! svg_load(data: str, width: i32, height: i32) -> Result<[i32], str>" desc="Rasterize SVG data to pixel array (ARGB)"
+        self.functions.insert(
+            "svg_load".into(),
+            builtin(
+                vec![
+                    ("data", BcType::Str),
+                    ("width", BcType::I32),
+                    ("height", BcType::I32),
+                ],
+                BcType::Result(
+                    Box::new(BcType::Array(Box::new(BcType::I32))),
+                    Box::new(BcType::Str),
+                ),
+                false,
+            ),
+        );
 
         // HashMap builtins (fn! except map_has and map_len which are pure reads)
         // @builtin category="HashMap" name="map_new" sig="fn! map_new() -> map" desc="Create empty hash map"

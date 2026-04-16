@@ -249,7 +249,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**222 built-in functions** across 20 categories.
+**223 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -556,11 +556,12 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
 | `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
 
-### Image (1 functions)
+### Image (2 functions)
 
 | Function | Description |
 |----------|-------------|
 | `fn! img_load(data: str) -> Result<[i32], str>` | Decode PNG/JPEG/BMP/GIF image from memory |
+| `fn! svg_load(data: str, width: i32, height: i32) -> Result<[i32], str>` | Rasterize SVG data to pixel array (ARGB) |
 
 ### TLS (6 functions)
 
