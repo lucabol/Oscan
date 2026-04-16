@@ -286,10 +286,11 @@ impl CodeGenerator {
             self.line("#define L_MAINFILE");
             self.line("#define L_WITHSNPRINTF");
             self.line("#define L_WITHSOCKETS");
-            // On platforms where l_tls.h is included, it provides memcpy/memmove/memset
-            // linker symbols via __asm__ shims.  Pre-define L_MEMFUNCS_DONE so l_os.h's
-            // L_MAINFILE block doesn't emit duplicate definitions.
             self.line("#if defined(__x86_64__) || defined(_WIN32)");
+            // l_tls.h's __asm__ shims (L_WITHSTART) conflict with l_os.h's memcpy
+            // function definitions. Pre-define L_MEMFUNCS_DONE so l_os.h skips its
+            // definitions — l_tls.h provides the linker symbols instead.
+            // We re-add macros after l_tls.h since it #undefs them.
             self.line("#define L_MEMFUNCS_DONE");
             self.line("#endif");
             // l_gfx.h uses Linux framebuffer ioctls — not available on WASI
@@ -314,6 +315,16 @@ impl CodeGenerator {
             // Only include on x86_64 and Windows where TLS is available.
             self.line("#if defined(__x86_64__) || defined(_WIN32)");
             self.line("#include \"l_tls.h\"");
+            // l_tls.h #undefs memcpy/strlen/etc (line ~466) before bearssl.h,
+            // and bearssl.h uses them. The l_tls.h __asm__ shims provide linker
+            // symbols but not C declarations visible to bearssl inline code.
+            // We suppress the warnings via -w in the compiler flags.
+            // Re-add macros so osc_runtime.c can use bare names.
+            self.line("#define memcpy l_memcpy");
+            self.line("#define memcmp l_memcmp");
+            self.line("#define memmove l_memmove");
+            self.line("#define memset l_memset");
+            self.line("#define strlen l_strlen");
             self.line("#endif");
             self.line("#include \"osc_runtime.h\"");
             self.line("#include \"osc_runtime.c\"");

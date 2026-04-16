@@ -1317,6 +1317,12 @@ fn compile_with_gcc_or_clang(
         if !show_warnings {
             command.arg("-w");
         }
+        // BearSSL headers use memcpy in inline functions after l_tls.h undefs
+        // the macro alias. Clang C99+ treats implicit function declarations as
+        // errors. Downgrade to warning so the __asm__ linker shims still work.
+        if cmd.contains("clang") {
+            command.arg("-Wno-error=implicit-function-declaration");
+        }
         // -Oz is Clang-only; GCC uses -Os for size optimization
         let size_opt = if cmd.contains("clang") { "-Oz" } else { "-Os" };
         command
