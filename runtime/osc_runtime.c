@@ -736,7 +736,7 @@ osc_result_str_str osc_read_line(osc_arena *arena)
 
     /* Read one byte at a time until newline or error */
     while (pos < sizeof(buf) - 1) {
-        ssize_t n = read(L_STDIN, &buf[pos], 1);
+        ssize_t n = l_read(L_STDIN, &buf[pos], 1);
         if (n <= 0) {
             if (pos == 0) {
                 result.is_ok     = 0;
@@ -885,7 +885,7 @@ osc_result_i32_str osc_file_open_write(osc_str path)
 int32_t osc_read_byte(int32_t fd)
 {
     unsigned char c;
-    ssize_t n = read((L_FD)fd, &c, 1);
+    ssize_t n = l_read((L_FD)fd, &c, 1);
     return n == 1 ? (int32_t)c : -1;
 }
 
@@ -902,7 +902,7 @@ void osc_write_str(int32_t fd, osc_str s)
 
 void osc_file_close(int32_t fd)
 {
-    close((L_FD)fd);
+    l_close((L_FD)fd);
 }
 
 osc_result_str_str osc_file_delete(osc_str path)
@@ -929,7 +929,7 @@ osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
     }
     L_Stat st;
     if (l_fstat(fd, &st) != 0 || st.st_size < 0) {
-        close(fd);
+        l_close(fd);
         result.is_ok = 0;
         result.value.err = osc_str_from_cstr("read_file: cannot stat file");
         return result;
@@ -938,11 +938,11 @@ osc_result_str_str osc_read_file(osc_arena *arena, osc_str path)
     char *buf = (char *)osc_arena_alloc(arena, file_len + 1);
     size_t total = 0;
     while (total < file_len) {
-        ssize_t n = read(fd, buf + total, file_len - total);
+        ssize_t n = l_read(fd, buf + total, file_len - total);
         if (n <= 0) break;
         total += (size_t)n;
     }
-    close(fd);
+    l_close(fd);
     buf[total] = '\0';
     result.is_ok = 1;
     result.value.ok.data = buf;
@@ -967,7 +967,7 @@ osc_result_str_str osc_write_file(osc_str path, osc_str data)
         while (total < (size_t)data.len) {
             ssize_t n = write(fd, data.data + total, (size_t)data.len - total);
             if (n <= 0) {
-                close(fd);
+                l_close(fd);
                 result.is_ok = 0;
                 result.value.err = osc_str_from_cstr("write_file: write failed");
                 return result;
@@ -975,7 +975,7 @@ osc_result_str_str osc_write_file(osc_str path, osc_str data)
             total += (size_t)n;
         }
     }
-    close(fd);
+    l_close(fd);
     result.is_ok = 1;
     result.value.ok.data = "";
     result.value.ok.len = 0;
@@ -4264,13 +4264,10 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
 
 /* ================================================================== */
 /*  libc stubs for BearSSL in freestanding mode                        */
-/*  BearSSL is compiled separately and expects standard libc symbols.  */
-/*  In freestanding mode (-nostdlib), these are missing. We provide    */
-/*  thin wrappers using raw syscalls.                                  */
-/*  l_os.h macros (#define close l_close, etc.) must be #undef'd       */
-/*  first to avoid name collisions.                                    */
+/*  When l_tls.h is included it provides these shims via               */
+/*  __asm__-aliased functions; skip this block to avoid duplicates.     */
 /* ================================================================== */
-#if defined(OSC_FREESTANDING) && defined(__x86_64__) && defined(__linux__)
+#if defined(OSC_FREESTANDING) && defined(__x86_64__) && defined(__linux__) && !defined(L_TLSH)
 #include <stdarg.h>
 
 /* Undo l_os.h macro redirects so we can define real linkable symbols */
@@ -4313,7 +4310,7 @@ int *__errno_location(void) {
 /* Restore l_os.h macros for any code that follows */
 #define close l_close
 #define read l_read
-#endif /* OSC_FREESTANDING && __x86_64__ && __linux__ */
+#endif /* OSC_FREESTANDING && __x86_64__ && __linux__ && !L_TLSH */
 
 #if defined(__x86_64__) || defined(_WIN32)
 /* TLS wrappers — l_tls.h is included on these platforms */

@@ -286,6 +286,12 @@ impl CodeGenerator {
             self.line("#define L_MAINFILE");
             self.line("#define L_WITHSNPRINTF");
             self.line("#define L_WITHSOCKETS");
+            // On platforms where l_tls.h is included, it provides memcpy/memmove/memset
+            // linker symbols via __asm__ shims.  Pre-define L_MEMFUNCS_DONE so l_os.h's
+            // L_MAINFILE block doesn't emit duplicate definitions.
+            self.line("#if defined(__x86_64__) || defined(_WIN32)");
+            self.line("#define L_MEMFUNCS_DONE");
+            self.line("#endif");
             // l_gfx.h uses Linux framebuffer ioctls — not available on WASI
             // l_gfx.h includes l_os.h, so on WASI we include l_os.h directly
             self.line("#ifndef __wasi__");
