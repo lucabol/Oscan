@@ -51,15 +51,18 @@ fn! main() {
         Result::Err(e) => { println("Error opening canvas: {e}"); exit(1); },
     };
 
-    canvas_clear(rgb(0, 0, 0));
+    canvas_clear(rgb(255, 255, 255));
 
-    for dy in 0..ph {
-        for dx in 0..pw {
-            gfx_pixel(dx, dy, pixels[2 + dy * pw + dx]);
-        };
+    // SVG backgrounds are transparent — use gfx_blit_alpha so alpha blends correctly
+    let mut px_data: [i32] = [];
+    let mut pi: i32 = 0;
+    while pi < pw * ph {
+        push(px_data, pixels[2 + pi]);
+        pi += 1;
     };
+    gfx_blit_alpha(0, 0, pw, ph, px_data);
 
-    gfx_draw_text(4, ph - 12, path, rgb(255, 255, 255));
+    gfx_draw_text(4, ph - 12, path, rgb(0, 0, 0));
     canvas_flush();
 
     while canvas_alive() {
