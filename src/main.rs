@@ -38,6 +38,8 @@ const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
 const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
 const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
 const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/math.h");
+const EMBEDDED_NANOSVG_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvg.h");
+const EMBEDDED_NANOSVGRAST_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
 
 // BearSSL public headers (for l_tls.h on Linux)
@@ -970,13 +972,24 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         }
     }
 
-    // Write compat/math.h for l_svg.h float shims
+    // Write compat/ files for l_svg.h (math shims + NanoSVG fork)
     {
         let compat_dir = temp_dir.join("compat");
         let _ = fs::create_dir_all(&compat_dir);
         if let Err(e) = fs::write(compat_dir.join("math.h"), EMBEDDED_COMPAT_MATH_H) {
             eprintln!("error writing compat/math.h: {e}");
             process::exit(1);
+        }
+        let nanosvg_dir = compat_dir.join("nanosvg");
+        let _ = fs::create_dir_all(&nanosvg_dir);
+        for (name, content) in [
+            ("nanosvg.h", EMBEDDED_NANOSVG_H),
+            ("nanosvgrast.h", EMBEDDED_NANOSVGRAST_H),
+        ] {
+            if let Err(e) = fs::write(nanosvg_dir.join(name), content) {
+                eprintln!("error writing compat/nanosvg/{name}: {e}");
+                process::exit(1);
+            }
         }
     }
 
@@ -1055,12 +1068,23 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         }
     }
 
-    // Write compat/math.h for l_svg.h float shims
+    // Write compat/ files for l_svg.h (math shims + NanoSVG fork)
     let compat_dir = temp_dir.join("compat");
     let _ = fs::create_dir_all(&compat_dir);
     if let Err(e) = fs::write(compat_dir.join("math.h"), EMBEDDED_COMPAT_MATH_H) {
         eprintln!("error writing compat/math.h: {e}");
         process::exit(1);
+    }
+    let nanosvg_dir = compat_dir.join("nanosvg");
+    let _ = fs::create_dir_all(&nanosvg_dir);
+    for (name, content) in [
+        ("nanosvg.h", EMBEDDED_NANOSVG_H),
+        ("nanosvgrast.h", EMBEDDED_NANOSVGRAST_H),
+    ] {
+        if let Err(e) = fs::write(nanosvg_dir.join(name), content) {
+            eprintln!("error writing compat/nanosvg/{name}: {e}");
+            process::exit(1);
+        }
     }
 
     // Write BearSSL public headers to bearssl/inc/ subdirectory (for l_tls.h)
