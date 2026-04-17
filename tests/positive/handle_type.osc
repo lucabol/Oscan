@@ -1,0 +1,50 @@
+// Test: handle type (opaque pointer)
+// Exercises: handle in extern declarations, variable bindings, casts, comparisons
+
+extern {
+    fn! fake_create() -> handle;
+    fn! fake_destroy(h: handle);
+}
+
+// A wrapper that returns a handle (simulated with i64 cast)
+fn! make_handle() -> handle {
+    let val: i64 = 42 as i64;
+    val as handle
+}
+
+fn! main() {
+    // handle variable binding
+    let h: handle = make_handle();
+
+    // handle to i64 cast
+    let n: i64 = h as i64;
+    print("handle as i64 = ");
+    print_i64(n);
+    println("");
+
+    // i64 to handle cast
+    let h2: handle = n as handle;
+
+    // handle equality comparison
+    if h == h2 {
+        println("h == h2: true");
+    } else {
+        println("h == h2: false");
+    };
+
+    // handle inequality comparison
+    let h3: handle = (100 as i64) as handle;
+    if h != h3 {
+        println("h != h3: true");
+    } else {
+        println("h != h3: false");
+    };
+
+    // mutable handle
+    let mut mh: handle = make_handle();
+    mh = h3;
+    let mh_val: i64 = mh as i64;
+    print("mh as i64 = ");
+    print_i64(mh_val);
+    println("");
+}

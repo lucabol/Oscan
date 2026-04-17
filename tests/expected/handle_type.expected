@@ -1,0 +1,4 @@
+handle as i64 = 42
+h == h2: true
+h != h3: true
+mh as i64 = 100

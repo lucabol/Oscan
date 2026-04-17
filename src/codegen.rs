@@ -457,6 +457,30 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_forward_decls(&mut self, program: &Program) {
+        // Emit extern function prototypes (no _arena parameter)
+        for decl in &program.decls {
+            if let TopDecl::Extern(eb) = decl {
+                for ef in &eb.decls {
+                    let ret = match &ef.return_type {
+                        Some(t) => self.type_to_c(&self.resolve_ast_type(t)),
+                        None => "void".to_string(),
+                    };
+                    let cname = Self::mangle_c_name(&ef.name);
+                    let params: Vec<String> = ef.params.iter().map(|p| {
+                        let ty = self.resolve_ast_type(&p.ty);
+                        let c_ty = self.type_to_c(&ty);
+                        format!("{} {}", c_ty, p.name)
+                    }).collect();
+                    let params_str = if params.is_empty() {
+                        "void".to_string()
+                    } else {
+                        params.join(", ")
+                    };
+                    self.line(&format!("extern {} {}({});", ret, cname, params_str));
+                }
+            }
+        }
+        // Emit user-defined function forward declarations
         for decl in &program.decls {
             if let TopDecl::Fn(f) = decl {
                 if f.name == "main" {
@@ -1307,6 +1331,8 @@ impl CodeGenerator {
             (BcType::I64, BcType::F64) => format!("osc_i64_to_f64({})", val),
             (BcType::F64, BcType::I32) => format!("osc_f64_to_i32({})", val),
             (BcType::F64, BcType::I64) => format!("osc_f64_to_i64({})", val),
+            (BcType::Handle, BcType::I64) => format!("((int64_t)({}))", val),
+            (BcType::I64, BcType::Handle) => format!("((uintptr_t)({}))", val),
             _ => format!("(({}){})", self.type_to_c(to), val),
         }
     }
@@ -2539,6 +2565,7 @@ impl CodeGenerator {
             BcType::Bool => "uint8_t".to_string(),
             BcType::Str => "osc_str".to_string(),
             BcType::Unit => "void".to_string(),
+            BcType::Handle => "uintptr_t".to_string(),
             BcType::Map => "osc_map*".to_string(),
             BcType::MapStrI32 => "osc_map*".to_string(),
             BcType::MapStrI64 => "osc_map*".to_string(),
@@ -2565,6 +2592,7 @@ impl CodeGenerator {
             BcType::Bool => "bool".to_string(),
             BcType::Str => "str".to_string(),
             BcType::Unit => "unit".to_string(),
+            BcType::Handle => "handle".to_string(),
             BcType::Map => "map".to_string(),
             BcType::MapStrI32 => "map_str_i32".to_string(),
             BcType::MapStrI64 => "map_str_i64".to_string(),
@@ -2602,6 +2630,7 @@ impl CodeGenerator {
             BcType::Result(ok, err) => format!("sizeof({})", self.result_type_name(ok, err)),
             BcType::FnPtr(_, _) => "sizeof(void*)".to_string(),
             BcType::Unit => "1".to_string(),
+            BcType::Handle => "sizeof(uintptr_t)".to_string(),
         }
     }
 
@@ -2614,6 +2643,7 @@ impl CodeGenerator {
                 PrimitiveType::Bool => BcType::Bool,
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
+                PrimitiveType::Handle => BcType::Handle,
                 PrimitiveType::Map => BcType::Map,
                 PrimitiveType::MapStrI32 => BcType::MapStrI32,
                 PrimitiveType::MapStrI64 => BcType::MapStrI64,

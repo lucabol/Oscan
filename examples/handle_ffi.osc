@@ -1,0 +1,64 @@
+// Opaque Handle Type for C FFI
+//
+// This example demonstrates:
+// - The `handle` type for opaque C pointers
+// - Passing handles to/from extern functions
+// - Converting between handle and i64
+// - Comparing handles for equality
+//
+// The `handle` type compiles to C's `uintptr_t` and is designed for
+// holding opaque pointers returned by C libraries. It supports:
+//   - Variable bindings (let, let mut)
+//   - Passing to/from functions (including extern)
+//   - Casting to/from i64
+//   - Equality comparison (==, !=)
+//
+// It does NOT support arithmetic, arrays, or struct fields.
+//
+// To run:
+//   oscan handle_ffi.osc --run
+
+// Simulate an opaque resource using i64-to-handle casts
+fn! create_resource(id: i64) -> handle {
+    id as handle
+}
+
+fn! get_resource_id(h: handle) -> i64 {
+    h as i64
+}
+
+fn! main() {
+    println("=== Handle Type Demo ===");
+    println("");
+
+    // Create two "resources"
+    let r1: handle = create_resource(1001 as i64);
+    let r2: handle = create_resource(2002 as i64);
+
+    // Inspect their IDs
+    let id1: i64 = get_resource_id(r1);
+    let id2: i64 = get_resource_id(r2);
+    println("Resource 1 ID: {id1}");
+    println("Resource 2 ID: {id2}");
+
+    // Compare handles
+    if r1 == r2 {
+        println("r1 and r2 are the same resource");
+    } else {
+        println("r1 and r2 are different resources");
+    };
+
+    // Create a duplicate handle
+    let r1_copy: handle = create_resource(1001 as i64);
+    if r1 == r1_copy {
+        println("r1 and r1_copy point to the same resource");
+    };
+
+    // Mutable handle — reassign
+    let mut current: handle = r1;
+    let cur_id: i64 = get_resource_id(current);
+    println("Current resource ID: {cur_id}");
+    current = r2;
+    let new_id: i64 = get_resource_id(current);
+    println("After reassign: {new_id}");
+}
