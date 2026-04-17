@@ -1,0 +1,9 @@
+// Negative test: handle type cannot be used in struct fields
+
+struct Wrapper {
+    ptr: handle,
+}
+
+fn! main() {
+    let w: Wrapper = Wrapper { ptr: (42 as i64) as handle };
+}

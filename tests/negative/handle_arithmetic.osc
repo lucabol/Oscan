@@ -1,0 +1,6 @@
+// Negative test: handle type cannot be used with arithmetic operations
+
+fn! main() {
+    let h: handle = (42 as i64) as handle;
+    let h2: handle = h + h;
+}

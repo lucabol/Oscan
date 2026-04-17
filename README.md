@@ -175,6 +175,8 @@ oscan [OPTIONS] <file.osc>
   --emit-c        Emit generated C to stdout
   --libc          Use hosted libc mode instead of freestanding mode
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
+  --extra-c <file>  Extra C source file to compile and link (repeatable)
+  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)
   --dump-ast      Print AST (debug)
   --dump-tokens   Print tokens (debug)
 ```

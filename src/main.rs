@@ -248,9 +248,11 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [-o output] <file.osc>",
     );
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
+    print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
+    print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
     print_line(&format!(
         "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
@@ -272,6 +274,8 @@ fn main() {
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
     let mut program_args: Vec<String> = Vec::new();
+    let mut extra_c_files: Vec<String> = Vec::new();
+    let mut extra_cflags: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -312,6 +316,24 @@ fn main() {
                     output_path = Some(args[i].clone());
                 } else {
                     eprintln!("-o requires an output file path");
+                    process::exit(1);
+                }
+            }
+            "--extra-c" => {
+                i += 1;
+                if i < args.len() {
+                    extra_c_files.push(args[i].clone());
+                } else {
+                    eprintln!("--extra-c requires a C source file path");
+                    process::exit(1);
+                }
+            }
+            "--extra-cflags" => {
+                i += 1;
+                if i < args.len() {
+                    extra_cflags.push(args[i].clone());
+                } else {
+                    eprintln!("--extra-cflags requires a compiler flag");
                     process::exit(1);
                 }
             }
@@ -443,7 +465,7 @@ fn main() {
             eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
             process::exit(1);
         }
-        run_program(&path, &c_code, freestanding, show_warnings, &program_args);
+        run_program(&path, &c_code, freestanding, show_warnings, &program_args, &extra_c_files, &extra_cflags);
     } else if emit_c || output_ends_in_c {
         // Emit C mode
         if let Some(out_path) = output_path {
@@ -488,7 +510,7 @@ fn main() {
                 pb
             }
         };
-        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref(), show_warnings);
+        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref(), show_warnings, &extra_c_files, &extra_cflags);
     }
 }
 
@@ -941,7 +963,7 @@ fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
 }
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
-fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool) {
+fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool, extra_c_files: &[String], extra_cflags: &[String]) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
@@ -1025,7 +1047,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     }
 
     if is_verbose() { eprintln!("[verbose] Invoking C compiler..."); }
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target, show_warnings);
+    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target, show_warnings, extra_c_files, extra_cflags);
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -1037,7 +1059,7 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     eprintln!("Compiled {}", exe_path.display());
 }
 
-fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool, program_args: &[String]) {
+fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool, program_args: &[String], extra_c_files: &[String], extra_cflags: &[String]) {
     let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
     if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
@@ -1120,7 +1142,7 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
     }
 
     if is_verbose() { eprintln!("[verbose] Invoking C compiler (run mode)..."); }
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None, show_warnings);
+    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None, show_warnings, extra_c_files, extra_cflags);
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -1152,6 +1174,8 @@ fn invoke_c_compiler(
     freestanding: bool,
     target: Option<&CrossTarget>,
     show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
 ) -> bool {
     // Cross-compilation targets bypass normal compiler detection
     if let Some(ct) = target {
@@ -1164,7 +1188,7 @@ fn invoke_c_compiler(
                     process::exit(1);
                 }
                 eprintln!("Cross-compiling for RISC-V (freestanding)...");
-                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs, show_warnings);
+                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs, show_warnings, extra_c_files, extra_cflags);
             }
             CrossTarget::Wasi => {
                 let cmd = "clang";
@@ -1182,7 +1206,7 @@ fn invoke_c_compiler(
                     }
                 };
                 eprintln!("Cross-compiling for WASI/WebAssembly...");
-                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot, show_warnings);
+                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot, show_warnings, extra_c_files, extra_cflags);
             }
         }
     }
@@ -1243,6 +1267,8 @@ fn invoke_c_compiler(
                         freestanding,
                         CompilerSource::Host,
                         show_warnings,
+                        extra_c_files,
+                        extra_cflags,
                     );
                 }
             }
@@ -1260,6 +1286,8 @@ fn invoke_c_compiler(
                 freestanding,
                 *source,
                 show_warnings,
+                extra_c_files,
+                extra_cflags,
             )
         }
         CCompiler::Clang { cmd, source } => {
@@ -1280,6 +1308,8 @@ fn invoke_c_compiler(
                         freestanding,
                         CompilerSource::Host,
                         show_warnings,
+                        extra_c_files,
+                        extra_cflags,
                     );
                 }
             }
@@ -1297,6 +1327,8 @@ fn invoke_c_compiler(
                 freestanding,
                 *source,
                 show_warnings,
+                extra_c_files,
+                extra_cflags,
             )
         }
         CCompiler::Msvc {
@@ -1321,6 +1353,8 @@ fn invoke_c_compiler(
                             freestanding,
                             CompilerSource::Host,
                             show_warnings,
+                            extra_c_files,
+                            extra_cflags,
                         );
                     }
                 }
@@ -1341,6 +1375,8 @@ fn invoke_c_compiler(
                 false,
                 freestanding,
                 show_warnings,
+                extra_c_files,
+                extra_cflags,
             )
         }
     }
@@ -1355,6 +1391,8 @@ fn compile_with_gcc_or_clang(
     freestanding: bool,
     source: CompilerSource,
     show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -1435,6 +1473,14 @@ fn compile_with_gcc_or_clang(
         }
     }
 
+    // Add user-supplied extra C source files and compiler flags
+    for f in extra_c_files {
+        command.arg(f);
+    }
+    for flag in extra_cflags {
+        command.arg(flag);
+    }
+
     verbose_command("C compiler", &command);
     let output = command.output();
 
@@ -1464,6 +1510,8 @@ fn compile_cross_riscv64(
     exe_file: &Path,
     include_dirs: &[PathBuf],
     show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
     // Freestanding single-TU build for RISC-V 64-bit
@@ -1492,6 +1540,13 @@ fn compile_cross_riscv64(
     }
     command.arg("-o").arg(exe_file);
 
+    for f in extra_c_files {
+        command.arg(f);
+    }
+    for flag in extra_cflags {
+        command.arg(flag);
+    }
+
     verbose_command("RISC-V cross-compile", &command);
     match command.output() {
         Ok(out) => {
@@ -1518,6 +1573,8 @@ fn compile_cross_wasi(
     include_dirs: &[PathBuf],
     sysroot: &str,
     show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
     // WASI libc mode: two TUs, wasm32 target
@@ -1535,6 +1592,13 @@ fn compile_cross_wasi(
         command.arg(format!("-I{}", dir.display()));
     }
     command.arg("-o").arg(exe_file);
+
+    for f in extra_c_files {
+        command.arg(f);
+    }
+    for flag in extra_cflags {
+        command.arg(flag);
+    }
 
     verbose_command("WASI cross-compile", &command);
     match command.output() {
@@ -1564,6 +1628,8 @@ fn compile_with_msvc(
     freestanding: bool,
     needs_nofreestanding: bool,
     show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
 ) -> bool {
     // When codegen emitted dual-mode headers but we're compiling with MSVC (libc),
     // define OSC_NOFREESTANDING to select the libc path.
@@ -1573,6 +1639,16 @@ fn compile_with_msvc(
         ""
     };
     let warn_flag = if show_warnings { "" } else { " /w" };
+
+    // Build extra files/flags strings for MSVC
+    let extra_c_str: String = extra_c_files
+        .iter()
+        .map(|f| format!(" \"{}\"", f))
+        .collect();
+    let extra_flags_str: String = extra_cflags
+        .iter()
+        .map(|f| format!(" {}", f))
+        .collect();
 
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
@@ -1586,16 +1662,16 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\" /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib secur32.lib crypt32.lib\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\"{}{} /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib secur32.lib crypt32.lib\r\n",
                 vcvars_path, cl_path, warn_flag,
-                all_includes, c_file.display(), exe_file.display(),
+                all_includes, c_file.display(), extra_c_str, extra_flags_str, exe_file.display(),
             )
         } else {
             // libc mode: two TUs, default CRT
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11{}{}  \"{}\" \"{}\" /Fe:\"{}\" /link\r\n",
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11{}{}  \"{}\" \"{}\"{}{} /Fe:\"{}\" /link\r\n",
                 vcvars_path, cl_path, warn_flag, nofree_flag,
-                all_includes, c_file.display(), runtime_c.display(), exe_file.display(),
+                all_includes, c_file.display(), runtime_c.display(), extra_c_str, extra_flags_str, exe_file.display(),
             )
         };
 
@@ -1666,6 +1742,14 @@ fn compile_with_msvc(
                 .arg(runtime_c)
                 .arg(format!("/Fe:{}", exe_file.display()))
                 .arg("/link");
+        }
+
+        // Add user-supplied extra C source files and compiler flags
+        for f in extra_c_files {
+            command.arg(f);
+        }
+        for flag in extra_cflags {
+            command.arg(flag);
         }
 
         verbose_command("MSVC cl.exe", &command);

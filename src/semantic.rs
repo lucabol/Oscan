@@ -1780,7 +1780,14 @@ impl SemanticAnalyzer {
             TopDecl::Struct(s) => {
                 let mut fields = Vec::new();
                 for f in &s.fields {
-                    fields.push((f.name.clone(), self.resolve_type(&f.ty)?));
+                    let ty = self.resolve_type(&f.ty)?;
+                    if ty == BcType::Handle {
+                        return Err(CompileError::new(
+                            f.ty.span(),
+                            "handle type cannot be used in struct fields".to_string(),
+                        ));
+                    }
+                    fields.push((f.name.clone(), ty));
                 }
                 if self.structs.contains_key(&s.name) {
                     return Err(CompileError::new(
@@ -1795,7 +1802,14 @@ impl SemanticAnalyzer {
                 for v in &e.variants {
                     let mut payload = Vec::new();
                     for t in &v.payload_types {
-                        payload.push(self.resolve_type(t)?);
+                        let ty = self.resolve_type(t)?;
+                        if ty == BcType::Handle {
+                            return Err(CompileError::new(
+                                t.span(),
+                                "handle type cannot be used in enum payloads".to_string(),
+                            ));
+                        }
+                        payload.push(ty);
                     }
                     variants.push((v.name.clone(), payload));
                 }
@@ -2597,6 +2611,8 @@ impl SemanticAnalyzer {
                         | (BcType::I64, BcType::F64)
                         | (BcType::F64, BcType::I32)
                         | (BcType::F64, BcType::I64)
+                        | (BcType::Handle, BcType::I64)
+                        | (BcType::I64, BcType::Handle)
                 );
                 if !valid {
                     return Err(CompileError::new(
@@ -3531,6 +3547,7 @@ impl SemanticAnalyzer {
                 PrimitiveType::Bool => BcType::Bool,
                 PrimitiveType::Str => BcType::Str,
                 PrimitiveType::Unit => BcType::Unit,
+                PrimitiveType::Handle => BcType::Handle,
                 PrimitiveType::Map => BcType::Map,
                 PrimitiveType::MapStrI32 => BcType::MapStrI32,
                 PrimitiveType::MapStrI64 => BcType::MapStrI64,
@@ -3550,12 +3567,24 @@ impl SemanticAnalyzer {
                     ))
                 }
             }
-            Type::FixedArray(elem, size, _) => {
+            Type::FixedArray(elem, size, span) => {
                 let e = self.resolve_type(elem)?;
+                if e == BcType::Handle {
+                    return Err(CompileError::new(
+                        *span,
+                        "handle type cannot be used as array element".to_string(),
+                    ));
+                }
                 Ok(BcType::FixedArray(Box::new(e), *size))
             }
-            Type::DynamicArray(elem, _) => {
+            Type::DynamicArray(elem, span) => {
                 let e = self.resolve_type(elem)?;
+                if e == BcType::Handle {
+                    return Err(CompileError::new(
+                        *span,
+                        "handle type cannot be used as array element".to_string(),
+                    ));
+                }
                 Ok(BcType::Array(Box::new(e)))
             }
             Type::Result(ok, err, _) => {
@@ -3699,7 +3728,7 @@ impl SemanticAnalyzer {
     /// Returns true if a type is safe to escape from an arena block.
     /// Only primitives (i32, i64, f64, bool, unit) are safe.
     fn is_arena_safe_type(ty: &BcType) -> bool {
-        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit | BcType::FnPtr(_, _))
+        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit | BcType::Handle | BcType::FnPtr(_, _))
     }
 }
 

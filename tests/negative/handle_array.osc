@@ -1,0 +1,5 @@
+// Negative test: handle type cannot be used as array element
+
+fn! main() {
+    let arr: [handle] = [];
+}

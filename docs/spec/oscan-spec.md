@@ -507,6 +507,7 @@ pattern_list     = pattern (',' pattern)* ','? ;
 | `bool` | 8 bits  | Boolean (true/false only)      | `uint8_t` (0/1) |
 | `str`  | ptr+len | UTF-8 string (immutable view)  | `osc_str`        |
 | `unit` | 0 bits  | No value (void equivalent)     | `void`          |
+| `handle` | ptr   | Opaque C pointer               | `uintptr_t`     |
 
 ### 3.2 Composite Types
 
@@ -699,10 +700,32 @@ The `as` keyword performs explicit type conversion. Only the following casts are
 | `i64` | `f64` | Integer to float (may lose precision)           |
 | `f64` | `i32` | Truncation (runtime checked — panics if NaN, Inf, or out of range) |
 | `f64` | `i64` | Truncation (runtime checked — panics if NaN, Inf, or out of range) |
+| `handle` | `i64` | Opaque pointer to integer (lossless on 64-bit, narrowing on 32-bit) |
+| `i64` | `handle` | Integer to opaque pointer (lossless on 64-bit, widening on 32-bit) |
 
 All other casts are compile errors. There are NO implicit coercions whatsoever.
 
-### 3.8 Type Checking Rules
+### 3.9 Opaque Handle Type
+
+The `handle` type is an opaque pointer type for C FFI interop. It compiles to C's `uintptr_t`.
+
+**Allowed operations:**
+- Store in `let` and `let mut` bindings
+- Pass to/from functions (including `extern` declarations)
+- Cast to/from `i64` using `as`
+- Equality comparison (`==`, `!=`)
+
+**Forbidden operations (compile errors):**
+- Arithmetic (`+`, `-`, `*`, `/`, `%`)
+- Ordering comparisons (`<`, `>`, `<=`, `>=`)
+- Use as array element type (`[handle]` or `[handle; N]`)
+- Use as struct field type
+- Use as enum variant payload
+- String interpolation
+
+**Purpose:** `handle` provides a type-safe way to hold opaque C pointers (e.g., library contexts, file handles, opaque state) without truncation issues that arise from using `i32` on 64-bit platforms.
+
+### 3.10 Type Checking Rules
 
 1. **All bindings must have explicit type annotations.** No type inference. This is a deliberate choice for LLM clarity — the type of every binding is visible at its declaration site.
 
@@ -1450,6 +1473,7 @@ extern {
 | `bool`      | `uint8_t`      | 0 = false, 1 = true               |
 | `str`       | `osc_str`       | Struct with `data` (const char*) and `len` (int32_t) |
 | `unit`      | `void`         |                                    |
+| `handle`    | `uintptr_t`    | Opaque pointer for C FFI           |
 | `[T; N]`    | `T[N]`         | Passed as pointer in C             |
 | `[T]`       | `osc_array*`    | Pointer to runtime array struct    |
 | `struct Foo`| `Foo`          | Same name, matching fields         |

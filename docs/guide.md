@@ -111,6 +111,7 @@ fn! main() {
 | `bool` | Boolean                      | `true`, `false`         |
 | `str`  | Immutable string (UTF-8)     | `"hello"`, `"line\n"`   |
 | `unit` | Void equivalent (0 bits)     | `()`                    |
+| `handle` | Opaque C pointer           | `(42 as i64) as handle` |
 
 - Integer literals are `i32` by default and must fit the `i32` range. Build larger `i64` values from in-range `i32` values with explicit casts.
 - Float literals must have digits on both sides: `0.5` not `.5`.
@@ -127,7 +128,7 @@ let z: f64 = x as f64;    // i32 → f64
 let w: i32 = 3.9 as i32;  // f64 → i32 (truncates to 3)
 ```
 
-Allowed pairs: `i32↔i64`, `i32↔f64`, `i64↔f64`. No implicit coercions ever.
+Allowed pairs: `i32↔i64`, `i32↔f64`, `i64↔f64`, `handle↔i64`. No implicit coercions ever.
 
 ---
 
@@ -708,7 +709,20 @@ fn! main() {
 }
 ```
 
-Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`) are supported in FFI signatures.
+Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
+
+The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
+
+### Linking Extra C Files
+
+Use `--extra-c` and `--extra-cflags` to link your own C source files and pass additional compiler flags:
+
+```
+oscan myapp.osc --extra-c mylib.c --extra-cflags -DDEBUG --run
+oscan myapp.osc --extra-c helper.c --extra-c utils.c -o myapp
+```
+
+Both flags are repeatable — use one per file or flag.
 
 ---
 

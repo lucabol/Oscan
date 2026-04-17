@@ -62,7 +62,7 @@ These are the features that most often trip up code-generation models.
 - `arena { ... };` — scoped memory reclamation for long-running programs.
 
 ### Type casts
-- `as` keyword: `x as i64`. Only 6 pairs: i32↔i64, i32↔f64, i64↔f64.
+- `as` keyword: `x as i64`. Only 8 pairs: i32↔i64, i32↔f64, i64↔f64, handle↔i64.
 - No implicit coercions ever. No null. No exceptions.
 
 ### Parameters
@@ -79,6 +79,9 @@ These are the features that most often trip up code-generation models.
 
 ### C FFI
 - `extern { fn c_function(a: i32) -> i32; }` for calling C functions.
+- `handle` type for opaque C pointers (compiles to `uintptr_t`).
+- `--extra-c <file>` to link additional C source files (repeatable).
+- `--extra-cflags <flag>` to pass extra flags to the C compiler (repeatable).
 
 ### Function pointers
 - `let f: fn(i32) -> i32 = add;` — only user-defined fns, not builtins.

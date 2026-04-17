@@ -420,6 +420,19 @@ pub enum Type {
     FnPtr(Vec<Type>, Box<Type>, Span),
 }
 
+impl Type {
+    pub fn span(&self) -> Span {
+        match self {
+            Type::Primitive(_, s) => *s,
+            Type::FixedArray(_, _, s) => *s,
+            Type::DynamicArray(_, s) => *s,
+            Type::Result(_, _, s) => *s,
+            Type::Named(_, s) => *s,
+            Type::FnPtr(_, _, s) => *s,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PrimitiveType {
     I32,
@@ -428,6 +441,7 @@ pub enum PrimitiveType {
     Bool,
     Str,
     Unit,
+    Handle,
     Map,
     MapStrI32,
     MapStrI64,

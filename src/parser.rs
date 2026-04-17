@@ -426,6 +426,10 @@ impl Parser {
                         self.advance();
                         Ok(Type::Primitive(PrimitiveType::Unit, span))
                     }
+                    "handle" => {
+                        self.advance();
+                        Ok(Type::Primitive(PrimitiveType::Handle, span))
+                    }
                     "map" => {
                         self.advance();
                         Ok(Type::Primitive(PrimitiveType::Map, span))
