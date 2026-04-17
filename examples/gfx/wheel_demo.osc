@@ -1,0 +1,53 @@
+// Mouse Wheel Demo
+//
+// Port of deps/laststanding/examples/wheel_demo.c
+// Scroll the wheel to grow/shrink a circle that follows the cursor.
+// Left-click resets the radius. Press Escape to quit.
+// Supported on Windows (WM_MOUSEWHEEL) and Linux X11 (buttons 4/5).
+// On framebuffer/terminal backends the wheel reads as 0.
+//
+// To run:
+//   oscan wheel_demo.osc --run
+
+fn! main() {
+    let co: Result<str, str> = canvas_open(480, 360, "Wheel demo");
+    match co {
+        Result::Ok(_) => { },
+        Result::Err(e) => { println("Error: {e}"); exit(1); },
+    };
+
+    let mut radius: i32 = 20;
+    let mut total: i32 = 0;
+
+    while canvas_alive() {
+        arena {
+            if canvas_key() == 27 { break; };
+
+            let mx: i32 = canvas_mouse_x();
+            let my: i32 = canvas_mouse_y();
+            let btn: i32 = canvas_mouse_btn();
+            let wheel: i32 = canvas_wheel();
+
+            if wheel != 0 {
+                radius = radius + wheel * 4;
+                if radius < 2 { radius = 2; };
+                if radius > 200 { radius = 200; };
+                total = total + wheel;
+            };
+            if band(btn, 1) != 0 {
+                radius = 20;
+                total = 0;
+            };
+
+            canvas_clear(rgb(0, 0, 0));
+            gfx_fill_circle(mx, my, radius, rgb(0, 255, 255));
+            gfx_draw_text(8, 8, "wheel total: {total}", rgb(255, 255, 0));
+            gfx_draw_text(8, 20, "scroll: resize  |  click: reset  |  esc: quit", rgb(255, 255, 255));
+            canvas_flush();
+        };
+
+        sleep_ms(16);
+    };
+
+    canvas_close()
+}

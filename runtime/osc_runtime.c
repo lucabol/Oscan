@@ -4031,6 +4031,7 @@ int32_t osc_canvas_key(void) { return (int32_t)l_canvas_key(&osc_gfx_canvas); }
 int32_t osc_canvas_mouse_x(void) { return (int32_t)osc_gfx_canvas.mouse_x; }
 int32_t osc_canvas_mouse_y(void) { return (int32_t)osc_gfx_canvas.mouse_y; }
 int32_t osc_canvas_mouse_btn(void) { return (int32_t)osc_gfx_canvas.mouse_btn; }
+int32_t osc_canvas_wheel(void) { return (int32_t)l_canvas_wheel(&osc_gfx_canvas); }
 
 int32_t osc_clipboard_set(osc_str text) {
     char buf[4096];
@@ -4083,6 +4084,7 @@ int32_t osc_canvas_key(void) { return 0; }
 int32_t osc_canvas_mouse_x(void) { return 0; }
 int32_t osc_canvas_mouse_y(void) { return 0; }
 int32_t osc_canvas_mouse_btn(void) { return 0; }
+int32_t osc_canvas_wheel(void) { return 0; }
 int32_t osc_clipboard_set(osc_str text) { (void)text; return -1; }
 osc_result_str_str osc_clipboard_get(osc_arena *arena) {
     (void)arena;
