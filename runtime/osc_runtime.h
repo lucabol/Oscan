@@ -518,6 +518,7 @@ int32_t osc_canvas_key(void);
 int32_t osc_canvas_mouse_x(void);
 int32_t osc_canvas_mouse_y(void);
 int32_t osc_canvas_mouse_btn(void);
+int32_t osc_canvas_wheel(void);
 
 /* ------------------------------------------------------------------ */
 /*  Graphics — Clipboard                                               */

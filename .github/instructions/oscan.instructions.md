@@ -604,7 +604,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (223 functions, 20 categories)
+## Built-in Functions (224 functions, 20 categories)
 
 ### I/O
 
@@ -905,6 +905,7 @@ fn! canvas_key() -> i32
 fn! canvas_mouse_x() -> i32
 fn! canvas_mouse_y() -> i32
 fn! canvas_mouse_btn() -> i32
+fn! canvas_wheel() -> i32
 fn! clipboard_set(text: str) -> i32
 fn! clipboard_get() -> Result<str, str>
 fn rgb(r: i32, g: i32, b: i32) -> i32

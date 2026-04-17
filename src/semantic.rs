@@ -1275,6 +1275,9 @@ impl SemanticAnalyzer {
             "canvas_mouse_btn".into(),
             builtin(vec![], BcType::I32, false),
         );
+        // @builtin category="Graphics" name="canvas_wheel" sig="fn! canvas_wheel() -> i32" desc="Get and clear accumulated mouse wheel delta (positive=up, negative=down, in clicks)"
+        self.functions
+            .insert("canvas_wheel".into(), builtin(vec![], BcType::I32, false));
 
         // Graphics: Clipboard (fn!)
         // @builtin category="Graphics" name="clipboard_set" sig="fn! clipboard_set(text: str) -> i32" desc="Copy text to system clipboard (requires canvas)"

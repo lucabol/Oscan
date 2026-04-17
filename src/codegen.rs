@@ -1592,6 +1592,7 @@ impl CodeGenerator {
             "canvas_mouse_x" => "osc_canvas_mouse_x()".to_string(),
             "canvas_mouse_y" => "osc_canvas_mouse_y()".to_string(),
             "canvas_mouse_btn" => "osc_canvas_mouse_btn()".to_string(),
+            "canvas_wheel" => "osc_canvas_wheel()".to_string(),
             // Graphics: Clipboard
             "clipboard_set" => format!("osc_clipboard_set({})", arg_strs[0]),
             "clipboard_get" => "osc_clipboard_get(_arena)".to_string(),
