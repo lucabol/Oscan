@@ -251,7 +251,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**224 built-in functions** across 20 categories.
+**225 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -529,7 +529,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
 | `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
 
-### Graphics (25 functions)
+### Graphics (26 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -538,6 +538,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! canvas_alive() -> bool` | Check if canvas is still open |
 | `fn! canvas_flush()` | Flush canvas to screen |
 | `fn! canvas_clear(color: i32)` | Clear canvas with color |
+| `fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>` | Set window/taskbar icon from RGBA pixel array |
 | `fn! gfx_pixel(x: i32, y: i32, color: i32)` | Draw a pixel |
 | `fn! gfx_get_pixel(x: i32, y: i32) -> i32` | Get pixel color at position |
 | `fn! gfx_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32)` | Draw a line |

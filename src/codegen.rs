@@ -1545,6 +1545,10 @@ impl CodeGenerator {
             "canvas_alive" => "osc_canvas_alive()".to_string(),
             "canvas_flush" => "osc_canvas_flush()".to_string(),
             "canvas_clear" => format!("osc_canvas_clear({})", arg_strs[0]),
+            "canvas_set_icon" => format!(
+                "osc_canvas_set_icon({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             // Graphics: Drawing Primitives
             "gfx_pixel" => format!(
                 "osc_gfx_pixel({}, {}, {})",
