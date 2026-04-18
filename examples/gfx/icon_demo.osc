@@ -1,0 +1,43 @@
+// canvas_set_icon demo — opens a window with the default retro icon, then
+// builds a small custom 16x16 icon and applies it. Press ESC to quit.
+
+fn! make_icon(sz: i32) -> [i32] {
+    let mut px: [i32] = [];
+    let mut i: i32 = 0;
+    let total: i32 = sz * sz;
+    while i < total {
+        let x: i32 = mod_i32(i, sz);
+        let y: i32 = i / sz;
+        let dx: i32 = x - sz / 2;
+        let dy: i32 = y - sz / 2;
+        if dx * dx + dy * dy <= (sz / 2) * (sz / 2) {
+            push(px, rgba(255, 80, 30, 255));
+        } else {
+            push(px, 0);
+        };
+        i += 1;
+    };
+    px
+}
+
+fn! main() {
+    match canvas_open(320, 200, "icon demo") {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("canvas_open failed: {e}"); exit(1); },
+    };
+
+    let icon: [i32] = make_icon(16);
+    match canvas_set_icon(icon, 16, 16) {
+        Result::Ok(_) => { println("custom icon applied"); },
+        Result::Err(e) => { println("canvas_set_icon: {e}"); },
+    };
+
+    let mut frames: i32 = 0;
+    while canvas_alive() and frames < 3 {
+        canvas_clear(rgb(20, 20, 40));
+        canvas_flush();
+        sleep_ms(16);
+        frames += 1;
+    };
+    canvas_close();
+}

@@ -493,6 +493,7 @@ void    osc_canvas_close(void);
 uint8_t osc_canvas_alive(void);
 void    osc_canvas_flush(void);
 void    osc_canvas_clear(int32_t color);
+osc_result_str_str osc_canvas_set_icon(osc_array *pixels, int32_t w, int32_t h);
 
 /* ------------------------------------------------------------------ */
 /*  Graphics — Drawing primitives                                      */

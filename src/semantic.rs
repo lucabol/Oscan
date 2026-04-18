@@ -1102,6 +1102,19 @@ impl SemanticAnalyzer {
             "canvas_clear".into(),
             builtin(vec![("color", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="Graphics" name="canvas_set_icon" sig="fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>" desc="Set window/taskbar icon from RGBA pixel array"
+        self.functions.insert(
+            "canvas_set_icon".into(),
+            builtin(
+                vec![
+                    ("pixels", BcType::Array(Box::new(BcType::I32))),
+                    ("w", BcType::I32),
+                    ("h", BcType::I32),
+                ],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
 
         // Graphics: Drawing Primitives (fn!)
         // @builtin category="Graphics" name="gfx_pixel" sig="fn! gfx_pixel(x: i32, y: i32, color: i32)" desc="Draw a pixel"

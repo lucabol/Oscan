@@ -3983,13 +3983,73 @@ osc_result_str_str osc_env_delete(osc_str name)
 
 static L_Canvas osc_gfx_canvas;
 
+/* Default retro icon: 32x32 phosphor-green "O" inside a CRT-style bezel.
+ * Pixel format: 0xAARRGGBB (matches l_canvas_set_icon expectations). */
+#define OSC_DEFAULT_ICON_SZ 32
+static void osc_build_default_icon(uint32_t *px) {
+    /* 16x16 pixel-art glyph for "O", scaled 2x to 32x32. MSB is leftmost pixel. */
+    static const uint16_t glyph[16] = {
+        0x0000, 0x07E0, 0x1FF8, 0x3C3C,
+        0x381C, 0x700E, 0x700E, 0x700E,
+        0x700E, 0x700E, 0x700E, 0x381C,
+        0x3C3C, 0x1FF8, 0x07E0, 0x0000,
+    };
+    const int N = OSC_DEFAULT_ICON_SZ;
+    for (int y = 0; y < N; y++) {
+        for (int x = 0; x < N; x++) {
+            uint32_t color;
+            int gy = y / 2;
+            int gx = x / 2;
+            int on = (glyph[gy] >> (15 - gx)) & 1;
+            int border = (x < 2 || y < 2 || x >= N - 2 || y >= N - 2);
+            if (on) {
+                /* Phosphor green with subtle scanline darkening. */
+                uint32_t g = (y & 1) ? 0xC8u : 0xFFu;
+                color = 0xFF000000u | (0x10u << 16) | (g << 8) | 0x20u;
+            } else if (border) {
+                /* CRT bezel: light gray. */
+                color = 0xFFB0B0B0u;
+            } else {
+                /* CRT screen background: very dark green-tinted. */
+                color = 0xFF080C08u;
+            }
+            px[y * N + x] = color;
+        }
+    }
+}
+
+static void osc_apply_default_icon(void) {
+    uint32_t icon[OSC_DEFAULT_ICON_SZ * OSC_DEFAULT_ICON_SZ];
+    osc_build_default_icon(icon);
+    (void)l_canvas_set_icon(&osc_gfx_canvas, icon, OSC_DEFAULT_ICON_SZ, OSC_DEFAULT_ICON_SZ);
+}
+
 osc_result_str_str osc_canvas_open(int32_t width, int32_t height, osc_str title) {
     osc_result_str_str result;
     char buf[256];
     osc_str_to_cstr_buf(title, buf, 256);
     int rc = (int)l_canvas_open(&osc_gfx_canvas, width, height, buf);
     if (rc != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("canvas_open: cannot open canvas"); return result; }
+    osc_apply_default_icon();
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
+}
+
+osc_result_str_str osc_canvas_set_icon(osc_array *pixels, int32_t w, int32_t h) {
+    osc_result_str_str result;
+    if (!pixels || w <= 0 || h <= 0 || pixels->len < w * h) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("canvas_set_icon: invalid pixel buffer");
+        return result;
+    }
+    int rc = l_canvas_set_icon(&osc_gfx_canvas, (const uint32_t *)pixels->data, w, h);
+    if (rc != 0) {
+        result.is_ok = 0;
+        result.value.err = osc_str_from_cstr("canvas_set_icon: platform call failed");
+        return result;
+    }
+    result.is_ok = 1;
+    result.value.ok = osc_str_from_cstr("");
+    return result;
 }
 
 void osc_canvas_close(void) { l_canvas_close(&osc_gfx_canvas); }
@@ -4069,6 +4129,10 @@ void    osc_canvas_close(void) {}
 uint8_t osc_canvas_alive(void) { return 0; }
 void    osc_canvas_flush(void) {}
 void    osc_canvas_clear(int32_t color) { (void)color; }
+osc_result_str_str osc_canvas_set_icon(osc_array *pixels, int32_t w, int32_t h) {
+    (void)pixels; (void)w; (void)h;
+    osc_result_str_str r; r.is_ok = 0; r.value.err = osc_str_from_cstr("canvas_set_icon: not supported on this platform"); return r;
+}
 void    osc_gfx_pixel(int32_t x, int32_t y, int32_t color) { (void)x; (void)y; (void)color; }
 int32_t osc_gfx_get_pixel(int32_t x, int32_t y) { (void)x; (void)y; return 0; }
 void    osc_gfx_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t color) { (void)x0; (void)y0; (void)x1; (void)y1; (void)color; }
