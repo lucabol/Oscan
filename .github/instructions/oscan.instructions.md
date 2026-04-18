@@ -761,7 +761,7 @@ fn! path_dirname(path: str) -> str
 ```
 fn! socket_tcp() -> Result<i32, str>
 fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>
-fn! socket_bind(sock: i32, port: i32) -> Result<str, str>
+fn! socket_bind(sock: i32, addr: str, port: i32) -> Result<str, str>
 fn! socket_listen(sock: i32, backlog: i32) -> Result<str, str>
 fn! socket_accept(sock: i32) -> Result<i32, str>
 fn! socket_send(sock: i32, data: str) -> Result<i32, str>

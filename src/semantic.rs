@@ -413,11 +413,15 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
-        // @builtin category="Socket" name="socket_bind" sig="fn! socket_bind(sock: i32, port: i32) -> Result<str, str>" desc="Bind socket to port"
+        // @builtin category="Socket" name="socket_bind" sig="fn! socket_bind(sock: i32, addr: str, port: i32) -> Result<str, str>" desc="Bind socket to address and port (use \"\" for any interface)"
         self.functions.insert(
             "socket_bind".into(),
             builtin(
-                vec![("sock", BcType::I32), ("port", BcType::I32)],
+                vec![
+                    ("sock", BcType::I32),
+                    ("addr", BcType::Str),
+                    ("port", BcType::I32),
+                ],
                 BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
                 false,
             ),

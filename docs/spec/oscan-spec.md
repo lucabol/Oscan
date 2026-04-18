@@ -1790,7 +1790,7 @@ Socket builtins provide TCP and UDP networking. All are side-effecting (`fn!`).
 ```
 fn! socket_tcp() -> i32                      // Create a TCP socket; returns socket descriptor (-1 on error)
 fn! socket_connect(sock: i32, addr: str, port: i32) -> i32  // Connect to remote IPv4 address or hostname; returns 0 on success, -1 on error
-fn! socket_bind(sock: i32, port: i32) -> i32               // Bind socket to local port; returns 0 on success, -1 on error
+fn! socket_bind(sock: i32, addr: str, port: i32) -> i32    // Bind socket to local address ("" for any) and port; returns 0 on success, -1 on error
 fn! socket_listen(sock: i32, backlog: i32) -> i32          // Listen for incoming connections; returns 0 on success, -1 on error
 fn! socket_accept(sock: i32) -> i32          // Accept incoming connection; returns client socket descriptor (-1 on error)
 fn! socket_send(sock: i32, data: str) -> i32 // Send data over socket; returns number of bytes sent (-1 on error)

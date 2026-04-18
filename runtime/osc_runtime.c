@@ -4226,9 +4226,13 @@ osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, osc_str addr, int32_t port)
 {
     osc_result_str_str result;
+    /* Freestanding/laststanding does not currently expose an address-aware bind;
+       the addr argument is accepted for API parity but ignored — the bind goes
+       to whatever l_socket_bind chooses (typically INADDR_ANY). */
+    (void)addr;
     if (l_socket_bind((L_SOCKET)sock, (int)port) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
@@ -4489,14 +4493,20 @@ osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, osc_str addr, int32_t port)
 {
     osc_result_str_str result;
     struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    sa.sin_addr.s_addr = INADDR_ANY;
+    if (port < 0 || port > 65535) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: invalid port"); return result; }
+    /* Empty address means "any interface" (INADDR_ANY); resolve otherwise. */
+    if (addr.len == 0) {
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons((unsigned short)port);
+        sa.sin_addr.s_addr = INADDR_ANY;
+    } else if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) {
+        result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot resolve address"); return result;
+    }
     if (bind((SOCKET)sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
@@ -4640,14 +4650,20 @@ osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port)
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }
 
-osc_result_str_str osc_socket_bind(int32_t sock, int32_t port)
+osc_result_str_str osc_socket_bind(int32_t sock, osc_str addr, int32_t port)
 {
     osc_result_str_str result;
     struct sockaddr_in sa;
-    memset(&sa, 0, sizeof(sa));
-    sa.sin_family = AF_INET;
-    sa.sin_port = htons((unsigned short)port);
-    sa.sin_addr.s_addr = INADDR_ANY;
+    if (port < 0 || port > 65535) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: invalid port"); return result; }
+    /* Empty address means "any interface" (INADDR_ANY); resolve otherwise. */
+    if (addr.len == 0) {
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons((unsigned short)port);
+        sa.sin_addr.s_addr = INADDR_ANY;
+    } else if (osc_socket_lookup_ipv4(addr, port, &sa) < 0) {
+        result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot resolve address"); return result;
+    }
     if (bind(sock, (struct sockaddr *)&sa, sizeof(sa)) != 0) { result.is_ok = 0; result.value.err = osc_str_from_cstr("socket_bind: cannot bind socket"); return result; }
     result.is_ok = 1; result.value.ok = osc_str_from_cstr(""); return result;
 }

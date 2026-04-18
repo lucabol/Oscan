@@ -18,7 +18,7 @@ fn! main() {
     if server < 0 or client < 0 {
         println("tcp setup failed");
     } else {
-        let br: Result<str, str> = socket_bind(server, tcp_port);
+        let br: Result<str, str> = socket_bind(server, "127.0.0.1", tcp_port);
         let bind_ok: bool = match br {
             Result::Ok(_) => { true },
             Result::Err(_) => { false },
@@ -74,7 +74,7 @@ fn! main() {
     if receiver < 0 or sender < 0 {
         println("udp setup failed");
     } else {
-        let br2: Result<str, str> = socket_bind(receiver, udp_port);
+        let br2: Result<str, str> = socket_bind(receiver, "127.0.0.1", udp_port);
         let bind_ok: bool = match br2 {
             Result::Ok(_) => { true },
             Result::Err(_) => { false },
