@@ -937,15 +937,32 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Search for libbearssl.a in multiple locations:
-/// 1. Include dirs (deps/laststanding/bearssl/build/ for dev mode)
-/// 2. <exe-dir>/toolchain/lib/ (release bundle layout)
-/// 3. <exe-dir>/lib/ (minimal install layout)
+/// 1. Include dirs (deps/laststanding/bearssl/build/ for dev-built copy)
+/// 2. packaging/prebuilt/<host-triple>/ (committed prebuilt for dev/CI)
+/// 3. <exe-dir>/toolchain/lib/ (release bundle layout)
+/// 4. <exe-dir>/lib/ (minimal install layout)
 fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
-    // Dev mode: search include dirs
+    // Dev mode: locally built copy under deps/laststanding/bearssl/build/
     for dir in include_dirs {
         let lib = dir.join("bearssl").join("build").join("libbearssl.a");
         if lib.exists() {
             return Some(lib.display().to_string());
+        }
+    }
+    // Dev/CI mode: committed prebuilt under packaging/prebuilt/<host-triple>/
+    // include_dirs typically contains <project_root>/deps/laststanding; walk up
+    // two levels to reach the project root.
+    let prebuilt_subdir = format!("{}-{}", env::consts::OS, env::consts::ARCH);
+    for dir in include_dirs {
+        if let Some(project_root) = dir.parent().and_then(|p| p.parent()) {
+            let lib = project_root
+                .join("packaging")
+                .join("prebuilt")
+                .join(&prebuilt_subdir)
+                .join("libbearssl.a");
+            if lib.exists() {
+                return Some(lib.display().to_string());
+            }
         }
     }
     // Release bundle: search relative to the oscan binary

@@ -85,7 +85,15 @@ jobs:
           echo "=== Positive Integration Tests (Linux/GCC, freestanding) ==="
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
-            expected="tests/expected/${name}.expected"
+            # Prefer libc-variant expected file when present (covers tests like
+            # tls_fetch whose freestanding "ok" output requires outbound network
+            # the CI runner does not provide; the libc-variant expects the
+            # connect_failed fallback which also matches no-network freestanding).
+            if [ -f "tests/expected_libc/${name}.expected" ]; then
+              expected="tests/expected_libc/${name}.expected"
+            else
+              expected="tests/expected/${name}.expected"
+            fi
             TOTAL=$((TOTAL + 1))
 
             if [ ! -f "$expected" ]; then
@@ -590,7 +598,11 @@ jobs:
 
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
-            expected="tests/expected/${name}.expected"
+            if [ -f "tests/expected_libc/${name}.expected" ]; then
+              expected="tests/expected_libc/${name}.expected"
+            else
+              expected="tests/expected/${name}.expected"
+            fi
             TOTAL=$((TOTAL + 1))
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
@@ -691,7 +703,11 @@ jobs:
 
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
-            expected="tests/expected/${name}.expected"
+            if [ -f "tests/expected_libc/${name}.expected" ]; then
+              expected="tests/expected_libc/${name}.expected"
+            else
+              expected="tests/expected/${name}.expected"
+            fi
             TOTAL=$((TOTAL + 1))
             [ ! -f "$expected" ] && { echo "FAIL: $name — no expected"; FAIL=$((FAIL+1)); continue; }
 
