@@ -1416,7 +1416,10 @@ impl CodeGenerator {
                 "osc_socket_connect({}, {}, {})",
                 arg_strs[0], arg_strs[1], arg_strs[2]
             ),
-            "socket_bind" => format!("osc_socket_bind({}, {})", arg_strs[0], arg_strs[1]),
+            "socket_bind" => format!(
+                "osc_socket_bind({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             "socket_listen" => format!("osc_socket_listen({}, {})", arg_strs[0], arg_strs[1]),
             "socket_accept" => format!("osc_socket_accept({})", arg_strs[0]),
             "socket_send" => format!("osc_socket_send({}, {})", arg_strs[0], arg_strs[1]),

@@ -181,7 +181,7 @@ osc_result_str_str osc_write_file(osc_str path, osc_str data);
 /* Socket I/O */
 osc_result_i32_str osc_socket_tcp(void);
 osc_result_str_str osc_socket_connect(int32_t sock, osc_str addr, int32_t port);
-osc_result_str_str osc_socket_bind(int32_t sock, int32_t port);
+osc_result_str_str osc_socket_bind(int32_t sock, osc_str addr, int32_t port);
 osc_result_str_str osc_socket_listen(int32_t sock, int32_t backlog);
 osc_result_i32_str osc_socket_accept(int32_t sock);
 osc_result_i32_str osc_socket_send(int32_t sock, osc_str data);

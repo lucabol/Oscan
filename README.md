@@ -409,7 +409,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 |----------|-------------|
 | `fn! socket_tcp() -> Result<i32, str>` | Create TCP socket |
 | `fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>` | Connect to address and port |
-| `fn! socket_bind(sock: i32, port: i32) -> Result<str, str>` | Bind socket to port |
+| `fn! socket_bind(sock: i32, addr: str, port: i32) -> Result<str, str>` | Bind socket to address and port (use \ |
 | `fn! socket_listen(sock: i32, backlog: i32) -> Result<str, str>` | Listen for connections |
 | `fn! socket_accept(sock: i32) -> Result<i32, str>` | Accept incoming connection |
 | `fn! socket_send(sock: i32, data: str) -> Result<i32, str>` | Send data on socket |

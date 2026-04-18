@@ -30,7 +30,7 @@ fn! main() {
     };
     defer socket_close(server);
 
-    let bind_result: Result<str, str> = socket_bind(server, port);
+    let bind_result: Result<str, str> = socket_bind(server, "", port);
     match bind_result {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: failed to bind to port: {e}"); exit(1); },
