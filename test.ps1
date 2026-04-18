@@ -102,9 +102,15 @@ function Test-WindowsFreestanding($exePath) {
     $size = (Get-Item $exePath).Length
     $depCheck = "SKIP"; $depDetail = "no tool"; $stdlibCheck = "SKIP"
 
-    # Socket/UDP tests legitimately need WS2_32.dll
+    # Socket/UDP tests legitimately need WS2_32.dll; TLS tests also need Secur32 + Crypt32.
     $testName = [System.IO.Path]::GetFileNameWithoutExtension($exePath)
-    $allowPattern = if ($testName -match 'socket|udp') { '^(?i)(KERNEL32|WS2_32)\.dll$' } else { '^(?i)KERNEL32\.dll$' }
+    $allowPattern = if ($testName -match '^tls') {
+        '^(?i)(KERNEL32|WS2_32|SECUR32|CRYPT32)\.dll$'
+    } elseif ($testName -match 'socket|udp') {
+        '^(?i)(KERNEL32|WS2_32)\.dll$'
+    } else {
+        '^(?i)KERNEL32\.dll$'
+    }
 
     $dumpbin = Find-Dumpbin
     if ($dumpbin) {
@@ -512,8 +518,13 @@ if (-not $SkipWSL) {
                 continue
             }
             $n = $t.Name
+            $isTls = $n -match '^tls_'
             if ($t.IsFfi) {
                 $bashLines += "gcc -std=c99 tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl -lm 2>/dev/null"
+            } elseif ($isTls) {
+                # TLS tests need BearSSL (libbearssl.a) linked after the source.
+                # Use the pre-built static library from packaging/prebuilt.
+                $bashLines += "gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding packaging/prebuilt/linux-x86_64/libbearssl.a -o tests/build/${n}_wsl 2>/dev/null"
             } else {
                 $bashLines += "gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl 2>/dev/null"
             }

@@ -1,0 +1,73 @@
+// HTTPS GET client — fetch a page over TLS
+//
+// Demonstrates the `tls_*` builtins (tls_connect, tls_send, tls_recv, tls_close,
+// tls_cleanup) for issuing HTTP/1.0 requests over TLS from a freestanding
+// Oscan binary.
+//
+// Windows: uses SChannel (no external deps).
+// Linux (freestanding, bundled toolchain): uses BearSSL (libbearssl.a).
+// Other platforms / libc mode: tls_connect returns an error.
+//
+// Usage:
+//   oscan examples/https_get.osc --run -- <host> [path]
+//
+// Examples:
+//   oscan examples/https_get.osc --run -- www.lucabol.com /
+//   oscan examples/https_get.osc --run -- text.npr.org /
+//
+// The program prints the raw HTTP response (status line + headers + body).
+
+fn! main() {
+    if arg_count() < 2 {
+        println("Usage: https_get <host> [path]");
+        println("Example: https_get www.lucabol.com /");
+        exit(1);
+    };
+
+    let host: str = arg_get(1);
+    let mut path: str = "/";
+    if arg_count() >= 3 {
+        path = arg_get(2);
+    };
+
+    // Open TLS connection on port 443.
+    let conn: Result<i32, str> = tls_connect(host, 443);
+    let h: i32 = match conn {
+        Result::Ok(fd) => { fd },
+        Result::Err(e) => {
+            println("tls_connect({host}) failed: {e}");
+            exit(1);
+            0
+        },
+    };
+    defer tls_close(h);
+    defer tls_cleanup();
+
+    // Build and send a minimal HTTP/1.0 GET.
+    let req: str = "GET {path} HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oscan-https-get/1.0\r\nConnection: close\r\n\r\n";
+    match tls_send(h, req) {
+        Result::Ok(_) => { },
+        Result::Err(e) => {
+            println("tls_send failed: {e}");
+            exit(1);
+        },
+    };
+
+    // Read the full response; tls_recv returns "" on EOF or error.
+    let mut total: i32 = 0;
+    let mut done: bool = false;
+    while not done {
+        let chunk: str = tls_recv(h, 4096);
+        let n: i32 = str_len(chunk);
+        if n > 0 {
+            print(chunk);
+            total += n;
+        } else {
+            done = true;
+        };
+    };
+
+    // Make sure there's a trailing newline and print a summary to stderr-free stdout.
+    println("");
+    println("--- received {total} bytes ---");
+}

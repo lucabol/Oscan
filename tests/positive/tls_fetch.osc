@@ -1,0 +1,71 @@
+// TLS Fetch Integration Test
+//
+// Verifies that `tls_connect` / `tls_send` / `tls_recv` / `tls_close` /
+// `tls_cleanup` can fetch two real HTTPS endpoints end-to-end:
+//   - www.lucabol.com (Netlify-hosted, relatively lean)
+//   - text.npr.org    (Akamai/CloudFront-fronted AWS API Gateway)
+//
+// Both endpoints are required to be reachable for this test to pass.
+// The test performs an HTTP/1.0 GET, reads the entire response, and checks:
+//   1. The response starts with "HTTP/1." (any 1.x status line is fine).
+//   2. The response contains a 2xx status code, specifically " 200 ".
+//   3. At least one byte of a body is delivered after the blank-line header
+//      terminator (i.e. the response isn't just a header block).
+//
+// Output is deterministic (no timestamps / dynamic content), so it can be
+// compared against tests/expected/tls_fetch.expected.
+//
+// Windows freestanding (SChannel) and Linux freestanding (BearSSL) only.
+// libc mode and non-x64 cross targets intentionally fail tls_connect with
+// "not supported" — the expected_libc variant accepts that.
+
+fn! fetch_status(host: str) -> str {
+    let conn: Result<i32, str> = tls_connect(host, 443);
+    let h: i32 = match conn {
+        Result::Ok(fd) => { fd },
+        Result::Err(_) => { return "connect_failed"; 0 },
+    };
+
+    let req: str = "GET / HTTP/1.0\r\nHost: {host}\r\nUser-Agent: oscan-tls-test/1.0\r\nConnection: close\r\n\r\n";
+    match tls_send(h, req) {
+        Result::Ok(_) => { },
+        Result::Err(_) => { tls_close(h); return "send_failed"; },
+    };
+
+    // Drain the response into a single string.
+    let mut body: str = "";
+    let mut total: i32 = 0;
+    let mut done: bool = false;
+    while not done {
+        let chunk: str = tls_recv(h, 4096);
+        let n: i32 = str_len(chunk);
+        if n > 0 {
+            body = str_concat(body, chunk);
+            total += n;
+        } else {
+            done = true;
+        };
+        // Safety cap: servers respond quickly; if we got > 256 KB already
+        // we've clearly succeeded — avoid unbounded concat on pathological
+        // responses.
+        if total > 262144 { done = true; };
+    };
+    tls_close(h);
+
+    if total == 0 { return "empty_response"; };
+    if not str_starts_with(body, "HTTP/1.") { return "bad_status_line"; };
+    if not str_contains(body, " 200 ") { return "non_200"; };
+    // Verify header/body separator is present and at least one body byte follows.
+    let sep: i32 = str_find(body, "\r\n\r\n");
+    if sep < 0 { return "no_header_terminator"; };
+    if str_len(body) <= sep + 4 { return "empty_body"; };
+    "ok"
+}
+
+fn! main() {
+    let lucabol: str = fetch_status("www.lucabol.com");
+    println("lucabol: {lucabol}");
+    let npr: str = fetch_status("text.npr.org");
+    println("npr: {npr}");
+    tls_cleanup();
+}
