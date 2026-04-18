@@ -52,6 +52,14 @@ Download the prebuilt binary for your platform from [GitHub Releases](https://gi
 
 **Windows x86_64:**
 
+*Quick install (downloads and installs the latest release):*
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/lucabol/Oscan/master/scripts/install-latest.ps1 | iex
+```
+
+Pass `-Mode msi` to use the MSI installer instead of the zip bundle. The script verifies the asset's SHA-256 against the release's `SHA256SUMS` before installing.
+
 *Option A — MSI installer (simplest):*
 
 1. Download `oscan-vX.Y.Z-windows-x86_64.msi`
