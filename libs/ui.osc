@@ -37,7 +37,7 @@ fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
 
 // Label: draws text in foreground color
 fn! ui_label(x: i32, y: i32, text: str) {
-    gfx_draw_text(x, y, text, UI_FG, 0)
+    gfx_draw_text(x, y, text, UI_FG, 0);
 }
 
 // Separator: horizontal line in border color
