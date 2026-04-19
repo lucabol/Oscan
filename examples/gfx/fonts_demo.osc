@@ -4,7 +4,7 @@
 //        gfx_draw_text (returns pixel advance), gfx_text_width,
 //        gfx_draw_text_scaled.
 
-use "libs/fonts.osc";
+use "../../libs/fonts.osc";
 
 fn! main() {
     let W: i32 = 480;
