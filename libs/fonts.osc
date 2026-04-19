@@ -1,0 +1,14 @@
+// fonts.osc — Font id constants for gfx_draw_text / gfx_draw_text_scaled / gfx_text_width.
+//
+// Usage:
+//   use "libs/fonts.osc";
+//   gfx_draw_text(10, 10, "Hello", rgb(255, 255, 255), FONT_DEFAULT);
+//   gfx_draw_text(10, 30, "café",  rgb(255, 255, 255), FONT_LATIN1);
+//   gfx_draw_text(10, 50, "┌──┐",  rgb(255, 255, 255), FONT_BOX);
+//
+// All bundled fonts are 8×8 cells. Unknown ids fall back to FONT_DEFAULT.
+
+let FONT_DEFAULT: i32 = 0;        // ASCII 32..126, fixed 8-px advance
+let FONT_PROPORTIONAL: i32 = 1;   // ASCII 32..126, per-glyph advance
+let FONT_LATIN1: i32 = 2;         // default + U+00A0..U+00FF (~96 glyphs)
+let FONT_BOX: i32 = 3;            // default + ~33 box-drawing / arrow codepoints

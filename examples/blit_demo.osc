@@ -57,13 +57,13 @@ fn! main() {
             canvas_clear(rgb(20, 20, 80));
 
             // --- Opaque blit section ---
-            gfx_draw_text(10, 10, "Opaque blit:", rgb(255, 255, 255));
+            gfx_draw_text(10, 10, "Opaque blit:", rgb(255, 255, 255), 0);
             for i in 0..10 {
                 gfx_blit(10 + i * 12, 24, SW, SH, smiley);
             };
 
             // --- Alpha blit section ---
-            gfx_draw_text(10, 50, "Alpha blit:", rgb(255, 255, 255));
+            gfx_draw_text(10, 50, "Alpha blit:", rgb(255, 255, 255), 0);
 
             // Draw colored background rectangles to show alpha blending
             gfx_fill_rect(10, 64, 60, 20, rgb(200, 0, 0));
@@ -78,9 +78,9 @@ fn! main() {
             };
 
             // --- Scaled text label ---
-            gfx_draw_text_scaled(10, 110, "Scaled + Blit!", rgb(255, 200, 0), 2, 2);
+            gfx_draw_text_scaled(10, 110, "Scaled + Blit!", rgb(255, 200, 0), 2, 2, 0);
 
-            gfx_draw_text(10, H - 12, "Press ESC to quit", rgb(128, 128, 128));
+            gfx_draw_text(10, H - 12, "Press ESC to quit", rgb(128, 128, 128), 0);
             canvas_flush();
             sleep_ms(16);
         };

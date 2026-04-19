@@ -33,8 +33,8 @@ fn! main() {
     gfx_rect(20, 20, 280, 200, rgb(255, 255, 255));
 
     // Text labels
-    gfx_draw_text(60, 85, "Hello!", rgb(255, 255, 255));
-    gfx_draw_text(10, 225, "Press ESC to quit", rgb(128, 128, 128));
+    gfx_draw_text(60, 85, "Hello!", rgb(255, 255, 255), 0);
+    gfx_draw_text(10, 225, "Press ESC to quit", rgb(128, 128, 128), 0);
 
     canvas_flush();
 

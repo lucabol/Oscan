@@ -60,7 +60,7 @@ fn! main() {
                 };
             };
 
-            gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0));
+            gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0), 0);
             canvas_flush();
             sleep_ms(16);
             t = t + 1;

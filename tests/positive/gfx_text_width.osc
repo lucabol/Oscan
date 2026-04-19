@@ -1,0 +1,37 @@
+// Regression test: gfx_text_width semantics for font id lookup.
+// FONT_DEFAULT has fixed 8-px advance; FONT_PROPORTIONAL has per-glyph widths.
+// Font ids match libs/fonts.osc: 0=default, 1=proportional, 2=latin1, 3=box.
+//
+// On freestanding Windows/ARM builds OSC_HAS_GFX is defined and real
+// measurements come through; on libc builds the gfx stubs return 0 for
+// every call. Both modes are validated by the relaxed invariants below.
+
+fn! main() {
+    let s: str = "iiiiii";
+
+    let w_default: i32 = gfx_text_width(s, 0);
+    let w_prop: i32 = gfx_text_width(s, 1);
+    let w_fallback: i32 = gfx_text_width(s, 99);
+
+    // Width must never be negative.
+    if w_default >= 0 and w_prop >= 0 and w_fallback >= 0 {
+        println("nonneg:ok");
+    } else {
+        println("nonneg:FAIL");
+    };
+
+    // Proportional is narrower than default for narrow glyphs. When gfx is
+    // stubbed out (libc) both are 0, so we allow equality too.
+    if w_prop <= w_default {
+        println("proportional:ok");
+    } else {
+        println("proportional:FAIL=default={w_default} prop={w_prop}");
+    };
+
+    // Unknown font ids must fall back to default.
+    if w_fallback == w_default {
+        println("fallback:ok");
+    } else {
+        println("fallback:FAIL={w_fallback}");
+    };
+}

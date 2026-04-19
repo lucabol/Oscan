@@ -296,6 +296,13 @@ impl CodeGenerator {
             // l_gfx.h uses Linux framebuffer ioctls — not available on WASI
             // l_gfx.h includes l_os.h, so on WASI we include l_os.h directly
             self.line("#ifndef __wasi__");
+            // Enable all bundled fonts (~1.9 KB total) so gfx_draw_text_* can
+            // route text through the UTF-8 L_Font path. Must be defined before
+            // including l_gfx.h so the font globals are compiled in.
+            self.line("#define L_FONT_PROPORTIONAL");
+            self.line("#define L_FONT_LATIN1_SUPPLEMENT");
+            self.line("#define L_FONT_BOX_DRAWING");
+            self.line("#define L_UI_WITH_CUSTOM_FONT");
             self.line("#include \"l_gfx.h\"");
             self.line("#define OSC_HAS_GFX");
             // l_img.h embeds stb_image.h (~8000 lines) which includes system headers
@@ -1579,12 +1586,16 @@ impl CodeGenerator {
                 arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
             ),
             "gfx_draw_text" => format!(
-                "osc_gfx_draw_text({}, {}, {}, {})",
-                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3]
+                "osc_gfx_draw_text({}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
             ),
             "gfx_draw_text_scaled" => format!(
-                "osc_gfx_draw_text_scaled({}, {}, {}, {}, {}, {})",
-                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5]
+                "osc_gfx_draw_text_scaled({}, {}, {}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5], arg_strs[6]
+            ),
+            "gfx_text_width" => format!(
+                "osc_gfx_text_width({}, {})",
+                arg_strs[0], arg_strs[1]
             ),
             "gfx_blit" => format!(
                 "osc_gfx_blit({}, {}, {}, {}, {})",

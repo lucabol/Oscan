@@ -113,7 +113,7 @@ fn! main() {
                     };
                 };
             };
-            gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128));
+            gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128), 0);
             canvas_flush();
 
             sleep_ms(16);

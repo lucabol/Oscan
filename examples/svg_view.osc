@@ -62,7 +62,7 @@ fn! main() {
     };
     gfx_blit_alpha(0, 0, pw, ph, px_data);
 
-    gfx_draw_text(4, ph - 12, path, rgb(0, 0, 0));
+    gfx_draw_text(4, ph - 12, path, rgb(0, 0, 0), 0);
     canvas_flush();
 
     while canvas_alive() {

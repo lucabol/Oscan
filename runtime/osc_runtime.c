@@ -4065,16 +4065,38 @@ void osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color
 void osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_circle(&osc_gfx_canvas, cx, cy, r, (uint32_t)color); }
 void osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_fill_circle(&osc_gfx_canvas, cx, cy, r, (uint32_t)color); }
 
-void osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) {
-    char buf[1024];
-    osc_str_to_cstr_buf(text, buf, 1024);
-    l_draw_text(&osc_gfx_canvas, x, y, buf, (uint32_t)color);
+/* Font id → L_Font pointer lookup. Ids match libs/fonts.osc constants:
+ *   0 = FONT_DEFAULT (ASCII)
+ *   1 = FONT_PROPORTIONAL (ASCII with per-glyph widths)
+ *   2 = FONT_LATIN1 (default + U+00A0..U+00FF)
+ *   3 = FONT_BOX (default + ~33 box-drawing / arrow codepoints)
+ * Out-of-range ids fall back to the default font. */
+static const L_Font *osc_font_by_id(int32_t id) {
+    switch (id) {
+        case 1: return &l_font8x8_proportional;
+        case 2: return &l_font8x8_latin1;
+        case 3: return &l_font8x8_box;
+        case 0:
+        default: return &l_font8x8_default;
+    }
 }
 
-void osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy) {
+int32_t osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color, int32_t font) {
+    char buf[1024];
+    osc_str_to_cstr_buf(text, buf, 1024);
+    return (int32_t)l_draw_text_f(&osc_gfx_canvas, osc_font_by_id(font), x, y, buf, (uint32_t)color);
+}
+
+int32_t osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy, int32_t font) {
     char buf[4096];
     osc_str_to_cstr_buf(text, buf, sizeof(buf));
-    l_draw_text_scaled(&osc_gfx_canvas, x, y, buf, (uint32_t)color, sx, sy);
+    return (int32_t)l_draw_text_scaled_f(&osc_gfx_canvas, osc_font_by_id(font), x, y, buf, (uint32_t)color, sx, sy);
+}
+
+int32_t osc_gfx_text_width(osc_str text, int32_t font) {
+    char buf[4096];
+    osc_str_to_cstr_buf(text, buf, sizeof(buf));
+    return (int32_t)l_text_width_f(osc_font_by_id(font), buf);
 }
 
 void osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) {
@@ -4140,8 +4162,9 @@ void    osc_gfx_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) 
 void    osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color) { (void)x; (void)y; (void)w; (void)h; (void)color; }
 void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void)cx; (void)cy; (void)r; (void)color; }
 void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { (void)cx; (void)cy; (void)r; (void)color; }
-void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color) { (void)x; (void)y; (void)text; (void)color; }
-void    osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy) { (void)x; (void)y; (void)text; (void)color; (void)sx; (void)sy; }
+int32_t osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color, int32_t font) { (void)x; (void)y; (void)text; (void)color; (void)font; return 0; }
+int32_t osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy, int32_t font) { (void)x; (void)y; (void)text; (void)color; (void)sx; (void)sy; (void)font; return 0; }
+int32_t osc_gfx_text_width(osc_str text, int32_t font) { (void)text; (void)font; return 0; }
 void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
 void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels) { (void)dx; (void)dy; (void)w; (void)h; (void)pixels; }
 int32_t osc_canvas_key(void) { return 0; }

@@ -1,0 +1,51 @@
+// Fonts demo — renders the same string through each bundled font.
+//
+// Shows: FONT_DEFAULT, FONT_PROPORTIONAL, FONT_LATIN1, FONT_BOX,
+//        gfx_draw_text (returns pixel advance), gfx_text_width,
+//        gfx_draw_text_scaled.
+
+use "libs/fonts.osc";
+
+fn! main() {
+    let W: i32 = 480;
+    let H: i32 = 280;
+    match canvas_open(W, H, "Oscan fonts demo") {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("canvas_open failed: {e}"); exit(1); },
+    };
+
+    let white: i32 = rgb(230, 230, 230);
+    let dim: i32 = rgb(140, 140, 140);
+    let accent: i32 = rgb(0, 200, 255);
+
+    while canvas_alive() {
+        canvas_clear(rgb(20, 20, 24));
+
+        gfx_draw_text(10, 10,  "FONT_DEFAULT:",      dim,    FONT_DEFAULT);
+        gfx_draw_text(10, 26,  "The quick brown fox jumps.", white, FONT_DEFAULT);
+
+        gfx_draw_text(10, 54,  "FONT_PROPORTIONAL:", dim,    FONT_DEFAULT);
+        gfx_draw_text(10, 70,  "The quick brown fox jumps.", white, FONT_PROPORTIONAL);
+
+        gfx_draw_text(10, 98,  "FONT_LATIN1 (café, naïve, éléphant):", dim, FONT_DEFAULT);
+        gfx_draw_text(10, 114, "café — naïve — éléphant — ¡hola!",     white, FONT_LATIN1);
+
+        gfx_draw_text(10, 142, "FONT_BOX:", dim, FONT_DEFAULT);
+        gfx_draw_text(10, 158, "┌──────┐", white, FONT_BOX);
+        gfx_draw_text(10, 174, "│ Oscan │", white, FONT_BOX);
+        gfx_draw_text(10, 190, "└──────┘", white, FONT_BOX);
+
+        gfx_draw_text_scaled(10, 212, "Scaled 2x default", accent, 2, 2, FONT_DEFAULT);
+
+        let sample: str = "Hello!";
+        let w_def: i32 = gfx_text_width(sample, FONT_DEFAULT);
+        let w_prop: i32 = gfx_text_width(sample, FONT_PROPORTIONAL);
+        gfx_draw_text(10, H - 14, "width('{sample}'): default={w_def} prop={w_prop} — ESC to quit", dim, FONT_DEFAULT);
+
+        canvas_flush();
+        if canvas_key() == 27 { break; };
+        sleep_ms(16);
+    };
+
+    canvas_close();
+}
