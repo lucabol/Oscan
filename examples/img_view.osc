@@ -54,7 +54,7 @@ fn! main() {
     };
 
     // Overlay filename
-    gfx_draw_text(4, ch - 12, path, rgb(255, 255, 255));
+    gfx_draw_text(4, ch - 12, path, rgb(255, 255, 255), 0);
 
     canvas_flush();
 

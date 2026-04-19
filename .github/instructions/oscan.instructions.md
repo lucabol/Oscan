@@ -604,7 +604,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (225 functions, 20 categories)
+## Built-in Functions (226 functions, 20 categories)
 
 ### I/O
 
@@ -898,8 +898,9 @@ fn! gfx_rect(x: i32, y: i32, w: i32, h: i32, color: i32)
 fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)
 fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)
 fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)
-fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)
-fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)
+fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32, font: i32) -> i32
+fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32, font: i32) -> i32
+fn gfx_text_width(text: str, font: i32) -> i32
 fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])
 fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])
 fn! canvas_key() -> i32

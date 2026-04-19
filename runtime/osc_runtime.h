@@ -506,8 +506,9 @@ void    osc_gfx_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 void    osc_gfx_fill_rect(int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 void    osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
 void    osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color);
-void    osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color);
-void    osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy);
+int32_t osc_gfx_draw_text(int32_t x, int32_t y, osc_str text, int32_t color, int32_t font);
+int32_t osc_gfx_draw_text_scaled(int32_t x, int32_t y, osc_str text, int32_t color, int32_t sx, int32_t sy, int32_t font);
+int32_t osc_gfx_text_width(osc_str text, int32_t font);
 void    osc_gfx_blit(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels);
 void    osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array *pixels);
 

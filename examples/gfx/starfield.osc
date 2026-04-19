@@ -88,7 +88,7 @@ fn! main() {
                 };
             };
 
-            gfx_draw_text(2, H - 10, "+/-:speed ESC:quit", rgb(100, 100, 100));
+            gfx_draw_text(2, H - 10, "+/-:speed ESC:quit", rgb(100, 100, 100), 0);
             canvas_flush();
             sleep_ms(16);
         };

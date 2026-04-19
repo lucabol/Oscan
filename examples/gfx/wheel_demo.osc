@@ -41,8 +41,8 @@ fn! main() {
 
             canvas_clear(rgb(0, 0, 0));
             gfx_fill_circle(mx, my, radius, rgb(0, 255, 255));
-            gfx_draw_text(8, 8, "wheel total: {total}", rgb(255, 255, 0));
-            gfx_draw_text(8, 20, "scroll: resize  |  click: reset  |  esc: quit", rgb(255, 255, 255));
+            gfx_draw_text(8, 8, "wheel total: {total}", rgb(255, 255, 0), 0);
+            gfx_draw_text(8, 20, "scroll: resize  |  click: reset  |  esc: quit", rgb(255, 255, 255), 0);
             canvas_flush();
         };
 

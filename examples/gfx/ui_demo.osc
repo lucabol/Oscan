@@ -42,7 +42,7 @@ fn! main() {
             ui_panel(10, 10, WIN_W - 20, WIN_H - 20);
 
             // Title
-            gfx_draw_text(24, 20, "UI Widget Demo", UI_ACCENT);
+            gfx_draw_text(24, 20, "UI Widget Demo", UI_ACCENT, 0);
 
             // Label
             ui_label(30, 50, "A simple label");

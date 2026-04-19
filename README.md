@@ -259,7 +259,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**225 built-in functions** across 20 categories.
+**226 built-in functions** across 20 categories.
 
 ### I/O (7 functions)
 
@@ -537,7 +537,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
 | `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
 
-### Graphics (26 functions)
+### Graphics (27 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -554,8 +554,9 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)` | Draw filled rectangle |
 | `fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw circle outline |
 | `fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw filled circle |
-| `fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)` | Draw text on canvas |
-| `fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)` | Draw scaled text on canvas |
+| `fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32, font: i32) -> i32` | Draw text on canvas using the given font id (0=default ASCII, 1=proportional, 2=latin1, 3=box-drawing); returns pixel advance |
+| `fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32, font: i32) -> i32` | Draw scaled text on canvas using the given font id; returns pixel advance |
+| `fn gfx_text_width(text: str, font: i32) -> i32` | Measure text pixel width for the given font id without drawing |
 | `fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Blit pixel buffer to canvas |
 | `fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Alpha-blended blit to canvas |
 | `fn! canvas_key() -> i32` | Get last key press |

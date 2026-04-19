@@ -1216,7 +1216,7 @@ impl SemanticAnalyzer {
                 false,
             ),
         );
-        // @builtin category="Graphics" name="gfx_draw_text" sig="fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32)" desc="Draw text on canvas"
+        // @builtin category="Graphics" name="gfx_draw_text" sig="fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32, font: i32) -> i32" desc="Draw text on canvas using the given font id (0=default ASCII, 1=proportional, 2=latin1, 3=box-drawing); returns pixel advance"
         self.functions.insert(
             "gfx_draw_text".into(),
             builtin(
@@ -1225,12 +1225,13 @@ impl SemanticAnalyzer {
                     ("y", BcType::I32),
                     ("text", BcType::Str),
                     ("color", BcType::I32),
+                    ("font", BcType::I32),
                 ],
-                BcType::Unit,
+                BcType::I32,
                 false,
             ),
         );
-        // @builtin category="Graphics" name="gfx_draw_text_scaled" sig="fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32)" desc="Draw scaled text on canvas"
+        // @builtin category="Graphics" name="gfx_draw_text_scaled" sig="fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32, font: i32) -> i32" desc="Draw scaled text on canvas using the given font id; returns pixel advance"
         self.functions.insert(
             "gfx_draw_text_scaled".into(),
             builtin(
@@ -1241,9 +1242,22 @@ impl SemanticAnalyzer {
                     ("color", BcType::I32),
                     ("sx", BcType::I32),
                     ("sy", BcType::I32),
+                    ("font", BcType::I32),
                 ],
-                BcType::Unit,
+                BcType::I32,
                 false,
+            ),
+        );
+        // @builtin category="Graphics" name="gfx_text_width" sig="fn gfx_text_width(text: str, font: i32) -> i32" desc="Measure text pixel width for the given font id without drawing"
+        self.functions.insert(
+            "gfx_text_width".into(),
+            builtin(
+                vec![
+                    ("text", BcType::Str),
+                    ("font", BcType::I32),
+                ],
+                BcType::I32,
+                true,
             ),
         );
         // @builtin category="Graphics" name="gfx_blit" sig="fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])" desc="Blit pixel buffer to canvas"
