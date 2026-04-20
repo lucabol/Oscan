@@ -19,6 +19,13 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
+    <!-- Branding: product icon shown in Add/Remove Programs and (where allowed) in UAC. -->
+    <Icon Id="oscan.ico" SourceFile="packaging\windows\oscan.ico" />
+    <Property Id="ARPPRODUCTICON" Value="oscan.ico" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/lucabol/Oscan" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/lucabol/Oscan" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/lucabol/Oscan/releases" />
+
     <!-- Full UI: welcome, license, install dir, progress, finish with Finish button -->
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <ui:WixUI Id="WixUI_InstallDir" />
