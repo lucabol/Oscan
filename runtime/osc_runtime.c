@@ -4069,16 +4069,24 @@ void osc_gfx_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_circle
 void osc_gfx_fill_circle(int32_t cx, int32_t cy, int32_t r, int32_t color) { l_fill_circle(&osc_gfx_canvas, cx, cy, r, (uint32_t)color); }
 
 /* Font id → L_Font pointer lookup. Ids match libs/fonts.osc constants:
- *   0 = FONT_DEFAULT (ASCII)
- *   1 = FONT_PROPORTIONAL (ASCII with per-glyph widths)
- *   2 = FONT_LATIN1 (default + U+00A0..U+00FF)
- *   3 = FONT_BOX (default + ~33 box-drawing / arrow codepoints)
+ *   0 = FONT_DEFAULT          (ASCII, 8×8 cell)
+ *   1 = FONT_PROPORTIONAL     (ASCII with per-glyph widths, 8×8 cell)
+ *   2 = FONT_LATIN1           (default + U+00A0..U+00FF, 8×8 cell)
+ *   3 = FONT_BOX              (default + ~33 box-drawing / arrow codepoints, 8×8 cell)
+ *   4 = FONT_DEFAULT_L        (ASCII, 8×12 cell — crisp 1.5× line-height tier)
+ *   5 = FONT_PROPORTIONAL_L   (ASCII with per-glyph widths, 8×12 cell)
+ *   6 = FONT_LATIN1_L         (default + U+00A0..U+00FF, 8×12 cell)
+ *   7 = FONT_BOX_L            (default + box-drawing / arrows, 8×12 cell)
  * Out-of-range ids fall back to the default font. */
 static const L_Font *osc_font_by_id(int32_t id) {
     switch (id) {
         case 1: return &l_font8x8_proportional;
         case 2: return &l_font8x8_latin1;
         case 3: return &l_font8x8_box;
+        case 4: return &l_font8x12_default;
+        case 5: return &l_font8x12_proportional;
+        case 6: return &l_font8x12_latin1;
+        case 7: return &l_font8x12_box;
         case 0:
         default: return &l_font8x8_default;
     }

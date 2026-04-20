@@ -6,9 +6,16 @@
 //   gfx_draw_text(10, 30, "café",  rgb(255, 255, 255), FONT_LATIN1);
 //   gfx_draw_text(10, 50, "┌──┐",  rgb(255, 255, 255), FONT_BOX);
 //
-// All bundled fonts are 8×8 cells. Unknown ids fall back to FONT_DEFAULT.
+// Two cell heights are available: 8×8 (compact) and 8×12 (_L, crisp 1.5×
+// line-height tier — same glyph width, doubled rows for taller text).
+// Unknown ids fall back to FONT_DEFAULT.
 
-let FONT_DEFAULT: i32 = 0;        // ASCII 32..126, fixed 8-px advance
-let FONT_PROPORTIONAL: i32 = 1;   // ASCII 32..126, per-glyph advance
-let FONT_LATIN1: i32 = 2;         // default + U+00A0..U+00FF (~96 glyphs)
-let FONT_BOX: i32 = 3;            // default + ~33 box-drawing / arrow codepoints
+let FONT_DEFAULT: i32 = 0;          // ASCII 32..126, fixed 8-px advance, 8-row cell
+let FONT_PROPORTIONAL: i32 = 1;     // ASCII 32..126, per-glyph advance, 8-row cell
+let FONT_LATIN1: i32 = 2;           // default + U+00A0..U+00FF (~96 glyphs), 8-row cell
+let FONT_BOX: i32 = 3;              // default + ~33 box-drawing / arrow codepoints, 8-row cell
+
+let FONT_DEFAULT_L: i32 = 4;        // FONT_DEFAULT with 12-row cell (row-doubled)
+let FONT_PROPORTIONAL_L: i32 = 5;   // FONT_PROPORTIONAL with 12-row cell
+let FONT_LATIN1_L: i32 = 6;         // FONT_LATIN1 with 12-row cell
+let FONT_BOX_L: i32 = 7;            // FONT_BOX with 12-row cell
