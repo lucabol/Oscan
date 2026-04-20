@@ -1106,6 +1106,15 @@ impl SemanticAnalyzer {
             "canvas_clear".into(),
             builtin(vec![("color", BcType::I32)], BcType::Unit, false),
         );
+        // @builtin category="Graphics" name="canvas_width" sig="fn! canvas_width() -> i32" desc="Current canvas width in pixels (updates on window resize)"
+        self.functions
+            .insert("canvas_width".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_height" sig="fn! canvas_height() -> i32" desc="Current canvas height in pixels (updates on window resize)"
+        self.functions
+            .insert("canvas_height".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_resized" sig="fn! canvas_resized() -> bool" desc="True once per resize event; auto-clears after each call"
+        self.functions
+            .insert("canvas_resized".into(), builtin(vec![], BcType::Bool, false));
         // @builtin category="Graphics" name="canvas_set_icon" sig="fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>" desc="Set window/taskbar icon from RGBA pixel array"
         self.functions.insert(
             "canvas_set_icon".into(),

@@ -604,7 +604,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (226 functions, 20 categories)
+## Built-in Functions (229 functions, 20 categories)
 
 ### I/O
 
@@ -890,6 +890,9 @@ fn! canvas_close()
 fn! canvas_alive() -> bool
 fn! canvas_flush()
 fn! canvas_clear(color: i32)
+fn! canvas_width() -> i32
+fn! canvas_height() -> i32
+fn! canvas_resized() -> bool
 fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>
 fn! gfx_pixel(x: i32, y: i32, color: i32)
 fn! gfx_get_pixel(x: i32, y: i32) -> i32
