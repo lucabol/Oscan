@@ -214,7 +214,7 @@ jobs:
         with:
           path: release-artifacts
 
-      - name: Generate SHA256SUMS.txt
+      - name: Generate SHA256SUMS
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path upload -Force | Out-Null
@@ -224,13 +224,13 @@ jobs:
           if (-not $files) {
             throw 'No packaged release assets were downloaded.'
           }
-          & .\scripts\write-checksums.ps1 -OutputPath .\upload\SHA256SUMS.txt @($files.FullName)
+          & .\scripts\write-checksums.ps1 -OutputPath upload/SHA256SUMS @($files.FullName)
 
       - name: Upload checksum artifact
         uses: actions/upload-artifact@v4
         with:
           name: release-checksums
-          path: upload/SHA256SUMS.txt
+          path: upload/SHA256SUMS
 
   publish:
     name: Publish GitHub Release
@@ -251,7 +251,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p upload
-          find release-assets -type f \( -name '*.zip' -o -name '*.msi' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS.txt' \) -exec cp {} upload/ \;
+          find release-assets -type f \( -name '*.zip' -o -name '*.msi' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS' \) -exec cp {} upload/ \;
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
