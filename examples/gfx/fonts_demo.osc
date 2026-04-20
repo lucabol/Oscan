@@ -1,14 +1,15 @@
-// Fonts demo — renders the same string through each bundled font.
+// Fonts demo — renders samples through each bundled font.
 //
-// Shows: FONT_DEFAULT, FONT_PROPORTIONAL, FONT_LATIN1, FONT_BOX,
-//        gfx_draw_text (returns pixel advance), gfx_text_width,
-//        gfx_draw_text_scaled.
+// Shows both tiers:
+//   FONT_DEFAULT / _PROPORTIONAL / _LATIN1 / _BOX          (8×8 cell)
+//   FONT_DEFAULT_L / _PROPORTIONAL_L / _LATIN1_L / _BOX_L  (8×12 cell, 1.5× height)
+// plus gfx_draw_text, gfx_text_width, gfx_draw_text_scaled.
 
 use "../../libs/fonts.osc";
 
 fn! main() {
-    let W: i32 = 480;
-    let H: i32 = 280;
+    let W: i32 = 560;
+    let H: i32 = 360;
     match canvas_open(W, H, "Oscan fonts demo") {
         Result::Ok(_) => {},
         Result::Err(e) => { println("canvas_open failed: {e}"); exit(1); },
@@ -21,21 +22,33 @@ fn! main() {
     while canvas_alive() {
         canvas_clear(rgb(20, 20, 24));
 
-        gfx_draw_text(10, 10,  "FONT_DEFAULT:",      dim,    FONT_DEFAULT);
+        // ── 8×8 tier ──
+        gfx_draw_text(10, 10,  "FONT_DEFAULT (8x8):",        dim,   FONT_DEFAULT);
         gfx_draw_text(10, 26,  "The quick brown fox jumps.", white, FONT_DEFAULT);
 
-        gfx_draw_text(10, 54,  "FONT_PROPORTIONAL:", dim,    FONT_DEFAULT);
-        gfx_draw_text(10, 70,  "The quick brown fox jumps.", white, FONT_PROPORTIONAL);
+        gfx_draw_text(10, 46,  "FONT_PROPORTIONAL (8x8):",   dim,   FONT_DEFAULT);
+        gfx_draw_text(10, 62,  "The quick brown fox jumps.", white, FONT_PROPORTIONAL);
 
-        gfx_draw_text(10, 98,  "FONT_LATIN1 (café, naïve, éléphant):", dim, FONT_DEFAULT);
-        gfx_draw_text(10, 114, "café — naïve — éléphant — ¡hola!",     white, FONT_LATIN1);
+        gfx_draw_text(10, 82,  "FONT_LATIN1 (8x8):",                 dim,   FONT_DEFAULT);
+        gfx_draw_text(10, 98,  "café — naïve — éléphant — ¡hola!",   white, FONT_LATIN1);
 
-        gfx_draw_text(10, 142, "FONT_BOX:", dim, FONT_DEFAULT);
-        gfx_draw_text(10, 158, "┌──────┐", white, FONT_BOX);
-        gfx_draw_text(10, 174, "│ Oscan │", white, FONT_BOX);
-        gfx_draw_text(10, 190, "└──────┘", white, FONT_BOX);
+        gfx_draw_text(10, 118, "FONT_BOX (8x8):", dim, FONT_DEFAULT);
+        gfx_draw_text(10, 134, "┌──────┐ │ Oscan │ └──────┘", white, FONT_BOX);
 
-        gfx_draw_text_scaled(10, 212, "Scaled 2x default", accent, 2, 2, FONT_DEFAULT);
+        // ── 8×12 _L tier (crisp 1.5× line-height) ──
+        gfx_draw_text(10, 160, "FONT_DEFAULT_L (8x12):",     dim,   FONT_DEFAULT);
+        gfx_draw_text(10, 176, "The quick brown fox jumps.", white, FONT_DEFAULT_L);
+
+        gfx_draw_text(10, 200, "FONT_PROPORTIONAL_L (8x12):", dim,  FONT_DEFAULT);
+        gfx_draw_text(10, 216, "The quick brown fox jumps.", white, FONT_PROPORTIONAL_L);
+
+        gfx_draw_text(10, 240, "FONT_LATIN1_L (8x12):",               dim,   FONT_DEFAULT);
+        gfx_draw_text(10, 256, "café — naïve — éléphant — ¡hola!",    white, FONT_LATIN1_L);
+
+        gfx_draw_text(10, 280, "FONT_BOX_L (8x12):", dim, FONT_DEFAULT);
+        gfx_draw_text(10, 296, "┌──────┐ │ Oscan │ └──────┘", white, FONT_BOX_L);
+
+        gfx_draw_text_scaled(10, 322, "Scaled 2x default", accent, 2, 2, FONT_DEFAULT);
 
         let sample: str = "Hello!";
         let w_def: i32 = gfx_text_width(sample, FONT_DEFAULT);
