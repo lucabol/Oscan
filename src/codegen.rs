@@ -313,6 +313,8 @@ impl CodeGenerator {
             self.line("#define OSC_HAS_IMG");
             self.line("#include \"l_svg.h\"");
             self.line("#define OSC_HAS_SVG");
+            self.line("#include \"l_tt.h\"");
+            self.line("#define OSC_HAS_TT");
             self.line("#endif");
             self.line("#else");
             self.line("#include \"l_os.h\"");
@@ -367,6 +369,7 @@ impl CodeGenerator {
                 || name == "osc_result_i32_str"
                 || name == "osc_result_i64_str"
                 || name == "osc_result_arr_i32_str"
+                || name == "osc_result_handle_str"
             {
                 continue; // Already in runtime
             }
@@ -1742,6 +1745,15 @@ impl CodeGenerator {
             // Image
             "img_load" => format!("osc_img_load(_arena, {})", arg_strs[0]),
             "svg_load" => format!("osc_svg_load(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            // TrueType
+            "tt_load" => format!("osc_tt_load(_arena, {})", arg_strs[0]),
+            "tt_free" => format!("osc_tt_free({})", arg_strs[0]),
+            "tt_ascent" => format!("osc_tt_ascent({}, {})", arg_strs[0], arg_strs[1]),
+            "tt_descent" => format!("osc_tt_descent({}, {})", arg_strs[0], arg_strs[1]),
+            "tt_line_gap" => format!("osc_tt_line_gap({}, {})", arg_strs[0], arg_strs[1]),
+            "tt_line_height" => format!("osc_tt_line_height({}, {})", arg_strs[0], arg_strs[1]),
+            "tt_text_width" => format!("osc_tt_text_width({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "tt_draw_text" => format!("osc_tt_draw_text({}, {}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5]),
             _ => {
                 // Check if this is a function pointer variable call
                 if let Some(ty) = self.lookup_type(name) {

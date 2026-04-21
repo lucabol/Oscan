@@ -40,6 +40,7 @@ CATEGORY_ORDER = [
     "Terminal",
     "Process",
     "Graphics",
+    "TrueType",
 ]
 
 # Examples to include (order matters for readability)

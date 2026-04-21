@@ -1390,6 +1390,87 @@ impl SemanticAnalyzer {
             ),
         );
 
+        // TrueType font rendering (fn!)
+        // @builtin category="TrueType" name="tt_load" sig="fn! tt_load(data: str) -> Result<handle, str>" desc="Load a TrueType/OpenType font from bytes; returns an opaque font handle"
+        self.functions.insert(
+            "tt_load".into(),
+            builtin(
+                vec![("data", BcType::Str)],
+                BcType::Result(Box::new(BcType::Handle), Box::new(BcType::Str)),
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_free" sig="fn! tt_free(font: handle)" desc="Release a font handle returned by tt_load"
+        self.functions.insert(
+            "tt_free".into(),
+            builtin(vec![("font", BcType::Handle)], BcType::Unit, false),
+        );
+        // @builtin category="TrueType" name="tt_ascent" sig="fn! tt_ascent(font: handle, pixel_height: f64) -> i32" desc="Scaled ascent (pixels above baseline) at the given pixel height"
+        self.functions.insert(
+            "tt_ascent".into(),
+            builtin(
+                vec![("font", BcType::Handle), ("pixel_height", BcType::F64)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_descent" sig="fn! tt_descent(font: handle, pixel_height: f64) -> i32" desc="Scaled descent (typically negative) at the given pixel height"
+        self.functions.insert(
+            "tt_descent".into(),
+            builtin(
+                vec![("font", BcType::Handle), ("pixel_height", BcType::F64)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_line_gap" sig="fn! tt_line_gap(font: handle, pixel_height: f64) -> i32" desc="Scaled line gap at the given pixel height"
+        self.functions.insert(
+            "tt_line_gap".into(),
+            builtin(
+                vec![("font", BcType::Handle), ("pixel_height", BcType::F64)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_line_height" sig="fn! tt_line_height(font: handle, pixel_height: f64) -> i32" desc="Recommended baseline-to-baseline distance (ascent - descent + line_gap)"
+        self.functions.insert(
+            "tt_line_height".into(),
+            builtin(
+                vec![("font", BcType::Handle), ("pixel_height", BcType::F64)],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_text_width" sig="fn! tt_text_width(font: handle, text: str, pixel_height: f64) -> i32" desc="Width in pixels of text rendered at pixel_height (includes kerning)"
+        self.functions.insert(
+            "tt_text_width".into(),
+            builtin(
+                vec![
+                    ("font", BcType::Handle),
+                    ("text", BcType::Str),
+                    ("pixel_height", BcType::F64),
+                ],
+                BcType::I32,
+                false,
+            ),
+        );
+        // @builtin category="TrueType" name="tt_draw_text" sig="fn! tt_draw_text(x: i32, y: i32, text: str, font: handle, pixel_height: f64, color: i32) -> i32" desc="Draw text onto the canvas at baseline (x, y); returns x pen after last glyph"
+        self.functions.insert(
+            "tt_draw_text".into(),
+            builtin(
+                vec![
+                    ("x", BcType::I32),
+                    ("y", BcType::I32),
+                    ("text", BcType::Str),
+                    ("font", BcType::Handle),
+                    ("pixel_height", BcType::F64),
+                    ("color", BcType::I32),
+                ],
+                BcType::I32,
+                false,
+            ),
+        );
+
         // HashMap builtins (fn! except map_has and map_len which are pure reads)
         // @builtin category="HashMap" name="map_new" sig="fn! map_new() -> map" desc="Create empty hash map"
         self.functions

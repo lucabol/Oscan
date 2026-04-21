@@ -120,6 +120,9 @@ OSC_RESULT_DECL(int32_t, osc_str, osc_result_i32_str);
 /* Result<[i32], str> used by img_load */
 OSC_RESULT_DECL(osc_array*, osc_str, osc_result_arr_i32_str);
 
+/* Result<handle, str> used by tt_load */
+OSC_RESULT_DECL(uintptr_t, osc_str, osc_result_handle_str);
+
 /* ------------------------------------------------------------------ */
 /*  Checked arithmetic — i32                                           */
 /* ------------------------------------------------------------------ */
@@ -545,6 +548,19 @@ int32_t osc_rgba(int32_t r, int32_t g, int32_t b, int32_t a);
 
 osc_result_arr_i32_str osc_img_load(osc_arena *arena, osc_str data);
 osc_result_arr_i32_str osc_svg_load(osc_arena *arena, osc_str data, int32_t width, int32_t height);
+
+/* ------------------------------------------------------------------ */
+/*  TrueType font rendering                                            */
+/* ------------------------------------------------------------------ */
+
+osc_result_handle_str osc_tt_load(osc_arena *arena, osc_str data);
+void               osc_tt_free(uintptr_t font);
+int32_t            osc_tt_ascent(uintptr_t font, double pixel_height);
+int32_t            osc_tt_descent(uintptr_t font, double pixel_height);
+int32_t            osc_tt_line_gap(uintptr_t font, double pixel_height);
+int32_t            osc_tt_line_height(uintptr_t font, double pixel_height);
+int32_t            osc_tt_text_width(uintptr_t font, osc_str text, double pixel_height);
+int32_t            osc_tt_draw_text(int32_t x, int32_t y, osc_str text, uintptr_t font, double pixel_height, int32_t color);
 
 #ifdef __cplusplus
 }

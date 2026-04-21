@@ -37,6 +37,7 @@ CATEGORY_ORDER = [
     "Terminal",
     "Process",
     "Graphics",
+    "TrueType",
 ]
 
 BEGIN_MARKER = "<!-- BEGIN BUILTIN TABLE -->"

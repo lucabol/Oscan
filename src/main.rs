@@ -41,6 +41,8 @@ const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/m
 const EMBEDDED_NANOSVG_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvg.h");
 const EMBEDDED_NANOSVGRAST_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
+const EMBEDDED_L_TT_H: &str = include_str!("../deps/laststanding/l_tt.h");
+const EMBEDDED_STB_TRUETYPE_H: &str = include_str!("../deps/laststanding/stb_truetype.h");
 
 // BearSSL public headers (for l_tls.h on Linux)
 const EMBEDDED_BEARSSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl.h");
@@ -1004,6 +1006,8 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_svg.h", EMBEDDED_L_SVG_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
+        ("l_tt.h", EMBEDDED_L_TT_H),
+        ("stb_truetype.h", EMBEDDED_STB_TRUETYPE_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");
@@ -1100,6 +1104,8 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
         ("stb_image.h", EMBEDDED_STB_IMAGE_H),
         ("l_svg.h", EMBEDDED_L_SVG_H),
         ("l_tls.h", EMBEDDED_L_TLS_H),
+        ("l_tt.h", EMBEDDED_L_TT_H),
+        ("stb_truetype.h", EMBEDDED_STB_TRUETYPE_H),
     ] {
         if let Err(e) = fs::write(temp_dir.join(name), content) {
             eprintln!("error writing embedded runtime file {name}: {e}");

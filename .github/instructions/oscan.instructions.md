@@ -604,7 +604,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (229 functions, 20 categories)
+## Built-in Functions (237 functions, 21 categories)
 
 ### I/O
 
@@ -915,6 +915,19 @@ fn! clipboard_set(text: str) -> i32
 fn! clipboard_get() -> Result<str, str>
 fn rgb(r: i32, g: i32, b: i32) -> i32
 fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32
+```
+
+### TrueType
+
+```
+fn! tt_load(data: str) -> Result<handle, str>
+fn! tt_free(font: handle)
+fn! tt_ascent(font: handle, pixel_height: f64) -> i32
+fn! tt_descent(font: handle, pixel_height: f64) -> i32
+fn! tt_line_gap(font: handle, pixel_height: f64) -> i32
+fn! tt_line_height(font: handle, pixel_height: f64) -> i32
+fn! tt_text_width(font: handle, text: str, pixel_height: f64) -> i32
+fn! tt_draw_text(x: i32, y: i32, text: str, font: handle, pixel_height: f64, color: i32) -> i32
 ```
 
 ### Image

@@ -1,0 +1,82 @@
+// TrueType Font Demo
+// Loads a TrueType font from disk and renders a pangram at several pixel sizes.
+// Usage: ttf_demo [font.ttf]
+
+fn! open_font(path: str) -> handle {
+    let mut result: handle = (0 as i64) as handle;
+    match read_file(path) {
+        Result::Ok(data) => {
+            match tt_load(data) {
+                Result::Ok(h) => { result = h; },
+                Result::Err(_) => {},
+            };
+        },
+        Result::Err(_) => {},
+    };
+    result
+}
+
+fn! main() {
+    let mut font: handle = (0 as i64) as handle;
+    let mut font_path: str = "";
+
+    if arg_count() >= 2 {
+        font_path = arg_get(1);
+        font = open_font(font_path);
+    } else {
+        let candidates: [str] = [
+            "C:\\Windows\\Fonts\\arial.ttf",
+            "C:\\Windows\\Fonts\\segoeui.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/Library/Fonts/Arial.ttf",
+        ];
+        for c in candidates {
+            let h: handle = open_font(c);
+            if (h as i64) != (0 as i64) {
+                font = h;
+                font_path = c;
+                break;
+            };
+        };
+    };
+
+    if (font as i64) == (0 as i64) {
+        println("Error: could not load a TrueType font. Pass a .ttf path.");
+        exit(1);
+    };
+    defer tt_free(font);
+
+    match canvas_open(900, 520, "ttf_demo") {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("{e}"); exit(1); },
+    };
+    defer canvas_close();
+
+    let pangram: str = "The quick brown fox jumps over the lazy dog 0123456789";
+
+    while canvas_alive() {
+        canvas_clear(rgb(16, 16, 24));
+
+        let mut y: i32 = 70;
+        let sizes: [f64] = [14.0, 20.0, 28.0, 40.0, 56.0, 80.0];
+        let colors: [i32] = [
+            rgb(255, 255, 255),
+            rgb(160, 216, 255),
+            rgb(255, 216, 128),
+            rgb(160, 255, 160),
+            rgb(255, 128, 160),
+            rgb(224, 192, 255),
+        ];
+        let n: i32 = len(sizes);
+        for i in 0..n {
+            tt_draw_text(16, y, pangram, font, sizes[i], colors[i]);
+            y += (sizes[i] * 1.25) as i32;
+            if y > canvas_height() - 20 { break; };
+        };
+
+        canvas_flush();
+        if canvas_key() == 27 { break; };
+        sleep_ms(16);
+    };
+}
+
