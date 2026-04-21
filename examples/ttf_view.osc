@@ -1,6 +1,13 @@
-// TrueType Font Demo
-// Loads a TrueType font from disk and renders a pangram at several pixel sizes.
-// Usage: ttf_demo [font.ttf]
+// ttf_view — Minimal TrueType font viewer (Oscan port of laststanding/examples/ttf_view.c).
+//
+// Loads a .ttf / .otf file and renders a pangram at several pixel sizes with
+// alpha-blended glyphs composited onto the canvas.
+//
+// Usage: ttf_view [font_path]
+//   If font_path is omitted, tries a short list of common system fonts
+//   (Arial on Windows, DejaVu Sans on Linux, Helvetica on macOS).
+//
+// Exit: press Escape or close the window.
 
 fn! open_font(path: str) -> handle {
     let mut result: handle = (0 as i64) as handle;
@@ -28,7 +35,11 @@ fn! main() {
             "C:\\Windows\\Fonts\\arial.ttf",
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
             "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
         ];
         for c in candidates {
             let h: handle = open_font(c);
@@ -41,12 +52,13 @@ fn! main() {
     };
 
     if (font as i64) == (0 as i64) {
-        println("Error: could not load a TrueType font. Pass a .ttf path.");
-        exit(1);
+        println("Usage: ttf_view <font.ttf>");
+        println("No system font found. Pass an explicit path.");
+        exit(0);
     };
     defer tt_free(font);
 
-    match canvas_open(900, 520, "ttf_demo") {
+    match canvas_open(900, 520, "ttf_view - l_tt.h") {
         Result::Ok(_) => {},
         Result::Err(e) => { println("{e}"); exit(1); },
     };
@@ -55,8 +67,14 @@ fn! main() {
     let pangram: str = "The quick brown fox jumps over the lazy dog 0123456789";
 
     while canvas_alive() {
-        canvas_clear(rgb(16, 16, 24));
+        canvas_clear(rgba(255, 16, 16, 24));
 
+        // Header: the font's path, rendered with the built-in bitmap font.
+        gfx_draw_text(16, 12, "Font:", rgb(255, 255, 0), 0);
+        gfx_draw_text(64, 12, font_path, rgb(255, 255, 255), 0);
+        gfx_line(0, 28, canvas_width(), 28, rgba(255, 48, 48, 48));
+
+        // TrueType-rendered samples at a few pixel sizes.
         let mut y: i32 = 70;
         let sizes: [f64] = [14.0, 20.0, 28.0, 40.0, 56.0, 80.0];
         let colors: [i32] = [
@@ -73,6 +91,11 @@ fn! main() {
             y += (sizes[i] * 1.25) as i32;
             if y > canvas_height() - 20 { break; };
         };
+
+        // Footer: hint.
+        gfx_draw_text(16, canvas_height() - 18,
+            "Esc to exit  -  pass any .ttf/.otf path on the command line",
+            rgb(96, 96, 96), 0);
 
         canvas_flush();
         if canvas_key() == 27 { break; };
