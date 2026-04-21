@@ -337,7 +337,10 @@ if (-not $SkipIntegration) {
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (freestanding) ──" -ForegroundColor Yellow }
     $secPass = 0; $secFail = 0
     $projectRoot = (Get-Location).Path
-    $parallelResults = Get-ChildItem "tests\positive\*.osc" | ForEach-Object -Parallel {
+    # Skip socket_hostnames on Windows: binding to a hostname triggers the
+    # Windows Firewall prompt (interactive popup) which hangs CI. Linux/WSL
+    # and ARM still exercise the hostname path.
+    $parallelResults = Get-ChildItem "tests\positive\*.osc" | Where-Object { $_.BaseName -ne 'socket_hostnames' } | ForEach-Object -Parallel {
         $name = $_.BaseName
         $root = $using:projectRoot
         $oscanExe = "$root\target\release\oscan.exe"
@@ -407,6 +410,7 @@ if (-not $SkipIntegration) {
     foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
         $name = $bcFile.BaseName
         if ($name -match '^ffi') { continue }
+        if ($name -eq 'socket_hostnames') { continue }
         $exe = "tests\build\$name.exe"
         if (-not (Test-Path $exe)) { continue }
 
@@ -429,7 +433,8 @@ if (-not $SkipIntegration) {
     Write-Phase "Windows x64 (libc)"
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (libc/stdlib) ──" -ForegroundColor Yellow }
     $libcPass = 0; $libcFail = 0
-    $libcResults = Get-ChildItem "tests\positive\*.osc" | ForEach-Object -Parallel {
+    # See comment above: skip on Windows to avoid firewall prompt.
+    $libcResults = Get-ChildItem "tests\positive\*.osc" | Where-Object { $_.BaseName -ne 'socket_hostnames' } | ForEach-Object -Parallel {
         $name = $_.BaseName
         $root = $using:projectRoot
         $oscanExe = "$root\target\release\oscan.exe"
