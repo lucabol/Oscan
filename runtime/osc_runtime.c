@@ -4928,3 +4928,232 @@ osc_result_arr_i32_str osc_svg_load(osc_arena *arena, osc_str data, int32_t widt
 }
 
 #endif /* OSC_HAS_SVG */
+
+/* ================================================================== */
+/*  TrueType font wrappers (requires l_tt.h)                           */
+/* ================================================================== */
+
+#ifdef OSC_HAS_TT
+
+/* Font handle: stores stbtt_fontinfo plus a copy of the font bytes.
+   stb_truetype reads from the original byte buffer on every glyph
+   lookup, so we own a copy for the font's lifetime. Allocated via
+   l_mmap so tt_free can release the pages cleanly. */
+typedef struct {
+    uint32_t       magic;
+    stbtt_fontinfo info;
+    unsigned char *bytes;
+    size_t         bytes_size;
+    size_t         alloc_size;
+} osc_tt_font;
+
+#define OSC_TT_MAGIC 0x4F54464Eu /* 'OTFN' */
+
+static osc_tt_font *osc_tt__resolve(uintptr_t h) {
+    if (h == 0) return 0;
+    osc_tt_font *f = (osc_tt_font *)(uintptr_t)h;
+    if (f->magic != OSC_TT_MAGIC) return 0;
+    return f;
+}
+
+osc_result_handle_str osc_tt_load(osc_arena *arena, osc_str data) {
+    (void)arena;
+    osc_result_handle_str result;
+    result.is_ok = 0;
+
+    if (!data.data || data.len <= 0) {
+        result.value.err = osc_str_from_cstr("tt_load: empty font data");
+        return result;
+    }
+
+    size_t bytes_cap = ((size_t)data.len + 4095) & ~(size_t)4095;
+    unsigned char *bytes = (unsigned char *)l_mmap(
+        0, bytes_cap,
+        L_PROT_READ | L_PROT_WRITE,
+        L_MAP_PRIVATE | L_MAP_ANONYMOUS, -1, 0);
+    if (bytes == (unsigned char *)L_MAP_FAILED) {
+        result.value.err = osc_str_from_cstr("tt_load: out of memory (font buffer)");
+        return result;
+    }
+    l_memcpy(bytes, data.data, (size_t)data.len);
+
+    size_t struct_cap = (sizeof(osc_tt_font) + 4095) & ~(size_t)4095;
+    osc_tt_font *f = (osc_tt_font *)l_mmap(
+        0, struct_cap,
+        L_PROT_READ | L_PROT_WRITE,
+        L_MAP_PRIVATE | L_MAP_ANONYMOUS, -1, 0);
+    if (f == (osc_tt_font *)L_MAP_FAILED) {
+        l_munmap(bytes, bytes_cap);
+        result.value.err = osc_str_from_cstr("tt_load: out of memory (font struct)");
+        return result;
+    }
+    f->magic      = OSC_TT_MAGIC;
+    f->bytes      = bytes;
+    f->bytes_size = bytes_cap;
+    f->alloc_size = struct_cap;
+
+    if (!l_tt_init_font(bytes, data.len, &f->info)) {
+        f->magic = 0;
+        l_munmap(bytes, bytes_cap);
+        l_munmap(f, struct_cap);
+        result.value.err = osc_str_from_cstr("tt_load: invalid font (not TrueType/OpenType)");
+        return result;
+    }
+
+    result.is_ok = 1;
+    result.value.ok = (uintptr_t)f;
+    return result;
+}
+
+void osc_tt_free(uintptr_t font) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f) return;
+    unsigned char *bytes = f->bytes;
+    size_t bytes_size    = f->bytes_size;
+    size_t alloc_size    = f->alloc_size;
+    f->magic = 0;
+    if (bytes) l_munmap(bytes, bytes_size);
+    l_munmap(f, alloc_size);
+}
+
+int32_t osc_tt_ascent(uintptr_t font, double pixel_height) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f) return 0;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int a = 0, d = 0, g = 0;
+    l_tt_vmetrics(&f->info, &a, &d, &g);
+    return (int32_t)(a * scale);
+}
+
+int32_t osc_tt_descent(uintptr_t font, double pixel_height) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f) return 0;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int a = 0, d = 0, g = 0;
+    l_tt_vmetrics(&f->info, &a, &d, &g);
+    return (int32_t)(d * scale);
+}
+
+int32_t osc_tt_line_gap(uintptr_t font, double pixel_height) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f) return 0;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int a = 0, d = 0, g = 0;
+    l_tt_vmetrics(&f->info, &a, &d, &g);
+    return (int32_t)(g * scale);
+}
+
+int32_t osc_tt_line_height(uintptr_t font, double pixel_height) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f) return 0;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int a = 0, d = 0, g = 0;
+    l_tt_vmetrics(&f->info, &a, &d, &g);
+    return (int32_t)((a - d + g) * scale);
+}
+
+/* Decode a single UTF-8 codepoint from s starting at *i.
+   Advances *i past the codepoint. On malformed UTF-8 returns the raw
+   byte and advances by 1 (so callers still make progress). */
+static int osc_tt__next_cp(const char *s, int len, int *i) {
+    unsigned char c = (unsigned char)s[*i];
+    int cp;
+    if (c < 0x80) {
+        cp = c;
+        *i += 1;
+    } else if ((c & 0xE0) == 0xC0 && *i + 1 < len) {
+        cp = ((c & 0x1F) << 6)
+           |  ((unsigned char)s[*i + 1] & 0x3F);
+        *i += 2;
+    } else if ((c & 0xF0) == 0xE0 && *i + 2 < len) {
+        cp = ((c & 0x0F) << 12)
+           | (((unsigned char)s[*i + 1] & 0x3F) << 6)
+           |  ((unsigned char)s[*i + 2] & 0x3F);
+        *i += 3;
+    } else if ((c & 0xF8) == 0xF0 && *i + 3 < len) {
+        cp = ((c & 0x07) << 18)
+           | (((unsigned char)s[*i + 1] & 0x3F) << 12)
+           | (((unsigned char)s[*i + 2] & 0x3F) << 6)
+           |  ((unsigned char)s[*i + 3] & 0x3F);
+        *i += 4;
+    } else {
+        cp = c;
+        *i += 1;
+    }
+    return cp;
+}
+
+int32_t osc_tt_text_width(uintptr_t font, osc_str text, double pixel_height) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f || !text.data || text.len <= 0) return 0;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int pen = 0, prev = 0, i = 0;
+    while (i < text.len) {
+        int cp = osc_tt__next_cp(text.data, text.len, &i);
+        if (prev) {
+            int k = l_tt_kern_advance(&f->info, prev, cp);
+            pen += (int)(k * scale);
+        }
+        int adv = 0, lsb = 0;
+        l_tt_hmetrics(&f->info, cp, &adv, &lsb);
+        pen += (int)(adv * scale);
+        prev = cp;
+    }
+    return (int32_t)pen;
+}
+
+int32_t osc_tt_draw_text(int32_t x, int32_t y, osc_str text, uintptr_t font,
+                         double pixel_height, int32_t color) {
+    osc_tt_font *f = osc_tt__resolve(font);
+    if (!f || !text.data || text.len <= 0) return x;
+    float scale = l_tt_scale_for_pixel_height(&f->info, (float)pixel_height);
+    int pen = x, prev = 0, i = 0;
+    while (i < text.len) {
+        int cp = osc_tt__next_cp(text.data, text.len, &i);
+        if (prev) {
+            int k = l_tt_kern_advance(&f->info, prev, cp);
+            pen += (int)(k * scale);
+        }
+        int gw = 0, gh = 0, gxo = 0, gyo = 0;
+        unsigned char *bm = l_tt_render_glyph(&f->info, cp, scale,
+                                              &gw, &gh, &gxo, &gyo);
+        if (bm) {
+            l_tt_blit_alpha(osc_gfx_canvas.pixels,
+                            osc_gfx_canvas.width, osc_gfx_canvas.height,
+                            osc_gfx_canvas.stride,
+                            pen + gxo, y + gyo,
+                            bm, gw, gh, (uint32_t)color);
+            l_tt_free_bitmap(bm, gw, gh);
+        }
+        int adv = 0, lsb = 0;
+        l_tt_hmetrics(&f->info, cp, &adv, &lsb);
+        pen += (int)(adv * scale);
+        prev = cp;
+    }
+    return (int32_t)pen;
+}
+
+#else /* no TrueType support */
+
+osc_result_handle_str osc_tt_load(osc_arena *arena, osc_str data) {
+    (void)arena; (void)data;
+    osc_result_handle_str result;
+    result.is_ok = 0;
+    result.value.err = osc_str_from_cstr("tt_load: not supported in this build");
+    return result;
+}
+void    osc_tt_free(uintptr_t font) { (void)font; }
+int32_t osc_tt_ascent(uintptr_t font, double ph)      { (void)font; (void)ph; return 0; }
+int32_t osc_tt_descent(uintptr_t font, double ph)     { (void)font; (void)ph; return 0; }
+int32_t osc_tt_line_gap(uintptr_t font, double ph)    { (void)font; (void)ph; return 0; }
+int32_t osc_tt_line_height(uintptr_t font, double ph) { (void)font; (void)ph; return 0; }
+int32_t osc_tt_text_width(uintptr_t font, osc_str text, double ph) {
+    (void)font; (void)text; (void)ph; return 0;
+}
+int32_t osc_tt_draw_text(int32_t x, int32_t y, osc_str text, uintptr_t font,
+                         double ph, int32_t color) {
+    (void)y; (void)text; (void)font; (void)ph; (void)color;
+    return x;
+}
+
+#endif /* OSC_HAS_TT */

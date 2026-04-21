@@ -259,7 +259,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**229 built-in functions** across 20 categories.
+**237 built-in functions** across 21 categories.
 
 ### I/O (7 functions)
 
@@ -571,6 +571,19 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! clipboard_get() -> Result<str, str>` | Get text from system clipboard (requires canvas) |
 | `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
 | `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
+
+### TrueType (8 functions)
+
+| Function | Description |
+|----------|-------------|
+| `fn! tt_load(data: str) -> Result<handle, str>` | Load a TrueType/OpenType font from bytes; returns an opaque font handle |
+| `fn! tt_free(font: handle)` | Release a font handle returned by tt_load |
+| `fn! tt_ascent(font: handle, pixel_height: f64) -> i32` | Scaled ascent (pixels above baseline) at the given pixel height |
+| `fn! tt_descent(font: handle, pixel_height: f64) -> i32` | Scaled descent (typically negative) at the given pixel height |
+| `fn! tt_line_gap(font: handle, pixel_height: f64) -> i32` | Scaled line gap at the given pixel height |
+| `fn! tt_line_height(font: handle, pixel_height: f64) -> i32` | Recommended baseline-to-baseline distance (ascent - descent + line_gap) |
+| `fn! tt_text_width(font: handle, text: str, pixel_height: f64) -> i32` | Width in pixels of text rendered at pixel_height (includes kerning) |
+| `fn! tt_draw_text(x: i32, y: i32, text: str, font: handle, pixel_height: f64, color: i32) -> i32` | Draw text onto the canvas at baseline (x, y); returns x pen after last glyph |
 
 ### Image (2 functions)
 
