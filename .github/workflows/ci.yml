@@ -285,6 +285,9 @@ jobs:
 
           foreach ($bcFile in Get-ChildItem "tests\positive\*.osc") {
             $name = $bcFile.BaseName
+            # socket_hostnames triggers a Windows Firewall popup in CI when
+            # binding to a hostname; keep Linux/ARM/WSL coverage instead.
+            if ($name -eq 'socket_hostnames') { continue }
             $expectedFile = "tests\expected\$name.expected"
             $Total++
 
