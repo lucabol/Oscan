@@ -1112,6 +1112,9 @@ impl SemanticAnalyzer {
         // @builtin category="Graphics" name="canvas_height" sig="fn! canvas_height() -> i32" desc="Current canvas height in pixels (updates on window resize)"
         self.functions
             .insert("canvas_height".into(), builtin(vec![], BcType::I32, false));
+        // @builtin category="Graphics" name="canvas_scale" sig="fn! canvas_scale() -> i32" desc="Integer DPI scale factor (1 at 96dpi, 2 at 144-192dpi, ...). Multiply hardcoded coords/sizes by this for HiDPI-aware layouts. Always 1 on Linux/fullscreen."
+        self.functions
+            .insert("canvas_scale".into(), builtin(vec![], BcType::I32, false));
         // @builtin category="Graphics" name="canvas_resized" sig="fn! canvas_resized() -> bool" desc="True once per resize event; auto-clears after each call"
         self.functions
             .insert("canvas_resized".into(), builtin(vec![], BcType::Bool, false));

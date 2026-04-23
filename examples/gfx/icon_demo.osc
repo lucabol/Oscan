@@ -26,6 +26,8 @@ fn! main() {
         Result::Err(e) => { println("canvas_open failed: {e}"); exit(1); },
     };
 
+    // canvas_set_icon takes a physical-pixel bitmap — it is DPI-independent,
+    // so no scale factor is needed for the icon itself.
     let icon: [i32] = make_icon(16);
     match canvas_set_icon(icon, 16, 16) {
         Result::Ok(_) => { println("custom icon applied"); },

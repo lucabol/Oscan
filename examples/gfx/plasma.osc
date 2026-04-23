@@ -7,9 +7,6 @@
 // To run:
 //   oscan plasma.osc --run
 
-let W: i32 = 320;
-let H: i32 = 240;
-
 // Triangular wave approximation of sine, values 0..255
 fn wave(x: i32) -> i32 {
     let phase: i32 = band(x, 255);
@@ -30,11 +27,17 @@ fn palette_color(idx: i32) -> i32 {
 }
 
 fn! main() {
-    let co: Result<str, str> = canvas_open(W, H, "Plasma");
+    let co: Result<str, str> = canvas_open(320, 240, "Plasma");
     match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
+
+    // Render loop iterates over the full canvas (canvas_width × canvas_height)
+    // so the plasma fills the whole window on HiDPI displays.
+    let s: i32 = canvas_scale();
+    let cw: i32 = canvas_width();
+    let ch: i32 = canvas_height();
 
     // Precompute palette into an array for fast lookup
     let mut pal: [i32] = [];
@@ -48,8 +51,8 @@ fn! main() {
         arena {
             if canvas_key() == 27 { break; };
 
-            for y in 0..H {
-                for x in 0..W {
+            for y in 0..ch {
+                for x in 0..cw {
                     // Combine several wave functions at different frequencies
                     let v1: i32 = wave(x + t);
                     let v2: i32 = wave(bshr(y * 3 + t * 2, 1));
@@ -60,7 +63,7 @@ fn! main() {
                 };
             };
 
-            gfx_draw_text(2, H - 10, "ESC:quit", rgb(0, 0, 0), 0);
+            gfx_draw_text_scaled(2 * s, ch - 10 * s, "ESC:quit", rgb(0, 0, 0), s, s, 0);
             canvas_flush();
             sleep_ms(16);
             t = t + 1;

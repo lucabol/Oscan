@@ -16,7 +16,11 @@ fn! main() {
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
 
-    let mut radius: i32 = 20;
+    // Scale overlay text and initial/clamped radii by canvas_scale() so the
+    // circle and HUD are sized for the physical window on HiDPI displays.
+    // Mouse coordinates are already in canvas pixel space.
+    let s: i32 = canvas_scale();
+    let mut radius: i32 = 20 * s;
     let mut total: i32 = 0;
 
     while canvas_alive() {
@@ -29,20 +33,20 @@ fn! main() {
             let wheel: i32 = canvas_wheel();
 
             if wheel != 0 {
-                radius = radius + wheel * 4;
-                if radius < 2 { radius = 2; };
-                if radius > 200 { radius = 200; };
+                radius = radius + wheel * 4 * s;
+                if radius < 2 * s { radius = 2 * s; };
+                if radius > 200 * s { radius = 200 * s; };
                 total = total + wheel;
             };
             if band(btn, 1) != 0 {
-                radius = 20;
+                radius = 20 * s;
                 total = 0;
             };
 
             canvas_clear(rgb(0, 0, 0));
             gfx_fill_circle(mx, my, radius, rgb(0, 255, 255));
-            gfx_draw_text(8, 8, "wheel total: {total}", rgb(255, 255, 0), 0);
-            gfx_draw_text(8, 20, "scroll: resize  |  click: reset  |  esc: quit", rgb(255, 255, 255), 0);
+            gfx_draw_text_scaled(8 * s, 8 * s, "wheel total: {total}", rgb(255, 255, 0), s, s, 0);
+            gfx_draw_text_scaled(8 * s, 20 * s, "scroll: resize  |  click: reset  |  esc: quit", rgb(255, 255, 255), s, s, 0);
             canvas_flush();
         };
 

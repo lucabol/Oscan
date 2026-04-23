@@ -1,11 +1,36 @@
 // Static Shapes Demo
 //
 // Port of deps/laststanding/test/gfx_demo.c
-// Draws rectangles, circles, lines, and text in various colors.
+// Draws rectangles, circles, lines, and text in various colors. Content is
+// scaled to the window so the shapes fill the canvas on HiDPI displays.
 // Press Escape to quit.
 //
 // To run:
 //   oscan gfx_demo.osc --run
+
+fn! draw_scene() {
+    let s: i32 = canvas_scale();
+    let w: i32 = canvas_width();
+    let h: i32 = canvas_height();
+    let m: i32 = if w < h { w } else { h };
+
+    canvas_clear(rgb(0, 0, 0));
+
+    // Shapes scale relative to canvas dimensions (reference 320x240 layout)
+    gfx_fill_rect(w * 50 / 320, h * 50 / 240, w * 100 / 320, h * 80 / 240, rgb(255, 0, 0));
+    gfx_circle(w * 200 / 320, h * 120 / 240, m * 60 / 240, rgb(0, 255, 0));
+    gfx_fill_circle(w * 260 / 320, h * 60 / 240, m * 30 / 240, rgb(0, 100, 255));
+
+    gfx_line(10 * s, 10 * s, w - 10 * s, h - 10 * s, rgb(255, 255, 0));
+    gfx_line(w - 10 * s, 10 * s, 10 * s, h - 10 * s, rgb(255, 0, 255));
+
+    gfx_rect(20 * s, 20 * s, w - 40 * s, h - 40 * s, rgb(255, 255, 255));
+
+    gfx_draw_text_scaled(w * 60 / 320, h * 85 / 240, "Hello!", rgb(255, 255, 255), s, s, 0);
+    gfx_draw_text_scaled(10 * s, h - 15 * s, "Press ESC to quit", rgb(128, 128, 128), s, s, 0);
+
+    canvas_flush();
+}
 
 fn! main() {
     let co: Result<str, str> = canvas_open(320, 240, "GFX Demo");
@@ -14,33 +39,12 @@ fn! main() {
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
 
-    canvas_clear(rgb(0, 0, 0));
-
-    // Filled rectangle
-    gfx_fill_rect(50, 50, 100, 80, rgb(255, 0, 0));
-
-    // Circle outline
-    gfx_circle(200, 120, 60, rgb(0, 255, 0));
-
-    // Filled circle
-    gfx_fill_circle(260, 60, 30, rgb(0, 100, 255));
-
-    // Diagonal lines
-    gfx_line(10, 10, 310, 230, rgb(255, 255, 0));
-    gfx_line(310, 10, 10, 230, rgb(255, 0, 255));
-
-    // Rectangle outline
-    gfx_rect(20, 20, 280, 200, rgb(255, 255, 255));
-
-    // Text labels
-    gfx_draw_text(60, 85, "Hello!", rgb(255, 255, 255), 0);
-    gfx_draw_text(10, 225, "Press ESC to quit", rgb(128, 128, 128), 0);
-
-    canvas_flush();
+    draw_scene();
 
     while canvas_alive() {
         arena {
             if canvas_key() == 27 { break; };
+            if canvas_resized() { draw_scene(); };
             sleep_ms(16);
         };
     };

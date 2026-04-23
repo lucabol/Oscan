@@ -498,6 +498,7 @@ void    osc_canvas_flush(void);
 void    osc_canvas_clear(int32_t color);
 int32_t osc_canvas_width(void);
 int32_t osc_canvas_height(void);
+int32_t osc_canvas_scale(void);
 uint8_t osc_canvas_resized(void);
 osc_result_str_str osc_canvas_set_icon(osc_array *pixels, int32_t w, int32_t h);
 
