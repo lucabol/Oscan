@@ -1,6 +1,6 @@
 # Oscan Language Guide
 
-A concise guide to writing correct Oscan programs. For the full formal specification, see [Oscan-spec.md](spec/Oscan-spec.md).
+A concise guide to writing correct Oscan programs. For the full formal specification, see [oscan-spec.md](spec/oscan-spec.md).
 
 **Interested in safety?** See [Safety Guide](safety.md) to learn how Oscan prevents 11 of 11 major bug categories that plague C.
 
@@ -119,7 +119,7 @@ fn! main() {
 
 ### Type Casts
 
-Only 6 explicit casts are allowed, using the `as` keyword:
+Only 8 explicit casts are allowed, using the `as` keyword:
 
 ```
 let x: i32 = 42;
