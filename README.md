@@ -1,23 +1,43 @@
 # Oscan
 
+[![CI](https://github.com/lucabol/Oscan/actions/workflows/ci.yml/badge.svg)](https://github.com/lucabol/Oscan/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lucabol/Oscan?include_prereleases&sort=semver)](https://github.com/lucabol/Oscan/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20ARM64%20%7C%20RISC--V%20%7C%20WASI-blue)
+
 **A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile to C99 and run anywhere. Oscan is designed so that LLMs *understand what they are writing* — a small, explicit grammar with readable C output you can inspect or embed directly.
+
+## Contents
+
+- [Language Highlights](#language-highlights)
+- [For AI Coding Agents](#for-ai-coding-agents)
+- [A Quick Look](#a-quick-look)
+- [Installation](#installation)
+- [Getting Started](#getting-started)
+- [Examples](#examples)
+- [Built-in Functions](#built-in-functions)
+- [Learn More](#learn-more)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [Project Structure](#project-structure)
+- [License](#license)
 
 ## Language Highlights
 
-- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls on x86_64, ARM64, and RISC-V. Also targets WebAssembly via WASI. (A `--libc` mode is available when you want it.)
-- **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [10 of 12 major bug categories](docs/safety.md) eliminated.
+- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls on x86_64, ARM64, and RISC-V. Also targets WebAssembly (via WASI, which uses libc). (A `--libc` mode is available for hosted builds when you want it.)
+- **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [11 of 11 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
-- **173 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included. See the [full table](#built-in-functions) below.
+- **238 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included. See the [full reference](docs/builtins.md).
 - **Purity visible in signatures.** `fn` for pure functions, `fn!` for side effects — the type system tracks who can do I/O.
 - **Errors as values.** `Result<T, E>` with `try` propagation. No exceptions, no hidden control flow.
 - **Guarded C output.** Generated C systematically avoids undefined behavior with bounds checks and overflow guards.
 - **One allocation model.** Arena-based memory — no manual alloc/free, no GC, deterministic cleanup.
 - **Immutable by default.** `let` is immutable; `let mut` opts in to mutation. Anti-shadowing enforced.
-- **26 reserved words.** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
+- **[26 reserved words.](docs/spec/oscan-spec.md#11-reserved-words-26-total)** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
 - **Order-independent definitions.** Use functions, types, and constants before they are declared.
 - **Namespaced imports.** `use "math.osc" as math` — access imported symbols via `math.add(...)` to avoid name collisions in larger programs.
-- **162 tests, 25 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
+- **162 tests, 37 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
 
 ## For AI Coding Agents
 
@@ -31,7 +51,7 @@ This file is **auto-generated** from the compiler source and example programs �
 
 ## A Quick Look
 
-```oscan
+```rust
 fn fib(n: i32) -> i32 {
     if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
 }
@@ -84,11 +104,17 @@ set -eu
 ASSET=$(curl -fsSL https://api.github.com/repos/lucabol/Oscan/releases/latest \
   | grep -o '"browser_download_url": *"[^"]*linux-x86_64-full.tar.xz"' \
   | head -1 | cut -d'"' -f4)
-curl -fsSL -L "$ASSET" -o /tmp/oscan.tar.xz
-tar -xJf /tmp/oscan.tar.xz -C /tmp
-/tmp/oscan-*/install.sh
-rm -rf /tmp/oscan.tar.xz /tmp/oscan-*
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+curl -fsSL -L "$ASSET" -o "$TMPDIR/oscan.tar.xz"
+tar -xJf "$TMPDIR/oscan.tar.xz" -C "$TMPDIR"
+"$TMPDIR"/oscan-*/install.sh
 ```
+
+> **SHA-256 verification:** the one-liner above does not verify the asset
+> checksum. For stricter installs, also download `SHA256SUMS` from the same
+> release and run `sha256sum -c SHA256SUMS` inside `$TMPDIR` before invoking
+> `install.sh`.
 
 *Manual install:*
 
@@ -99,12 +125,14 @@ rm -rf /tmp/oscan.tar.xz /tmp/oscan-*
 
 The Linux release includes a bundled C toolchain for the tested distribution(s).
 
-**macOS:**
+**macOS (Intel x86_64 or Apple Silicon arm64):**
 
-1. Download the macOS release archive
+1. Download the macOS release archive that matches your CPU (`x86_64` for Intel, `arm64` for Apple Silicon)
 2. Extract: `tar xf oscan-*.tar.gz`
 3. Copy `oscan` to `/usr/local/bin/` or another directory in your PATH
 4. Verify: `oscan --help`
+
+For stricter installs, also download `SHA256SUMS` from the same release and verify with `shasum -a 256 -c SHA256SUMS` before copying the binary.
 
 **macOS requires Xcode Command Line Tools** (or an equivalent C compiler). Install it with:
 
@@ -128,7 +156,8 @@ cargo build --release
 
 The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime.
 
-### Why Bundles Include `toolchain/` on Windows and Linux
+<details>
+<summary><strong>Why bundles include <code>toolchain/</code> on Windows and Linux</strong></summary>
 
 On Windows and Linux, the bundled release archives include a `toolchain/` directory that sits alongside the `oscan` binary. This directory contains a pre-configured C compiler and related tools so you don't have to install a separate system toolchain.
 
@@ -153,6 +182,8 @@ oscan-vX.Y.Z-windows-x86_64-full/
 
 The `oscan` compiler discovers this bundled `toolchain/` automatically, so your first Oscan programs will compile without any additional setup.
 
+</details>
+
 ---
 
 ## Getting Started
@@ -161,7 +192,7 @@ The `oscan` compiler discovers this bundled `toolchain/` automatically, so your 
 
 Create `hello.osc`:
 
-```oscan
+```rust
 fn! main() {
     println("Hello, Oscan!");
 }
@@ -259,357 +290,16 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**238 built-in functions** across 21 categories.
+**238 built-in functions** across 21 categories: I/O, String, Conversion, Character, Math, Bitwise, File I/O, Filesystem, Path, Socket, HashMap, Array, Date/Time, System, Environment, Terminal, Process, Graphics, TrueType, Image, TLS.
 
-### I/O (7 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! print(s: str)` | Print string to stdout |
-| `fn! println(s: str)` | Print string with newline |
-| `fn! print_i32(n: i32)` | Print i32 to stdout |
-| `fn! print_i64(n: i64)` | Print i64 to stdout |
-| `fn! print_f64(n: f64)` | Print f64 to stdout |
-| `fn! print_bool(b: bool)` | Print bool to stdout |
-| `fn! read_line() -> Result<str, str>` | Read a line from stdin |
-
-### String (19 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn str_len(s: str) -> i32` | Length of string in bytes |
-| `fn str_eq(a: str, b: str) -> bool` | String equality check |
-| `fn! str_concat(a: str, b: str) -> str` | Concatenate two strings |
-| `fn! str_to_cstr(s: str) -> str` | Convert to null-terminated C string |
-| `fn str_find(haystack: str, needle: str) -> i32` | Find substring index or -1 |
-| `fn! str_from_i32(n: i32) -> str` | Convert i32 to string |
-| `fn! str_slice(s: str, start: i32, end: i32) -> str` | Extract substring by index range |
-| `fn str_contains(s: str, sub: str) -> bool` | Check if string contains substring |
-| `fn str_starts_with(s: str, prefix: str) -> bool` | Check if string starts with prefix |
-| `fn str_ends_with(s: str, suffix: str) -> bool` | Check if string ends with suffix |
-| `fn! str_trim(s: str) -> str` | Remove leading and trailing whitespace |
-| `fn! str_split(s: str, delim: str) -> [str]` | Split string by delimiter |
-| `fn! str_to_upper(s: str) -> str` | Convert string to uppercase |
-| `fn! str_to_lower(s: str) -> str` | Convert string to lowercase |
-| `fn! str_replace(s: str, old: str, new_s: str) -> str` | Replace all occurrences of substring |
-| `fn str_compare(a: str, b: str) -> i32` | Lexicographic comparison (-1, 0, 1) |
-| `fn! str_from_chars(arr: [i32]) -> str` | Build string from char code array |
-| `fn! str_to_chars(s: str) -> [i32]` | Convert string to char code array |
-| `fn! str_join(arr: [str], sep: str) -> str` | Join string array with separator |
-
-### Conversion (8 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! i32_to_str(n: i32) -> str` | Convert i32 to string |
-| `fn parse_i32(s: str) -> Result<i32, str>` | Parse string to i32 |
-| `fn parse_i64(s: str) -> Result<i64, str>` | Parse string to i64 |
-| `fn! str_from_i64(n: i64) -> str` | Convert i64 to string |
-| `fn! str_from_f64(n: f64) -> str` | Convert f64 to string |
-| `fn str_from_bool(b: bool) -> str` | Convert bool to string |
-| `fn! str_from_i32_hex(n: i32) -> str` | Convert i32 to hex string |
-| `fn! str_from_i64_hex(n: i64) -> str` | Convert i64 to hex string |
-
-### Character (10 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn char_is_alpha(c: i32) -> bool` | Check if character is alphabetic |
-| `fn char_is_digit(c: i32) -> bool` | Check if character is a digit |
-| `fn char_is_alnum(c: i32) -> bool` | Check if character is alphanumeric |
-| `fn char_is_space(c: i32) -> bool` | Check if character is whitespace |
-| `fn char_is_upper(c: i32) -> bool` | Check if character is uppercase |
-| `fn char_is_lower(c: i32) -> bool` | Check if character is lowercase |
-| `fn char_is_print(c: i32) -> bool` | Check if character is printable |
-| `fn char_is_xdigit(c: i32) -> bool` | Check if character is hex digit |
-| `fn char_to_upper(c: i32) -> i32` | Convert character to uppercase |
-| `fn char_to_lower(c: i32) -> i32` | Convert character to lowercase |
-
-### Math (28 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn abs_i32(n: i32) -> i32` | Absolute value of i32 |
-| `fn abs_f64(n: f64) -> f64` | Absolute value of f64 |
-| `fn mod_i32(a: i32, b: i32) -> i32` | Integer modulus |
-| `fn math_sin(x: f64) -> f64` | Sine |
-| `fn math_cos(x: f64) -> f64` | Cosine |
-| `fn math_sqrt(x: f64) -> f64` | Square root |
-| `fn math_pow(base: f64, exp: f64) -> f64` | Power |
-| `fn math_exp(x: f64) -> f64` | Exponential (e^x) |
-| `fn math_log(x: f64) -> f64` | Natural logarithm |
-| `fn math_atan2(y: f64, x: f64) -> f64` | Two-argument arctangent |
-| `fn math_floor(x: f64) -> f64` | Floor |
-| `fn math_ceil(x: f64) -> f64` | Ceiling |
-| `fn math_fmod(x: f64, y: f64) -> f64` | Floating-point modulus |
-| `fn math_abs(x: f64) -> f64` | Absolute value of f64 |
-| `fn math_pi() -> f64` | Constant pi |
-| `fn math_e() -> f64` | Constant e |
-| `fn math_ln2() -> f64` | Constant ln(2) |
-| `fn math_sqrt2() -> f64` | Constant sqrt(2) |
-| `fn abs_i64(n: i64) -> i64` | Absolute value of i64 |
-| `fn min_i32(a: i32, b: i32) -> i32` | Minimum of two i32 |
-| `fn max_i32(a: i32, b: i32) -> i32` | Maximum of two i32 |
-| `fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32` | Clamp i32 to range |
-| `fn min_i64(a: i64, b: i64) -> i64` | Minimum of two i64 |
-| `fn max_i64(a: i64, b: i64) -> i64` | Maximum of two i64 |
-| `fn clamp_i64(v: i64, lo: i64, hi: i64) -> i64` | Clamp i64 to range |
-| `fn min_f64(a: f64, b: f64) -> f64` | Minimum of two f64 |
-| `fn max_f64(a: f64, b: f64) -> f64` | Maximum of two f64 |
-| `fn clamp_f64(v: f64, lo: f64, hi: f64) -> f64` | Clamp f64 to range |
-
-### Bitwise (6 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn band(a: i32, b: i32) -> i32` | Bitwise AND |
-| `fn bor(a: i32, b: i32) -> i32` | Bitwise OR |
-| `fn bxor(a: i32, b: i32) -> i32` | Bitwise XOR |
-| `fn bshl(a: i32, n: i32) -> i32` | Bitwise shift left |
-| `fn bshr(a: i32, n: i32) -> i32` | Bitwise shift right |
-| `fn bnot(a: i32) -> i32` | Bitwise NOT |
-
-### File I/O (15 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! file_open_read(path: str) -> Result<i32, str>` | Open file for reading, returns fd |
-| `fn! file_open_write(path: str) -> Result<i32, str>` | Open file for writing, returns fd |
-| `fn! read_byte(fd: i32) -> i32` | Read one byte from fd |
-| `fn! write_byte(fd: i32, b: i32)` | Write one byte to fd |
-| `fn! write_str(fd: i32, s: str)` | Write string to fd |
-| `fn! file_close(fd: i32)` | Close file descriptor |
-| `fn! file_delete(path: str) -> Result<str, str>` | Delete a file |
-| `fn! file_rename(old: str, new_path: str) -> Result<str, str>` | Rename a file |
-| `fn! file_exists(path: str) -> bool` | Check if file exists |
-| `fn! file_open_append(path: str) -> Result<i32, str>` | Open file for appending, returns fd |
-| `fn! file_size(path: str) -> i64` | Get file size in bytes |
-| `fn! fd_dup(fd: i32) -> i32` | Duplicate file descriptor |
-| `fn! fd_dup2(oldfd: i32, newfd: i32) -> i32` | Redirect file descriptor |
-| `fn! read_file(path: str) -> Result<str, str>` | Read entire file as string |
-| `fn! write_file(path: str, data: str) -> Result<str, str>` | Write string to file |
-
-### Filesystem (5 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! dir_create(path: str) -> Result<str, str>` | Create a directory |
-| `fn! dir_remove(path: str) -> Result<str, str>` | Remove a directory |
-| `fn! dir_current() -> str` | Get current working directory |
-| `fn! dir_change(path: str) -> Result<str, str>` | Change working directory |
-| `fn! dir_list(path: str) -> [str]` | List directory contents |
-
-### Path (7 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! path_join(dir: str, file: str) -> str` | Join directory and filename |
-| `fn path_ext(path: str) -> str` | Get file extension |
-| `fn! path_exists(path: str) -> bool` | Check if path exists |
-| `fn! path_is_dir(path: str) -> bool` | Check if path is a directory |
-| `fn! path_find_exec(name: str) -> Result<str, str>` | Find executable in PATH |
-| `fn path_basename(path: str) -> str` | Get filename from path |
-| `fn! path_dirname(path: str) -> str` | Get directory from path |
-
-### Socket (12 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! socket_tcp() -> Result<i32, str>` | Create TCP socket |
-| `fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>` | Connect to address and port |
-| `fn! socket_bind(sock: i32, addr: str, port: i32) -> Result<str, str>` | Bind socket to address and port (use \ |
-| `fn! socket_listen(sock: i32, backlog: i32) -> Result<str, str>` | Listen for connections |
-| `fn! socket_accept(sock: i32) -> Result<i32, str>` | Accept incoming connection |
-| `fn! socket_send(sock: i32, data: str) -> Result<i32, str>` | Send data on socket |
-| `fn! socket_recv(sock: i32, max_len: i32) -> str` | Receive data from socket |
-| `fn! socket_close(sock: i32)` | Close socket |
-| `fn! socket_udp() -> Result<i32, str>` | Create UDP socket |
-| `fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32` | Send UDP data to address |
-| `fn! socket_recvfrom(sock: i32, max_len: i32) -> str` | Receive UDP data |
-| `fn! socket_unix_connect(path: str) -> Result<i32, str>` | Connect to Unix domain socket |
-
-### HashMap (36 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! map_new() -> map` | Create empty hash map |
-| `fn! map_set(m: map, key: str, value: str)` | Set key-value pair |
-| `fn! map_get(m: map, key: str) -> str` | Get value by key |
-| `fn map_has(m: map, key: str) -> bool` | Check if key exists |
-| `fn! map_delete(m: map, key: str)` | Delete key from map |
-| `fn map_len(m: map) -> i32` | Number of entries in map |
-| `fn! map_str_i32_new() -> map_str_i32` | Create empty str→i32 map |
-| `fn! map_str_i32_set(m: map_str_i32, key: str, value: i32)` | Set key-value pair |
-| `fn! map_str_i32_get(m: map_str_i32, key: str) -> i32` | Get value by key (0 if missing) |
-| `fn map_str_i32_has(m: map_str_i32, key: str) -> bool` | Check if key exists |
-| `fn! map_str_i32_delete(m: map_str_i32, key: str)` | Delete key from map |
-| `fn map_str_i32_len(m: map_str_i32) -> i32` | Number of entries |
-| `fn! map_str_i64_new() -> map_str_i64` | Create empty str→i64 map |
-| `fn! map_str_i64_set(m: map_str_i64, key: str, value: i64)` | Set key-value pair |
-| `fn! map_str_i64_get(m: map_str_i64, key: str) -> i64` | Get value by key (0 if missing) |
-| `fn map_str_i64_has(m: map_str_i64, key: str) -> bool` | Check if key exists |
-| `fn! map_str_i64_delete(m: map_str_i64, key: str)` | Delete key from map |
-| `fn map_str_i64_len(m: map_str_i64) -> i32` | Number of entries |
-| `fn! map_str_f64_new() -> map_str_f64` | Create empty str→f64 map |
-| `fn! map_str_f64_set(m: map_str_f64, key: str, value: f64)` | Set key-value pair |
-| `fn! map_str_f64_get(m: map_str_f64, key: str) -> f64` | Get value by key (0.0 if missing) |
-| `fn map_str_f64_has(m: map_str_f64, key: str) -> bool` | Check if key exists |
-| `fn! map_str_f64_delete(m: map_str_f64, key: str)` | Delete key from map |
-| `fn map_str_f64_len(m: map_str_f64) -> i32` | Number of entries |
-| `fn! map_i32_str_new() -> map_i32_str` | Create empty i32→str map |
-| `fn! map_i32_str_set(m: map_i32_str, key: i32, value: str)` | Set key-value pair |
-| `fn! map_i32_str_get(m: map_i32_str, key: i32) -> str` | Get value by key (empty string if missing) |
-| `fn! map_i32_str_has(m: map_i32_str, key: i32) -> bool` | Check if key exists |
-| `fn! map_i32_str_delete(m: map_i32_str, key: i32)` | Delete key from map |
-| `fn map_i32_str_len(m: map_i32_str) -> i32` | Number of entries |
-| `fn! map_i32_i32_new() -> map_i32_i32` | Create empty i32→i32 map |
-| `fn! map_i32_i32_set(m: map_i32_i32, key: i32, value: i32)` | Set key-value pair |
-| `fn! map_i32_i32_get(m: map_i32_i32, key: i32) -> i32` | Get value by key (0 if missing) |
-| `fn! map_i32_i32_has(m: map_i32_i32, key: i32) -> bool` | Check if key exists |
-| `fn! map_i32_i32_delete(m: map_i32_i32, key: i32)` | Delete key from map |
-| `fn map_i32_i32_len(m: map_i32_i32) -> i32` | Number of entries |
-
-### Array (4 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! sort_i32(arr: [i32])` | Sort i32 array in place |
-| `fn! sort_i64(arr: [i64])` | Sort i64 array in place |
-| `fn! sort_str(arr: [str])` | Sort string array in place |
-| `fn! sort_f64(arr: [f64])` | Sort f64 array in place |
-
-### Date/Time (7 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! time_format(timestamp: i64, fmt: str) -> str` | Format timestamp as string |
-| `fn! time_utc_year(timestamp: i64) -> i32` | Get UTC year from timestamp |
-| `fn! time_utc_month(timestamp: i64) -> i32` | Get UTC month from timestamp |
-| `fn! time_utc_day(timestamp: i64) -> i32` | Get UTC day from timestamp |
-| `fn! time_utc_hour(timestamp: i64) -> i32` | Get UTC hour from timestamp |
-| `fn! time_utc_min(timestamp: i64) -> i32` | Get UTC minute from timestamp |
-| `fn! time_utc_sec(timestamp: i64) -> i32` | Get UTC second from timestamp |
-
-### System (10 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! arg_count() -> i32` | Number of command-line arguments |
-| `fn! arg_get(i: i32) -> str` | Get command-line argument by index |
-| `fn! rand_seed(seed: i32)` | Seed the random number generator |
-| `fn! rand_i32() -> i32` | Generate random i32 |
-| `fn! time_now() -> i64` | Current time as Unix timestamp |
-| `fn! sleep_ms(ms: i32)` | Sleep for milliseconds |
-| `fn! exit(code: i32)` | Exit with status code |
-| `fn glob_match(pattern: str, text: str) -> bool` | Match text against glob pattern |
-| `fn! sha256(data: str) -> str` | Compute SHA-256 hash |
-| `fn is_tty() -> bool` | Check if stdout is a terminal |
-
-### Environment (8 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! env_get(name: str) -> Result<str, str>` | Get environment variable |
-| `fn! errno_get() -> i32` | Get last error code |
-| `fn! errno_str(code: i32) -> str` | Convert error code to message |
-| `fn! env_count() -> i32` | Number of environment variables |
-| `fn! env_key(i: i32) -> str` | Get env variable name by index |
-| `fn! env_value(i: i32) -> str` | Get env variable value by index |
-| `fn! env_set(name: str, value: str) -> Result<str, str>` | Set environment variable |
-| `fn! env_delete(name: str) -> Result<str, str>` | Delete environment variable |
-
-### Terminal (5 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! term_width() -> i32` | Get terminal width in columns |
-| `fn! term_height() -> i32` | Get terminal height in rows |
-| `fn! term_raw() -> Result<str, str>` | Enter raw terminal mode |
-| `fn! term_restore() -> Result<str, str>` | Restore normal terminal mode |
-| `fn! read_nonblock() -> i32` | Non-blocking read from stdin |
-
-### Process (4 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! proc_run(cmd: str, args: [str]) -> i32` | Run external process |
-| `fn! proc_spawn(cmd: str, args: [str]) -> i32` | Spawn process, returns PID |
-| `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
-| `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
-
-### Graphics (31 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! canvas_open(width: i32, height: i32, title: str) -> Result<str, str>` | Open graphics canvas |
-| `fn! canvas_close()` | Close graphics canvas |
-| `fn! canvas_alive() -> bool` | Check if canvas is still open |
-| `fn! canvas_flush()` | Flush canvas to screen |
-| `fn! canvas_clear(color: i32)` | Clear canvas with color |
-| `fn! canvas_width() -> i32` | Current canvas width in pixels (updates on window resize) |
-| `fn! canvas_height() -> i32` | Current canvas height in pixels (updates on window resize) |
-| `fn! canvas_scale() -> i32` | Integer DPI scale factor (1 at 96dpi, 2 at 144-192dpi, ...). Multiply hardcoded coords/sizes by this for HiDPI-aware layouts. Always 1 on Linux/fullscreen. |
-| `fn! canvas_resized() -> bool` | True once per resize event; auto-clears after each call |
-| `fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>` | Set window/taskbar icon from RGBA pixel array |
-| `fn! gfx_pixel(x: i32, y: i32, color: i32)` | Draw a pixel |
-| `fn! gfx_get_pixel(x: i32, y: i32) -> i32` | Get pixel color at position |
-| `fn! gfx_line(x0: i32, y0: i32, x1: i32, y1: i32, color: i32)` | Draw a line |
-| `fn! gfx_rect(x: i32, y: i32, w: i32, h: i32, color: i32)` | Draw rectangle outline |
-| `fn! gfx_fill_rect(x: i32, y: i32, w: i32, h: i32, color: i32)` | Draw filled rectangle |
-| `fn! gfx_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw circle outline |
-| `fn! gfx_fill_circle(cx: i32, cy: i32, r: i32, color: i32)` | Draw filled circle |
-| `fn! gfx_draw_text(x: i32, y: i32, text: str, color: i32, font: i32) -> i32` | Draw text on canvas using the given font id (0=default ASCII, 1=proportional, 2=latin1, 3=box-drawing); returns pixel advance |
-| `fn! gfx_draw_text_scaled(x: i32, y: i32, text: str, color: i32, sx: i32, sy: i32, font: i32) -> i32` | Draw scaled text on canvas using the given font id; returns pixel advance |
-| `fn gfx_text_width(text: str, font: i32) -> i32` | Measure text pixel width for the given font id without drawing |
-| `fn! gfx_blit(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Blit pixel buffer to canvas |
-| `fn! gfx_blit_alpha(dx: i32, dy: i32, w: i32, h: i32, pixels: [i32])` | Alpha-blended blit to canvas |
-| `fn! canvas_key() -> i32` | Get last key press |
-| `fn! canvas_mouse_x() -> i32` | Get mouse X position |
-| `fn! canvas_mouse_y() -> i32` | Get mouse Y position |
-| `fn! canvas_mouse_btn() -> i32` | Get mouse button state |
-| `fn! canvas_wheel() -> i32` | Get and clear accumulated mouse wheel delta (positive=up, negative=down, in clicks) |
-| `fn! clipboard_set(text: str) -> i32` | Copy text to system clipboard (requires canvas) |
-| `fn! clipboard_get() -> Result<str, str>` | Get text from system clipboard (requires canvas) |
-| `fn rgb(r: i32, g: i32, b: i32) -> i32` | Create RGB color value |
-| `fn rgba(r: i32, g: i32, b: i32, a: i32) -> i32` | Create RGBA color value |
-
-### TrueType (8 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! tt_load(data: str) -> Result<handle, str>` | Load a TrueType/OpenType font from bytes; returns an opaque font handle |
-| `fn! tt_free(font: handle)` | Release a font handle returned by tt_load |
-| `fn! tt_ascent(font: handle, pixel_height: f64) -> i32` | Scaled ascent (pixels above baseline) at the given pixel height |
-| `fn! tt_descent(font: handle, pixel_height: f64) -> i32` | Scaled descent (typically negative) at the given pixel height |
-| `fn! tt_line_gap(font: handle, pixel_height: f64) -> i32` | Scaled line gap at the given pixel height |
-| `fn! tt_line_height(font: handle, pixel_height: f64) -> i32` | Recommended baseline-to-baseline distance (ascent - descent + line_gap) |
-| `fn! tt_text_width(font: handle, text: str, pixel_height: f64) -> i32` | Width in pixels of text rendered at pixel_height (includes kerning) |
-| `fn! tt_draw_text(x: i32, y: i32, text: str, font: handle, pixel_height: f64, color: i32) -> i32` | Draw text onto the canvas at baseline (x, y); returns x pen after last glyph |
-
-### Image (2 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! img_load(data: str) -> Result<[i32], str>` | Decode PNG/JPEG/BMP/GIF image from memory |
-| `fn! svg_load(data: str, width: i32, height: i32) -> Result<[i32], str>` | Rasterize SVG data to pixel array (ARGB) |
-
-### TLS (6 functions)
-
-| Function | Description |
-|----------|-------------|
-| `fn! tls_connect(host: str, port: i32) -> Result<i32, str>` | Connect to host over TLS |
-| `fn! tls_send(handle: i32, data: str) -> Result<i32, str>` | Send data over TLS |
-| `fn! tls_recv(handle: i32, max_len: i32) -> str` | Receive data over TLS |
-| `fn! tls_recv_byte(handle: i32) -> i32` | Receive single byte over TLS (-1 on close) |
-| `fn! tls_close(handle: i32)` | Close TLS connection |
-| `fn! tls_cleanup()` | Clean up TLS subsystem |
+See the [full built-in function reference](docs/builtins.md) for signatures and descriptions.
 
 <!-- END BUILTIN TABLE -->
 
 ## Learn More
 
 - **[Language Guide](docs/guide.md)** — Concise walkthrough of syntax, types, and patterns
-- **[Safety Guide](docs/safety.md)** — How Oscan prevents 10 of 12 major bug categories
+- **[Safety Guide](docs/safety.md)** — How Oscan prevents 11 of 11 major bug categories
 - **[Language Specification](docs/spec/oscan-spec.md)** — Full formal semantics, grammar, and standard library reference
 - **[Runtime Primitives](docs/spec/oscan-spec.md#appendix-a-available-runtime-primitives-future-builtins)** — Inventory of available freestanding OS primitives (Appendix A)
 
@@ -639,41 +329,7 @@ Oscan is a research project. The codebase is intentionally small and focused —
 
 For architectural decisions and design rationale, see [.squad/decisions.md](.squad/decisions.md).
 
-## Release Packaging
-
-Release builds are handled by GitHub Actions workflows. Two manual workflows must be run **once** (and again whenever their upstream dependencies change) before creating a release:
-
-### Mirror musl toolchain (one-time setup)
-
-The Linux release bundle ships a musl cross-compiler so users can compile freestanding programs without installing gcc. The toolchain comes from [musl.cc](https://musl.cc/) but that site blocks GitHub Actions, so we self-host it as a GitHub release asset.
-
-**Run once from your local machine** (musl.cc blocks GitHub Actions, so the workflow won't work):
-
-```bash
-curl -fSL -o x86_64-linux-musl-cross.tgz https://musl.cc/x86_64-linux-musl-cross.tgz
-gh release create toolchains --title "Toolchains" --notes "Pre-downloaded musl cross-compilation toolchains" x86_64-linux-musl-cross.tgz
-```
-
-Re-run if the musl.cc toolchain is updated.
-
-### Build BearSSL (when BearSSL submodule changes)
-
-TLS support on Linux uses [BearSSL](https://www.bearssl.org/), compiled as a static library. Rather than rebuilding all 293 source files on every release, the library is pre-built and committed.
-
-**Run** from Actions → "Build BearSSL" → Run workflow. This compiles BearSSL with system gcc (freestanding flags) and commits `packaging/prebuilt/linux-x86_64/libbearssl.a`.
-
-Re-run whenever `deps/laststanding/bearssl/` is updated.
-
-### Creating a release
-
-After both prerequisites are in place, tag a version and push:
-
-```bash
-git tag v0.0.12
-git push origin v0.0.12
-```
-
-The Release workflow automatically builds oscan for Windows and Linux, assembles bundles with the toolchain and libbearssl.a, runs smoke tests, and publishes to GitHub Releases.
+Release packaging (maintainer-only: musl mirroring, BearSSL builds, tagging) lives in [docs/releasing.md](docs/releasing.md).
 
 ## Project Structure
 
@@ -681,8 +337,9 @@ The Release workflow automatically builds oscan for Windows and Linux, assembles
 src/            Compiler (Rust): lexer, parser, typechecker, C codegen
 runtime/        C runtime: arena, standard library, OS primitives
 tests/          Positive and negative integration tests
-examples/       18 non-graphics programs + 7 graphics programs
-docs/           Language guide and full specification
+examples/       27 CLI/network programs
+examples/gfx/   10 graphics & game demos
+docs/           Language guide, full specification, built-in reference
 deps/           laststanding (freestanding OS library)
 ```
 
