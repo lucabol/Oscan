@@ -1,6 +1,6 @@
 # Why Oscan Is Safe
 
-Oscan prevents **10 of the 12 major categories of bugs** that plague C programs — by design, not by convention. Every prevention mechanism is built into the language itself and enforced at compile time or runtime. A pure Oscan program (no `extern` blocks) **cannot produce any memory corruption bug whatsoever**.
+Oscan prevents **11 of the 11 major categories of bugs** that plague C programs — by design, not by convention. Every prevention mechanism is built into the language itself and enforced at compile time or runtime. A pure Oscan program (no `extern` blocks) **cannot produce any memory corruption bug whatsoever**.
 
 ---
 
@@ -414,7 +414,7 @@ extern {
 
 ## Summary
 
-**For a pure Oscan program (no `extern`), memory corruption is impossible.** The language eliminates 11 of the 12 major bug categories that plague C:
+**For a pure Oscan program (no `extern`), memory corruption is impossible.** The language eliminates all 11 major bug categories that plague C:
 
 - ✅ Buffer overflow
 - ✅ Use-after-free

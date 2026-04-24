@@ -25,7 +25,7 @@
 ## Language Highlights
 
 - **Runs without a C library.** Compiles to freestanding C99 via direct syscalls on x86_64, ARM64, and RISC-V. Also targets WebAssembly (via WASI, which uses libc). (A `--libc` mode is available for hosted builds when you want it.)
-- **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [10 of 12 major bug categories](docs/safety.md) eliminated.
+- **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [11 of 11 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
 - **238 standard functions.** String interpolation, hash maps, math, file I/O, SHA-256, sorting, graphics, networking, and more — batteries included. See the [full reference](docs/builtins.md).
@@ -299,7 +299,7 @@ See the [full built-in function reference](docs/builtins.md) for signatures and 
 ## Learn More
 
 - **[Language Guide](docs/guide.md)** — Concise walkthrough of syntax, types, and patterns
-- **[Safety Guide](docs/safety.md)** — How Oscan prevents 10 of 12 major bug categories
+- **[Safety Guide](docs/safety.md)** — How Oscan prevents 11 of 11 major bug categories
 - **[Language Specification](docs/spec/oscan-spec.md)** — Full formal semantics, grammar, and standard library reference
 - **[Runtime Primitives](docs/spec/oscan-spec.md#appendix-a-available-runtime-primitives-future-builtins)** — Inventory of available freestanding OS primitives (Appendix A)
 
