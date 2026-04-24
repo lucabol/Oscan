@@ -1560,6 +1560,7 @@ impl CodeGenerator {
             "canvas_clear" => format!("osc_canvas_clear({})", arg_strs[0]),
             "canvas_width" => "osc_canvas_width()".to_string(),
             "canvas_height" => "osc_canvas_height()".to_string(),
+            "canvas_scale" => "osc_canvas_scale()".to_string(),
             "canvas_resized" => "osc_canvas_resized()".to_string(),
             "canvas_set_icon" => format!(
                 "osc_canvas_set_icon({}, {}, {})",

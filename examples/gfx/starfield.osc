@@ -7,10 +7,6 @@
 // To run:
 //   oscan starfield.osc --run
 
-let W: i32 = 320;
-let H: i32 = 240;
-let CENTER_X: i32 = 160;
-let CENTER_Y: i32 = 120;
 let NUM_STARS: i32 = 200;
 let Z_FAR: i32 = 1024;
 let Z_NEAR: i32 = 2;
@@ -23,19 +19,27 @@ fn! rand_range(lo: i32, hi: i32) -> i32 {
 }
 
 fn! main() {
-    let co: Result<str, str> = canvas_open(W, H, "Starfield");
+    let co: Result<str, str> = canvas_open(320, 240, "Starfield");
     match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
+
+    // Work in physical canvas coordinates so the starfield fills the window
+    // on HiDPI displays.
+    let s: i32 = canvas_scale();
+    let cw: i32 = canvas_width();
+    let ch: i32 = canvas_height();
+    let cx: i32 = cw / 2;
+    let cy: i32 = ch / 2;
 
     let mut star_x: [i32] = [];
     let mut star_y: [i32] = [];
     let mut star_z: [i32] = [];
 
     for i in 0..NUM_STARS {
-        push(star_x, rand_range(0 - (CENTER_X * 4), CENTER_X * 4));
-        push(star_y, rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4));
+        push(star_x, rand_range(0 - (cx * 4), cx * 4));
+        push(star_y, rand_range(0 - (cy * 4), cy * 4));
         push(star_z, rand_range(Z_NEAR + 1, Z_FAR));
     };
 
@@ -58,19 +62,19 @@ fn! main() {
                 let mut visible: bool = true;
 
                 if star_z[i] <= Z_NEAR {
-                    star_x[i] = rand_range(0 - (CENTER_X * 4), CENTER_X * 4);
-                    star_y[i] = rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4);
+                    star_x[i] = rand_range(0 - (cx * 4), cx * 4);
+                    star_y[i] = rand_range(0 - (cy * 4), cy * 4);
                     star_z[i] = rand_range(Z_NEAR + 1, Z_FAR);
                     visible = false;
                 };
 
                 if visible {
-                    let px: i32 = (star_x[i] * 256) / star_z[i] + CENTER_X;
-                    let py: i32 = (star_y[i] * 256) / star_z[i] + CENTER_Y;
+                    let px: i32 = (star_x[i] * 256) / star_z[i] + cx;
+                    let py: i32 = (star_y[i] * 256) / star_z[i] + cy;
 
-                    if px < 0 or px >= W or py < 0 or py >= H {
-                        star_x[i] = rand_range(0 - (CENTER_X * 4), CENTER_X * 4);
-                        star_y[i] = rand_range(0 - (CENTER_Y * 4), CENTER_Y * 4);
+                    if px < 0 or px >= cw or py < 0 or py >= ch {
+                        star_x[i] = rand_range(0 - (cx * 4), cx * 4);
+                        star_y[i] = rand_range(0 - (cy * 4), cy * 4);
                         star_z[i] = rand_range(Z_NEAR + 1, Z_FAR);
                         visible = false;
                     };
@@ -80,7 +84,9 @@ fn! main() {
                         let color: i32 = rgb(bright, bright, bright);
 
                         if star_z[i] < Z_FAR / 4 {
-                            gfx_fill_rect(px, py, 2, 2, color);
+                            gfx_fill_rect(px, py, 2 * s, 2 * s, color);
+                        } else if s > 1 {
+                            gfx_fill_rect(px, py, s, s, color);
                         } else {
                             gfx_pixel(px, py, color);
                         };
@@ -88,7 +94,7 @@ fn! main() {
                 };
             };
 
-            gfx_draw_text(2, H - 10, "+/-:speed ESC:quit", rgb(100, 100, 100), 0);
+            gfx_draw_text_scaled(2 * s, ch - 10 * s, "+/-:speed ESC:quit", rgb(100, 100, 100), s, s, 0);
             canvas_flush();
             sleep_ms(16);
         };

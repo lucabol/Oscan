@@ -15,6 +15,11 @@ fn! main() {
         Result::Err(e) => { println("canvas_open failed: {e}"); exit(1); },
     };
 
+    // All coordinates and scale factors are multiplied by canvas_scale() so
+    // the layout fills the physical window on HiDPI displays.
+    let s: i32 = canvas_scale();
+    let ch: i32 = canvas_height();
+
     let white: i32 = rgb(230, 230, 230);
     let dim: i32 = rgb(140, 140, 140);
     let accent: i32 = rgb(0, 200, 255);
@@ -23,37 +28,37 @@ fn! main() {
         canvas_clear(rgb(20, 20, 24));
 
         // ── 8×8 tier ──
-        gfx_draw_text(10, 10,  "FONT_DEFAULT (8x8):",        dim,   FONT_DEFAULT);
-        gfx_draw_text(10, 26,  "The quick brown fox jumps.", white, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 10 * s,  "FONT_DEFAULT (8x8):",        dim,   s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 26 * s,  "The quick brown fox jumps.", white, s, s, FONT_DEFAULT);
 
-        gfx_draw_text(10, 46,  "FONT_PROPORTIONAL (8x8):",   dim,   FONT_DEFAULT);
-        gfx_draw_text(10, 62,  "The quick brown fox jumps.", white, FONT_PROPORTIONAL);
+        gfx_draw_text_scaled(10 * s, 46 * s,  "FONT_PROPORTIONAL (8x8):",   dim,   s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 62 * s,  "The quick brown fox jumps.", white, s, s, FONT_PROPORTIONAL);
 
-        gfx_draw_text(10, 82,  "FONT_LATIN1 (8x8):",                 dim,   FONT_DEFAULT);
-        gfx_draw_text(10, 98,  "café — naïve — éléphant — ¡hola!",   white, FONT_LATIN1);
+        gfx_draw_text_scaled(10 * s, 82 * s,  "FONT_LATIN1 (8x8):",                 dim,   s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 98 * s,  "café — naïve — éléphant — ¡hola!",   white, s, s, FONT_LATIN1);
 
-        gfx_draw_text(10, 118, "FONT_BOX (8x8):", dim, FONT_DEFAULT);
-        gfx_draw_text(10, 134, "┌──────┐ │ Oscan │ └──────┘", white, FONT_BOX);
+        gfx_draw_text_scaled(10 * s, 118 * s, "FONT_BOX (8x8):", dim, s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 134 * s, "┌──────┐ │ Oscan │ └──────┘", white, s, s, FONT_BOX);
 
         // ── 8×12 _L tier (crisp 1.5× line-height) ──
-        gfx_draw_text(10, 160, "FONT_DEFAULT_L (8x12):",     dim,   FONT_DEFAULT);
-        gfx_draw_text(10, 176, "The quick brown fox jumps.", white, FONT_DEFAULT_L);
+        gfx_draw_text_scaled(10 * s, 160 * s, "FONT_DEFAULT_L (8x12):",     dim,   s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 176 * s, "The quick brown fox jumps.", white, s, s, FONT_DEFAULT_L);
 
-        gfx_draw_text(10, 200, "FONT_PROPORTIONAL_L (8x12):", dim,  FONT_DEFAULT);
-        gfx_draw_text(10, 216, "The quick brown fox jumps.", white, FONT_PROPORTIONAL_L);
+        gfx_draw_text_scaled(10 * s, 200 * s, "FONT_PROPORTIONAL_L (8x12):", dim,  s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 216 * s, "The quick brown fox jumps.", white, s, s, FONT_PROPORTIONAL_L);
 
-        gfx_draw_text(10, 240, "FONT_LATIN1_L (8x12):",               dim,   FONT_DEFAULT);
-        gfx_draw_text(10, 256, "café — naïve — éléphant — ¡hola!",    white, FONT_LATIN1_L);
+        gfx_draw_text_scaled(10 * s, 240 * s, "FONT_LATIN1_L (8x12):",               dim,   s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 256 * s, "café — naïve — éléphant — ¡hola!",    white, s, s, FONT_LATIN1_L);
 
-        gfx_draw_text(10, 280, "FONT_BOX_L (8x12):", dim, FONT_DEFAULT);
-        gfx_draw_text(10, 296, "┌──────┐ │ Oscan │ └──────┘", white, FONT_BOX_L);
+        gfx_draw_text_scaled(10 * s, 280 * s, "FONT_BOX_L (8x12):", dim, s, s, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 296 * s, "┌──────┐ │ Oscan │ └──────┘", white, s, s, FONT_BOX_L);
 
-        gfx_draw_text_scaled(10, 322, "Scaled 2x default", accent, 2, 2, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, 322 * s, "Scaled 2x default", accent, 2 * s, 2 * s, FONT_DEFAULT);
 
         let sample: str = "Hello!";
         let w_def: i32 = gfx_text_width(sample, FONT_DEFAULT);
         let w_prop: i32 = gfx_text_width(sample, FONT_PROPORTIONAL);
-        gfx_draw_text(10, H - 14, "width('{sample}'): default={w_def} prop={w_prop} — ESC to quit", dim, FONT_DEFAULT);
+        gfx_draw_text_scaled(10 * s, ch - 14 * s, "width('{sample}'): default={w_def} prop={w_prop} — ESC to quit", dim, s, s, FONT_DEFAULT);
 
         canvas_flush();
         if canvas_key() == 27 { break; };

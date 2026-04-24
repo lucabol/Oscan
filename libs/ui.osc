@@ -35,9 +35,11 @@ fn! ui_panel(x: i32, y: i32, w: i32, h: i32) {
     gfx_rect(x, y, w, h, UI_BORDER)
 }
 
-// Label: draws text in foreground color
+// Label: draws text in foreground color. Text is scaled by canvas_scale() so
+// labels stay readable on HiDPI displays.
 fn! ui_label(x: i32, y: i32, text: str) {
-    gfx_draw_text(x, y, text, UI_FG, 0);
+    let s: i32 = canvas_scale();
+    gfx_draw_text_scaled(x, y, text, UI_FG, s, s, 0);
 }
 
 // Separator: horizontal line in border color
@@ -47,7 +49,10 @@ fn! ui_separator(x: i32, y: i32, w: i32) {
 
 // Button: clickable rectangle with label.
 // Returns true on the frame the mouse button is first pressed inside.
+// Callers pass already-scaled x/y/w/h (e.g. 100 * canvas_scale() wide);
+// the label is drawn at canvas_scale() so it matches the button size on HiDPI.
 fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool {
+    let s: i32 = canvas_scale();
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -63,19 +68,21 @@ fn! ui_button(x: i32, y: i32, w: i32, h: i32, label: str, prev_btn: i32) -> bool
     gfx_fill_rect(x, y, w, h, bg);
     gfx_rect(x, y, w, h, if hover { UI_ACCENT } else { UI_BORDER });
 
-    // Center the label text (8px per char — matches 8x8 bitmap font)
-    let text_w: i32 = str_len(label) * 8;
+    // Center the label text (8px per char — matches 8x8 bitmap font, scaled)
+    let text_w: i32 = str_len(label) * 8 * s;
     let tx: i32 = x + (w - text_w) / 2;
-    let ty: i32 = y + (h - 8) / 2;
-    gfx_draw_text(tx, ty, label, UI_FG, 0);
+    let ty: i32 = y + (h - 8 * s) / 2;
+    gfx_draw_text_scaled(tx, ty, label, UI_FG, s, s, 0);
 
     clicked
 }
 
 // Checkbox: toggling box with label.
-// Returns the new checked state (toggled on click).
+// Returns the new checked state (toggled on click). All internal sizes scale
+// with canvas_scale() so the box and check glyph match the label on HiDPI.
 fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> bool {
-    let box_size: i32 = 12;
+    let s: i32 = canvas_scale();
+    let box_size: i32 = 12 * s;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -89,22 +96,24 @@ fn! ui_checkbox(x: i32, y: i32, label: str, checked: bool, prev_btn: i32) -> boo
 
     // Draw checkmark if checked
     if checked {
-        gfx_line(x + 2, y + 6, x + 5, y + 9, UI_ACCENT);
-        gfx_line(x + 5, y + 9, x + 10, y + 2, UI_ACCENT);
+        gfx_line(x + 2 * s, y + 6 * s, x + 5 * s, y + 9 * s, UI_ACCENT);
+        gfx_line(x + 5 * s, y + 9 * s, x + 10 * s, y + 2 * s, UI_ACCENT);
     };
 
     // Draw label
-    gfx_draw_text(x + box_size + 6, y + 2, label, UI_FG, 0);
+    gfx_draw_text_scaled(x + box_size + 6 * s, y + 2 * s, label, UI_FG, s, s, 0);
 
     // Toggle on click
     if clicked { not checked } else { checked }
 }
 
 // Slider: horizontal slider with drag support.
-// Returns the new value based on mouse position when dragging.
+// Returns the new value based on mouse position when dragging. Track height
+// and thumb size scale with canvas_scale(); caller supplies the scaled width.
 fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) -> i32 {
-    let h: i32 = 12;
-    let thumb_w: i32 = 8;
+    let s: i32 = canvas_scale();
+    let h: i32 = 12 * s;
+    let thumb_w: i32 = 8 * s;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -125,7 +134,7 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 
     // Draw filled portion
     if thumb_x > x {
-        gfx_fill_rect(x + 1, y + 1, thumb_x - x, h - 2, UI_ACCENT);
+        gfx_fill_rect(x + s, y + s, thumb_x - x, h - 2 * s, UI_ACCENT);
     };
 
     // Draw thumb
@@ -150,9 +159,11 @@ fn! ui_slider(x: i32, y: i32, w: i32, value: i32, min_val: i32, max_val: i32) ->
 // Textbox: single-line text input with keyboard handling.
 // buf is a mutable [i32] array of character codes.
 // key is the current frame's key from canvas_key() (caller must poll).
-// Returns new focused state (true if clicked on this textbox).
+// Returns new focused state (true if clicked on this textbox). Internal
+// padding/cursor scale with canvas_scale() on HiDPI displays.
 fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32, key: i32) -> bool {
-    let h: i32 = 20;
+    let s: i32 = canvas_scale();
+    let h: i32 = 20 * s;
     let mx: i32 = canvas_mouse_x();
     let my: i32 = canvas_mouse_y();
     let btn: i32 = canvas_mouse_btn();
@@ -179,14 +190,14 @@ fn! ui_textbox(x: i32, y: i32, w: i32, buf: [i32], focused: bool, prev_btn: i32,
 
     // Convert buffer to string and draw text
     let text: str = str_from_chars(buf);
-    let pad: i32 = 4;
-    let text_y: i32 = y + (h - 8) / 2;
-    gfx_draw_text(x + pad, text_y, text, UI_FG, 0);
+    let pad: i32 = 4 * s;
+    let text_y: i32 = y + (h - 8 * s) / 2;
+    gfx_draw_text_scaled(x + pad, text_y, text, UI_FG, s, s, 0);
 
-    // Draw cursor when focused (thin rect after last character, 8px font)
+    // Draw cursor when focused (thin rect after last character, 8px font * s)
     if focused {
-        let cursor_x: i32 = x + pad + len(buf) * 8;
-        gfx_fill_rect(cursor_x, text_y, 1, 8, UI_FG);
+        let cursor_x: i32 = x + pad + len(buf) * 8 * s;
+        gfx_fill_rect(cursor_x, text_y, s, 8 * s, UI_FG);
     };
 
     // Return new focus state

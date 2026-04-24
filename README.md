@@ -259,7 +259,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**237 built-in functions** across 21 categories.
+**238 built-in functions** across 21 categories.
 
 ### I/O (7 functions)
 
@@ -537,7 +537,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! proc_wait(pid: i32) -> i32` | Wait for process, returns exit code |
 | `fn! pipe_create() -> [i32]` | Create pipe, returns [read_fd, write_fd] |
 
-### Graphics (30 functions)
+### Graphics (31 functions)
 
 | Function | Description |
 |----------|-------------|
@@ -548,6 +548,7 @@ You can write **CLI utilities** (text processing, file handling, sorting, greppi
 | `fn! canvas_clear(color: i32)` | Clear canvas with color |
 | `fn! canvas_width() -> i32` | Current canvas width in pixels (updates on window resize) |
 | `fn! canvas_height() -> i32` | Current canvas height in pixels (updates on window resize) |
+| `fn! canvas_scale() -> i32` | Integer DPI scale factor (1 at 96dpi, 2 at 144-192dpi, ...). Multiply hardcoded coords/sizes by this for HiDPI-aware layouts. Always 1 on Linux/fullscreen. |
 | `fn! canvas_resized() -> bool` | True once per resize event; auto-clears after each call |
 | `fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>` | Set window/taskbar icon from RGBA pixel array |
 | `fn! gfx_pixel(x: i32, y: i32, color: i32)` | Draw a pixel |

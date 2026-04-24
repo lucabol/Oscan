@@ -37,32 +37,39 @@ fn! main() {
         Result::Err(e) => { println("Error reading file: {e}"); exit(1); "" },
     };
 
-    let pixels: [i32] = match svg_load(data, w, h) {
+    // Open the canvas first, then rasterize the SVG at the physical canvas
+    // size so vectors stay crisp on HiDPI displays instead of being stretched
+    // from a small logical buffer.
+    match canvas_open(w, h, path) {
+        Result::Ok(_) => {},
+        Result::Err(e) => { println("Error opening canvas: {e}"); exit(1); },
+    };
+
+    let s: i32 = canvas_scale();
+    let pw: i32 = canvas_width();
+    let ph: i32 = canvas_height();
+
+    let pixels: [i32] = match svg_load(data, pw, ph) {
         Result::Ok(px) => { px },
         Result::Err(e) => { println("Error rasterizing SVG: {e}"); exit(1); [] },
     };
 
-    let pw: i32 = pixels[0];
-    let ph: i32 = pixels[1];
-    println("Rasterized size: {pw} x {ph}");
-
-    match canvas_open(pw, ph, path) {
-        Result::Ok(_) => {},
-        Result::Err(e) => { println("Error opening canvas: {e}"); exit(1); },
-    };
+    let rw: i32 = pixels[0];
+    let rh: i32 = pixels[1];
+    println("Rasterized size: {rw} x {rh}");
 
     canvas_clear(rgb(255, 255, 255));
 
     // SVG backgrounds are transparent — use gfx_blit_alpha so alpha blends correctly
     let mut px_data: [i32] = [];
     let mut pi: i32 = 0;
-    while pi < pw * ph {
+    while pi < rw * rh {
         push(px_data, pixels[2 + pi]);
         pi += 1;
     };
-    gfx_blit_alpha(0, 0, pw, ph, px_data);
+    gfx_blit_alpha(0, 0, rw, rh, px_data);
 
-    gfx_draw_text(4, ph - 12, path, rgb(0, 0, 0), 0);
+    gfx_draw_text_scaled(4 * s, ph - 12 * s, path, rgb(0, 0, 0), s, s, 0);
     canvas_flush();
 
     while canvas_alive() {

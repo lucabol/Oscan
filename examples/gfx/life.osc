@@ -7,8 +7,6 @@
 // To run:
 //   oscan life.osc --run
 
-let W: i32 = 320;
-let H: i32 = 240;
 let GW: i32 = 80;
 let GH: i32 = 60;
 let CELL: i32 = 4;
@@ -42,12 +40,18 @@ fn! randomize(grid: [i32]) {
 }
 
 fn! main() {
-    let co: Result<str, str> = canvas_open(W, H, "Game of Life");
+    let co: Result<str, str> = canvas_open(320, 240, "Game of Life");
     match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
     rand_seed(42);
+
+    // Multiply cell / overlay sizes by the canvas DPI scale so cells and
+    // status text stay readable on HiDPI displays.
+    let s: i32 = canvas_scale();
+    let ch: i32 = canvas_height();
+    let cell: i32 = CELL * s;
 
     let size: i32 = GW * GH;
 
@@ -109,11 +113,11 @@ fn! main() {
             for y in 0..GH {
                 for x in 0..GW {
                     if grid[y * GW + x] == 1 {
-                        gfx_fill_rect(x * CELL, y * CELL, CELL, CELL, rgb(0, 255, 0));
+                        gfx_fill_rect(x * cell, y * cell, cell, cell, rgb(0, 255, 0));
                     };
                 };
             };
-            gfx_draw_text(2, H - 10, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128), 0);
+            gfx_draw_text_scaled(2 * s, ch - 10 * s, "SPC:pause R:rand C:clear ESC:quit", rgb(128, 128, 128), s, s, 0);
             canvas_flush();
 
             sleep_ms(16);

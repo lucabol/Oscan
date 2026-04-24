@@ -48,6 +48,11 @@ fn! main() {
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
 
+    // Multiply blit positions by canvas_scale() so the sprites are placed at
+    // the right physical coordinates on HiDPI displays. The sprite bitmap
+    // itself stays 8x8; gfx_blit does not scale pixel data.
+    let s: i32 = canvas_scale();
+    let ch: i32 = canvas_height();
     let smiley: [i32] = make_smiley();
 
     while canvas_alive() {
@@ -57,30 +62,30 @@ fn! main() {
             canvas_clear(rgb(20, 20, 80));
 
             // --- Opaque blit section ---
-            gfx_draw_text(10, 10, "Opaque blit:", rgb(255, 255, 255), 0);
+            gfx_draw_text_scaled(10 * s, 10 * s, "Opaque blit:", rgb(255, 255, 255), s, s, 0);
             for i in 0..10 {
-                gfx_blit(10 + i * 12, 24, SW, SH, smiley);
+                gfx_blit(10 * s + i * 12 * s, 24 * s, SW, SH, smiley);
             };
 
             // --- Alpha blit section ---
-            gfx_draw_text(10, 50, "Alpha blit:", rgb(255, 255, 255), 0);
+            gfx_draw_text_scaled(10 * s, 50 * s, "Alpha blit:", rgb(255, 255, 255), s, s, 0);
 
             // Draw colored background rectangles to show alpha blending
-            gfx_fill_rect(10, 64, 60, 20, rgb(200, 0, 0));
-            gfx_fill_rect(75, 64, 60, 20, rgb(0, 180, 0));
+            gfx_fill_rect(10 * s, 64 * s, 60 * s, 20 * s, rgb(200, 0, 0));
+            gfx_fill_rect(75 * s, 64 * s, 60 * s, 20 * s, rgb(0, 180, 0));
 
             // Blit smileys over colored backgrounds with alpha
             for i in 0..5 {
-                gfx_blit_alpha(12 + i * 12, 70, SW, SH, smiley);
+                gfx_blit_alpha(12 * s + i * 12 * s, 70 * s, SW, SH, smiley);
             };
             for i in 0..5 {
-                gfx_blit_alpha(77 + i * 12, 70, SW, SH, smiley);
+                gfx_blit_alpha(77 * s + i * 12 * s, 70 * s, SW, SH, smiley);
             };
 
             // --- Scaled text label ---
-            gfx_draw_text_scaled(10, 110, "Scaled + Blit!", rgb(255, 200, 0), 2, 2, 0);
+            gfx_draw_text_scaled(10 * s, 110 * s, "Scaled + Blit!", rgb(255, 200, 0), 2 * s, 2 * s, 0);
 
-            gfx_draw_text(10, H - 12, "Press ESC to quit", rgb(128, 128, 128), 0);
+            gfx_draw_text_scaled(10 * s, ch - 12 * s, "Press ESC to quit", rgb(128, 128, 128), s, s, 0);
             canvas_flush();
             sleep_ms(16);
         };

@@ -7,35 +7,38 @@
 // To run:
 //   oscan bounce.osc --run
 
-let W: i32 = 320;
-let H: i32 = 240;
-let R: i32 = 10;
-
 fn! main() {
-    let co: Result<str, str> = canvas_open(W, H, "Bounce");
+    let co: Result<str, str> = canvas_open(320, 240, "Bounce");
     match co {
         Result::Ok(_) => { },
         Result::Err(e) => { println("Error: {e}"); exit(1); },
     };
 
-    let mut x: i32 = W / 2;
-    let mut y: i32 = H / 2;
-    let mut dx: i32 = 2;
-    let mut dy: i32 = 1;
+    // Pick up the canvas's integer DPI scale so coordinates and speeds
+    // match the physical window size on HiDPI displays.
+    let s: i32 = canvas_scale();
+    let cw: i32 = canvas_width();
+    let ch: i32 = canvas_height();
+    let r: i32 = 10 * s;
+
+    let mut x: i32 = cw / 2;
+    let mut y: i32 = ch / 2;
+    let mut dx: i32 = 2 * s;
+    let mut dy: i32 = 1 * s;
 
     while canvas_alive() {
         arena {
             if canvas_key() == 27 { break; };
 
             canvas_clear(rgb(0, 0, 0));
-            gfx_fill_circle(x, y, R, rgb(255, 0, 0));
+            gfx_fill_circle(x, y, r, rgb(255, 0, 0));
             canvas_flush();
         };
 
         x = x + dx;
         y = y + dy;
-        if x <= R or x >= W - R { dx = 0 - dx; };
-        if y <= R or y >= H - R { dy = 0 - dy; };
+        if x <= r or x >= cw - r { dx = 0 - dx; };
+        if y <= r or y >= ch - r { dy = 0 - dy; };
 
         sleep_ms(16);
     };
