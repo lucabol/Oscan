@@ -64,6 +64,15 @@ function Add-TestResult($Name, $Arch, $Category, $Status, $Detail) {
     }
 }
 
+function Write-PhaseFailures($Arch) {
+    if ($VerboseOutput) { return }
+    foreach ($failure in @($script:Results | Where-Object { $_.Arch -eq $Arch -and $_.Status -eq 'FAIL' })) {
+        $message = "    FAIL: $($failure.Name)"
+        if ($failure.Detail) { $message += " - $($failure.Detail)" }
+        Write-Host $message -ForegroundColor Red
+    }
+}
+
 function Add-VerifyResult($Name, $Arch, $DepCheck, $DepDetail, $StdlibCheck, $Size) {
     [void]$script:VerifyResults.Add([PSCustomObject]@{
         Name = $Name; Arch = $Arch
@@ -404,6 +413,8 @@ if (-not (Test-Path $oscan)) {
     Write-Host "Error: $oscan not found. Run without -SkipBuild first." -ForegroundColor Red
     exit 1
 }
+$projectRoot = (Get-Location).Path
+$throttle = [Math]::Max(1, [Environment]::ProcessorCount)
 
 if ($Backend -ne "c") {
     try {
@@ -445,14 +456,11 @@ if (-not $SkipIntegration) {
         New-Item -ItemType Directory -Path "tests\build" | Out-Null
     }
 
-    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
-
     # Positive tests (parallel compile + run)
     $positivePhase = if ($Backend -eq "c") { "Windows x64 (positive)" } else { "Windows x64 (C vs $Backend)" }
     Write-Phase $positivePhase
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (freestanding) ──" -ForegroundColor Yellow }
     $secPass = 0; $secFail = 0
-    $projectRoot = (Get-Location).Path
     # Skip socket_hostnames on Windows: binding to a hostname triggers the
     # Windows Firewall prompt (interactive popup) which hangs CI. Linux/WSL
     # and ARM still exercise the hostname path.
@@ -679,6 +687,7 @@ if (-not $SkipWSL) {
 
         # Phase 2: Generate batch bash script for compile + run
         $bashLines = @("#!/bin/bash", "cd '$wslDir'")
+        $wslTestTimeoutSeconds = 30
         # l_img.h's vendored stb_image integration requires laststanding's
         # freestanding stdlib/string shims on Linux (see its README).
         $freestandingCompat = "-Ideps/laststanding/compat"
@@ -699,7 +708,10 @@ if (-not $SkipWSL) {
                 $bashLines += "gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding $freestandingCompat -o tests/build/${n}_wsl 2>/dev/null"
             }
             $bashLines += "if [ `$? -ne 0 ]; then echo 'FAIL|$n|gcc compile error'; else"
-            $bashLines += "  ./tests/build/${n}_wsl > tests/build/${n}_wsl.out 2>&1; echo `"OK|$n|`$?`"; fi"
+            $bashLines += "  timeout --kill-after=5s ${wslTestTimeoutSeconds}s ./tests/build/${n}_wsl > tests/build/${n}_wsl.out 2>&1"
+            $bashLines += "  rc=`$?"
+            $bashLines += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo 'FAIL|$n|timed out after ${wslTestTimeoutSeconds}s'; else echo `"OK|$n|`$rc`"; fi"
+            $bashLines += "fi"
         }
 
         $bashScript = $bashLines -join "`n"
@@ -749,6 +761,7 @@ if (-not $SkipWSL) {
             $color = if ($wslFail -gt 0) { "Red" } else { "Green" }
             Write-PhaseResult "$wslPass passed, $wslFail failed" $color
         }
+        Write-PhaseFailures "wsl-x64"
 
         # WSL freestanding verification (batch: single WSL call)
         Write-Phase "Verifying (WSL)"
@@ -823,21 +836,57 @@ if (-not $SkipWSL) {
             $archiveDirWin = "build\runtime-archives\linux-x86_64"
             $archiveDirWSL = "$wslDir/build/runtime-archives/linux-x86_64"
             $archivePath = Join-Path $archiveDirWin "libosc_runtime_freestanding.a"
+            $archiveManifestPath = Join-Path $archiveDirWin "libosc_runtime_freestanding.json"
             $hostedArchivePath = Join-Path $archiveDirWin "libosc_runtime_hosted.a"
-            $freestandingCC = if (Test-WSLCommand "x86_64-linux-musl-gcc") { "x86_64-linux-musl-gcc" } else { "gcc" }
+            $hostedArchiveManifestPath = Join-Path $archiveDirWin "libosc_runtime_hosted.json"
             $hostedCC = "gcc"
-            $shimPath = Join-Path $archiveDirWin "osc_native_shim.freestanding.$freestandingCC.o"
-            $hostedShimPath = Join-Path $archiveDirWin "osc_native_shim.hosted.$hostedCC.o"
 
             if (-not (Test-Path $archiveDirWin)) { New-Item -ItemType Directory -Path $archiveDirWin -Force | Out-Null }
-            if (-not (Test-Path $archivePath)) {
-                wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode freestanding --target linux-x86_64 --cc $freestandingCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
+            $freestandingSourceTime = (Get-ChildItem "runtime\osc_runtime*.c" | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
+            if ((Test-Path $archivePath) -and ((Get-Item $archivePath).LastWriteTimeUtc -lt $freestandingSourceTime)) {
+                Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
+            }
+            $hostedSourceTime = (Get-Item "runtime\osc_runtime.c").LastWriteTimeUtc
+            if ((Test-Path $hostedArchivePath) -and ((Get-Item $hostedArchivePath).LastWriteTimeUtc -lt $hostedSourceTime)) {
+                Remove-Item -LiteralPath $hostedArchivePath, $hostedArchiveManifestPath -Force -ErrorAction SilentlyContinue
+            }
+            $freestandingCC = $null
+            if ((Test-Path $archivePath) -and (Test-Path $archiveManifestPath)) {
+                try {
+                    $recordedCC = (Get-Content -LiteralPath $archiveManifestPath -Raw | ConvertFrom-Json).cc
+                    if ($recordedCC -and (Test-WSLCommand $recordedCC)) {
+                        $freestandingCC = $recordedCC
+                    }
+                } catch {
+                    Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
+                }
+            }
+            if (-not $freestandingCC) {
+                $freestandingCandidates = @()
+                if (Test-WSLCommand "x86_64-linux-musl-gcc") {
+                    $freestandingCandidates += "x86_64-linux-musl-gcc"
+                }
+                $freestandingCandidates += "gcc"
+                foreach ($candidateCC in $freestandingCandidates) {
+                    Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
+                    wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode freestanding --target linux-x86_64 --cc $candidateCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
+                    if ((Test-Path $archivePath) -and (Test-Path $archiveManifestPath)) {
+                        $freestandingCC = $candidateCC
+                        break
+                    }
+                }
             }
             if (-not (Test-Path $hostedArchivePath)) {
                 wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode hosted --target linux-x86_64 --cc $hostedCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
             }
+            $shimPath = if ($freestandingCC) {
+                Join-Path $archiveDirWin "osc_native_shim.freestanding.$freestandingCC.o"
+            } else {
+                $null
+            }
+            $hostedShimPath = Join-Path $archiveDirWin "osc_native_shim.hosted.$hostedCC.o"
             $shimSrcTime = (Get-Item "runtime\osc_native_shim.c").LastWriteTimeUtc
-            $needShim = (-not (Test-Path $shimPath)) -or ((Get-Item $shimPath).LastWriteTimeUtc -lt $shimSrcTime)
+            $needShim = $shimPath -and ((-not (Test-Path $shimPath)) -or ((Get-Item $shimPath).LastWriteTimeUtc -lt $shimSrcTime))
             if ($needShim) {
                 wsl bash -c "cd '$wslDir' && $freestandingCC -std=gnu11 -ffreestanding -w -Os -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Iruntime -c runtime/osc_native_shim.c -o '$archiveDirWSL/osc_native_shim.freestanding.$freestandingCC.o'" 2>&1 | Out-Null
             }
@@ -846,7 +895,7 @@ if (-not $SkipWSL) {
                 wsl bash -c "cd '$wslDir' && $hostedCC -std=c99 -O2 -w -ffunction-sections -fdata-sections -Iruntime -c runtime/osc_native_shim.c -o '$archiveDirWSL/osc_native_shim.hosted.$hostedCC.o'" 2>&1 | Out-Null
             }
 
-            if (-not (Test-Path $archivePath) -or -not (Test-Path $shimPath) -or -not (Test-Path $hostedArchivePath) -or -not (Test-Path $hostedShimPath)) {
+            if (-not $freestandingCC -or -not (Test-Path $archivePath) -or -not (Test-Path $shimPath) -or -not (Test-Path $hostedArchivePath) -or -not (Test-Path $hostedShimPath)) {
                 Write-PhaseResult "skipped (could not build mode-matched linux-x86_64 runtime archives/shims under WSL)" Yellow
             } else {
                 $nDir = "tests\build\wsl-native"
@@ -882,7 +931,9 @@ if (-not $SkipWSL) {
                         $linkCommand = "$freestandingCC '$obj' '$archiveDirWSL/osc_native_shim.freestanding.$freestandingCC.o' '$archiveDirWSL/libosc_runtime_freestanding.a' -nostdlib -static -Wl,--gc-sections,--build-id=none -o '$exe'"
                     }
                     $nBash += "if $linkCommand 2>tests/build/wsl-native/$n.linkerr; then"
-                    $nBash += "  ./'$exe' > tests/build/wsl-native/$n.out 2>&1; echo `"OK|$n|`$?`""
+                    $nBash += "  timeout --kill-after=5s ${wslTestTimeoutSeconds}s ./'$exe' > tests/build/wsl-native/$n.out 2>&1"
+                    $nBash += "  rc=`$?"
+                    $nBash += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo `"FAIL|$n|timed out after ${wslTestTimeoutSeconds}s`"; else echo `"OK|$n|`$rc`"; fi"
                     $nBash += "else"
                     $nBash += "  echo `"FAIL|$n|link error`""
                     $nBash += "fi"
@@ -956,6 +1007,7 @@ if (-not $SkipWSL) {
                 }
                 $color = if ($nFail -gt 0) { "Red" } else { "Green" }
                 Write-PhaseResult "$nPass passed, $nFail failed" $color
+                Write-PhaseFailures "wsl-x64-$Backend"
 
                 # Freestanding verification (Test-LinuxFreestanding): every
                 # produced wsl-native binary must be statically linked with
