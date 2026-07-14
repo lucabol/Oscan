@@ -16,6 +16,30 @@
     "extract": {
       "strip_components": 1
     },
+    "runtime": {
+      "abi": "gnu",
+      "crt": "ucrt",
+      "compiler": {
+        "path": "bin/clang.exe",
+        "family": "clang",
+        "version": "22.1.2",
+        "target": "x86_64-w64-windows-gnu",
+        "size_flag": "-Oz"
+      },
+      "archiver": {
+        "path": "bin/llvm-ar.exe",
+        "family": "llvm-ar",
+        "version": "22.1.2"
+      },
+      "linker": {
+        "path": "bin/ld.lld.exe",
+        "family": "lld",
+        "version": "22.1.2",
+        "driver_flags": [
+          "-fuse-ld=lld"
+        ]
+      }
+    },
     "prune": {
       "remove_globs": [
         "lib/clang/*/lib/windows/*i386*",

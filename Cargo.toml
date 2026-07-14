@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Cranelift AOT native backend (src/backend/). Pinned in lockstep (all
+# cranelift-* crates ship from the same wasmtime release train and must
+# share one version). `x86`/`arm64`/`riscv64` are enabled explicitly
+# (rather than relying on the default `host-arch` feature) so the compiler
+# can always target Windows/Linux x86-64, AArch64, and RISC-V64 regardless
+# of which architecture the oscan compiler itself is built on.
+cranelift-codegen = { version = "0.133.1", features = ["x86", "arm64", "riscv64"] }
+cranelift-frontend = "0.133.1"
+cranelift-module = "0.133.1"
+cranelift-object = "0.133.1"
+object = "0.39.1"
+serde_json = "1.0"
+target-lexicon = "0.13.5"

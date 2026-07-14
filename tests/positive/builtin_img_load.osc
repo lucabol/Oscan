@@ -1,0 +1,51 @@
+// Test: img_load (headless image decoding)
+// Exercises: img_load with a deterministically-generated, embedded PNG
+// (a hand-built 4x4 RGB image with distinct known colors per pixel — see
+// scripts/_gen_test_ttf.py's sibling generation approach; regenerate with
+// Pillow: Image.new(...).putdata([...]).save(...) then dump raw bytes).
+// The PNG bytes are embedded as a plain [i32] array (one element per
+// byte, 0..255) and reassembled into a raw `str` via `str_from_chars`
+// (which copies each element's low 8 bits verbatim — see
+// runtime/osc_runtime.c's osc_str_from_chars — never UTF-8-encodes them),
+// so this test needs no external file/fixture and works identically
+// under any test runner regardless of working directory.
+//
+// img_load doesn't touch any canvas/window state (see
+// runtime/osc_runtime.c's osc_img_load: it only decodes into a fresh
+// arena-allocated pixel array), so this is fully headless.
+
+fn! main() {
+    // A 4x4 RGB PNG, one distinct solid color per pixel (row-major):
+    // red, green, blue, yellow / cyan, magenta, gray, black /
+    // white, dark-gray, orange, navy / near-black, near-white, purple, pink.
+    let png_bytes: [i32] = [
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 4, 0, 0, 0,
+        4, 8, 2, 0, 0, 0, 38, 147, 9, 41, 0, 0, 0, 51, 73, 68, 65, 84, 120, 156, 99, 248,
+        207, 192, 192, 0, 198, 255, 97, 228, 255, 134, 134, 6, 6, 6, 6, 166, 255, 12, 12,
+        142, 14, 142, 30, 79, 54, 113, 137, 200, 49, 48, 50, 49, 255, 250, 245, 171, 90,
+        215, 57, 146, 235, 4, 0, 6, 114, 19, 95, 178, 166, 86, 183, 0, 0, 0, 0, 73, 69,
+        78, 68, 174, 66, 96, 130
+    ];
+    let png_data: str = str_from_chars(png_bytes);
+
+    match img_load(png_data) {
+        Result::Ok(px) => {
+            let w: i32 = px[0];
+            let h: i32 = px[1];
+            print_i32(w); print(" "); print_i32(h); println("");
+            // First 3 decoded pixels: opaque red, green, blue (0xFFrrggbb
+            // packed as a signed i32 — matches the C oracle exactly, so
+            // no need to unpack channels here).
+            print_i32(px[2]); print(" "); print_i32(px[3]); print(" "); print_i32(px[4]);
+            println("");
+        },
+        Result::Err(e) => { println("err: {e}"); },
+    };
+
+    // Decoding garbage must fail cleanly (Result::Err), not panic.
+    let garbage: [i32] = [1, 2, 3, 4, 5];
+    match img_load(str_from_chars(garbage)) {
+        Result::Ok(_) => { println("unexpected: garbage decoded"); },
+        Result::Err(_) => { println("garbage rejected: ok"); },
+    };
+}

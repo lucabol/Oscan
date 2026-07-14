@@ -11,7 +11,9 @@ param(
 
     [string]$OutputDir,
 
-    [string]$ContractPath
+    [string]$ContractPath,
+
+    [string]$RuntimeArchiveDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,6 +53,9 @@ $pythonArgs = @(
     "--output-dir", $OutputDir,
     "--contract", $ContractPath
 )
+if ($RuntimeArchiveDir) {
+    $pythonArgs += @("--runtime-archive-dir", $RuntimeArchiveDir)
+}
 
 $result = & python @pythonArgs
 if ($LASTEXITCODE -ne 0) {

@@ -1,0 +1,26 @@
+// Test: a `Result`-returning `fn! main()` under the native backend. The
+// synthesized C-ABI `main` wrapper (see `src/backend/mod.rs`'s
+// `synthesize_main_entry`) must read `oscan_main`'s `Result` discriminator
+// and settle on a process exit code *before* destroying the top-level
+// arena, not after: a `Result`-returning `oscan_main` returns a pointer
+// into arena memory, and `osc_arena_destroy` unmaps (freestanding) or
+// frees (hosted) every block the arena ever allocated, including the one
+// backing that very `Result`. Allocates a substantial amount of arena
+// memory before returning `Result::Err(...)` so a regression (reading the
+// discriminator through an already-destroyed arena) is not a silent,
+// hard-to-notice miscompile but an outright crash/wrong exit code.
+
+fn! main() -> Result<str, str> {
+    let mut total: i32 = 0;
+    let mut items: [str] = [];
+    let mut i: i32 = 0;
+    while i < 2000 {
+        push(items, "arena filler item to grow the top-level arena");
+        total = total + 1;
+        i = i + 1;
+    };
+    print_i32(total);
+    print_i32(len(items));
+    println("");
+    Result::Err("deliberate failure to exercise the Err exit path")
+}

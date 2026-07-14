@@ -39,9 +39,55 @@ if (-not $ArchivePath.EndsWith($expectedArchiveSuffix)) {
 $expectsBundled = $targetSpec["bundle_kind"] -eq "full"
 $requiresHostCompiler = [bool]($targetSpec["requires_host_compiler"] ?? $false)
 $expectedNoteFile = if ($targetSpec.ContainsKey("note_file")) { [string]$targetSpec["note_file"] } else { $null }
-# Linux bundled: smoke uses OSCAN_CC override because musl native GCC is not relocatable
-$useHostOverride = $expectsBundled -and $platform -eq "linux"
-$expectedCompilerSource = if ($useHostOverride) { "override" } elseif ($expectsBundled) { "bundled" } else { "host" }
+$nativeRuntimeModes = @($targetSpec["native_runtime_modes"])
+$nativeSmokeMode = [string]$targetSpec["native_smoke_mode"]
+$expectedCompilerSource = if ($expectsBundled) { "bundled" } else { "host" }
+
+# Every bundled target (Windows, Linux) ships its own relocatable compiler
+# under toolchain/, so a packaged bundle must never need a host C compiler.
+# find_bundled_c_compiler_in_dir() walks the toolchain directory directly
+# (never PATH), so shadowing just the well-known host compiler names on PATH
+# with stubs that fail immediately proves the bundle is genuinely
+# self-contained: if discovery ever regressed to silently falling back to a
+# host compiler, this makes that regression fail loudly here instead of
+# only "working" because the CI runner happens to have build-essential/Xcode
+# CLT installed. The stub directory is *prepended* to the real PATH (not
+# used to replace it), so every other tool (sh, dirname, tar, ...) still
+# resolves normally through the rest of the inherited PATH.
+function New-NoHostCompilerPathPrefix {
+    param([Parameter(Mandatory = $true)][string]$ScratchDir)
+
+    $blockDir = Join-Path $ScratchDir "no-host-compiler-path"
+    New-Item -ItemType Directory -Path $blockDir -Force | Out-Null
+    if ($env:OS -eq "Windows_NT") {
+        foreach ($name in @("cc", "gcc", "clang", "cl")) {
+            Set-Content -Path (Join-Path $blockDir "$name.cmd") -Encoding ASCII -Value "@echo off`r`nexit /b 127"
+        }
+    } else {
+        foreach ($name in @("cc", "gcc", "clang")) {
+            $stub = Join-Path $blockDir $name
+            Set-Content -Path $stub -Encoding ASCII -NoNewline -Value "#!/bin/sh`nexit 127`n"
+            & chmod +x $stub
+        }
+    }
+    return $blockDir
+}
+
+function Invoke-NoHostCompilerCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScratchDir,
+        [Parameter(Mandatory = $true)][scriptblock]$Body
+    )
+
+    $savedPath = $env:PATH
+    try {
+        $blockDir = New-NoHostCompilerPathPrefix -ScratchDir $ScratchDir
+        $env:PATH = "$blockDir$([System.IO.Path]::PathSeparator)$savedPath"
+        & $Body
+    } finally {
+        $env:PATH = $savedPath
+    }
+}
 
 function Get-DefaultScratchDir {
     param(
@@ -111,6 +157,23 @@ if ($expectsBundled -and -not (Test-Path (Join-Path $InstallDir "toolchain"))) {
 if ($expectedNoteFile -and -not (Test-Path (Join-Path $InstallDir $expectedNoteFile))) {
     throw "Installed bundle is missing the contract note file '$expectedNoteFile'"
 }
+if ($nativeRuntimeModes.Count -gt 0) {
+    $RuntimeSourceDir = Join-Path $InstallDir "native-runtime"
+    foreach ($sourceName in @("osc_native_shim.c", "osc_runtime.h")) {
+        if (-not (Test-Path (Join-Path $RuntimeSourceDir $sourceName) -PathType Leaf)) {
+            throw "Installed bundle is missing native runtime source '$sourceName'"
+        }
+    }
+    $RuntimeArchiveDir = Join-Path $InstallDir "build\runtime-archives\$Target"
+    foreach ($mode in $nativeRuntimeModes) {
+        foreach ($suffix in @(".a", ".json")) {
+            $runtimeAsset = Join-Path $RuntimeArchiveDir "libosc_runtime_$mode$suffix"
+            if (-not (Test-Path $runtimeAsset -PathType Leaf)) {
+                throw "Installed bundle is missing native runtime asset '$runtimeAsset'"
+            }
+        }
+    }
+}
 
 $SampleSource = Join-Path $ScratchDir "hello.osc"
 $SampleOutput = Join-Path $ScratchDir ("hello" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
@@ -127,18 +190,18 @@ try {
     if ($requiresHostCompiler) {
         $compileArgs += "--libc"
     }
-    # Bundled Linux toolchain (musl native GCC) has hardcoded absolute paths
-    # and is not relocatable. Override with host compiler for the smoke test.
-    if ($expectsBundled -and $platform -eq "linux") {
-        $compileArgs += "--libc"
-        $env:OSCAN_CC = "gcc"
-    }
     $compileArgs += @($SampleSource, "-o", $SampleOutput)
-    & $OscanCommand @compileArgs 2> $CompileLog
-    if ($LASTEXITCODE -ne 0) {
-        throw "Release smoke compile failed:`n$((Get-Content $CompileLog -Raw))"
+    $compileInvocation = {
+        & $OscanCommand @compileArgs 2> $CompileLog
+        if ($LASTEXITCODE -ne 0) {
+            throw "Release smoke compile failed:`n$((Get-Content $CompileLog -Raw))"
+        }
     }
-    if ($env:OSCAN_CC) { Remove-Item Env:\OSCAN_CC -ErrorAction SilentlyContinue }
+    if ($expectsBundled) {
+        Invoke-NoHostCompilerCommand -ScratchDir $ScratchDir -Body $compileInvocation
+    } else {
+        & $compileInvocation
+    }
 } finally {
     Pop-Location
 }
@@ -152,6 +215,54 @@ $Actual = & $SampleOutput 2>&1 | Out-String
 $Actual = $Actual.TrimEnd("`r", "`n").Replace("`r`n", "`n")
 if ($Actual -ne "Hello, Release!") {
     throw "Unexpected smoke test output: '$Actual'"
+}
+
+if ($nativeRuntimeModes.Count -gt 0) {
+    $NativeOutput = Join-Path $ScratchDir ("hello-native" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
+    $NativeLog = Join-Path $ScratchDir "native.stderr.txt"
+    $savedRuntimeArchiveDir = $env:OSCAN_RUNTIME_ARCHIVE_DIR
+    try {
+        $env:OSCAN_RUNTIME_ARCHIVE_DIR = $RuntimeArchiveDir
+        $nativeArgs = @()
+        if ($nativeSmokeMode -eq "hosted") {
+            $nativeArgs += "--libc"
+        }
+        $nativeArgs += @("--backend", "native", $SampleSource, "-o", $NativeOutput)
+        $nativeInvocation = {
+            & $OscanCommand @nativeArgs 2> $NativeLog
+            if ($LASTEXITCODE -ne 0) {
+                throw "Packaged --backend native smoke compile failed:`n$((Get-Content $NativeLog -Raw))"
+            }
+        }
+        if ($expectsBundled) {
+            Invoke-NoHostCompilerCommand -ScratchDir $ScratchDir -Body $nativeInvocation
+        } else {
+            & $nativeInvocation
+        }
+    } finally {
+        $env:OSCAN_RUNTIME_ARCHIVE_DIR = $savedRuntimeArchiveDir
+    }
+    $NativeCompileText = Get-Content $NativeLog -Raw
+    if ($expectsBundled -and $NativeCompileText -notmatch "\bbundled\b") {
+        throw "Packaged native link did not use the relocatable bundled toolchain:`n$NativeCompileText"
+    }
+
+    $NativeActual = & $NativeOutput 2>&1 | Out-String
+    $NativeActual = $NativeActual.TrimEnd("`r", "`n").Replace("`r`n", "`n")
+    if ($NativeActual -ne "Hello, Release!") {
+        throw "Unexpected packaged native smoke output: '$NativeActual'"
+    }
+    if ($platform -eq "windows") {
+        $NativeAscii = [System.Text.Encoding]::ASCII.GetString(
+            [System.IO.File]::ReadAllBytes($NativeOutput)
+        )
+        if ($NativeAscii -notmatch "(?i)KERNEL32\.dll") {
+            throw "Packaged native hello is missing its expected KERNEL32.dll import"
+        }
+        if ($NativeAscii -match "(?i)(msvcrt|ucrt|vcruntime|api-ms-win-crt|WS2_32\.dll|USER32\.dll|GDI32\.dll|Secur32\.dll|Crypt32\.dll)") {
+            throw "Packaged native hello contains an unexpected CRT or optional Win32 DLL dependency"
+        }
+    }
 }
 
 Write-Host "Release smoke test passed for $ArchivePath"

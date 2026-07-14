@@ -1,0 +1,82 @@
+// Test: `match` arms whose pattern is a bare identifier (not `_`), which
+// binds the *whole* scrutinee value under that name — as opposed to a
+// wildcard (already covered by match_exhaustive.osc) or a nested payload
+// binding inside an `Enum { ... }` pattern.
+// Exercises: `other => ...` as a catch-all across every scrutinee shape
+// (i32, str, struct, enum-with-payload, enum-without-payload), including
+// using the bound name as a normal value afterwards (struct field access,
+// re-matching it in a nested match) to make sure the binding carries the
+// scrutinee's real type all the way through, not just a name in scope.
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+enum Shape {
+    Circle(f64),
+    Rectangle(f64, f64),
+    Empty,
+}
+
+fn! main() {
+    // i32 scrutinee
+    let n: i32 = 7;
+    match n {
+        0 => { println("zero"); },
+        other => { print_i32(other); println(""); },
+    };
+
+    // str scrutinee
+    let s: str = "hello";
+    match s {
+        "nope" => { println("nope"); },
+        other => { println(other); },
+    };
+
+    // struct scrutinee: the bound name must carry the struct's real type
+    // (field access on `other` only type-checks/compiles if it does).
+    let p: Point = Point { x: 3, y: 4 };
+    match p {
+        other => { print_i32(other.x); print_i32(other.y); println(""); },
+    };
+
+    // enum with payload: an explicit variant arm alongside a catch-all
+    // that re-matches the bound value in a nested match, to confirm the
+    // catch-all binding's payload data is still readable afterwards.
+    let circle: Shape = Shape::Circle(2.0);
+    match circle {
+        Shape::Circle(r) => { print_f64(r); println(""); },
+        other => {
+            match other {
+                Shape::Rectangle(w, h) => { print_f64(w * h); println(""); },
+                _ => { println("other"); },
+            };
+        },
+    };
+
+    let rect: Shape = Shape::Rectangle(3.0, 4.0);
+    match rect {
+        Shape::Circle(cr) => { print_f64(cr); println(""); },
+        other => {
+            match other {
+                Shape::Rectangle(w, h) => { print_f64(w * h); println(""); },
+                _ => { println("other"); },
+            };
+        },
+    };
+
+    // enum without payload, same catch-all + re-match shape.
+    let empty: Shape = Shape::Empty;
+    match empty {
+        Shape::Circle(_) => { println("circle"); },
+        other => {
+            match other {
+                Shape::Empty => { println("empty"); },
+                _ => { println("other"); },
+            };
+        },
+    };
+
+    println("done");
+}

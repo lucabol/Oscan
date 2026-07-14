@@ -54,4 +54,27 @@ fn! main() {
     print_bool(map_i32_i32_has(squares, 3)); println("");
     map_i32_i32_set(squares, 3, 27);
     print_i32(map_i32_i32_get(squares, 3)); println("");
+
+    // The remaining ops below (str_i64/str_f64 has+delete+len, i32_str
+    // delete, i32_i32 len) aren't exercised above; cover them too so every
+    // map_<k>_<v> builtin's exact ABI signature/layout is regression-tested
+    // (native-completeness: these are the only typed-map operations a
+    // native-backend shim signature mistake could slip through undetected).
+    print_bool(map_str_i64_has(big, "x")); println("");
+    print_i32(map_str_i64_len(big)); println("");
+    map_str_i64_delete(big, "x");
+    print_bool(map_str_i64_has(big, "x")); println("");
+    print_i32(map_str_i64_len(big)); println("");
+
+    print_bool(map_str_f64_has(temps, "pi")); println("");
+    print_i32(map_str_f64_len(temps)); println("");
+    map_str_f64_delete(temps, "pi");
+    print_bool(map_str_f64_has(temps, "pi")); println("");
+    print_i32(map_str_f64_len(temps)); println("");
+
+    map_i32_str_delete(names, 1);
+    print_bool(map_i32_str_has(names, 1)); println("");
+    print_i32(map_i32_str_len(names)); println("");
+
+    print_i32(map_i32_i32_len(squares)); println("");
 }

@@ -69,6 +69,145 @@ osc_arena *osc_global_arena = NULL;
 int osc_global_argc = 0;
 char **osc_global_argv = NULL;
 
+#ifdef OSC_FREESTANDING
+/* See osc_runtime.h: exported (non-inline) wrapper around l_os.h's
+ * l_getenv_init, which has internal linkage and so cannot be called
+ * from a separately compiled translation unit such as the native
+ * (Cranelift) backend's synthesized entry point. */
+void osc_freestanding_env_init(int32_t argc, char **argv)
+{
+    l_getenv_init((int)argc, argv);
+}
+
+/* ================================================================== */
+/*  Narrow core stdio (bypasses the generic Windows FD table)          */
+/* ================================================================== */
+/*
+ * l_write/l_read resolve every fd through l_win_fd_table on Windows: a
+ * static, generic 256-entry table supporting arbitrary open/dup/dup2 file
+ * descriptors (see deps/laststanding/l_os.h). A program that only prints
+ * or panics never needs that generality, but the freestanding runtime
+ * archive is one precompiled translation unit shared by every native
+ * program (no per-program specialization — see src/backend/link.rs's
+ * module docs on section-level garbage collection), so any reference
+ * from osc_print/osc_println/osc_panic/osc_read_line to l_win_fd_handle
+ * would keep the whole table — and its ~4 KiB of storage plus
+ * init/lookup code — linked into every native program, whether it ever
+ * touches a redirected descriptor or not.
+ *
+ * osc_core_write/osc_core_read instead resolve fds 0/1/2 through a tiny,
+ * independent cache (populated directly from GetStdHandle, never from
+ * l_win_fd_table) so a program that only calls
+ * print/println/panic/read_line never references l_win_fd_table at all —
+ * that generic machinery remains available, and independently
+ * section-garbage-collectable, for programs that call
+ * osc_write_str/osc_file_open_read/osc_file_open_write/osc_fd_dup2/sockets.
+ *
+ * osc_fd_dup2 and osc_file_close resync this cache whenever they retarget
+ * or close one of fds 0/1/2 through the generic (table-backed) API, so a
+ * program mixing fd_dup2-based redirection (see examples/sh.osc, which
+ * redirects fd 1 around builtin commands that call println) with
+ * print/println still observes the redirected stream.
+ */
+#ifdef _WIN32
+static HANDLE  osc_std_fd_handle[3];
+static uint8_t osc_std_fd_ready[3];
+
+static HANDLE osc_std_fd_get(int32_t fd)
+{
+    if (!osc_std_fd_ready[fd]) {
+        DWORD id = (fd == L_STDIN) ? STD_INPUT_HANDLE
+                 : (fd == L_STDOUT) ? STD_OUTPUT_HANDLE
+                                    : STD_ERROR_HANDLE;
+        osc_std_fd_handle[fd] = GetStdHandle(id);
+        osc_std_fd_ready[fd]  = 1;
+    }
+    return osc_std_fd_handle[fd];
+}
+
+/* Called only from the generic (table-backed) fd API, never from
+ * print/println/panic/read_line -- so those narrow entry points never
+ * pull in l_win_fd_handle/l_win_fd_table transitively. */
+static void osc_std_fd_resync(int32_t fd)
+{
+    if (fd >= L_STDIN && fd <= L_STDERR) {
+        osc_std_fd_handle[fd] = l_win_fd_handle((L_FD)fd);
+        osc_std_fd_ready[fd]  = 1;
+    }
+}
+
+static void osc_core_write(int32_t fd, const void *buf, size_t len)
+{
+    DWORD written;
+    if (len == 0) return;
+    WriteFile(osc_std_fd_get(fd), buf, (DWORD)len, &written, NULL);
+}
+
+static ssize_t osc_core_read(int32_t fd, void *buf, size_t len)
+{
+    DWORD nread;
+    if (!ReadFile(osc_std_fd_get(fd), buf, (DWORD)len, &nread, NULL)) return -1;
+    return (ssize_t)nread;
+}
+#else
+/* Non-Windows freestanding l_write/l_read are already a direct syscall
+ * with no fd-table indirection (see l_os.h), so there is nothing to
+ * narrow here — reuse them as-is; resyncing is a no-op. */
+static void osc_core_write(int32_t fd, const void *buf, size_t len)
+{
+    if (len > 0) write((L_FD)fd, buf, len);
+}
+
+static ssize_t osc_core_read(int32_t fd, void *buf, size_t len)
+{
+    return l_read((L_FD)fd, buf, len);
+}
+
+static void osc_std_fd_resync(int32_t fd)
+{
+    (void)fd;
+}
+#endif
+
+/* Minimal decimal formatter for osc_panic's line number — avoids pulling
+ * in the full l_snprintf machinery (~3.7 KiB, shared with every other
+ * generic formatting feature) just to render one integer. Returns the
+ * number of characters written (excluding the implicit NUL); truncates
+ * if bufsz is too small. */
+static size_t osc_format_i32_dec(char *buf, size_t bufsz, int value)
+{
+    char         tmp[12]; /* "-2147483648" (11 chars), no NUL needed here */
+    size_t       tlen = 0;
+    unsigned int uval;
+    size_t       n, i;
+
+    if (bufsz == 0) return 0;
+
+    uval = (value < 0) ? (unsigned int)(-(long long)value) : (unsigned int)value;
+    do {
+        tmp[tlen++] = (char)('0' + uval % 10);
+        uval /= 10;
+    } while (uval > 0);
+    if (value < 0) tmp[tlen++] = '-';
+
+    n = tlen < bufsz ? tlen : bufsz;
+    for (i = 0; i < n; i++) buf[i] = tmp[tlen - 1 - i];
+    return n;
+}
+
+/* Appends at most slen bytes of s to buf[0..bufsz-1] starting at pos,
+ * truncating (never writing past bufsz, never underflowing if pos is
+ * already at or past bufsz) and returning the new pos. Shared by
+ * osc_panic's hand-rolled message builder below. */
+static size_t osc_buf_append(char *buf, size_t bufsz, size_t pos, const char *s, size_t slen)
+{
+    size_t room = (pos < bufsz) ? bufsz - pos : 0;
+    if (slen > room) slen = room;
+    if (slen > 0) memcpy(buf + pos, s, slen);
+    return pos + slen;
+}
+#endif /* OSC_FREESTANDING */
+
 /* ================================================================== */
 /*  Panic handler                                                      */
 /* ================================================================== */
@@ -76,13 +215,26 @@ char **osc_global_argv = NULL;
 void osc_panic(const char *message, const char *file, int line)
 {
 #ifdef OSC_FREESTANDING
-    char buf[256];
-    int n = snprintf(buf, sizeof(buf), "panic at %s:%d: %s\n", file, line, message);
-    if (n > 0) {
-        size_t wlen = (size_t)n;
-        if (wlen > sizeof(buf) - 1) wlen = sizeof(buf) - 1;
-        write(L_STDERR, buf, wlen);
-    }
+    /* Hand-rolled formatting, not snprintf/l_snprintf: see the "Narrow
+     * core stdio" comment above -- a basic panic message shouldn't
+     * retain the full generic formatter. l_snprintf remains available,
+     * unpruned, for any program that actually calls a generic
+     * formatting/conversion feature. */
+    char   buf[256];
+    char   linebuf[12];
+    size_t linelen;
+    size_t pos = 0;
+
+    pos = osc_buf_append(buf, sizeof(buf), pos, "panic at ", strlen("panic at "));
+    pos = osc_buf_append(buf, sizeof(buf), pos, file, strlen(file));
+    pos = osc_buf_append(buf, sizeof(buf), pos, ":", 1);
+    linelen = osc_format_i32_dec(linebuf, sizeof(linebuf), line);
+    pos = osc_buf_append(buf, sizeof(buf), pos, linebuf, linelen);
+    pos = osc_buf_append(buf, sizeof(buf), pos, ": ", 2);
+    pos = osc_buf_append(buf, sizeof(buf), pos, message, strlen(message));
+    pos = osc_buf_append(buf, sizeof(buf), pos, "\n", 1);
+
+    osc_core_write(L_STDERR, buf, pos);
     exit(1);
 #else
     fprintf(stderr, "panic at %s:%d: %s\n", file, line, message);
@@ -684,18 +836,18 @@ static void osc_format_f64(char *buf, size_t bufsz, double n)
 /* Helper: write a buffer to stdout */
 static void osc_write_stdout(const char *buf, size_t len)
 {
-    if (len > 0) write(L_STDOUT, buf, len);
+    if (len > 0) osc_core_write(L_STDOUT, buf, len);
 }
 
 void osc_print(osc_str s)
 {
-    if (s.len > 0) write(L_STDOUT, s.data, (size_t)s.len);
+    if (s.len > 0) osc_core_write(L_STDOUT, s.data, (size_t)s.len);
 }
 
 void osc_println(osc_str s)
 {
-    if (s.len > 0) write(L_STDOUT, s.data, (size_t)s.len);
-    write(L_STDOUT, "\n", 1);
+    if (s.len > 0) osc_core_write(L_STDOUT, s.data, (size_t)s.len);
+    osc_core_write(L_STDOUT, "\n", 1);
 }
 
 void osc_print_i32(int32_t n)
@@ -722,9 +874,9 @@ void osc_print_f64(double n)
 void osc_print_bool(uint8_t b)
 {
     if (b) {
-        write(L_STDOUT, "true", 4);
+        osc_core_write(L_STDOUT, "true", 4);
     } else {
-        write(L_STDOUT, "false", 5);
+        osc_core_write(L_STDOUT, "false", 5);
     }
 }
 
@@ -736,7 +888,7 @@ osc_result_str_str osc_read_line(osc_arena *arena)
 
     /* Read one byte at a time until newline or error */
     while (pos < sizeof(buf) - 1) {
-        ssize_t n = l_read(L_STDIN, &buf[pos], 1);
+        ssize_t n = osc_core_read(L_STDIN, &buf[pos], 1);
         if (n <= 0) {
             if (pos == 0) {
                 result.is_ok     = 0;
@@ -903,6 +1055,7 @@ void osc_write_str(int32_t fd, osc_str s)
 void osc_file_close(int32_t fd)
 {
     l_close((L_FD)fd);
+    osc_std_fd_resync(fd);
 }
 
 osc_result_str_str osc_file_delete(osc_str path)
@@ -2458,7 +2611,9 @@ int32_t osc_fd_dup(int32_t fd)
 int32_t osc_fd_dup2(int32_t oldfd, int32_t newfd)
 {
 #ifdef OSC_FREESTANDING
-    return (int32_t)l_dup2((L_FD)oldfd, (L_FD)newfd);
+    int32_t result = (int32_t)l_dup2((L_FD)oldfd, (L_FD)newfd);
+    if (result >= 0) osc_std_fd_resync(newfd);
+    return result;
 #else
 #ifdef _WIN32
     return (int32_t)_dup2((int)oldfd, (int)newfd);

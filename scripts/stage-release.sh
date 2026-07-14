@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env sh
+#!/usr/bin/env sh
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -9,6 +9,7 @@ VERSION=""
 BINARY_PATH=""
 OUTPUT_DIR="$REPO_ROOT/target/release-artifacts"
 CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
+RUNTIME_ARCHIVE_DIR=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -32,8 +33,12 @@ while [ "$#" -gt 0 ]; do
             CONTRACT_PATH="$2"
             shift 2
             ;;
+        --runtime-archive-dir)
+            RUNTIME_ARCHIVE_DIR="$2"
+            shift 2
+            ;;
         *)
-            echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --version <version> --binary <path> [--output-dir <path>] [--contract <path>]" >&2
+            echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>]" >&2
             exit 1
             ;;
     esac
@@ -43,9 +48,11 @@ done
 [ -n "$VERSION" ] || { echo "missing --version" >&2; exit 1; }
 [ -n "$BINARY_PATH" ] || { echo "missing --binary" >&2; exit 1; }
 
-python3 "$SCRIPT_DIR/release_tools.py" stage-release \
+set -- "$SCRIPT_DIR/release_tools.py" stage-release \
     --target "$TARGET" \
     --version "$VERSION" \
     --binary "$BINARY_PATH" \
     --output-dir "$OUTPUT_DIR" \
     --contract "$CONTRACT_PATH"
+[ -n "$RUNTIME_ARCHIVE_DIR" ] && set -- "$@" --runtime-archive-dir "$RUNTIME_ARCHIVE_DIR"
+python3 "$@"

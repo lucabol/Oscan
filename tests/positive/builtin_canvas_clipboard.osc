@@ -1,0 +1,53 @@
+// Test: Canvas and clipboard builtins
+// Exercises: every canvas_*/clipboard_* builtin's ABI/signature lowering.
+//
+// Two halves, matching how impractical each part is to actually run
+// headlessly:
+//  1. Direct scalar canvas queries (alive/width/height/scale/resized/
+//     key/mouse_*/wheel) plus clear/flush/close are genuinely safe to
+//     call with no canvas ever opened (they just read/no-op on the
+//     runtime's default "no canvas" state) and are executed for real,
+//     asserting both backends agree byte-for-byte.
+//  2. canvas_open/canvas_set_icon (open a real OS window) and
+//     clipboard_set/clipboard_get (touch the desktop clipboard) cannot
+//     be run unconditionally in a headless/sandboxed CI environment
+//     without risking a hang or an environment-dependent result. They
+//     are gated behind a condition the compiler cannot prove false at
+//     compile time (so the call is still fully lowered, type-checked,
+//     and *linked* against its runtime shim -- proving the ABI marshaling
+//     is correct) but that is always false at runtime, so they never
+//     actually execute.
+
+fn! main() {
+    print_bool(canvas_alive()); println("");
+    print_i32(canvas_width()); println("");
+    print_i32(canvas_height()); println("");
+    print_i32(canvas_scale()); println("");
+    print_bool(canvas_resized()); println("");
+    print_i32(canvas_key()); println("");
+    print_i32(canvas_mouse_x()); println("");
+    print_i32(canvas_mouse_y()); println("");
+    print_i32(canvas_mouse_btn()); println("");
+    print_i32(canvas_wheel()); println("");
+    canvas_clear(rgb(0, 0, 0));
+    canvas_flush();
+    canvas_close();
+
+    let never: bool = 1 == 2;
+    if never {
+        let r1: Result<str, str> = canvas_open(320, 240, "unit-test");
+        match r1 { Result::Ok(_) => {}, Result::Err(_) => {}, };
+
+        let pixels: [i32] = [0, 0, 0, 0];
+        let r2: Result<str, str> = canvas_set_icon(pixels, 2, 2);
+        match r2 { Result::Ok(_) => {}, Result::Err(_) => {}, };
+
+        let n: i32 = clipboard_set("unit-test");
+        print_i32(n);
+
+        let r3: Result<str, str> = clipboard_get();
+        match r3 { Result::Ok(_) => {}, Result::Err(_) => {}, };
+    };
+
+    println("done");
+}

@@ -5,6 +5,7 @@ tests/build/
 *.o
 
 *.obj
+__pycache__/
 .squad/orchestration-log/
 .squad/log/
 .squad/decisions/inbox/

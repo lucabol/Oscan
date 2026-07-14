@@ -8,6 +8,14 @@
     "toolchain_position": "archive-root/toolchain",
     "binary_and_toolchain_are_siblings": true
   },
+  "native_backend": {
+    "runtime_source_position": "archive-root/native-runtime",
+    "runtime_archive_position_template": "archive-root/build/runtime-archives/{target}",
+    "source_files": [
+      "osc_native_shim.c",
+      "osc_runtime.h"
+    ]
+  },
   "lookup_contract": {
     "windows": {
       "search_roots": [
@@ -46,7 +54,13 @@
       "archive_format": "zip",
       "archive_name_template": "oscan-v{version}-windows-x86_64-full.zip",
       "archive_root_template": "oscan-v{version}-windows-x86_64-full",
-      "toolchain_manifest": "windows-x86_64.json"
+      "toolchain_manifest": "windows-x86_64.json",
+      "native_runtime_modes": [
+        "hosted",
+        "freestanding",
+        "freestanding_core"
+      ],
+      "native_smoke_mode": "freestanding"
     },
     "linux-x86_64": {
       "binary_name": "oscan",
@@ -54,7 +68,13 @@
       "archive_format": "tar.xz",
       "archive_name_template": "oscan-v{version}-linux-x86_64-full.tar.xz",
       "archive_root_template": "oscan-v{version}-linux-x86_64-full",
-      "toolchain_manifest": "linux-x86_64.json"
+      "toolchain_manifest": "linux-x86_64.json",
+      "native_runtime_modes": [
+        "hosted",
+        "freestanding",
+        "freestanding_core"
+      ],
+      "native_smoke_mode": "freestanding"
     }
   },
   "binary_only_targets": {
@@ -66,7 +86,9 @@
       "archive_root_template": "oscan-v{version}-macos-x86_64",
       "requires_host_compiler": true,
       "required_host_toolchain": "apple-clt",
-      "note_file": "macos-phase1-note.md"
+      "note_file": "macos-phase1-note.md",
+      "native_runtime_modes": [],
+      "native_smoke_mode": null
     }
   }
 }
