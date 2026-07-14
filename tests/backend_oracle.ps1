@@ -33,6 +33,31 @@ function Normalize-OracleText {
     return $Text.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
 }
 
+function Resolve-OracleBackendSelection {
+    param(
+        [Parameter(Mandatory = $true)][string]$Backend,
+        [Parameter(Mandatory = $true)][string]$BackendOption
+    )
+
+    # PowerShell treats GNU-style "--backend native" as two positional values:
+    # Backend="--backend", BackendOption="native". Normalize that common spelling
+    # while preserving the native PowerShell "-Backend native" form.
+    if ($Backend -eq "--backend") {
+        if ($BackendOption -eq "--backend") {
+            throw "--backend requires a backend name"
+        }
+        return [PSCustomObject]@{
+            Backend = $BackendOption
+            BackendOption = "--backend"
+        }
+    }
+
+    return [PSCustomObject]@{
+        Backend = $Backend
+        BackendOption = $BackendOption
+    }
+}
+
 # Compares normalized actual stdout against a primary expected file, falling
 # back to an optional secondary ("libc"-style, reduced-capability) expected
 # file when the primary doesn't match. A handful of builtins are legitimately

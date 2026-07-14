@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Oscan Test Runner — quiet by default, verbose on --VerboseOutput or failure
-# Usage: .\test.ps1 [-Backend <name>] [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-SkipLibc] [-VerboseOutput]
+# Usage: .\test.ps1 [-Backend <name> | --backend <name>] [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-SkipLibc] [-VerboseOutput]
 
 param(
     [switch]$SkipBuild,
@@ -18,6 +18,15 @@ param(
 
 $ErrorActionPreference = "Continue"
 . (Join-Path $PSScriptRoot "tests\backend_oracle.ps1")
+
+try {
+    $backendSelection = Resolve-OracleBackendSelection -Backend $Backend -BackendOption $BackendOption
+    $Backend = $backendSelection.Backend
+    $BackendOption = $backendSelection.BackendOption
+} catch {
+    Write-Host "Backend selection failed: $_" -ForegroundColor Red
+    exit 2
+}
 
 # ── Result tracking ────────────────────────────────────
 $script:Results = [System.Collections.ArrayList]::new()

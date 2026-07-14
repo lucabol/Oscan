@@ -9,6 +9,22 @@ function Assert-OracleTest {
 Assert-OracleTest ((Normalize-OracleText "a`r`nb`r`n") -eq "a`nb") "text normalization failed"
 Assert-OracleTest ((Normalize-OracleText "a`rb`n") -eq "a`nb") "bare CR normalization failed"
 
+$nativeSelection = Resolve-OracleBackendSelection -Backend "native" -BackendOption "--backend"
+Assert-OracleTest ($nativeSelection.Backend -eq "native") "PowerShell-style backend selection changed"
+Assert-OracleTest ($nativeSelection.BackendOption -eq "--backend") "PowerShell-style backend option changed"
+
+$gnuSelection = Resolve-OracleBackendSelection -Backend "--backend" -BackendOption "native"
+Assert-OracleTest ($gnuSelection.Backend -eq "native") "GNU-style backend name was not normalized"
+Assert-OracleTest ($gnuSelection.BackendOption -eq "--backend") "GNU-style backend option was not normalized"
+
+$missingBackendRejected = $false
+try {
+    [void](Resolve-OracleBackendSelection -Backend "--backend" -BackendOption "--backend")
+} catch {
+    $missingBackendRejected = $true
+}
+Assert-OracleTest $missingBackendRejected "GNU-style --backend without a name was not rejected"
+
 # Test-ExpectedOutputMatch: primary expected file wins when it matches; an
 # optional fallback (mirroring tests/expected_libc/<name>.expected) is only
 # consulted when the primary doesn't match, and a genuine divergence must

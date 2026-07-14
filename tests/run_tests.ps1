@@ -1,5 +1,5 @@
 # Oscan Test Runner (PowerShell) — quiet by default, -VerboseOutput for details
-# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-Backend <name>] [-VerboseOutput]
+# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-Backend <name> | --backend <name>] [-VerboseOutput]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -18,6 +18,16 @@ $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ScriptDir
 . (Join-Path $ScriptDir "backend_oracle.ps1")
+
+try {
+    $backendSelection = Resolve-OracleBackendSelection -Backend $Backend -BackendOption $BackendOption
+    $Backend = $backendSelection.Backend
+    $BackendOption = $backendSelection.BackendOption
+} catch {
+    Pop-Location
+    Write-Error $_
+    exit 2
+}
 
 $Pass = 0; $Fail = 0; $NegPass = 0; $NegFail = 0
 $Failures = [System.Collections.ArrayList]::new()
