@@ -663,6 +663,9 @@ if (-not $SkipWSL) {
     } else {
         $script:WSLAvail = $true
         $wslDir = Convert-ToWSLPath (Get-Location).Path
+        # Each generated C file includes the full freestanding runtime. Compile
+        # several at once, but cap the fan-out to avoid DrvFS and memory contention.
+        $wslParallelism = [Math]::Max(1, [Math]::Min(8, $throttle))
 
         if (-not (Test-Path "tests\build")) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
@@ -686,18 +689,25 @@ if (-not $SkipWSL) {
         } -ThrottleLimit $throttle
 
         # Phase 2: Generate batch bash script for compile + run
-        $bashLines = @("#!/bin/bash", "cd '$wslDir'")
+        $bashLines = @(
+            "#!/bin/bash",
+            "cd '$wslDir'",
+            "rm -rf tests/build/wsl-results",
+            "mkdir -p tests/build/wsl-results"
+        )
         $wslTestTimeoutSeconds = 30
+        $wslScheduledJobs = 0
         # l_img.h's vendored stb_image integration requires laststanding's
         # freestanding stdlib/string shims on Linux (see its README).
         $freestandingCompat = "-Ideps/laststanding/compat"
         foreach ($t in $transpileResults) {
             if (-not $t.Success) {
-                $bashLines += "echo 'FAIL|$($t.Name)|transpile error'"
+                $bashLines += "echo 'FAIL|$($t.Name)|transpile error' > tests/build/wsl-results/$($t.Name).result"
                 continue
             }
             $n = $t.Name
             $isTls = $n -match '^tls_'
+            $bashLines += "("
             if ($t.IsFfi) {
                 $bashLines += "gcc -std=c99 tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl -lm 2>/dev/null"
             } elseif ($isTls) {
@@ -712,7 +722,14 @@ if (-not $SkipWSL) {
             $bashLines += "  rc=`$?"
             $bashLines += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo 'FAIL|$n|timed out after ${wslTestTimeoutSeconds}s'; else echo `"OK|$n|`$rc`"; fi"
             $bashLines += "fi"
+            $bashLines += ") > tests/build/wsl-results/$n.result &"
+            $wslScheduledJobs++
+            if (($wslScheduledJobs % $wslParallelism) -eq 0) {
+                $bashLines += "wait"
+            }
         }
+        $bashLines += "wait"
+        $bashLines += "cat tests/build/wsl-results/*.result"
 
         $bashScript = $bashLines -join "`n"
         Set-Content "tests\build\_wsl_batch.sh" $bashScript -NoNewline
@@ -916,11 +933,17 @@ if (-not $SkipWSL) {
                 # successfully cross-emitted (mirrors the C-backend WSL
                 # phase's single-call batching above). Each object is linked
                 # with the same explicit runtime mode used to emit it.
-                $nBash = @("#!/bin/bash", "cd '$wslDir'")
+                $nBash = @(
+                    "#!/bin/bash",
+                    "cd '$wslDir'",
+                    "rm -rf tests/build/wsl-native/results",
+                    "mkdir -p tests/build/wsl-native/results"
+                )
+                $nativeScheduledJobs = 0
                 foreach ($r in $objResults) {
                     $n = $r.Name
                     if (-not $r.Success) {
-                        $nBash += "echo `"FAIL|$n|native object generation error`""
+                        $nBash += "echo `"FAIL|$n|native object generation error`" > tests/build/wsl-native/results/$n.result"
                         continue
                     }
                     $obj = "tests/build/wsl-native/$n.o"
@@ -930,6 +953,7 @@ if (-not $SkipWSL) {
                     } else {
                         $linkCommand = "$freestandingCC '$obj' '$archiveDirWSL/osc_native_shim.freestanding.$freestandingCC.o' '$archiveDirWSL/libosc_runtime_freestanding.a' -nostdlib -static -Wl,--gc-sections,--build-id=none -o '$exe'"
                     }
+                    $nBash += "("
                     $nBash += "if $linkCommand 2>tests/build/wsl-native/$n.linkerr; then"
                     $nBash += "  timeout --kill-after=5s ${wslTestTimeoutSeconds}s ./'$exe' > tests/build/wsl-native/$n.out 2>&1"
                     $nBash += "  rc=`$?"
@@ -937,7 +961,14 @@ if (-not $SkipWSL) {
                     $nBash += "else"
                     $nBash += "  echo `"FAIL|$n|link error`""
                     $nBash += "fi"
+                    $nBash += ") > tests/build/wsl-native/results/$n.result &"
+                    $nativeScheduledJobs++
+                    if (($nativeScheduledJobs % $wslParallelism) -eq 0) {
+                        $nBash += "wait"
+                    }
                 }
+                $nBash += "wait"
+                $nBash += "cat tests/build/wsl-native/results/*.result"
                 Set-Content "tests\build\wsl-native\_wsl_native_batch.sh" ($nBash -join "`n") -NoNewline
                 $nBatchOutput = wsl bash -c "cd '$wslDir' && bash tests/build/wsl-native/_wsl_native_batch.sh" 2>&1 | Out-String
                 $nBatchExitCode = $LASTEXITCODE
