@@ -1,46 +1,37 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::*;
+use crate::ast::{BinOp, UnaryOp};
+use crate::ir;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
-// Code Generator — Typed AST → C99 source
+// Code Generator — Typed IR → C99 source
 // ---------------------------------------------------------------------------
 
 pub struct CodeGenerator {
     out: String,
     indent: usize,
     temp_counter: usize,
-    structs: HashMap<String, StructInfo>,
     enums: HashMap<String, EnumInfo>,
     functions: HashMap<String, FunctionInfo>,
-    constants: HashMap<String, ConstInfo>,
-    scopes: Vec<HashMap<String, BcType>>,
-    mut_vars: HashSet<String>,
     current_fn_return_type: Option<BcType>,
     deferred_exprs: Vec<String>,
     result_types: Vec<(BcType, BcType)>,
-    expected_array_elem_type: Option<BcType>,
     fn_ptr_types: Vec<BcType>,
     freestanding: bool,
 }
 
 impl CodeGenerator {
-    pub fn generate(program: &Program, info: &SemanticInfo, freestanding: bool) -> String {
+    pub fn generate(program: &ir::Program, freestanding: bool) -> String {
         let mut cg = Self {
             out: String::new(),
             indent: 0,
             temp_counter: 0,
-            structs: info.structs.clone(),
-            enums: info.enums.clone(),
-            functions: info.functions.clone(),
-            constants: info.constants.clone(),
-            scopes: Vec::new(),
-            mut_vars: HashSet::new(),
+            enums: program.enums.clone(),
+            functions: program.functions.clone(),
             current_fn_return_type: None,
             deferred_exprs: Vec::new(),
             result_types: Vec::new(),
-            expected_array_elem_type: None,
             fn_ptr_types: Vec::new(),
             freestanding,
         };
@@ -66,10 +57,22 @@ impl CodeGenerator {
     // Result type collection
     // -----------------------------------------------------------------------
 
-    fn collect_result_types(&mut self, program: &Program) {
+    fn collect_result_types(&mut self, program: &ir::Program) {
         let mut seen = HashSet::new();
-        for decl in &program.decls {
-            self.collect_result_types_decl(decl, &mut seen);
+        for f in &program.fn_defs {
+            self.collect_result_types_from_bctype(&f.return_type, &mut seen);
+            for (_, ty) in &f.params {
+                self.collect_result_types_from_bctype(ty, &mut seen);
+            }
+            self.collect_result_types_block(&f.body, &mut seen);
+        }
+        for c in &program.const_defs {
+            self.collect_result_types_from_bctype(&c.ty, &mut seen);
+        }
+        for s in &program.struct_defs {
+            for (_, ty) in &s.fields {
+                self.collect_result_types_from_bctype(ty, &mut seen);
+            }
         }
         // Also collect from function return types
         for fi in self.functions.values() {
@@ -80,62 +83,36 @@ impl CodeGenerator {
                 }
             }
         }
-        // Always include Result<str, str> for read_line
-        let str_str = (BcType::Str, BcType::Str);
-        if !seen.contains(&str_str) {
-            // Already defined in runtime, skip
-        }
     }
 
-    fn collect_result_types_decl(&mut self, decl: &TopDecl, seen: &mut HashSet<(BcType, BcType)>) {
-        match decl {
-            TopDecl::Fn(f) => {
-                if let Some(ty) = &f.return_type {
-                    self.collect_result_types_from_ast_type(ty, seen);
-                }
-                for p in &f.params {
-                    self.collect_result_types_from_ast_type(&p.ty, seen);
-                }
-                self.collect_result_types_block(&f.body, seen);
-            }
-            TopDecl::Let(l) => {
-                self.collect_result_types_from_ast_type(&l.ty, seen);
-            }
-            TopDecl::Struct(s) => {
-                for field in &s.fields {
-                    self.collect_result_types_from_ast_type(&field.ty, seen);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_result_types_from_ast_type(
+    fn collect_result_types_from_bctype(
         &mut self,
-        ty: &Type,
+        ty: &BcType,
         seen: &mut HashSet<(BcType, BcType)>,
     ) {
-        if let Type::Result(ok, err, _) = ty {
-            let ok_bc = self.resolve_ast_type(ok);
-            let err_bc = self.resolve_ast_type(err);
-            let key = (ok_bc, err_bc);
+        if let BcType::Result(ok, err) = ty {
+            let key = ((**ok).clone(), (**err).clone());
             if seen.insert(key.clone()) {
                 self.result_types.push(key);
             }
-            self.collect_result_types_from_ast_type(ok, seen);
-            self.collect_result_types_from_ast_type(err, seen);
+            self.collect_result_types_from_bctype(ok, seen);
+            self.collect_result_types_from_bctype(err, seen);
         }
     }
 
-    fn collect_result_types_block(&mut self, block: &Block, seen: &mut HashSet<(BcType, BcType)>) {
+    fn collect_result_types_block(
+        &mut self,
+        block: &ir::Block,
+        seen: &mut HashSet<(BcType, BcType)>,
+    ) {
         for stmt in &block.stmts {
             match stmt {
-                Stmt::Let(ls) => {
-                    self.collect_result_types_from_ast_type(&ls.ty, seen);
+                ir::Stmt::Let(ls) => {
+                    self.collect_result_types_from_bctype(&ls.ty, seen);
                 }
-                Stmt::For(f) => self.collect_result_types_block(&f.body, seen),
-                Stmt::ForIn(fi) => self.collect_result_types_block(&fi.body, seen),
-                Stmt::While(w) => self.collect_result_types_block(&w.body, seen),
+                ir::Stmt::For(f) => self.collect_result_types_block(&f.body, seen),
+                ir::Stmt::ForIn(fi) => self.collect_result_types_block(&fi.body, seen),
+                ir::Stmt::While(w) => self.collect_result_types_block(&w.body, seen),
                 _ => {}
             }
         }
@@ -149,7 +126,7 @@ impl CodeGenerator {
         format!("osc_{}", self.type_tag(ty))
     }
 
-    fn collect_fn_ptr_types(&mut self, program: &Program) {
+    fn collect_fn_ptr_types(&mut self, program: &ir::Program) {
         let mut seen = HashSet::new();
         // Collect from function parameters and return types
         let fns: Vec<FunctionInfo> = self.functions.values().cloned().collect();
@@ -159,14 +136,12 @@ impl CodeGenerator {
             }
             self.collect_fn_ptr_from_bctype(&fi.return_type, &mut seen);
         }
-        // Collect from AST (let bindings inside functions)
-        for decl in &program.decls {
-            if let TopDecl::Fn(f) = decl {
-                for p in &f.params {
-                    self.collect_fn_ptr_from_ast_type(&p.ty, &mut seen);
-                }
-                self.collect_fn_ptr_from_block(&f.body, &mut seen);
+        // Collect from IR (let bindings inside functions)
+        for f in &program.fn_defs {
+            for (_, ty) in &f.params {
+                self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
             }
+            self.collect_fn_ptr_from_block(&f.body, &mut seen);
         }
     }
 
@@ -183,34 +158,33 @@ impl CodeGenerator {
         }
     }
 
-    fn collect_fn_ptr_from_ast_type(&mut self, ty: &Type, seen: &mut HashSet<String>) {
+    fn collect_fn_ptr_from_bctype_deep(&mut self, ty: &BcType, seen: &mut HashSet<String>) {
         match ty {
-            Type::FnPtr(params, ret, _) => {
-                let bc = self.resolve_ast_type(ty);
-                self.collect_fn_ptr_from_bctype(&bc, seen);
+            BcType::FnPtr(params, ret) => {
+                self.collect_fn_ptr_from_bctype(ty, seen);
                 for p in params {
-                    self.collect_fn_ptr_from_ast_type(p, seen);
+                    self.collect_fn_ptr_from_bctype_deep(p, seen);
                 }
-                self.collect_fn_ptr_from_ast_type(ret, seen);
+                self.collect_fn_ptr_from_bctype_deep(ret, seen);
             }
-            Type::DynamicArray(elem, _) | Type::FixedArray(elem, _, _) => {
-                self.collect_fn_ptr_from_ast_type(elem, seen);
+            BcType::Array(elem) | BcType::FixedArray(elem, _) => {
+                self.collect_fn_ptr_from_bctype_deep(elem, seen);
             }
-            Type::Result(ok, err, _) => {
-                self.collect_fn_ptr_from_ast_type(ok, seen);
-                self.collect_fn_ptr_from_ast_type(err, seen);
+            BcType::Result(ok, err) => {
+                self.collect_fn_ptr_from_bctype_deep(ok, seen);
+                self.collect_fn_ptr_from_bctype_deep(err, seen);
             }
-            Type::Primitive(_, _) | Type::Named(_, _) => {}
+            _ => {}
         }
     }
 
-    fn collect_fn_ptr_from_block(&mut self, block: &Block, seen: &mut HashSet<String>) {
+    fn collect_fn_ptr_from_block(&mut self, block: &ir::Block, seen: &mut HashSet<String>) {
         for stmt in &block.stmts {
             match stmt {
-                Stmt::Let(ls) => self.collect_fn_ptr_from_ast_type(&ls.ty, seen),
-                Stmt::For(f) => self.collect_fn_ptr_from_block(&f.body, seen),
-                Stmt::ForIn(fi) => self.collect_fn_ptr_from_block(&fi.body, seen),
-                Stmt::While(w) => self.collect_fn_ptr_from_block(&w.body, seen),
+                ir::Stmt::Let(ls) => self.collect_fn_ptr_from_bctype_deep(&ls.ty, seen),
+                ir::Stmt::For(f) => self.collect_fn_ptr_from_block(&f.body, seen),
+                ir::Stmt::ForIn(fi) => self.collect_fn_ptr_from_block(&fi.body, seen),
+                ir::Stmt::While(w) => self.collect_fn_ptr_from_block(&w.body, seen),
                 _ => {}
             }
         }
@@ -227,7 +201,9 @@ impl CodeGenerator {
                 }
                 self.line(&format!(
                     "typedef {} (*{})({});",
-                    ret_c, name, param_parts.join(", ")
+                    ret_c,
+                    name,
+                    param_parts.join(", ")
                 ));
             }
         }
@@ -392,22 +368,20 @@ impl CodeGenerator {
     // Enum definitions
     // -----------------------------------------------------------------------
 
-    fn emit_enum_defs(&mut self, program: &Program) {
-        for decl in &program.decls {
-            if let TopDecl::Enum(e) = decl {
-                self.emit_enum_def(e);
-            }
+    fn emit_enum_defs(&mut self, program: &ir::Program) {
+        for e in &program.enum_defs {
+            self.emit_enum_def(e);
         }
     }
 
-    fn emit_enum_def(&mut self, e: &EnumDecl) {
+    fn emit_enum_def(&mut self, e: &ir::EnumDef) {
         // Tag constants
-        for (i, v) in e.variants.iter().enumerate() {
-            self.line(&format!("#define {}_TAG_{} {}", e.name, v.name, i));
+        for (i, (vname, _)) in e.variants.iter().enumerate() {
+            self.line(&format!("#define {}_TAG_{} {}", e.name, vname, i));
         }
         self.blank();
 
-        let has_payload = e.variants.iter().any(|v| !v.payload_types.is_empty());
+        let has_payload = e.variants.iter().any(|(_, tys)| !tys.is_empty());
 
         if has_payload {
             self.line(&format!("typedef struct {{"));
@@ -415,16 +389,16 @@ impl CodeGenerator {
             self.line("int tag;");
             self.line("union {");
             self.indent += 1;
-            for v in &e.variants {
-                if !v.payload_types.is_empty() {
+            for (vname, tys) in &e.variants {
+                if !tys.is_empty() {
                     self.line(&format!("struct {{"));
                     self.indent += 1;
-                    for (i, pt) in v.payload_types.iter().enumerate() {
-                        let ct = self.type_to_c(&self.resolve_ast_type(pt));
+                    for (i, pt) in tys.iter().enumerate() {
+                        let ct = self.type_to_c(pt);
                         self.line(&format!("{} _{};", ct, i));
                     }
                     self.indent -= 1;
-                    self.line(&format!("}} {};", v.name));
+                    self.line(&format!("}} {};", vname));
                 }
             }
             self.indent -= 1;
@@ -442,20 +416,18 @@ impl CodeGenerator {
     // Struct definitions
     // -----------------------------------------------------------------------
 
-    fn emit_struct_defs(&mut self, program: &Program) {
-        for decl in &program.decls {
-            if let TopDecl::Struct(s) = decl {
-                self.emit_struct_def(s);
-            }
+    fn emit_struct_defs(&mut self, program: &ir::Program) {
+        for s in &program.struct_defs {
+            self.emit_struct_def(s);
         }
     }
 
-    fn emit_struct_def(&mut self, s: &StructDecl) {
+    fn emit_struct_def(&mut self, s: &ir::StructDef) {
         self.line(&format!("typedef struct {{"));
         self.indent += 1;
-        for f in &s.fields {
-            let ct = self.type_to_c(&self.resolve_ast_type(&f.ty));
-            self.line(&format!("{} {};", ct, f.name));
+        for (fname, fty) in &s.fields {
+            let ct = self.type_to_c(fty);
+            self.line(&format!("{} {};", ct, fname));
         }
         self.indent -= 1;
         self.line(&format!("}} {};", s.name));
@@ -466,43 +438,39 @@ impl CodeGenerator {
     // Forward declarations
     // -----------------------------------------------------------------------
 
-    fn emit_forward_decls(&mut self, program: &Program) {
+    fn emit_forward_decls(&mut self, program: &ir::Program) {
         // Emit extern function prototypes (no _arena parameter)
-        for decl in &program.decls {
-            if let TopDecl::Extern(eb) = decl {
-                for ef in &eb.decls {
-                    let ret = match &ef.return_type {
-                        Some(t) => self.type_to_c(&self.resolve_ast_type(t)),
-                        None => "void".to_string(),
-                    };
-                    let cname = Self::mangle_c_name(&ef.name);
-                    let params: Vec<String> = ef.params.iter().map(|p| {
-                        let ty = self.resolve_ast_type(&p.ty);
-                        let c_ty = self.type_to_c(&ty);
-                        format!("{} {}", c_ty, p.name)
-                    }).collect();
-                    let params_str = if params.is_empty() {
-                        "void".to_string()
-                    } else {
-                        params.join(", ")
-                    };
-                    self.line(&format!("extern {} {}({});", ret, cname, params_str));
-                }
+        for eb in &program.extern_blocks {
+            for ef in &eb.decls {
+                let ret = self.type_to_c(&ef.return_type);
+                let cname = Self::mangle_c_name(&ef.name);
+                let params: Vec<String> = ef
+                    .params
+                    .iter()
+                    .map(|(name, ty)| {
+                        let c_ty = self.type_to_c(ty);
+                        format!("{} {}", c_ty, name)
+                    })
+                    .collect();
+                let params_str = if params.is_empty() {
+                    "void".to_string()
+                } else {
+                    params.join(", ")
+                };
+                self.line(&format!("extern {} {}({});", ret, cname, params_str));
             }
         }
         // Emit user-defined function forward declarations
-        for decl in &program.decls {
-            if let TopDecl::Fn(f) = decl {
-                if f.name == "main" {
-                    let ret = self.fn_return_c(f);
-                    let params = self.fn_params_c(f);
-                    self.line(&format!("{} oscan_main({});", ret, params));
-                } else {
-                    let ret = self.fn_return_c(f);
-                    let params = self.fn_params_c(f);
-                    let cname = Self::mangle_c_name(&f.name);
-                    self.line(&format!("{} {}({});", ret, cname, params));
-                }
+        for f in &program.fn_defs {
+            if f.name == "main" {
+                let ret = self.fn_return_c(f);
+                let params = self.fn_params_c(f);
+                self.line(&format!("{} oscan_main({});", ret, params));
+            } else {
+                let ret = self.fn_return_c(f);
+                let params = self.fn_params_c(f);
+                let cname = Self::mangle_c_name(&f.name);
+                self.line(&format!("{} {}({});", ret, cname, params));
             }
         }
         self.blank();
@@ -512,35 +480,30 @@ impl CodeGenerator {
     // Top-level constants
     // -----------------------------------------------------------------------
 
-    fn emit_top_level_constants(&mut self, program: &Program) {
-        for decl in &program.decls {
-            if let TopDecl::Let(l) = decl {
-                let ty = self.resolve_ast_type(&l.ty);
-                let c_ty = self.type_to_c(&ty);
-                match &l.value {
-                    Expr::StringLit(s, _) => {
-                        let escaped = self.escape_c_string(s);
+    fn emit_top_level_constants(&mut self, program: &ir::Program) {
+        for c in &program.const_defs {
+            let c_ty = self.type_to_c(&c.ty);
+            match &c.value {
+                ir::Expr::StringLit(s, _) => {
+                    let escaped = self.escape_c_string(s);
+                    self.line(&format!(
+                        "static const osc_str {} = {{ \"{}\", {} }};",
+                        c.name,
+                        escaped,
+                        s.len()
+                    ));
+                }
+                _ => {
+                    // Try compile-time constant evaluation first (C99 requires
+                    // static initializers to be constant expressions).
+                    if let Some(const_val) = Self::try_const_eval(&c.value) {
                         self.line(&format!(
-                            "static const osc_str {} = {{ \"{}\", {} }};",
-                            l.name,
-                            escaped,
-                            s.len()
+                            "static const {} {} = {};",
+                            c_ty, c.name, const_val
                         ));
-                    }
-                    _ => {
-                        // Try compile-time constant evaluation first (C99 requires
-                        // static initializers to be constant expressions).
-                        if let Some(const_val) = Self::try_const_eval(&l.value) {
-                            self.line(&format!(
-                                "static const {} {} = {};",
-                                c_ty, l.name, const_val
-                            ));
-                        } else {
-                            self.scopes.push(HashMap::new());
-                            let val = self.emit_expr(&l.value);
-                            self.scopes.pop();
-                            self.line(&format!("static const {} {} = {};", c_ty, l.name, val));
-                        }
+                    } else {
+                        let val = self.emit_expr(&c.value);
+                        self.line(&format!("static const {} {} = {};", c_ty, c.name, val));
                     }
                 }
             }
@@ -549,12 +512,12 @@ impl CodeGenerator {
     }
 
     /// Attempt to evaluate a constant expression at compile time.
-    fn try_const_eval(expr: &Expr) -> Option<String> {
+    fn try_const_eval(expr: &ir::Expr) -> Option<String> {
         match expr {
-            Expr::IntLit(v, _) => Some(format!("{}", v)),
-            Expr::FloatLit(v, _) => Some(format!("{:?}", v)),
-            Expr::BoolLit(b, _) => Some(if *b { "1".to_string() } else { "0".to_string() }),
-            Expr::BinaryOp {
+            ir::Expr::IntLit(v, _) => Some(format!("{}", v)),
+            ir::Expr::FloatLit(v, _) => Some(format!("{:?}", v)),
+            ir::Expr::BoolLit(b, _) => Some(if *b { "1".to_string() } else { "0".to_string() }),
+            ir::Expr::BinaryOp {
                 op, left, right, ..
             } => {
                 let l = Self::try_const_eval(left)?;
@@ -570,7 +533,7 @@ impl CodeGenerator {
                     _ => None,
                 }
             }
-            Expr::UnaryOp {
+            ir::Expr::UnaryOp {
                 op: UnaryOp::Neg,
                 operand,
                 ..
@@ -587,15 +550,13 @@ impl CodeGenerator {
     // Function definitions
     // -----------------------------------------------------------------------
 
-    fn emit_function_defs(&mut self, program: &Program) {
-        for decl in &program.decls {
-            if let TopDecl::Fn(f) = decl {
-                self.emit_function(f);
-            }
+    fn emit_function_defs(&mut self, program: &ir::Program) {
+        for f in &program.fn_defs {
+            self.emit_function(f);
         }
     }
 
-    fn emit_function(&mut self, f: &FnDecl) {
+    fn emit_function(&mut self, f: &ir::FnDef) {
         let ret = self.fn_return_c(f);
         let params = self.fn_params_c(f);
         let name = if f.name == "main" {
@@ -604,23 +565,13 @@ impl CodeGenerator {
             Self::mangle_c_name(&f.name)
         };
 
-        self.current_fn_return_type = match &f.return_type {
-            Some(t) => Some(self.resolve_ast_type(t)),
-            None => Some(BcType::Unit),
-        };
+        self.current_fn_return_type = Some(f.return_type.clone());
 
         // Save and reset deferred expressions for this function
         let saved_deferred = std::mem::take(&mut self.deferred_exprs);
 
         self.line(&format!("{} {}({}) {{", ret, name, params));
         self.indent += 1;
-
-        // Set up scope with parameters
-        self.push_scope();
-        for p in &f.params {
-            let ty = self.resolve_ast_type(&p.ty);
-            self.scopes.last_mut().unwrap().insert(p.name.clone(), ty);
-        }
 
         // Emit body
         let body_val = self.emit_block_body(&f.body);
@@ -643,7 +594,6 @@ impl CodeGenerator {
             self.emit_deferred_calls();
         }
 
-        self.pop_scope();
         self.indent -= 1;
         self.line("}");
         self.blank();
@@ -738,7 +688,7 @@ impl CodeGenerator {
 
     /// Emits all statements in the block. Returns the C expression for the
     /// tail expression, or "(void)0" for unit blocks.
-    fn emit_block_body(&mut self, block: &Block) -> String {
+    fn emit_block_body(&mut self, block: &ir::Block) -> String {
         for stmt in &block.stmts {
             self.emit_stmt(stmt);
         }
@@ -749,20 +699,18 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_arena(&mut self, body: &Block) -> String {
-        let ty = self.block_type(body);
+    fn emit_arena(&mut self, body: &ir::Block) -> String {
+        let ty = body.ty();
         if ty == BcType::Unit {
             // No return value
             self.line("{");
             self.indent += 1;
             self.line("osc_arena *_parent_arena = _arena;");
             self.line("osc_arena *_arena = osc_arena_create(0);");
-            self.push_scope();
             let body_val = self.emit_block_body(body);
             if body_val != "(void)0" {
                 self.line(&format!("{};", body_val));
             }
-            self.pop_scope();
             self.line("osc_arena_destroy(_arena);");
             self.line("_arena = _parent_arena;");
             self.indent -= 1;
@@ -777,7 +725,6 @@ impl CodeGenerator {
             self.indent += 1;
             self.line("osc_arena *_parent_arena = _arena;");
             self.line("osc_arena *_arena = osc_arena_create(0);");
-            self.push_scope();
             for s in &body.stmts {
                 self.emit_stmt(s);
             }
@@ -785,7 +732,6 @@ impl CodeGenerator {
                 let v = self.emit_expr(tail);
                 self.line(&format!("{} = {};", tmp, v));
             }
-            self.pop_scope();
             self.line("osc_arena_destroy(_arena);");
             self.line("_arena = _parent_arena;");
             self.indent -= 1;
@@ -798,23 +744,16 @@ impl CodeGenerator {
     // Statement emission
     // -----------------------------------------------------------------------
 
-    fn emit_stmt(&mut self, stmt: &Stmt) {
+    fn emit_stmt(&mut self, stmt: &ir::Stmt) {
         match stmt {
-            Stmt::Let(ls) => {
-                let ty = self.resolve_ast_type(&ls.ty);
-                let c_ty = self.type_to_c(&ty);
-                // Propagate element type for empty array literals
-                if let BcType::Array(ref elem_ty) = ty {
-                    self.expected_array_elem_type = Some((**elem_ty).clone());
-                }
+            ir::Stmt::Let(ls) => {
+                let c_ty = self.type_to_c(&ls.ty);
                 let val = self.emit_expr(&ls.value);
-                self.expected_array_elem_type = None;
                 if ls.is_mut {
                     self.line(&format!("{} {} = {};", c_ty, ls.name, val));
-                    self.mut_vars.insert(ls.name.clone());
                 } else {
                     // For structs/enums/arrays, skip const qualifier to avoid C issues
-                    match &ty {
+                    match &ls.ty {
                         BcType::Struct(_)
                         | BcType::Enum(_)
                         | BcType::Array(_)
@@ -833,9 +772,8 @@ impl CodeGenerator {
                         }
                     }
                 }
-                self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
             }
-            Stmt::Assign(a) => {
+            ir::Stmt::Assign(a) => {
                 let val = self.emit_expr(&a.value);
                 if a.target.accessors.is_empty() {
                     self.line(&format!("{} = {};", a.target.name, val));
@@ -844,7 +782,7 @@ impl CodeGenerator {
                     self.line(&format!("{} = {};", target, val));
                 }
             }
-            Stmt::CompoundAssign(ca) => {
+            ir::Stmt::CompoundAssign(ca) => {
                 let c_op = match ca.op {
                     BinOp::Add => "+=",
                     BinOp::Sub => "-=",
@@ -861,11 +799,11 @@ impl CodeGenerator {
                     self.line(&format!("{} {} {};", target, c_op, val));
                 }
             }
-            Stmt::Expr(es) => {
+            ir::Stmt::Expr(es) => {
                 let val = self.emit_expr(&es.expr);
                 if val != "(void)0" {
                     // Cast discarded results to (void) to suppress -Wunused-value
-                    let ty = self.type_of(&es.expr);
+                    let ty = es.expr.ty();
                     if ty != BcType::Unit {
                         self.line(&format!("(void)({});", val));
                     } else {
@@ -873,11 +811,10 @@ impl CodeGenerator {
                     }
                 }
             }
-            Stmt::While(w) => {
+            ir::Stmt::While(w) => {
                 let cond = self.emit_expr(&w.condition);
                 self.line(&format!("while ({}) {{", cond));
                 self.indent += 1;
-                self.push_scope();
                 for s in &w.body.stmts {
                     self.emit_stmt(s);
                 }
@@ -887,11 +824,10 @@ impl CodeGenerator {
                         self.line(&format!("{};", v));
                     }
                 }
-                self.pop_scope();
                 self.indent -= 1;
                 self.line("}");
             }
-            Stmt::For(f) => {
+            ir::Stmt::For(f) => {
                 let start = self.emit_expr(&f.start);
                 let end = self.emit_expr(&f.end);
                 self.line(&format!(
@@ -899,11 +835,6 @@ impl CodeGenerator {
                     f.var, start, f.var, end, f.var
                 ));
                 self.indent += 1;
-                self.push_scope();
-                self.scopes
-                    .last_mut()
-                    .unwrap()
-                    .insert(f.var.clone(), BcType::I32);
                 for s in &f.body.stmts {
                     self.emit_stmt(s);
                 }
@@ -913,15 +844,14 @@ impl CodeGenerator {
                         self.line(&format!("{};", v));
                     }
                 }
-                self.pop_scope();
                 self.indent -= 1;
                 self.line("}");
             }
-            Stmt::ForIn(fi) => {
+            ir::Stmt::ForIn(fi) => {
                 let iter_idx = self.fresh_tmp();
                 let arr_expr = self.emit_expr(&fi.iterable);
                 // Determine array element type from the iterable
-                let arr_ty = self.type_of(&fi.iterable);
+                let arr_ty = fi.iterable.ty();
                 let (elem_ty, is_fixed, fixed_size) = match &arr_ty {
                     BcType::FixedArray(e, n) => ((**e).clone(), true, *n),
                     BcType::Array(e) => ((**e).clone(), false, 0),
@@ -934,11 +864,6 @@ impl CodeGenerator {
                         iter_idx, iter_idx, fixed_size, iter_idx
                     ));
                     self.indent += 1;
-                    self.push_scope();
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(fi.var.clone(), elem_ty);
                     self.line(&format!(
                         "const {} {} = {}[{}];",
                         c_elem_ty, fi.var, arr_expr, iter_idx
@@ -949,11 +874,6 @@ impl CodeGenerator {
                         iter_idx, iter_idx, arr_expr, iter_idx
                     ));
                     self.indent += 1;
-                    self.push_scope();
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(fi.var.clone(), elem_ty);
                     self.line(&format!(
                         "const {} {} = (({}*){}->data)[{}];",
                         c_elem_ty, fi.var, c_elem_ty, arr_expr, iter_idx
@@ -968,17 +888,16 @@ impl CodeGenerator {
                         self.line(&format!("{};", v));
                     }
                 }
-                self.pop_scope();
                 self.indent -= 1;
                 self.line("}");
             }
-            Stmt::Break(_) => {
+            ir::Stmt::Break(_) => {
                 self.line("break;");
             }
-            Stmt::Continue(_) => {
+            ir::Stmt::Continue(_) => {
                 self.line("continue;");
             }
-            Stmt::Return(r) => {
+            ir::Stmt::Return(r) => {
                 let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
                 if let Some(val) = &r.value {
                     let v = self.emit_expr(val);
@@ -992,24 +911,24 @@ impl CodeGenerator {
                     }
                 }
             }
-            Stmt::Defer(d) => {
+            ir::Stmt::Defer(d) => {
                 let c_code = self.emit_expr(&d.expr);
                 self.deferred_exprs.push(c_code);
             }
         }
     }
 
-    fn emit_place(&mut self, place: &Place) -> String {
+    fn emit_place(&mut self, place: &ir::Place) -> String {
         let mut s = place.name.clone();
         for acc in &place.accessors {
             match acc {
-                PlaceAccessor::Field(f) => {
+                ir::PlaceAccessor::Field(f) => {
                     s = format!("{}.{}", s, f);
                 }
-                PlaceAccessor::Index(idx) => {
+                ir::PlaceAccessor::Index(idx) => {
                     let idx_c = self.emit_expr(idx);
                     // For array set, we need the element type
-                    let arr_ty = self.lookup_type(&place.name).unwrap_or(BcType::Unit);
+                    let arr_ty = place.base_ty.clone();
                     let elem_ty = match &arr_ty {
                         BcType::Array(e) | BcType::FixedArray(e, _) => (**e).clone(),
                         _ => BcType::I32,
@@ -1028,10 +947,10 @@ impl CodeGenerator {
     // May emit supporting statements to `self.out`.
     // -----------------------------------------------------------------------
 
-    fn emit_expr(&mut self, expr: &Expr) -> String {
+    fn emit_expr(&mut self, expr: &ir::Expr) -> String {
         match expr {
-            Expr::IntLit(v, _) => format!("{}", v),
-            Expr::FloatLit(v, _) => {
+            ir::Expr::IntLit(v, _) => format!("{}", v),
+            ir::Expr::FloatLit(v, _) => {
                 let s = format!("{}", v);
                 if s.contains('.') || s.contains('e') || s.contains('E') {
                     s
@@ -1039,12 +958,12 @@ impl CodeGenerator {
                     format!("{}.0", s)
                 }
             }
-            Expr::StringLit(s, _) => {
+            ir::Expr::StringLit(s, _) => {
                 let escaped = self.escape_c_string(s);
                 format!("osc_str_from_cstr(\"{}\")", escaped)
             }
-            Expr::InterpolatedString { parts, .. } => self.emit_interpolated_string(parts),
-            Expr::BoolLit(b, _) => {
+            ir::Expr::InterpolatedString { parts, .. } => self.emit_interpolated_string(parts),
+            ir::Expr::BoolLit(b, _) => {
                 if *b {
                     "1".to_string()
                 } else {
@@ -1052,33 +971,27 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::Ident(name, _) => {
-                // If it's a function name used as a value (function pointer),
-                // emit the mangled C function name
-                if self.lookup_type(name).is_none()
-                    && !self.constants.contains_key(name)
-                    && self.functions.contains_key(name)
-                {
+            ir::Expr::Ident { name, kind, .. } => match kind {
+                ir::IdentKind::FnRef => {
                     if name == "main" {
                         "oscan_main".to_string()
                     } else {
                         Self::mangle_c_name(name)
                     }
-                } else {
-                    name.clone()
                 }
-            }
+                ir::IdentKind::Value => name.clone(),
+            },
 
-            Expr::BinaryOp {
+            ir::Expr::BinaryOp {
                 op, left, right, ..
             } => self.emit_binary_op(*op, left, right),
 
-            Expr::UnaryOp { op, operand, .. } => {
+            ir::Expr::UnaryOp { op, operand, .. } => {
                 let val = self.emit_expr(operand);
                 match op {
                     UnaryOp::Not => format!("(!({}))", val),
                     UnaryOp::Neg => {
-                        let ty = self.type_of(operand);
+                        let ty = operand.ty();
                         match ty {
                             BcType::I32 => format!("osc_neg_i32({})", val),
                             BcType::I64 => format!("osc_neg_i64({})", val),
@@ -1089,36 +1002,29 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::Cast {
-                expr: inner, ty, ..
+            ir::Expr::Cast {
+                expr: inner, to_ty, ..
             } => {
                 let val = self.emit_expr(inner);
-                let from = self.type_of(inner);
-                let to = self.resolve_ast_type(ty);
-                self.emit_cast(&val, &from, &to)
+                let from = inner.ty();
+                self.emit_cast(&val, &from, to_ty)
             }
 
-            Expr::Call { callee, args, .. } => {
-                let name = match callee.as_ref() {
-                    Expr::Ident(n, _) => n.clone(),
-                    _ => "unknown".to_string(),
-                };
-                self.emit_call(&name, args)
-            }
+            ir::Expr::Call { callee, args, .. } => self.emit_call(callee, args),
 
-            Expr::FieldAccess {
+            ir::Expr::FieldAccess {
                 expr: obj, field, ..
             } => {
                 let obj_c = self.emit_expr(obj);
                 format!("{}.{}", obj_c, field)
             }
 
-            Expr::Index {
+            ir::Expr::Index {
                 expr: arr, index, ..
             } => {
                 let arr_c = self.emit_expr(arr);
                 let idx_c = self.emit_expr(index);
-                let arr_ty = self.type_of(arr);
+                let arr_ty = arr.ty();
                 match &arr_ty {
                     BcType::Str => {
                         format!(
@@ -1137,28 +1043,12 @@ impl CodeGenerator {
                 }
             }
 
-            Expr::Block(block) => {
-                // Pre-scan let stmts to populate a temporary scope so
-                // block_type can resolve identifiers defined inside the block.
-                let ty = if block.tail_expr.is_some() {
-                    self.push_scope();
-                    for stmt in &block.stmts {
-                        if let Stmt::Let(ls) = stmt {
-                            let ty = self.resolve_ast_type(&ls.ty);
-                            self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
-                        }
-                    }
-                    let ty = self.block_type(block);
-                    self.pop_scope();
-                    ty
-                } else {
-                    BcType::Unit
-                };
+            ir::Expr::Block(block) => {
+                let ty = block.ty();
 
                 if ty == BcType::Unit {
                     self.line("{");
                     self.indent += 1;
-                    self.push_scope();
                     for s in &block.stmts {
                         self.emit_stmt(s);
                     }
@@ -1168,7 +1058,6 @@ impl CodeGenerator {
                             self.line(&format!("{};", v));
                         }
                     }
-                    self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     "(void)0".to_string()
@@ -1178,7 +1067,6 @@ impl CodeGenerator {
                     self.line(&format!("{} {};", c_ty, tmp));
                     self.line("{");
                     self.indent += 1;
-                    self.push_scope();
                     for s in &block.stmts {
                         self.emit_stmt(s);
                     }
@@ -1186,38 +1074,48 @@ impl CodeGenerator {
                         let v = self.emit_expr(tail);
                         self.line(&format!("{} = {};", tmp, v));
                     }
-                    self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     tmp
                 }
             }
 
-            Expr::If {
+            ir::Expr::If {
                 condition,
                 then_block,
                 else_branch,
+                ty,
                 ..
-            } => self.emit_if(condition, then_block, else_branch.as_deref()),
+            } => self.emit_if(condition, then_block, else_branch.as_deref(), ty),
 
-            Expr::Match {
-                scrutinee, arms, ..
-            } => self.emit_match(scrutinee, arms),
+            ir::Expr::Match {
+                scrutinee,
+                arms,
+                ty,
+                ..
+            } => self.emit_match(scrutinee, arms, ty),
 
-            Expr::Try { call, span } => self.emit_try(call, *span),
+            ir::Expr::Try { call, .. } => self.emit_try(call),
 
-            Expr::ArrayLit { elements, .. } => self.emit_array_lit(elements),
+            ir::Expr::ArrayLit {
+                elements, elem_ty, ..
+            } => self.emit_array_lit(elements, elem_ty),
+            // `ty` (the literal's own fully resolved `Array`/`FixedArray`
+            // type) is intentionally unused here: both kinds of array
+            // literal construct an identical runtime value, so the C
+            // backend only ever needs `elem_ty`. Other consumers (the
+            // verifier, future backends) read the full type via `.ty()`.
+            ir::Expr::StructLit { name, fields, .. } => self.emit_struct_lit(name, fields),
 
-            Expr::StructLit { name, fields, .. } => self.emit_struct_lit(name, fields),
-
-            Expr::EnumConstructor {
+            ir::Expr::EnumConstructor {
                 enum_name,
                 variant,
                 args,
+                ty,
                 ..
-            } => self.emit_enum_constructor(enum_name, variant, args),
+            } => self.emit_enum_constructor(enum_name, variant, args, ty),
 
-            Expr::Arena { body, .. } => self.emit_arena(body),
+            ir::Expr::Arena { body, .. } => self.emit_arena(body),
         }
     }
 
@@ -1225,10 +1123,10 @@ impl CodeGenerator {
     // Binary operations
     // -----------------------------------------------------------------------
 
-    fn emit_binary_op(&mut self, op: BinOp, left: &Expr, right: &Expr) -> String {
+    fn emit_binary_op(&mut self, op: BinOp, left: &ir::Expr, right: &ir::Expr) -> String {
         let lv = self.emit_expr(left);
         let rv = self.emit_expr(right);
-        let ty = self.type_of(left);
+        let ty = left.ty();
 
         match op {
             BinOp::Add => match ty {
@@ -1289,18 +1187,18 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_interpolated_string(&mut self, parts: &[InterpolatedStringPart]) -> String {
+    fn emit_interpolated_string(&mut self, parts: &[ir::InterpolatedStringPart]) -> String {
         let mut rendered_parts = Vec::new();
 
         for part in parts {
             match part {
-                InterpolatedStringPart::Text(text) => {
+                ir::InterpolatedStringPart::Text(text) => {
                     if !text.is_empty() {
                         let escaped = self.escape_c_string(text);
                         rendered_parts.push(format!("osc_str_from_cstr(\"{}\")", escaped));
                     }
                 }
-                InterpolatedStringPart::Expr(expr) => {
+                ir::InterpolatedStringPart::Expr(expr) => {
                     rendered_parts.push(self.emit_interpolated_expr(expr));
                 }
             }
@@ -1317,9 +1215,9 @@ impl CodeGenerator {
         result
     }
 
-    fn emit_interpolated_expr(&mut self, expr: &Expr) -> String {
+    fn emit_interpolated_expr(&mut self, expr: &ir::Expr) -> String {
         let value = self.emit_expr(expr);
-        match self.type_of(expr) {
+        match expr.ty() {
             BcType::Str => value,
             BcType::I32 => format!("osc_str_from_i32(_arena, {})", value),
             BcType::I64 => format!("osc_str_from_i64(_arena, {})", value),
@@ -1351,8 +1249,11 @@ impl CodeGenerator {
     // Function calls
     // -----------------------------------------------------------------------
 
-    fn emit_call(&mut self, name: &str, args: &[Expr]) -> String {
+    fn emit_call(&mut self, callee: &ir::Callee, args: &[ir::Expr]) -> String {
         let mut arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+        let name: &str = match callee {
+            ir::Callee::Named(n) | ir::Callee::Var(n) => n.as_str(),
+        };
 
         match name {
             "print" => format!("osc_print({})", arg_strs[0]),
@@ -1598,12 +1499,15 @@ impl CodeGenerator {
             ),
             "gfx_draw_text_scaled" => format!(
                 "osc_gfx_draw_text_scaled({}, {}, {}, {}, {}, {}, {})",
-                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5], arg_strs[6]
+                arg_strs[0],
+                arg_strs[1],
+                arg_strs[2],
+                arg_strs[3],
+                arg_strs[4],
+                arg_strs[5],
+                arg_strs[6]
             ),
-            "gfx_text_width" => format!(
-                "osc_gfx_text_width({}, {})",
-                arg_strs[0], arg_strs[1]
-            ),
+            "gfx_text_width" => format!("osc_gfx_text_width({}, {})", arg_strs[0], arg_strs[1]),
             "gfx_blit" => format!(
                 "osc_gfx_blit({}, {}, {}, {}, {})",
                 arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4]
@@ -1650,7 +1554,9 @@ impl CodeGenerator {
             ),
             "map_str_i32_get" => format!("osc_map_str_i32_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_str_i32_has" => format!("osc_map_str_i32_has({}, {})", arg_strs[0], arg_strs[1]),
-            "map_str_i32_delete" => format!("osc_map_str_i32_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i32_delete" => {
+                format!("osc_map_str_i32_delete({}, {})", arg_strs[0], arg_strs[1])
+            }
             "map_str_i32_len" => format!("osc_map_str_i32_len({})", arg_strs[0]),
             // Typed HashMap builtins: map_str_i64
             "map_str_i64_new" => "osc_map_str_i64_new(_arena)".to_string(),
@@ -1660,7 +1566,9 @@ impl CodeGenerator {
             ),
             "map_str_i64_get" => format!("osc_map_str_i64_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_str_i64_has" => format!("osc_map_str_i64_has({}, {})", arg_strs[0], arg_strs[1]),
-            "map_str_i64_delete" => format!("osc_map_str_i64_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_i64_delete" => {
+                format!("osc_map_str_i64_delete({}, {})", arg_strs[0], arg_strs[1])
+            }
             "map_str_i64_len" => format!("osc_map_str_i64_len({})", arg_strs[0]),
             // Typed HashMap builtins: map_str_f64
             "map_str_f64_new" => "osc_map_str_f64_new(_arena)".to_string(),
@@ -1670,7 +1578,9 @@ impl CodeGenerator {
             ),
             "map_str_f64_get" => format!("osc_map_str_f64_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_str_f64_has" => format!("osc_map_str_f64_has({}, {})", arg_strs[0], arg_strs[1]),
-            "map_str_f64_delete" => format!("osc_map_str_f64_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_str_f64_delete" => {
+                format!("osc_map_str_f64_delete({}, {})", arg_strs[0], arg_strs[1])
+            }
             "map_str_f64_len" => format!("osc_map_str_f64_len({})", arg_strs[0]),
             // Typed HashMap builtins: map_i32_str
             "map_i32_str_new" => "osc_map_i32_str_new(_arena)".to_string(),
@@ -1680,7 +1590,9 @@ impl CodeGenerator {
             ),
             "map_i32_str_get" => format!("osc_map_i32_str_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_i32_str_has" => format!("osc_map_i32_str_has({}, {})", arg_strs[0], arg_strs[1]),
-            "map_i32_str_delete" => format!("osc_map_i32_str_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_str_delete" => {
+                format!("osc_map_i32_str_delete({}, {})", arg_strs[0], arg_strs[1])
+            }
             "map_i32_str_len" => format!("osc_map_i32_str_len({})", arg_strs[0]),
             // Typed HashMap builtins: map_i32_i32
             "map_i32_i32_new" => "osc_map_i32_i32_new(_arena)".to_string(),
@@ -1690,12 +1602,14 @@ impl CodeGenerator {
             ),
             "map_i32_i32_get" => format!("osc_map_i32_i32_get({}, {})", arg_strs[0], arg_strs[1]),
             "map_i32_i32_has" => format!("osc_map_i32_i32_has({}, {})", arg_strs[0], arg_strs[1]),
-            "map_i32_i32_delete" => format!("osc_map_i32_i32_delete({}, {})", arg_strs[0], arg_strs[1]),
+            "map_i32_i32_delete" => {
+                format!("osc_map_i32_i32_delete({}, {})", arg_strs[0], arg_strs[1])
+            }
             "map_i32_i32_len" => format!("osc_map_i32_i32_len({})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
             "push" => {
                 // Need to get element type for the &val
-                let arr_ty = self.type_of(&args[0]);
+                let arr_ty = args[0].ty();
                 let elem_ty = match &arr_ty {
                     BcType::Array(e) => (**e).clone(),
                     _ => BcType::I32,
@@ -1706,7 +1620,7 @@ impl CodeGenerator {
                 format!("osc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
             }
             "pop" => {
-                let arr_ty = self.type_of(&args[0]);
+                let arr_ty = args[0].ty();
                 let elem_ty = match &arr_ty {
                     BcType::Array(e) => (**e).clone(),
                     _ => BcType::I32,
@@ -1745,7 +1659,10 @@ impl CodeGenerator {
             "str_to_chars" => format!("osc_str_to_chars(_arena, {})", arg_strs[0]),
             // Image
             "img_load" => format!("osc_img_load(_arena, {})", arg_strs[0]),
-            "svg_load" => format!("osc_svg_load(_arena, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
+            "svg_load" => format!(
+                "osc_svg_load(_arena, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
             // TrueType
             "tt_load" => format!("osc_tt_load(_arena, {})", arg_strs[0]),
             "tt_free" => format!("osc_tt_free({})", arg_strs[0]),
@@ -1753,31 +1670,37 @@ impl CodeGenerator {
             "tt_descent" => format!("osc_tt_descent({}, {})", arg_strs[0], arg_strs[1]),
             "tt_line_gap" => format!("osc_tt_line_gap({}, {})", arg_strs[0], arg_strs[1]),
             "tt_line_height" => format!("osc_tt_line_height({}, {})", arg_strs[0], arg_strs[1]),
-            "tt_text_width" => format!("osc_tt_text_width({}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2]),
-            "tt_draw_text" => format!("osc_tt_draw_text({}, {}, {}, {}, {}, {})", arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5]),
-            _ => {
-                // Check if this is a function pointer variable call
-                if let Some(ty) = self.lookup_type(name) {
-                    if let BcType::FnPtr(_, _) = ty {
-                        arg_strs.insert(0, "_arena".to_string());
-                        return format!("{}({})", name, arg_strs.join(", "));
-                    }
+            "tt_text_width" => format!(
+                "osc_tt_text_width({}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2]
+            ),
+            "tt_draw_text" => format!(
+                "osc_tt_draw_text({}, {}, {}, {}, {}, {})",
+                arg_strs[0], arg_strs[1], arg_strs[2], arg_strs[3], arg_strs[4], arg_strs[5]
+            ),
+            _ => match callee {
+                ir::Callee::Var(_) => {
+                    // Indirect call through a function-pointer-typed variable.
+                    arg_strs.insert(0, "_arena".to_string());
+                    format!("{}({})", name, arg_strs.join(", "))
                 }
-                // User-defined or extern function
-                let fi = self.functions.get(name).cloned();
-                let cname = Self::mangle_c_name(name);
-                if let Some(info) = fi {
-                    if info.is_extern {
-                        format!("{}({})", cname, arg_strs.join(", "))
+                ir::Callee::Named(_) => {
+                    // User-defined or extern function
+                    let fi = self.functions.get(name).cloned();
+                    let cname = Self::mangle_c_name(name);
+                    if let Some(info) = fi {
+                        if info.is_extern {
+                            format!("{}({})", cname, arg_strs.join(", "))
+                        } else {
+                            arg_strs.insert(0, "_arena".to_string());
+                            format!("{}({})", cname, arg_strs.join(", "))
+                        }
                     } else {
                         arg_strs.insert(0, "_arena".to_string());
                         format!("{}({})", cname, arg_strs.join(", "))
                     }
-                } else {
-                    arg_strs.insert(0, "_arena".to_string());
-                    format!("{}({})", cname, arg_strs.join(", "))
                 }
-            }
+            },
         }
     }
 
@@ -1787,31 +1710,16 @@ impl CodeGenerator {
 
     fn emit_if(
         &mut self,
-        condition: &Expr,
-        then_block: &Block,
-        else_branch: Option<&Expr>,
+        condition: &ir::Expr,
+        then_block: &ir::Block,
+        else_branch: Option<&ir::Expr>,
+        ty: &BcType,
     ) -> String {
-        // Pre-scan then_block let stmts to determine type correctly
-        let ty = if then_block.tail_expr.is_some() {
-            self.push_scope();
-            for stmt in &then_block.stmts {
-                if let Stmt::Let(ls) = stmt {
-                    let ty = self.resolve_ast_type(&ls.ty);
-                    self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
-                }
-            }
-            let ty = self.block_type(then_block);
-            self.pop_scope();
-            ty
-        } else {
-            BcType::Unit
-        };
         let cond = self.emit_expr(condition);
 
-        if ty == BcType::Unit {
+        if *ty == BcType::Unit {
             self.line(&format!("if ({}) {{", cond));
             self.indent += 1;
-            self.push_scope();
             for s in &then_block.stmts {
                 self.emit_stmt(s);
             }
@@ -1821,11 +1729,10 @@ impl CodeGenerator {
                     self.line(&format!("{};", v));
                 }
             }
-            self.pop_scope();
             self.indent -= 1;
             if let Some(else_expr) = else_branch {
                 match else_expr {
-                    Expr::If {
+                    ir::Expr::If {
                         condition: ec,
                         then_block: et,
                         else_branch: ee,
@@ -1835,7 +1742,6 @@ impl CodeGenerator {
                         let ec_c = self.emit_expr(ec);
                         self.line(&format!("}} else if ({}) {{", ec_c));
                         self.indent += 1;
-                        self.push_scope();
                         for s in &et.stmts {
                             self.emit_stmt(s);
                         }
@@ -1845,17 +1751,15 @@ impl CodeGenerator {
                                 self.line(&format!("{};", v));
                             }
                         }
-                        self.pop_scope();
                         self.indent -= 1;
                         if let Some(ee) = ee {
                             self.emit_else_unit(ee);
                         }
                         self.line("}");
                     }
-                    Expr::Block(blk) => {
+                    ir::Expr::Block(blk) => {
                         self.line("} else {");
                         self.indent += 1;
-                        self.push_scope();
                         for s in &blk.stmts {
                             self.emit_stmt(s);
                         }
@@ -1865,7 +1769,6 @@ impl CodeGenerator {
                                 self.line(&format!("{};", v));
                             }
                         }
-                        self.pop_scope();
                         self.indent -= 1;
                         self.line("}");
                     }
@@ -1887,22 +1790,18 @@ impl CodeGenerator {
         } else {
             // Expression if — use temp variable
             let tmp = self.fresh_tmp();
-            let c_ty = self.type_to_c(&ty);
+            let c_ty = self.type_to_c(ty);
             self.line(&format!("{} {};", c_ty, tmp));
             self.line(&format!("if ({}) {{", cond));
             self.indent += 1;
-            self.push_scope();
             let then_val = self.emit_block_body(then_block);
             self.line(&format!("{} = {};", tmp, then_val));
-            self.pop_scope();
             self.indent -= 1;
             if let Some(else_expr) = else_branch {
                 self.line("} else {");
                 self.indent += 1;
-                self.push_scope();
                 let else_val = self.emit_expr(else_expr);
                 self.line(&format!("{} = {};", tmp, else_val));
-                self.pop_scope();
                 self.indent -= 1;
             }
             self.line("}");
@@ -1910,9 +1809,9 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_else_unit(&mut self, expr: &Expr) {
+    fn emit_else_unit(&mut self, expr: &ir::Expr) {
         match expr {
-            Expr::If {
+            ir::Expr::If {
                 condition,
                 then_block,
                 else_branch,
@@ -1921,7 +1820,6 @@ impl CodeGenerator {
                 let cond = self.emit_expr(condition);
                 self.line(&format!("}} else if ({}) {{", cond));
                 self.indent += 1;
-                self.push_scope();
                 for s in &then_block.stmts {
                     self.emit_stmt(s);
                 }
@@ -1931,16 +1829,14 @@ impl CodeGenerator {
                         self.line(&format!("{};", v));
                     }
                 }
-                self.pop_scope();
                 self.indent -= 1;
                 if let Some(ee) = else_branch {
                     self.emit_else_unit(ee);
                 }
             }
-            Expr::Block(blk) => {
+            ir::Expr::Block(blk) => {
                 self.line("} else {");
                 self.indent += 1;
-                self.push_scope();
                 for s in &blk.stmts {
                     self.emit_stmt(s);
                 }
@@ -1950,7 +1846,6 @@ impl CodeGenerator {
                         self.line(&format!("{};", v));
                     }
                 }
-                self.pop_scope();
                 self.indent -= 1;
             }
             _ => {
@@ -1969,26 +1864,23 @@ impl CodeGenerator {
     // Match expression
     // -----------------------------------------------------------------------
 
-    fn emit_match(&mut self, scrutinee: &Expr, arms: &[MatchArm]) -> String {
-        let scrut_ty = self.type_of(scrutinee);
+    fn emit_match(&mut self, scrutinee: &ir::Expr, arms: &[ir::MatchArm], ty: &BcType) -> String {
+        let scrut_ty = scrutinee.ty();
         let scrut_c = self.emit_expr(scrutinee);
 
-        // Determine result type from first arm, pre-scanning pattern bindings
-        let result_ty = self.match_arm_result_type(&scrut_ty, &arms[0]);
-
-        if result_ty == BcType::Unit {
+        if *ty == BcType::Unit {
             self.emit_match_unit(&scrut_c, &scrut_ty, arms);
             "(void)0".to_string()
         } else {
             let tmp = self.fresh_tmp();
-            let c_ty = self.type_to_c(&result_ty);
+            let c_ty = self.type_to_c(ty);
             self.line(&format!("{} {};", c_ty, tmp));
             self.emit_match_valued(&tmp, &scrut_c, &scrut_ty, arms);
             tmp
         }
     }
 
-    fn emit_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[ir::MatchArm]) {
         match scrut_ty {
             BcType::Enum(ename) => {
                 let has_payload = self
@@ -2023,7 +1915,7 @@ impl CodeGenerator {
         tmp: &str,
         scrut_c: &str,
         scrut_ty: &BcType,
-        arms: &[MatchArm],
+        arms: &[ir::MatchArm],
     ) {
         match scrut_ty {
             BcType::Enum(ename) => {
@@ -2053,32 +1945,28 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_enum_arm_unit(&mut self, scrut_c: &str, ename: &str, arm: &MatchArm) {
+    fn emit_enum_arm_unit(&mut self, scrut_c: &str, ename: &str, arm: &ir::MatchArm) {
         match &arm.pattern {
-            Pattern::Wildcard(_) => {
+            ir::Pattern::Wildcard(_) => {
                 self.line("default: {");
             }
-            Pattern::Ident(name, _) => {
+            ir::Pattern::Ident(name, _) => {
                 self.line("default: {");
                 self.indent += 1;
-                let _info = self.enums.get(ename).unwrap().clone();
                 // Can't easily bind the whole value for default
                 let ty = BcType::Enum(ename.to_string());
                 let c_ty = self.type_to_c(&ty);
                 self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
-                self.push_scope();
-                self.scopes.last_mut().unwrap().insert(name.clone(), ty);
                 let v = self.emit_expr(&arm.body);
                 if v != "(void)0" {
                     self.line(&format!("{};", v));
                 }
-                self.pop_scope();
                 self.indent -= 1;
                 self.line("    break;");
                 self.line("}");
                 return;
             }
-            Pattern::Enum {
+            ir::Pattern::Enum {
                 variant,
                 bindings: _,
                 ..
@@ -2090,24 +1978,22 @@ impl CodeGenerator {
             }
         }
         self.indent += 1;
-        self.push_scope();
         self.bind_enum_payload(scrut_c, ename, &arm.pattern);
         let v = self.emit_expr(&arm.body);
         if v != "(void)0" {
             self.line(&format!("{};", v));
         }
-        self.pop_scope();
         self.line("break;");
         self.indent -= 1;
         self.line("}");
     }
 
-    fn emit_enum_arm_valued(&mut self, tmp: &str, scrut_c: &str, ename: &str, arm: &MatchArm) {
+    fn emit_enum_arm_valued(&mut self, tmp: &str, scrut_c: &str, ename: &str, arm: &ir::MatchArm) {
         match &arm.pattern {
-            Pattern::Wildcard(_) => {
+            ir::Pattern::Wildcard(_) => {
                 self.line("default: {");
             }
-            Pattern::Enum { variant, .. } => {
+            ir::Pattern::Enum { variant, .. } => {
                 self.line(&format!("case {}_TAG_{}: {{", ename, variant));
             }
             _ => {
@@ -2115,18 +2001,16 @@ impl CodeGenerator {
             }
         }
         self.indent += 1;
-        self.push_scope();
         self.bind_enum_payload(scrut_c, ename, &arm.pattern);
         let v = self.emit_expr(&arm.body);
         self.line(&format!("{} = {};", tmp, v));
-        self.pop_scope();
         self.line("break;");
         self.indent -= 1;
         self.line("}");
     }
 
-    fn bind_enum_payload(&mut self, scrut_c: &str, ename: &str, pattern: &Pattern) {
-        if let Pattern::Enum {
+    fn bind_enum_payload(&mut self, scrut_c: &str, ename: &str, pattern: &ir::Pattern) {
+        if let ir::Pattern::Enum {
             variant, bindings, ..
         } = pattern
         {
@@ -2134,7 +2018,7 @@ impl CodeGenerator {
             let var_info = info.variants.iter().find(|(n, _)| n == variant);
             if let Some((_, payload_types)) = var_info {
                 for (i, binding) in bindings.iter().enumerate() {
-                    if let Pattern::Ident(name, _) = binding {
+                    if let ir::Pattern::Ident(name, _) = binding {
                         if i < payload_types.len() {
                             let ty = &payload_types[i];
                             let c_ty = self.type_to_c(ty);
@@ -2142,10 +2026,6 @@ impl CodeGenerator {
                                 "{} {} = {}.data.{}._{};",
                                 c_ty, name, scrut_c, variant, i
                             ));
-                            self.scopes
-                                .last_mut()
-                                .unwrap()
-                                .insert(name.clone(), ty.clone());
                         }
                     }
                 }
@@ -2158,32 +2038,27 @@ impl CodeGenerator {
         scrut_c: &str,
         ok_ty: &BcType,
         err_ty: &BcType,
-        arms: &[MatchArm],
+        arms: &[ir::MatchArm],
     ) {
         let mut ok_arm = None;
         let mut err_arm = None;
         let mut wildcard_arm = None;
         for arm in arms {
             match &arm.pattern {
-                Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
-                Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
-                Pattern::Wildcard(_) => wildcard_arm = Some(arm),
+                ir::Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
+                ir::Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
+                ir::Pattern::Wildcard(_) => wildcard_arm = Some(arm),
                 _ => wildcard_arm = Some(arm),
             }
         }
 
         self.line(&format!("if ({}.is_ok) {{", scrut_c));
         self.indent += 1;
-        self.push_scope();
         if let Some(arm) = ok_arm {
-            if let Pattern::Enum { bindings, .. } = &arm.pattern {
-                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+            if let ir::Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(ir::Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(ok_ty);
                     self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), ok_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -2196,20 +2071,14 @@ impl CodeGenerator {
                 self.line(&format!("{};", v));
             }
         }
-        self.pop_scope();
         self.indent -= 1;
         self.line("} else {");
         self.indent += 1;
-        self.push_scope();
         if let Some(arm) = err_arm {
-            if let Pattern::Enum { bindings, .. } = &arm.pattern {
-                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+            if let ir::Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(ir::Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(err_ty);
                     self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), err_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -2222,7 +2091,6 @@ impl CodeGenerator {
                 self.line(&format!("{};", v));
             }
         }
-        self.pop_scope();
         self.indent -= 1;
         self.line("}");
     }
@@ -2233,32 +2101,27 @@ impl CodeGenerator {
         scrut_c: &str,
         ok_ty: &BcType,
         err_ty: &BcType,
-        arms: &[MatchArm],
+        arms: &[ir::MatchArm],
     ) {
         let mut ok_arm = None;
         let mut err_arm = None;
         let mut wildcard_arm = None;
         for arm in arms {
             match &arm.pattern {
-                Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
-                Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
-                Pattern::Wildcard(_) => wildcard_arm = Some(arm),
+                ir::Pattern::Enum { variant, .. } if variant == "Ok" => ok_arm = Some(arm),
+                ir::Pattern::Enum { variant, .. } if variant == "Err" => err_arm = Some(arm),
+                ir::Pattern::Wildcard(_) => wildcard_arm = Some(arm),
                 _ => wildcard_arm = Some(arm),
             }
         }
 
         self.line(&format!("if ({}.is_ok) {{", scrut_c));
         self.indent += 1;
-        self.push_scope();
         if let Some(arm) = ok_arm {
-            if let Pattern::Enum { bindings, .. } = &arm.pattern {
-                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+            if let ir::Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(ir::Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(ok_ty);
                     self.line(&format!("{} {} = {}.value.ok;", c_ty, name, scrut_c));
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), ok_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -2267,20 +2130,14 @@ impl CodeGenerator {
             let v = self.emit_expr(&arm.body);
             self.line(&format!("{} = {};", tmp, v));
         }
-        self.pop_scope();
         self.indent -= 1;
         self.line("} else {");
         self.indent += 1;
-        self.push_scope();
         if let Some(arm) = err_arm {
-            if let Pattern::Enum { bindings, .. } = &arm.pattern {
-                if let Some(Pattern::Ident(name, _)) = bindings.first() {
+            if let ir::Pattern::Enum { bindings, .. } = &arm.pattern {
+                if let Some(ir::Pattern::Ident(name, _)) = bindings.first() {
                     let c_ty = self.type_to_c(err_ty);
                     self.line(&format!("{} {} = {}.value.err;", c_ty, name, scrut_c));
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), err_ty.clone());
                 }
             }
             let v = self.emit_expr(&arm.body);
@@ -2289,51 +2146,42 @@ impl CodeGenerator {
             let v = self.emit_expr(&arm.body);
             self.line(&format!("{} = {};", tmp, v));
         }
-        self.pop_scope();
         self.indent -= 1;
         self.line("}");
     }
 
-    fn emit_literal_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[MatchArm]) {
+    fn emit_literal_match_unit(&mut self, scrut_c: &str, scrut_ty: &BcType, arms: &[ir::MatchArm]) {
         let mut first = true;
         for arm in arms {
             match &arm.pattern {
-                Pattern::Wildcard(_) => {
+                ir::Pattern::Wildcard(_) => {
                     if first {
                         self.line("{");
                     } else {
                         self.line("} else {");
                     }
                     self.indent += 1;
-                    self.push_scope();
                     let v = self.emit_expr(&arm.body);
                     if v != "(void)0" {
                         self.line(&format!("{};", v));
                     }
-                    self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     return;
                 }
-                Pattern::Ident(name, _) => {
+                ir::Pattern::Ident(name, _) => {
                     if first {
                         self.line("{");
                     } else {
                         self.line("} else {");
                     }
                     self.indent += 1;
-                    self.push_scope();
                     let c_ty = self.type_to_c(scrut_ty);
                     self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
-                    self.scopes
-                        .last_mut()
-                        .unwrap()
-                        .insert(name.clone(), scrut_ty.clone());
                     let v = self.emit_expr(&arm.body);
                     if v != "(void)0" {
                         self.line(&format!("{};", v));
                     }
-                    self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     return;
@@ -2348,12 +2196,10 @@ impl CodeGenerator {
                         self.line(&format!("}} else if ({}) {{", cmp));
                     }
                     self.indent += 1;
-                    self.push_scope();
                     let v = self.emit_expr(&arm.body);
                     if v != "(void)0" {
                         self.line(&format!("{};", v));
                     }
-                    self.pop_scope();
                     self.indent -= 1;
                 }
             }
@@ -2366,30 +2212,24 @@ impl CodeGenerator {
         tmp: &str,
         scrut_c: &str,
         scrut_ty: &BcType,
-        arms: &[MatchArm],
+        arms: &[ir::MatchArm],
     ) {
         let mut first = true;
         for arm in arms {
             match &arm.pattern {
-                Pattern::Wildcard(_) | Pattern::Ident(_, _) => {
+                ir::Pattern::Wildcard(_) | ir::Pattern::Ident(_, _) => {
                     if first {
                         self.line("{");
                     } else {
                         self.line("} else {");
                     }
                     self.indent += 1;
-                    self.push_scope();
-                    if let Pattern::Ident(name, _) = &arm.pattern {
+                    if let ir::Pattern::Ident(name, _) = &arm.pattern {
                         let c_ty = self.type_to_c(scrut_ty);
                         self.line(&format!("{} {} = {};", c_ty, name, scrut_c));
-                        self.scopes
-                            .last_mut()
-                            .unwrap()
-                            .insert(name.clone(), scrut_ty.clone());
                     }
                     let v = self.emit_expr(&arm.body);
                     self.line(&format!("{} = {};", tmp, v));
-                    self.pop_scope();
                     self.indent -= 1;
                     self.line("}");
                     return;
@@ -2404,10 +2244,8 @@ impl CodeGenerator {
                         self.line(&format!("}} else if ({}) {{", cmp));
                     }
                     self.indent += 1;
-                    self.push_scope();
                     let v = self.emit_expr(&arm.body);
                     self.line(&format!("{} = {};", tmp, v));
-                    self.pop_scope();
                     self.indent -= 1;
                 }
             }
@@ -2415,14 +2253,14 @@ impl CodeGenerator {
         self.line("}");
     }
 
-    fn pattern_to_c(&self, pat: &Pattern) -> String {
+    fn pattern_to_c(&self, pat: &ir::Pattern) -> String {
         match pat {
-            Pattern::IntLit(v, _) => format!("{}", v),
-            Pattern::FloatLit(v, _) => format!("{}", v),
-            Pattern::StringLit(s, _) => {
+            ir::Pattern::IntLit(v, _) => format!("{}", v),
+            ir::Pattern::FloatLit(v, _) => format!("{}", v),
+            ir::Pattern::StringLit(s, _) => {
                 format!("osc_str_from_cstr(\"{}\")", self.escape_c_string(s))
             }
-            Pattern::BoolLit(b, _) => {
+            ir::Pattern::BoolLit(b, _) => {
                 if *b {
                     "1".to_string()
                 } else {
@@ -2444,12 +2282,8 @@ impl CodeGenerator {
     // Try expression
     // -----------------------------------------------------------------------
 
-    fn emit_try(&mut self, call: &Expr, _span: crate::token::Span) -> String {
-        let call_ty = self.type_of(call);
-        let (_ok_ty, _err_ty) = match &call_ty {
-            BcType::Result(o, e) => ((**o).clone(), (**e).clone()),
-            _ => (BcType::Unit, BcType::Str),
-        };
+    fn emit_try(&mut self, call: &ir::Expr) -> String {
+        let call_ty = call.ty();
 
         let call_c = self.emit_expr(call);
         let call_tmp = self.fresh_tmp();
@@ -2475,21 +2309,15 @@ impl CodeGenerator {
     // Array literal
     // -----------------------------------------------------------------------
 
-    fn emit_array_lit(&mut self, elements: &[Expr]) -> String {
+    fn emit_array_lit(&mut self, elements: &[ir::Expr], elem_ty: &BcType) -> String {
         if elements.is_empty() {
-            let size_expr = if let Some(ref elem_ty) = self.expected_array_elem_type {
-                self.c_sizeof(elem_ty)
-            } else {
-                // Fallback: should not happen with correct type annotations
-                "1".to_string()
-            };
+            let size_expr = self.c_sizeof(elem_ty);
             return format!("osc_array_new(_arena, {}, 0)", size_expr);
         }
 
-        let elem_ty = self.type_of(&elements[0]);
-        let elem_c = self.type_to_c(&elem_ty);
+        let elem_c = self.type_to_c(elem_ty);
         let tmp = self.fresh_tmp();
-        let size_expr = self.c_sizeof(&elem_ty);
+        let size_expr = self.c_sizeof(elem_ty);
         self.line(&format!(
             "osc_array* {} = osc_array_new(_arena, {}, {});",
             tmp,
@@ -2509,7 +2337,7 @@ impl CodeGenerator {
     // Struct literal
     // -----------------------------------------------------------------------
 
-    fn emit_struct_lit(&mut self, name: &str, fields: &[FieldInit]) -> String {
+    fn emit_struct_lit(&mut self, name: &str, fields: &[ir::FieldInit]) -> String {
         let mut parts = Vec::new();
         for fi in fields {
             let v = self.emit_expr(&fi.value);
@@ -2522,9 +2350,15 @@ impl CodeGenerator {
     // Enum constructor
     // -----------------------------------------------------------------------
 
-    fn emit_enum_constructor(&mut self, enum_name: &str, variant: &str, args: &[Expr]) -> String {
+    fn emit_enum_constructor(
+        &mut self,
+        enum_name: &str,
+        variant: &str,
+        args: &[ir::Expr],
+        ty: &BcType,
+    ) -> String {
         if enum_name == "Result" {
-            return self.emit_result_constructor(variant, args);
+            return self.emit_result_constructor(variant, args, ty);
         }
 
         let info = self.enums.get(enum_name).cloned();
@@ -2557,16 +2391,22 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_result_constructor(&mut self, variant: &str, args: &[Expr]) -> String {
-        let fn_ret = self.current_fn_return_type.clone().unwrap_or(BcType::Unit);
-        let result_c_ty = self.type_to_c(&fn_ret);
+    /// Builds a C `Result` value using the constructor's own resolved type
+    /// (`ty`, the `EnumConstructor` IR node's `.ty()` — set by lowering to
+    /// the *contextual* `Result<T, E>` type, e.g. an enclosing `let`'s
+    /// declared type) rather than the enclosing function's return type:
+    /// those two differ whenever the constructor builds a local `Result`
+    /// value that isn't itself being returned (e.g. a `Result` local
+    /// inside a `Unit`-returning function).
+    fn emit_result_constructor(&mut self, variant: &str, args: &[ir::Expr], ty: &BcType) -> String {
+        let result_c_ty = self.type_to_c(ty);
 
         match variant {
             "Ok" => {
                 let val = self.emit_expr(&args[0]);
-                let (ok_ty, _) = match &fn_ret {
-                    BcType::Result(o, _) => ((**o).clone(), BcType::Unit),
-                    _ => (BcType::Unit, BcType::Unit),
+                let ok_ty = match ty {
+                    BcType::Result(o, _) => (**o).clone(),
+                    _ => BcType::Unit,
                 };
                 if ok_ty == BcType::Unit {
                     format!("({}){{ .is_ok = 1 }}", result_c_ty)
@@ -2669,284 +2509,15 @@ impl CodeGenerator {
         }
     }
 
-    fn resolve_ast_type(&self, ty: &Type) -> BcType {
-        match ty {
-            Type::Primitive(p, _) => match p {
-                PrimitiveType::I32 => BcType::I32,
-                PrimitiveType::I64 => BcType::I64,
-                PrimitiveType::F64 => BcType::F64,
-                PrimitiveType::Bool => BcType::Bool,
-                PrimitiveType::Str => BcType::Str,
-                PrimitiveType::Unit => BcType::Unit,
-                PrimitiveType::Handle => BcType::Handle,
-                PrimitiveType::Map => BcType::Map,
-                PrimitiveType::MapStrI32 => BcType::MapStrI32,
-                PrimitiveType::MapStrI64 => BcType::MapStrI64,
-                PrimitiveType::MapStrF64 => BcType::MapStrF64,
-                PrimitiveType::MapI32Str => BcType::MapI32Str,
-                PrimitiveType::MapI32I32 => BcType::MapI32I32,
-            },
-            Type::Named(name, _) => {
-                if self.structs.contains_key(name) {
-                    BcType::Struct(name.clone())
-                } else {
-                    BcType::Enum(name.clone())
-                }
-            }
-            Type::FixedArray(elem, size, _) => {
-                BcType::FixedArray(Box::new(self.resolve_ast_type(elem)), *size)
-            }
-            Type::DynamicArray(elem, _) => BcType::Array(Box::new(self.resolve_ast_type(elem))),
-            Type::Result(ok, err, _) => BcType::Result(
-                Box::new(self.resolve_ast_type(ok)),
-                Box::new(self.resolve_ast_type(err)),
-            ),
-            Type::FnPtr(params, ret, _) => {
-                let param_types: Vec<BcType> = params.iter().map(|p| self.resolve_ast_type(p)).collect();
-                BcType::FnPtr(param_types, Box::new(self.resolve_ast_type(ret)))
-            }
-        }
+    fn fn_return_c(&self, f: &ir::FnDef) -> String {
+        self.type_to_c(&f.return_type)
     }
 
-    /// Determine the type of an expression (for codegen, uses scope + symbol tables)
-    fn type_of(&self, expr: &Expr) -> BcType {
-        match expr {
-            Expr::IntLit(_, _) => BcType::I32,
-            Expr::FloatLit(_, _) => BcType::F64,
-            Expr::StringLit(_, _) => BcType::Str,
-            Expr::InterpolatedString { .. } => BcType::Str,
-            Expr::BoolLit(_, _) => BcType::Bool,
-            Expr::Ident(name, _) => {
-                if let Some(ty) = self.lookup_type(name) {
-                    ty
-                } else if let Some(fi) = self.functions.get(name) {
-                    let param_types: Vec<BcType> = fi.params.iter().map(|(_, t)| t.clone()).collect();
-                    BcType::FnPtr(param_types, Box::new(fi.return_type.clone()))
-                } else {
-                    BcType::Unit
-                }
-            }
-            Expr::BinaryOp { op, left, .. } => match op {
-                BinOp::Eq
-                | BinOp::Neq
-                | BinOp::Lt
-                | BinOp::Gt
-                | BinOp::LtEq
-                | BinOp::GtEq
-                | BinOp::And
-                | BinOp::Or => BcType::Bool,
-                _ => self.type_of(left),
-            },
-            Expr::UnaryOp { op, operand, .. } => match op {
-                UnaryOp::Not => BcType::Bool,
-                UnaryOp::Neg => self.type_of(operand),
-            },
-            Expr::Cast { ty, .. } => self.resolve_ast_type(ty),
-            Expr::Call {
-                callee, args: _, ..
-            } => {
-                if let Expr::Ident(name, _) = callee.as_ref() {
-                    if name == "len" {
-                        return BcType::I32;
-                    }
-                    if name == "push" {
-                        return BcType::Unit;
-                    }
-                    // Check if it's a fn-ptr variable
-                    if let Some(ty) = self.lookup_type(name) {
-                        if let BcType::FnPtr(_, ret) = ty {
-                            return *ret;
-                        }
-                    }
-                    self.functions
-                        .get(name)
-                        .map(|f| f.return_type.clone())
-                        .unwrap_or(BcType::Unit)
-                } else {
-                    BcType::Unit
-                }
-            }
-            Expr::FieldAccess {
-                expr: obj, field, ..
-            } => {
-                if let BcType::Struct(name) = self.type_of(obj) {
-                    self.structs
-                        .get(&name)
-                        .and_then(|s| s.fields.iter().find(|(n, _)| n == field))
-                        .map(|(_, t)| t.clone())
-                        .unwrap_or(BcType::Unit)
-                } else {
-                    BcType::Unit
-                }
-            }
-            Expr::Index { expr: arr, .. } => match self.type_of(arr) {
-                BcType::Array(e) | BcType::FixedArray(e, _) => *e,
-                _ => BcType::Unit,
-            },
-            Expr::Block(block) => self.block_type(block),
-            Expr::If {
-                then_block,
-                else_branch,
-                ..
-            } => {
-                if else_branch.is_some() {
-                    self.block_type(then_block)
-                } else {
-                    BcType::Unit
-                }
-            }
-            Expr::Match { arms, .. } => {
-                if arms.is_empty() {
-                    BcType::Unit
-                } else {
-                    self.arm_body_type(&arms[0].body)
-                }
-            }
-            Expr::Try { call, .. } => match self.type_of(call) {
-                BcType::Result(ok, _) => *ok,
-                _ => BcType::Unit,
-            },
-            Expr::ArrayLit { elements, .. } => {
-                if elements.is_empty() {
-                    BcType::Array(Box::new(BcType::Unit))
-                } else {
-                    BcType::Array(Box::new(self.type_of(&elements[0])))
-                }
-            }
-            Expr::StructLit { name, .. } => BcType::Struct(name.clone()),
-            Expr::EnumConstructor { enum_name, .. } => {
-                if enum_name == "Result" {
-                    self.current_fn_return_type.clone().unwrap_or(BcType::Unit)
-                } else {
-                    BcType::Enum(enum_name.clone())
-                }
-            }
-            Expr::Arena { body, .. } => self.block_type(body),
-        }
-    }
-
-    fn block_type(&self, block: &Block) -> BcType {
-        if let Some(tail) = &block.tail_expr {
-            self.type_of(tail)
-        } else {
-            BcType::Unit
-        }
-    }
-
-    fn arm_body_type(&self, body: &Expr) -> BcType {
-        self.type_of(body)
-    }
-
-    /// Determine the result type of a match arm by temporarily pushing
-    /// pattern bindings into scope so identifiers resolve correctly.
-    fn match_arm_result_type(&mut self, scrut_ty: &BcType, arm: &MatchArm) -> BcType {
-        self.push_scope();
-        // Register pattern bindings from enum/result patterns
-        match (&arm.pattern, scrut_ty) {
-            (
-                Pattern::Enum {
-                    enum_name,
-                    variant,
-                    bindings,
-                    ..
-                },
-                BcType::Enum(ename),
-            ) => {
-                let lookup = if enum_name.is_empty() {
-                    ename.as_str()
-                } else {
-                    enum_name.as_str()
-                };
-                if let Some(info) = self.enums.get(lookup).cloned() {
-                    if let Some((_, payload_types)) =
-                        info.variants.iter().find(|(n, _)| n == variant)
-                    {
-                        for (i, binding) in bindings.iter().enumerate() {
-                            if let Pattern::Ident(name, _) = binding {
-                                if i < payload_types.len() {
-                                    self.scopes
-                                        .last_mut()
-                                        .unwrap()
-                                        .insert(name.clone(), payload_types[i].clone());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            (
-                Pattern::Enum {
-                    variant, bindings, ..
-                },
-                BcType::Result(ok_ty, err_ty),
-            ) => {
-                if let Some(Pattern::Ident(name, _)) = bindings.first() {
-                    match variant.as_str() {
-                        "Ok" => {
-                            self.scopes
-                                .last_mut()
-                                .unwrap()
-                                .insert(name.clone(), (**ok_ty).clone());
-                        }
-                        "Err" => {
-                            self.scopes
-                                .last_mut()
-                                .unwrap()
-                                .insert(name.clone(), (**err_ty).clone());
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-        // Also pre-scan let stmts in arm body if it's a block
-        if let Expr::Block(block) = &arm.body {
-            for stmt in &block.stmts {
-                if let Stmt::Let(ls) = stmt {
-                    let ty = self.resolve_ast_type(&ls.ty);
-                    self.scopes.last_mut().unwrap().insert(ls.name.clone(), ty);
-                }
-            }
-        }
-        let ty = self.type_of(&arm.body);
-        self.pop_scope();
-        ty
-    }
-
-    fn lookup_type(&self, name: &str) -> Option<BcType> {
-        for scope in self.scopes.iter().rev() {
-            if let Some(ty) = scope.get(name) {
-                return Some(ty.clone());
-            }
-        }
-        if let Some(ci) = self.constants.get(name) {
-            return Some(ci.ty.clone());
-        }
-        None
-    }
-
-    fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-
-    fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn fn_return_c(&self, f: &FnDecl) -> String {
-        match &f.return_type {
-            Some(t) => self.type_to_c(&self.resolve_ast_type(t)),
-            None => "void".to_string(),
-        }
-    }
-
-    fn fn_params_c(&self, f: &FnDecl) -> String {
+    fn fn_params_c(&self, f: &ir::FnDef) -> String {
         let mut parts = vec!["osc_arena* _arena".to_string()];
-        for p in &f.params {
-            let ty = self.resolve_ast_type(&p.ty);
-            let c_ty = self.type_to_c(&ty);
-            parts.push(format!("{} {}", c_ty, p.name));
+        for (name, ty) in &f.params {
+            let c_ty = self.type_to_c(ty);
+            parts.push(format!("{} {}", c_ty, name));
         }
         parts.join(", ")
     }

@@ -73,8 +73,74 @@ chmod +x run_tests.sh
 
 ### Windows (PowerShell)
 ```powershell
-.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -CC gcc
+.\run_tests.ps1 -Oscan ..\target\release\oscan.exe
 ```
+
+### Differential backend oracle
+
+The PowerShell runner can compare any opt-in native backend with the C backend:
+
+```powershell
+.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend native
+# Full repository runner:
+.\test.ps1 -Backend native
+# GNU-style spelling is also accepted:
+.\test.ps1 --backend native
+# Focused native runtime/link-mode regression:
+.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe
+```
+
+`c` remains the default, so existing commands are unchanged. Selecting another
+backend requires the compiler to advertise `--backend`; otherwise the runner
+stops with a clear gating message. Use `-BackendOption` if a development
+compiler exposes the selector under another option name.
+
+For each positive test, the differential run invokes both `--backend c` and
+the selected backend in isolated working directories. It compares compile and
+runtime exit status, normalized stdout, stable normalized stderr, and the
+resulting fixture files. Both outputs are also checked against
+`expected/<name>.expected`, which remains an independent third oracle.
+
+- Put per-test input fixtures in `fixtures/<name>/`.
+- Put the complete expected final fixture tree in `expected_files/<name>/`.
+- Optional `expected_stderr/<name>.expected` and
+  `expected_exit/<name>.expected` files add explicit expected diagnostics and
+  exit status (the default exit status is zero).
+- Pass `-UnstableStderrTests name1,name2` only for tests whose stderr is
+  intentionally platform- or backend-dependent.
+
+Negative tests are compiled once without a backend selector: they exercise the
+shared frontend and are not duplicated per backend.
+
+The focused hosted-mode regression verifies that plain `--backend native`
+remains libc-free, while explicit `--libc --backend native` differentially
+runs all FFI fixtures (including libm symbols), preserves object-only output,
+and passes `--extra-c`/`--extra-cflags` through the hosted linker.
+
+### Cross-platform runs (WSL Linux x64, WSL native cross-link, ARM64)
+
+`test.ps1`'s WSL and ARM64 (QEMU) phases cross-compile and run every positive
+test outside Windows. They honor the same `expected_exit/<name>.expected`
+convention as the differential oracle above:
+
+- The WSL native cross-link phase (`--backend native` cross-emitted to
+  `linux-x86_64`, linked and run under WSL) reads
+  `expected_exit/<name>.expected` for each attempted test and fails a program
+  whose actual exit code doesn't match its declared expectation (default
+  zero) — see `Resolve-WslNativeBatchRecords` in `test.ps1` and its focused
+  tests in `wsl_native_batch.tests.ps1`.
+- A handful of builtins are legitimately unavailable or behave differently
+  outside the primary Windows freestanding environment: canvas/clipboard
+  "alive before open" defaults differ between Windows and POSIX's
+  backend-selection logic, `img_load`/`svg_load`/`tt_load` decoding and
+  `tls_connect` are only wired up for `__x86_64__`/`_WIN32` targets (so ARM64
+  falls back to the same "not supported" stub used by hosted/libc mode), and
+  `tls_fetch` needs real outbound network access a sandboxed runner may not
+  have. All three WSL/ARM phases accept either `expected/<name>.expected` or
+  `expected_libc/<name>.expected` (when present) so those constrained
+  contexts don't fail, while any *other* divergence (a crash, a wrong error,
+  partial output, ...) still fails — see `Test-ExpectedOutputMatch` in
+  `backend_oracle.ps1` and its tests in `backend_oracle.tests.ps1`.
 
 ## How It Works
 

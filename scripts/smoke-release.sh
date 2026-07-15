@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env sh
+#!/usr/bin/env sh
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -64,6 +64,8 @@ emit("BUNDLE_KIND", spec["bundle_kind"])
 emit("ARCHIVE_FORMAT", spec["archive_format"])
 emit("NOTE_FILE", spec.get("note_file", ""))
 emit("REQUIRES_HOST_COMPILER", "1" if spec.get("requires_host_compiler") else "0")
+emit("NATIVE_RUNTIME_MODES", ",".join(spec["native_runtime_modes"]))
+emit("NATIVE_SMOKE_MODE", spec.get("native_smoke_mode") or "")
 PY
 )"
 
@@ -119,6 +121,26 @@ if [ -n "$NOTE_FILE" ] && [ ! -f "$INSTALL_DIR/$NOTE_FILE" ]; then
     echo "installed bundle is missing the contract note file '$NOTE_FILE'" >&2
     exit 1
 fi
+if [ -n "$NATIVE_RUNTIME_MODES" ]; then
+    for SOURCE_NAME in osc_native_shim.c osc_runtime.h; do
+        [ -f "$INSTALL_DIR/native-runtime/$SOURCE_NAME" ] || {
+            echo "installed bundle is missing native runtime source '$SOURCE_NAME'" >&2
+            exit 1
+        }
+    done
+    RUNTIME_ARCHIVE_DIR="$INSTALL_DIR/build/runtime-archives/$TARGET"
+    OLD_IFS=$IFS
+    IFS=,
+    for MODE in $NATIVE_RUNTIME_MODES; do
+        for SUFFIX in .a .json; do
+            [ -f "$RUNTIME_ARCHIVE_DIR/libosc_runtime_${MODE}${SUFFIX}" ] || {
+                echo "installed bundle is missing native runtime asset libosc_runtime_${MODE}${SUFFIX}" >&2
+                exit 1
+            }
+        done
+    done
+    IFS=$OLD_IFS
+fi
 
 cat > "$SCRATCH_DIR/hello.osc" <<'EOF'
 fn! main() {
@@ -161,5 +183,31 @@ ACTUAL="$("$OUTPUT_EXE")"
     echo "unexpected smoke test output: $ACTUAL" >&2
     exit 1
 }
+
+if [ -n "$NATIVE_RUNTIME_MODES" ]; then
+    NATIVE_OUTPUT_EXE="$SCRATCH_DIR/hello-native"
+    NATIVE_COMPILE_LOG="$SCRATCH_DIR/native.stderr.txt"
+    if [ "$NATIVE_SMOKE_MODE" = "hosted" ]; then
+        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
+            "$OSCAN_COMMAND" --libc --backend native "$SCRATCH_DIR/hello.osc" \
+            -o "$NATIVE_OUTPUT_EXE" 2>"$NATIVE_COMPILE_LOG"; then
+            cat "$NATIVE_COMPILE_LOG" >&2
+            exit 1
+        fi
+    else
+        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
+            "$OSCAN_COMMAND" --backend native "$SCRATCH_DIR/hello.osc" \
+            -o "$NATIVE_OUTPUT_EXE" 2>"$NATIVE_COMPILE_LOG"; then
+            cat "$NATIVE_COMPILE_LOG" >&2
+            exit 1
+        fi
+    fi
+
+    NATIVE_ACTUAL="$("$NATIVE_OUTPUT_EXE")"
+    [ "$NATIVE_ACTUAL" = "Hello, Release!" ] || {
+        echo "unexpected packaged native smoke output: $NATIVE_ACTUAL" >&2
+        exit 1
+    }
+fi
 
 echo "Release smoke test passed for $ARCHIVE_PATH"

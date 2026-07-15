@@ -487,6 +487,22 @@ extern char **osc_global_argv;
 /* Global arena — created by generated main, used by micro-lib fns */
 extern osc_arena *osc_global_arena;
 
+/* Initializes l_os.h's argv-derived environment table in freestanding
+ * builds (Unix: envp = argv + argc + 1; no-op on Windows/WASI, which
+ * read the environment directly). Every freestanding entry point must
+ * call this once, after storing argc/argv, before any osc_env_* builtin
+ * runs — the C backend's generated `main` does so inline (see
+ * src/codegen.rs's emit_main_wrapper, which calls l_os.h's
+ * l_getenv_init directly since program.c and the runtime are one
+ * translation unit there); the native (Cranelift) backend's synthesized
+ * entry point is a separate translation unit from the runtime archive,
+ * so it calls this exported wrapper instead — l_getenv_init itself has
+ * internal (static) linkage and cannot be called across translation
+ * units. Only defined for freestanding builds (see osc_runtime.c);
+ * hosted (libc) builds read the real process environment instead and
+ * never call this. */
+void osc_freestanding_env_init(int32_t argc, char **argv);
+
 /* ------------------------------------------------------------------ */
 /*  Graphics — Canvas lifecycle                                        */
 /* ------------------------------------------------------------------ */

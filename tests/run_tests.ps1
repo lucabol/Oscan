@@ -1,9 +1,15 @@
 # Oscan Test Runner (PowerShell) — quiet by default, -VerboseOutput for details
-# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-VerboseOutput]
+# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-Backend <name> | --backend <name>] [-VerboseOutput]
 
 param(
     [Parameter(Mandatory=$true)]
     [string]$Oscan,
+
+    [string]$Backend = "c",
+
+    [string]$BackendOption = "--backend",
+
+    [string[]]$UnstableStderrTests = @(),
 
     [switch]$VerboseOutput
 )
@@ -11,6 +17,17 @@ param(
 $ErrorActionPreference = "Continue"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ScriptDir
+. (Join-Path $ScriptDir "backend_oracle.ps1")
+
+try {
+    $backendSelection = Resolve-OracleBackendSelection -Backend $Backend -BackendOption $BackendOption
+    $Backend = $backendSelection.Backend
+    $BackendOption = $backendSelection.BackendOption
+} catch {
+    Pop-Location
+    Write-Error $_
+    exit 2
+}
 
 $Pass = 0; $Fail = 0; $NegPass = 0; $NegFail = 0
 $Failures = [System.Collections.ArrayList]::new()
@@ -18,6 +35,16 @@ $LibcRegressionTests = @('builtin_typed_maps')
 
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
+}
+
+if ($Backend -ne "c") {
+    try {
+        Assert-OracleBackendAvailable -Compiler $Oscan -Backend $Backend -BackendOption $BackendOption
+    } catch {
+        Pop-Location
+        Write-Error $_
+        exit 2
+    }
 }
 
 # --- Positive Tests ---
@@ -31,26 +58,48 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
         $Fail++; continue
     }
 
-    if ($name -match '^ffi') {
-        $compileArgs += '--libc'
-    }
-    & $Oscan @compileArgs $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
-    if ($LASTEXITCODE -ne 0) {
-        [void]$Failures.Add("$name — compile error")
-        $Fail++; continue
+    if ($name -match '^ffi') { $compileArgs += '--libc' }
+
+    if ($Backend -eq "c") {
+        & $Oscan @compileArgs $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
+        if ($LASTEXITCODE -ne 0) {
+            [void]$Failures.Add("$name — compile error")
+            $Fail++; continue
+        }
+
+        $actual = & ".\build\$name.exe" 2>&1 | Out-String
+        $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+        $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+
+        if ($actual -ne $expected) {
+            [void]$Failures.Add("$name — output mismatch")
+            $Fail++
+            continue
+        }
+    } else {
+        $oracleResult = Invoke-DifferentialBackendTest `
+            -Compiler $Oscan `
+            -Source $oscFile.FullName `
+            -Name $name `
+            -Backend $Backend `
+            -BackendOption $BackendOption `
+            -BuildRoot (Join-Path $ScriptDir "build") `
+            -RunRoot (Join-Path $ScriptDir "build\oracle-runs\$name") `
+            -ExpectedFile (Join-Path $ScriptDir $expectedFile) `
+            -ExpectedStderrFile (Join-Path $ScriptDir "expected_stderr\$name.expected") `
+            -ExpectedExitFile (Join-Path $ScriptDir "expected_exit\$name.expected") `
+            -FixtureRoot (Join-Path $ScriptDir "fixtures") `
+            -ExpectedFixtureRoot (Join-Path $ScriptDir "expected_files") `
+            -CompileArguments $compileArgs `
+            -CompareStderr ($UnstableStderrTests -notcontains $name)
+        if (-not $oracleResult.Success) {
+            [void]$Failures.Add("$name — $($oracleResult.Failures -join '; ')")
+            $Fail++
+            continue
+        }
     }
 
-    $actual = & ".\build\$name.exe" 2>&1 | Out-String
-    $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
-    $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
-
-    if ($actual -ne $expected) {
-        [void]$Failures.Add("$name — output mismatch")
-        $Fail++
-        continue
-    }
-
-    if (($LibcRegressionTests -contains $name) -and ($name -notmatch '^ffi')) {
+    if (($Backend -eq "c") -and ($LibcRegressionTests -contains $name) -and ($name -notmatch '^ffi')) {
         & $Oscan --libc $oscFile.FullName -o "build\$name.libc.exe" 2>"build\$name.libc.err"
         if ($LASTEXITCODE -ne 0) {
             [void]$Failures.Add("$name — libc compile error")
@@ -88,8 +137,10 @@ foreach ($oscFile in Get-ChildItem "negative\*.osc") {
 # --- Freestanding Verification ---
 $VPass = 0; $VFail = 0
 $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
+$verificationBackendTag = ConvertTo-OracleBackendTag $Backend
 foreach ($exe in Get-ChildItem "build\*.exe" -ErrorAction SilentlyContinue) {
     if ($exe.BaseName -match '^ffi' -or $exe.BaseName -like '*.libc') { continue }
+    if (($Backend -ne "c") -and ($exe.BaseName -notlike "*.$verificationBackendTag")) { continue }
     $stdlibPatterns = @('msvcrt', 'ucrt', 'vcruntime', 'api-ms-win-crt')
     $ok = $true
 
@@ -114,6 +165,9 @@ foreach ($exe in Get-ChildItem "build\*.exe" -ErrorAction SilentlyContinue) {
 Write-Host ""
 Write-Host "━━━ Oscan Test Suite ━━━" -ForegroundColor Cyan
 Write-Host ("  Positive:     {0} passed, {1} failed" -f $Pass, $Fail)
+if ($Backend -ne "c") {
+    Write-Host ("  Oracle:       C vs {0}" -f $Backend)
+}
 Write-Host ("  Negative:     {0} passed, {1} failed" -f $NegPass, $NegFail)
 if (($VPass + $VFail) -gt 0) {
     Write-Host ("  Freestanding: {0} verified, {1} failed" -f $VPass, $VFail)

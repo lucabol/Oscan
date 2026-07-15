@@ -1,0 +1,5 @@
+no-newline-line
+-42 10000000000 true false
+file: redirected output
+
+after redirect

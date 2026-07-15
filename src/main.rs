@@ -1,7 +1,10 @@
 mod ast;
+mod backend;
 mod codegen;
 mod error;
+mod ir;
 mod lexer;
+mod lower;
 mod parser;
 mod semantic;
 mod token;
@@ -13,11 +16,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
-fn is_verbose() -> bool {
+pub(crate) fn is_verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
@@ -25,7 +28,10 @@ fn is_verbose() -> bool {
 fn verbose_command(label: &str, cmd: &Command) {
     if is_verbose() {
         let prog = cmd.get_program().to_string_lossy();
-        let args: Vec<String> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         eprintln!("[verbose] {label}: {prog} {}", args.join(" "));
     }
 }
@@ -39,24 +45,31 @@ const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.
 const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
 const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/math.h");
 const EMBEDDED_NANOSVG_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvg.h");
-const EMBEDDED_NANOSVGRAST_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
+const EMBEDDED_NANOSVGRAST_H: &str =
+    include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
 const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
 const EMBEDDED_L_TT_H: &str = include_str!("../deps/laststanding/l_tt.h");
 const EMBEDDED_STB_TRUETYPE_H: &str = include_str!("../deps/laststanding/stb_truetype.h");
 
 // BearSSL public headers (for l_tls.h on Linux)
 const EMBEDDED_BEARSSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl.h");
-const EMBEDDED_BEARSSL_HASH_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_hash.h");
-const EMBEDDED_BEARSSL_HMAC_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_hmac.h");
+const EMBEDDED_BEARSSL_HASH_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_hash.h");
+const EMBEDDED_BEARSSL_HMAC_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_hmac.h");
 const EMBEDDED_BEARSSL_KDF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_kdf.h");
-const EMBEDDED_BEARSSL_RAND_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_rand.h");
+const EMBEDDED_BEARSSL_RAND_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_rand.h");
 const EMBEDDED_BEARSSL_PRF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_prf.h");
-const EMBEDDED_BEARSSL_BLOCK_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_block.h");
-const EMBEDDED_BEARSSL_AEAD_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_aead.h");
+const EMBEDDED_BEARSSL_BLOCK_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_block.h");
+const EMBEDDED_BEARSSL_AEAD_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_aead.h");
 const EMBEDDED_BEARSSL_RSA_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_rsa.h");
 const EMBEDDED_BEARSSL_EC_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ec.h");
 const EMBEDDED_BEARSSL_SSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ssl.h");
-const EMBEDDED_BEARSSL_X509_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_x509.h");
+const EMBEDDED_BEARSSL_X509_H: &str =
+    include_str!("../deps/laststanding/bearssl/inc/bearssl_x509.h");
 const EMBEDDED_BEARSSL_PEM_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_pem.h");
 
 const BEARSSL_HEADERS: &[(&str, &str)] = &[
@@ -193,8 +206,7 @@ fn replace_word_boundary(source: &str, word: &str, replacement: &str) -> String 
     while i < bytes.len() {
         if i + word_len <= bytes.len() && bytes[i..i + word_len] == *word_bytes {
             let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
-            let after_ok =
-                i + word_len >= bytes.len() || !is_ident_char(bytes[i + word_len]);
+            let after_ok = i + word_len >= bytes.len() || !is_ident_char(bytes[i + word_len]);
             if before_ok && after_ok {
                 result.push_str(replacement);
                 i += word_len;
@@ -219,9 +231,7 @@ fn replace_ns_dot(source: &str, ns: &str) -> String {
     let mut i = 0;
 
     while i < bytes.len() {
-        if i + ns_dot_len < bytes.len()
-            && bytes[i..i + ns_dot_len] == *ns_dot_bytes
-        {
+        if i + ns_dot_len < bytes.len() && bytes[i..i + ns_dot_len] == *ns_dot_bytes {
             let before_ok = i == 0 || !is_ident_char(bytes[i - 1]);
             let after_byte = bytes[i + ns_dot_len];
             let after_ok = after_byte.is_ascii_alphabetic() || after_byte == b'_';
@@ -250,9 +260,15 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [-o output] <file.osc>",
     );
-    print_line("  --target <arch>  Cross-compile for target (riscv64, wasi)");
+    print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
+    print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
+    print_line("  --backend c|native  Code generation backend (default: c)");
+    print_line(&format!(
+        "  --native-target <tag>  Native backend target: {} (default: host)",
+        backend::NativeTarget::accepted_values()
+    ));
     print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
     print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
@@ -260,6 +276,12 @@ fn print_usage(to_stderr: bool) {
         "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
         toolchain_search_hint()
     ));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Backend {
+    C,
+    Native,
 }
 
 fn main() {
@@ -275,6 +297,8 @@ fn main() {
     let mut show_warnings = false;
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
+    let mut backend_kind = Backend::C;
+    let mut native_target_arg: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut extra_c_files: Vec<String> = Vec::new();
     let mut extra_cflags: Vec<String> = Vec::new();
@@ -311,6 +335,32 @@ fn main() {
                         process::exit(1);
                     }
                 });
+            }
+            "--backend" => {
+                i += 1;
+                let val = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("error: --backend requires an argument (c, native)");
+                    process::exit(1);
+                });
+                backend_kind = match val.as_str() {
+                    "c" => Backend::C,
+                    "native" => Backend::Native,
+                    other => {
+                        eprintln!("error: unknown backend '{other}' (supported: c, native)");
+                        process::exit(1);
+                    }
+                };
+            }
+            "--native-target" => {
+                i += 1;
+                let val = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!(
+                        "error: --native-target requires an argument ({})",
+                        backend::NativeTarget::accepted_values()
+                    );
+                    process::exit(1);
+                });
+                native_target_arg = Some(val);
             }
             "-o" => {
                 i += 1;
@@ -355,6 +405,48 @@ fn main() {
         i += 1;
     }
 
+    // Backend-selection validation. `--target` (C-backend cross-compile
+    // to riscv64/wasi) and `--native-target` (native-backend target
+    // selection) are deliberately separate flags with non-overlapping
+    // meanings — see `print_usage` — so using either with the wrong
+    // backend is a user error, not something to silently ignore.
+    if backend_kind == Backend::Native {
+        if target.is_some() {
+            eprintln!("error: --target is only supported with --backend c; use --native-target for the native backend");
+            process::exit(1);
+        }
+        if emit_c {
+            eprintln!("error: --emit-c is only supported with --backend c (the native backend never produces C source)");
+            process::exit(1);
+        }
+    } else if native_target_arg.is_some() {
+        eprintln!("error: --native-target requires --backend native");
+        process::exit(1);
+    }
+    let native_target = if backend_kind == Backend::Native {
+        Some(match native_target_arg.as_deref().unwrap_or("host") {
+            // Both "no --native-target given" and an explicit
+            // "--native-target host" mean the same thing — auto-detect
+            // this machine — and must fail the same clean way (naming
+            // the unsupported host, never silently defaulting to some
+            // other target) when this host's OS/architecture isn't one
+            // the native backend supports; see `NativeTarget::try_host`.
+            "host" => backend::NativeTarget::try_host().unwrap_or_else(|e| {
+                eprintln!("error: {e}");
+                process::exit(1);
+            }),
+            val => backend::NativeTarget::parse(val).unwrap_or_else(|| {
+                eprintln!(
+                    "error: unknown --native-target '{val}' (supported: {})",
+                    backend::NativeTarget::accepted_values()
+                );
+                process::exit(1);
+            }),
+        })
+    } else {
+        None
+    };
+
     let path = match file_path {
         Some(p) => p,
         None => {
@@ -367,7 +459,9 @@ fn main() {
     VERBOSE.store(verbose, Ordering::Relaxed);
 
     let source = {
-        if is_verbose() { eprintln!("[verbose] Resolving imports for {}", path); }
+        if is_verbose() {
+            eprintln!("[verbose] Resolving imports for {}", path);
+        }
         let file_path_buf = PathBuf::from(&path);
         let mut visited = HashSet::new();
         let mut namespaces = Vec::new();
@@ -387,7 +481,9 @@ fn main() {
     };
 
     // Lex
-    if is_verbose() { eprintln!("[verbose] Lexing..."); }
+    if is_verbose() {
+        eprintln!("[verbose] Lexing...");
+    }
     let mut lex = lexer::Lexer::new(&source);
     let tokens = match lex.tokenize() {
         Ok(t) => t,
@@ -404,7 +500,9 @@ fn main() {
     }
 
     // Parse
-    if is_verbose() { eprintln!("[verbose] Parsing..."); }
+    if is_verbose() {
+        eprintln!("[verbose] Parsing...");
+    }
     let mut par = parser::Parser::new(tokens);
     let program = match par.parse_program() {
         Ok(p) => p,
@@ -426,7 +524,9 @@ fn main() {
     }
 
     // Semantic analysis
-    if is_verbose() { eprintln!("[verbose] Semantic analysis..."); }
+    if is_verbose() {
+        eprintln!("[verbose] Semantic analysis...");
+    }
     let info = match semantic::SemanticAnalyzer::analyze(&program) {
         Ok(info) => info,
         Err(e) => {
@@ -436,10 +536,39 @@ fn main() {
     };
 
     // Code generation
+    let ir_program = lower::lower_program(&program, &info);
+    if let Err(errors) = ir::verify(&ir_program) {
+        for e in &errors {
+            eprintln!("internal compiler error: {}", e);
+        }
+        process::exit(1);
+    }
+
+    if let Some(native_target) = native_target {
+        let runtime_mode = if use_libc {
+            backend::RuntimeMode::Hosted
+        } else {
+            backend::RuntimeMode::Freestanding
+        };
+        run_native_backend(
+            &ir_program,
+            native_target,
+            runtime_mode,
+            &path,
+            output_path,
+            run_mode,
+            show_warnings,
+            &program_args,
+            &extra_c_files,
+            &extra_cflags,
+        );
+        return;
+    }
+
     // macOS: l_os.h uses Linux syscalls for Unix; freestanding is not possible on macOS
     let freestanding = match &target {
-        Some(CrossTarget::RiscV64) => true,   // RISC-V always freestanding
-        Some(CrossTarget::Wasi) => false,      // WASI always libc mode
+        Some(CrossTarget::RiscV64) => true, // RISC-V always freestanding
+        Some(CrossTarget::Wasi) => false,   // WASI always libc mode
         None => {
             if !use_libc && cfg!(target_os = "macos") {
                 eprintln!("note: freestanding mode not supported on macOS; using libc mode");
@@ -449,8 +578,15 @@ fn main() {
             }
         }
     };
-    let c_code = codegen::CodeGenerator::generate(&program, &info, freestanding);
-    if is_verbose() { eprintln!("[verbose] Generated C code ({} bytes, freestanding={})", c_code.len(), freestanding); }
+
+    let c_code = codegen::CodeGenerator::generate(&ir_program, freestanding);
+    if is_verbose() {
+        eprintln!(
+            "[verbose] Generated C code ({} bytes, freestanding={})",
+            c_code.len(),
+            freestanding
+        );
+    }
 
     // Determine the output mode:
     //   --run           → compile and execute
@@ -467,7 +603,15 @@ fn main() {
             eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
             process::exit(1);
         }
-        run_program(&path, &c_code, freestanding, show_warnings, &program_args, &extra_c_files, &extra_cflags);
+        run_program(
+            &path,
+            &c_code,
+            freestanding,
+            show_warnings,
+            &program_args,
+            &extra_c_files,
+            &extra_cflags,
+        );
     } else if emit_c || output_ends_in_c {
         // Emit C mode
         if let Some(out_path) = output_path {
@@ -512,12 +656,154 @@ fn main() {
                 pb
             }
         };
-        compile_to_executable(&c_code, &exe_path, freestanding, target.as_ref(), show_warnings, &extra_c_files, &extra_cflags);
+        compile_to_executable(
+            &c_code,
+            &exe_path,
+            freestanding,
+            target.as_ref(),
+            show_warnings,
+            &extra_c_files,
+            &extra_cflags,
+        );
     }
 }
 
+/// Drives the Cranelift native backend end to end: object emission,
+/// with `-o *.o`/`-o *.obj` short-circuiting to just the object file,
+/// otherwise linking into a standalone executable (and, for
+/// `--run`, executing it). Never touches `crate::codegen`/the C backend —
+/// see `src/backend/mod.rs`'s module docs on why that would be a "silent
+/// fallback" this backend deliberately never performs.
+fn run_native_backend(
+    ir_program: &ir::Program,
+    native_target: backend::NativeTarget,
+    runtime_mode: backend::RuntimeMode,
+    source_path: &str,
+    output_path: Option<String>,
+    run_mode: bool,
+    show_warnings: bool,
+    program_args: &[String],
+    extra_c_files: &[String],
+    extra_cflags: &[String],
+) {
+    if is_verbose() {
+        eprintln!("[verbose] Native backend target: {native_target}, runtime: {runtime_mode}");
+    }
+    let object_bytes = match backend::compile_object(ir_program, native_target, runtime_mode) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("{}", e.with_file(source_path));
+            process::exit(1);
+        }
+    };
+    if is_verbose() {
+        eprintln!(
+            "[verbose] Native object emitted ({} bytes)",
+            object_bytes.len()
+        );
+    }
+
+    let output_is_object = output_path
+        .as_ref()
+        .map(|p| {
+            let lower = p.to_ascii_lowercase();
+            lower.ends_with(".o") || lower.ends_with(".obj")
+        })
+        .unwrap_or(false);
+
+    if output_is_object {
+        if run_mode {
+            eprintln!(
+                "error: --run cannot be combined with an object-file output path (-o *.o/*.obj)"
+            );
+            process::exit(1);
+        }
+        let out_path = output_path.unwrap();
+        if let Err(e) = backend::link::write_object_file(&object_bytes, Path::new(&out_path)) {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+        eprintln!("Wrote {out_path}");
+        return;
+    }
+
+    let link_options = backend::link::NativeLinkOptions {
+        runtime_mode,
+        show_warnings,
+        extra_c_files,
+        extra_cflags,
+    };
+    let temp_dir = env::temp_dir().join(format!("oscan_native_{}", process::id()));
+    if let Err(e) = fs::create_dir_all(&temp_dir) {
+        eprintln!("error creating temp directory: {e}");
+        process::exit(1);
+    }
+    let obj_path = temp_dir.join(format!("program{}", native_target.obj_suffix()));
+    if let Err(e) = backend::link::write_object_file(&object_bytes, &obj_path) {
+        eprintln!("error: {e}");
+        let _ = fs::remove_dir_all(&temp_dir);
+        process::exit(1);
+    }
+
+    if run_mode {
+        let exe_path = temp_dir.join(format!("program{}", native_target.exe_suffix()));
+        if let Err(e) =
+            backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options)
+        {
+            eprintln!("error: {e}");
+            let _ = fs::remove_dir_all(&temp_dir);
+            process::exit(1);
+        }
+        eprintln!("\n=== Running {} ===\n", source_path);
+        let status = Command::new(&exe_path).args(program_args).status();
+        let _ = fs::remove_dir_all(&temp_dir);
+        match status {
+            Ok(exit_status) => {
+                if !exit_status.success() {
+                    process::exit(exit_status.code().unwrap_or(1));
+                }
+            }
+            Err(e) => {
+                eprintln!("error running program: {e}");
+                process::exit(1);
+            }
+        }
+        return;
+    }
+
+    let exe_path = match output_path {
+        Some(p) => {
+            let pb = PathBuf::from(p);
+            if pb.extension().is_none() {
+                pb.with_extension(native_target.exe_suffix().trim_start_matches('.'))
+            } else {
+                pb
+            }
+        }
+        None => {
+            let stem = Path::new(source_path)
+                .file_stem()
+                .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                .to_os_string();
+            let mut pb = PathBuf::from(stem);
+            let suffix = native_target.exe_suffix().trim_start_matches('.');
+            if !suffix.is_empty() {
+                pb.set_extension(suffix);
+            }
+            pb
+        }
+    };
+    let result = backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options);
+    let _ = fs::remove_dir_all(&temp_dir);
+    if let Err(e) = result {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
+    eprintln!("Compiled {}", exe_path.display());
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompilerSource {
+pub(crate) enum CompilerSource {
     Override,
     Bundled,
     Host,
@@ -525,7 +811,7 @@ enum CompilerSource {
 
 /// Represents a discovered C compiler with enough info to invoke it.
 #[derive(Debug, PartialEq, Eq)]
-enum CCompiler {
+pub(crate) enum CCompiler {
     Gcc {
         cmd: String,
         source: CompilerSource,
@@ -566,7 +852,7 @@ fn find_wasi_sysroot() -> Option<String> {
     None
 }
 
-fn command_exists(cmd: &str) -> bool {
+pub(crate) fn command_exists(cmd: &str) -> bool {
     let check = if cfg!(windows) { "where.exe" } else { "which" };
     Command::new(check)
         .arg(cmd)
@@ -585,11 +871,25 @@ fn env_var_nonempty(name: &str) -> Option<String> {
     }
 }
 
-fn compiler_source_label(source: CompilerSource) -> &'static str {
+pub(crate) fn compiler_source_label(source: CompilerSource) -> &'static str {
     match source {
         CompilerSource::Override => "override",
         CompilerSource::Bundled => "bundled",
         CompilerSource::Host => "host",
+    }
+}
+
+/// The invocable command for `compiler`, only when it is GCC or Clang
+/// (`None` for MSVC): used by the native (Cranelift) backend's linker
+/// discovery in `src/backend/link.rs`, which drives GCC/Clang as a linker
+/// front-end for `.o`/`.a` inputs rather than `cl.exe`/`link.exe` (see that
+/// module for why).
+pub(crate) fn gcc_or_clang_cmd(compiler: &CCompiler) -> Option<(&str, CompilerSource)> {
+    match compiler {
+        CCompiler::Gcc { cmd, source } | CCompiler::Clang { cmd, source } => {
+            Some((cmd.as_str(), *source))
+        }
+        CCompiler::Msvc { .. } => None,
     }
 }
 
@@ -627,7 +927,10 @@ fn resource_dir_candidates(
 }
 
 fn find_first_existing_dir(candidates: &[PathBuf]) -> Option<PathBuf> {
-    candidates.iter().find(|candidate| candidate.is_dir()).cloned()
+    candidates
+        .iter()
+        .find(|candidate| candidate.is_dir())
+        .cloned()
 }
 
 fn bundled_toolchain_bin_dirs(toolchain_dir: &Path, platform: &str) -> Vec<PathBuf> {
@@ -801,14 +1104,14 @@ fn find_bundled_c_compiler_in_dir(toolchain_dir: &Path, platform: &str) -> Optio
             let cmd_str = candidate.to_string_lossy().into_owned();
             if !compiler_can_execute(&cmd_str) {
                 if is_verbose() {
-                    eprintln!("[verbose] Bundled compiler {} exists but can't execute — skipping", cmd_str);
+                    eprintln!(
+                        "[verbose] Bundled compiler {} exists but can't execute — skipping",
+                        cmd_str
+                    );
                 }
                 continue;
             }
-            return Some(compiler_from_command(
-                cmd_str,
-                CompilerSource::Bundled,
-            ));
+            return Some(compiler_from_command(cmd_str, CompilerSource::Bundled));
         }
     }
     None
@@ -900,7 +1203,7 @@ fn find_host_c_compiler() -> Option<CCompiler> {
 /// OSCAN_CC override → bundled toolchain → clang (PATH) → VS-bundled clang →
 /// gcc → cl.exe (PATH) → cl.exe (VS installation).
 /// Clang is preferred for smaller binaries and faster compilation.
-fn find_c_compiler() -> Option<CCompiler> {
+pub(crate) fn find_c_compiler() -> Option<CCompiler> {
     if let Some(override_compiler) = compiler_override(env_var_nonempty("OSCAN_CC")) {
         return Some(override_compiler);
     }
@@ -981,10 +1284,40 @@ fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
     None
 }
 
+/// A temp-directory path unique to this invocation. Combining the process
+/// ID with a monotonic per-process counter and a high-resolution
+/// timestamp avoids a real (if narrow) collision window: Windows reuses a
+/// just-exited process's PID for a newly spawned process almost
+/// immediately, so `oscan_temp_<pid>` alone can collide when many short-lived
+/// `oscan` invocations run back-to-back in quick succession (as the
+/// differential backend-oracle test harness does) — one process's
+/// `fs::remove_dir_all` cleanup racing a same-PID successor's
+/// `fs::create_dir_all` of the identical path intermittently manifests as
+/// spurious "path not found"/"access denied" I/O errors.
+fn unique_temp_dir_name() -> String {
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("oscan_temp_{}_{}_{}", process::id(), nanos, seq)
+}
+
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
-fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, target: Option<&CrossTarget>, show_warnings: bool, extra_c_files: &[String], extra_cflags: &[String]) {
-    let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
-    if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
+fn compile_to_executable(
+    c_code: &str,
+    exe_path: &Path,
+    freestanding: bool,
+    target: Option<&CrossTarget>,
+    show_warnings: bool,
+    extra_c_files: &[String],
+    extra_cflags: &[String],
+) {
+    let temp_dir = env::temp_dir().join(unique_temp_dir_name());
+    if is_verbose() {
+        eprintln!("[verbose] Creating temp dir: {}", temp_dir.display());
+    }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -1049,17 +1382,27 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let runtime_c = if let Some(ref rd) = find_runtime_dir() {
-        if is_verbose() { eprintln!("[verbose] Using on-disk runtime: {}", rd.display()); }
+        if is_verbose() {
+            eprintln!("[verbose] Using on-disk runtime: {}", rd.display());
+        }
         include_dirs.push(rd.clone());
         include_dirs.extend(find_extra_include_dirs(rd));
         rd.join("osc_runtime.c")
     } else {
-        if is_verbose() { eprintln!("[verbose] Using embedded runtime files"); }
+        if is_verbose() {
+            eprintln!("[verbose] Using embedded runtime files");
+        }
         temp_dir.join("osc_runtime.c")
     };
     include_dirs.push(temp_dir.clone());
     if is_verbose() {
-        eprintln!("[verbose] Include dirs: {:?}", include_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>());
+        eprintln!(
+            "[verbose] Include dirs: {:?}",
+            include_dirs
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+        );
         if let Some(lib) = find_bearssl_lib(&include_dirs) {
             eprintln!("[verbose] Found libbearssl.a: {}", lib);
         } else {
@@ -1067,8 +1410,20 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
         }
     }
 
-    if is_verbose() { eprintln!("[verbose] Invoking C compiler..."); }
-    let compiled = invoke_c_compiler(&c_file, exe_path, &runtime_c, &include_dirs, freestanding, target, show_warnings, extra_c_files, extra_cflags);
+    if is_verbose() {
+        eprintln!("[verbose] Invoking C compiler...");
+    }
+    let compiled = invoke_c_compiler(
+        &c_file,
+        exe_path,
+        &runtime_c,
+        &include_dirs,
+        freestanding,
+        target,
+        show_warnings,
+        extra_c_files,
+        extra_cflags,
+    );
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -1080,9 +1435,19 @@ fn compile_to_executable(c_code: &str, exe_path: &Path, freestanding: bool, targ
     eprintln!("Compiled {}", exe_path.display());
 }
 
-fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warnings: bool, program_args: &[String], extra_c_files: &[String], extra_cflags: &[String]) {
-    let temp_dir = env::temp_dir().join(format!("oscan_temp_{}", process::id()));
-    if is_verbose() { eprintln!("[verbose] Creating temp dir: {}", temp_dir.display()); }
+fn run_program(
+    source_path: &str,
+    c_code: &str,
+    freestanding: bool,
+    show_warnings: bool,
+    program_args: &[String],
+    extra_c_files: &[String],
+    extra_cflags: &[String],
+) {
+    let temp_dir = env::temp_dir().join(unique_temp_dir_name());
+    if is_verbose() {
+        eprintln!("[verbose] Creating temp dir: {}", temp_dir.display());
+    }
     if let Err(e) = fs::create_dir_all(&temp_dir) {
         eprintln!("error creating temp directory: {e}");
         process::exit(1);
@@ -1151,21 +1516,43 @@ fn run_program(source_path: &str, c_code: &str, freestanding: bool, show_warning
     // On-disk runtime dir (dev mode) takes precedence; temp dir is always a fallback
     let mut include_dirs: Vec<PathBuf> = Vec::new();
     let runtime_c = if let Some(ref rd) = find_runtime_dir() {
-        if is_verbose() { eprintln!("[verbose] Using on-disk runtime: {}", rd.display()); }
+        if is_verbose() {
+            eprintln!("[verbose] Using on-disk runtime: {}", rd.display());
+        }
         include_dirs.push(rd.clone());
         include_dirs.extend(find_extra_include_dirs(rd));
         rd.join("osc_runtime.c")
     } else {
-        if is_verbose() { eprintln!("[verbose] Using embedded runtime files"); }
+        if is_verbose() {
+            eprintln!("[verbose] Using embedded runtime files");
+        }
         temp_dir.join("osc_runtime.c")
     };
     include_dirs.push(temp_dir.clone());
     if is_verbose() {
-        eprintln!("[verbose] Include dirs: {:?}", include_dirs.iter().map(|d| d.display().to_string()).collect::<Vec<_>>());
+        eprintln!(
+            "[verbose] Include dirs: {:?}",
+            include_dirs
+                .iter()
+                .map(|d| d.display().to_string())
+                .collect::<Vec<_>>()
+        );
     }
 
-    if is_verbose() { eprintln!("[verbose] Invoking C compiler (run mode)..."); }
-    let compiled = invoke_c_compiler(&c_file, &exe_file, &runtime_c, &include_dirs, freestanding, None, show_warnings, extra_c_files, extra_cflags);
+    if is_verbose() {
+        eprintln!("[verbose] Invoking C compiler (run mode)...");
+    }
+    let compiled = invoke_c_compiler(
+        &c_file,
+        &exe_file,
+        &runtime_c,
+        &include_dirs,
+        freestanding,
+        None,
+        show_warnings,
+        extra_c_files,
+        extra_cflags,
+    );
 
     if !compiled {
         eprintln!("\nerror: compilation failed");
@@ -1211,7 +1598,15 @@ fn invoke_c_compiler(
                     process::exit(1);
                 }
                 eprintln!("Cross-compiling for RISC-V (freestanding)...");
-                return compile_cross_riscv64(cmd, c_file, exe_file, include_dirs, show_warnings, extra_c_files, extra_cflags);
+                return compile_cross_riscv64(
+                    cmd,
+                    c_file,
+                    exe_file,
+                    include_dirs,
+                    show_warnings,
+                    extra_c_files,
+                    extra_cflags,
+                );
             }
             CrossTarget::Wasi => {
                 let cmd = "clang";
@@ -1229,7 +1624,17 @@ fn invoke_c_compiler(
                     }
                 };
                 eprintln!("Cross-compiling for WASI/WebAssembly...");
-                return compile_cross_wasi(cmd, c_file, exe_file, runtime_c, include_dirs, &sysroot, show_warnings, extra_c_files, extra_cflags);
+                return compile_cross_wasi(
+                    cmd,
+                    c_file,
+                    exe_file,
+                    runtime_c,
+                    include_dirs,
+                    &sysroot,
+                    show_warnings,
+                    extra_c_files,
+                    extra_cflags,
+                );
             }
         }
     }
@@ -1242,10 +1647,7 @@ fn invoke_c_compiler(
             eprintln!("searched in this order:");
             eprintln!("  1. OSCAN_CC override");
             if bundled_supported {
-                eprintln!(
-                    "  2. bundled toolchain under {}",
-                    toolchain_search_hint()
-                );
+                eprintln!("  2. bundled toolchain under {}", toolchain_search_hint());
                 if cfg!(windows) {
                     eprintln!("  3. host compiler detection (clang, VS clang, gcc, cl.exe)");
                 } else {
@@ -1423,9 +1825,7 @@ fn compile_with_gcc_or_clang(
         // Freestanding: single TU (runtime is #included), no libc
         // Use gnu11 for GNU extensions required by l_os.h (register asm, etc.)
         // Size optimization flags matching laststanding build scripts
-        command
-            .arg("-std=gnu11")
-            .arg("-ffreestanding");
+        command.arg("-std=gnu11").arg("-ffreestanding");
         if !show_warnings {
             command.arg("-w");
         }
@@ -1538,9 +1938,7 @@ fn compile_cross_riscv64(
 ) -> bool {
     let mut command = Command::new(cmd);
     // Freestanding single-TU build for RISC-V 64-bit
-    command
-        .arg("-std=gnu11")
-        .arg("-ffreestanding");
+    command.arg("-std=gnu11").arg("-ffreestanding");
     if !show_warnings {
         command.arg("-w");
     }
@@ -1608,9 +2006,7 @@ fn compile_cross_wasi(
     if !show_warnings {
         command.arg("-w");
     }
-    command
-        .arg(c_file)
-        .arg(runtime_c);
+    command.arg(c_file).arg(runtime_c);
     for dir in include_dirs {
         command.arg(format!("-I{}", dir.display()));
     }
@@ -1668,10 +2064,7 @@ fn compile_with_msvc(
         .iter()
         .map(|f| format!(" \"{}\"", f))
         .collect();
-    let extra_flags_str: String = extra_cflags
-        .iter()
-        .map(|f| format!(" {}", f))
-        .collect();
+    let extra_flags_str: String = extra_cflags.iter().map(|f| format!(" {}", f)).collect();
 
     if let Some(vcvars_path) = vcvars {
         // cl.exe was found outside PATH – use a temporary .bat file so that
@@ -1869,7 +2262,10 @@ mod tests {
 
         assert_eq!(
             candidates,
-            vec![PathBuf::from("install").join("toolchain"), PathBuf::from("toolchain")]
+            vec![
+                PathBuf::from("install").join("toolchain"),
+                PathBuf::from("toolchain")
+            ]
         );
     }
 
@@ -1920,10 +2316,7 @@ mod tests {
         fs::write(&generic_gcc, []).unwrap();
 
         // Non-executable dummy files should be skipped by the health check
-        assert_eq!(
-            find_bundled_c_compiler_in_dir(&toolchain, "windows"),
-            None
-        );
+        assert_eq!(find_bundled_c_compiler_in_dir(&toolchain, "windows"), None);
     }
 
     #[test]
@@ -1937,10 +2330,7 @@ mod tests {
         fs::write(&generic_gcc, []).unwrap();
 
         // Non-executable dummy file should be skipped
-        assert_eq!(
-            find_bundled_c_compiler_in_dir(&toolchain, "linux"),
-            None
-        );
+        assert_eq!(find_bundled_c_compiler_in_dir(&toolchain, "linux"), None);
     }
 
     #[test]

@@ -1,0 +1,65 @@
+// Focused regression test for the narrow core-stdio path (see
+// runtime/osc_runtime.c's "Narrow core stdio" comment): print/println and
+// the direct numeric/bool print builtins must keep working exactly as
+// before, and fd_dup2-based stdout redirection (as used by
+// examples/sh.osc's output-redirection builtins) must still be honored by
+// println even though it no longer goes through the generic Windows FD
+// table directly.
+
+fn! main() {
+    // Plain print family (exercises osc_print/osc_println/osc_print_i32/
+    // osc_print_i64/osc_print_bool via osc_core_write).
+    print("no-newline-");
+    println("line");
+    print_i32(-42);
+    print(" ");
+    let big: i64 = (2000000000 as i64) * (5 as i64);
+    print_i64(big);
+    print(" ");
+    print_bool(true);
+    print(" ");
+    print_bool(false);
+    println("");
+
+    // Redirect fd 1 to a file (mirrors examples/sh.osc's `cmd > file`
+    // handling), println while redirected, then restore. If the narrow
+    // print path ever stopped honoring fd_dup2 (see osc_std_fd_resync),
+    // "redirected output" would leak to the real stdout instead of the
+    // file, and/or the file would stay empty.
+    //
+    // NOTE: the file/fd_dup2 calls below are bound to a local variable
+    // before matching (rather than `match file_open_write(...) { ... }`
+    // directly) because matching directly on an impure call re-evaluates
+    // the call once per arm it inspects -- unrelated to this test's
+    // purpose, but matters for a builtin with real side effects like
+    // opening a file.
+    let saved_stdout: i32 = fd_dup(1);
+    let opened: Result<i32, str> = file_open_write("_print_family_redirect.txt");
+    match opened {
+        Result::Ok(fd) => {
+            fd_dup2(fd, 1);
+            println("redirected output");
+            fd_dup2(saved_stdout, 1);
+            file_close(fd);
+        },
+        Result::Err(e) => {
+            fd_dup2(saved_stdout, 1);
+            println("open failed: {e}");
+        },
+    };
+    file_close(saved_stdout);
+
+    let content: Result<str, str> = read_file("_print_family_redirect.txt");
+    match content {
+        Result::Ok(c) => println("file: {c}"),
+        Result::Err(e) => println("read failed: {e}"),
+    };
+
+    let del: Result<str, str> = file_delete("_print_family_redirect.txt");
+    match del {
+        Result::Ok(_) => {},
+        Result::Err(_) => {},
+    };
+
+    println("after redirect");
+}

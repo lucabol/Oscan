@@ -212,7 +212,9 @@ oscan [OPTIONS] <file.osc>
   -o <path>       Output path (exe by default; .c extension for C output)
   --run           Compile and execute immediately
   --emit-c        Emit generated C to stdout
-  --libc          Use hosted libc mode instead of freestanding mode
+  --libc          Use hosted libc mode (also explicit for --backend native)
+  --backend <name>  Code generator: c (default) or native
+  --native-target <tag>  Native object target (default: host)
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
   --extra-c <file>  Extra C source file to compile and link (repeatable)
   --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)
