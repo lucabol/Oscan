@@ -85,14 +85,10 @@ jobs:
           echo "=== Positive Integration Tests (Linux/GCC, freestanding) ==="
           for osc_file in tests/positive/*.osc; do
             name=$(basename "$osc_file" .osc)
-            # Prefer libc-variant expected file when present (covers tests like
-            # tls_fetch whose freestanding "ok" output requires outbound network
-            # the CI runner does not provide; the libc-variant expects the
-            # connect_failed fallback which also matches no-network freestanding).
+            expected="tests/expected/${name}.expected"
+            fallback=""
             if [ -f "tests/expected_libc/${name}.expected" ]; then
-              expected="tests/expected_libc/${name}.expected"
-            else
-              expected="tests/expected/${name}.expected"
+              fallback="tests/expected_libc/${name}.expected"
             fi
             TOTAL=$((TOTAL + 1))
 
@@ -122,13 +118,24 @@ jobs:
             # Run and compare
             actual=$("./tests/build/${name}" 2>&1) || true
             expected_content=$(cat "$expected")
+            fallback_content=""
+            if [ -n "$fallback" ]; then
+              fallback_content=$(cat "$fallback")
+            fi
 
-            if [ "$actual" = "$expected_content" ]; then
+            # Linux x86-64 freestanding normally exercises the real runtime
+            # implementation. Also accept the exact reduced-capability output
+            # for environment-dependent tests such as canvas and TLS.
+            if [ "$actual" = "$expected_content" ] ||
+               { [ -n "$fallback" ] && [ "$actual" = "$fallback_content" ]; }; then
               echo "PASS: $name"
               PASS=$((PASS + 1))
             else
               echo "FAIL: $name — output mismatch"
               echo "  Expected: $(head -3 <<< "$expected_content")"
+              if [ -n "$fallback" ]; then
+                echo "  Or:       $(head -3 <<< "$fallback_content")"
+              fi
               echo "  Actual:   $(head -3 <<< "$actual")"
               FAIL=$((FAIL + 1))
             fi
