@@ -4279,7 +4279,10 @@ void osc_gfx_blit_alpha(int32_t dx, int32_t dy, int32_t w, int32_t h, osc_array 
     l_blit_alpha(&osc_gfx_canvas, dx, dy, w, h, (const uint32_t *)pixels->data, w * 4);
 }
 
-int32_t osc_canvas_key(void) { return (int32_t)l_canvas_key(&osc_gfx_canvas); }
+int32_t osc_canvas_key(void) {
+    if (!l_canvas_alive(&osc_gfx_canvas)) return 0;
+    return (int32_t)l_canvas_key(&osc_gfx_canvas);
+}
 int32_t osc_canvas_mouse_x(void) { return (int32_t)osc_gfx_canvas.mouse_x; }
 int32_t osc_canvas_mouse_y(void) { return (int32_t)osc_gfx_canvas.mouse_y; }
 int32_t osc_canvas_mouse_btn(void) { return (int32_t)osc_gfx_canvas.mouse_btn; }
