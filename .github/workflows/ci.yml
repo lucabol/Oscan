@@ -501,53 +501,13 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}\packaging\prebuilt\windows-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
-      - name: Native hello smoke test (compiler/linker blocked on PATH)
+      - name: Native embedded-link and differential validation
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          if (-not (Test-Path "tests\build")) {
-            New-Item -ItemType Directory -Path "tests\build" | Out-Null
-          }
-
-          # Restrict PATH to a minimal, compiler-free set so a successful
-          # native build/link here can only have used this oscan.exe's
-          # embedded linker, never an external cc/gcc/clang/cl.
-          $env:PATH = @(
-            "$env:SystemRoot\System32",
-            "$env:SystemRoot",
-            "$env:SystemRoot\System32\WindowsPowerShell\v1.0"
-          ) -join ';'
-          foreach ($blocked in @('cc.exe', 'gcc.exe', 'clang.exe', 'cl.exe', 'clang-cl.exe')) {
-            $found = Get-Command $blocked -ErrorAction SilentlyContinue
-            if ($found) {
-              throw "expected '$blocked' to be unreachable on the blocked PATH, but found $($found.Source)"
-            }
-          }
-
-          & ".\target\release\oscan.exe" examples\hello.osc -o "tests\build\embed_hello.exe"
-          if ($LASTEXITCODE -ne 0) {
-            throw "native build using the embedded linker failed with exit code $LASTEXITCODE"
-          }
-
-          $actual = & ".\tests\build\embed_hello.exe" 2>&1 | Out-String
-          Write-Host "hello.osc output: $actual"
-
-      - name: Native hello true-isolation test (toolchain dir renamed away)
-        shell: pwsh
-        run: |
-          # docs/design/native-link-embedding.md §9 item 1a: file-hash
-          # equality of the extracted linker is necessary but NOT sufficient,
-          # because ld.lld.exe is dynamically linked against 5 sibling DLLs.
-          # PATH-stubbing cc/gcc/clang/cl (the step above) does not by itself
-          # rule out a stray toolchain bin/ on PATH masking a
-          # missing-sibling-DLL bug. This renames the whole pinned toolchain
-          # directory away (self-contained try/finally) and re-proves the
-          # embedded link end to end.
-          .\tests\native_link_isolation.tests.ps1 -Oscan ".\target\release\oscan.exe"
-
-      - name: Full C vs native backend differential suite
-        shell: pwsh
-        run: .\tests\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend native
+          .\tests\windows_native_ci.tests.ps1 `
+            -Oscan ".\target\release\oscan.exe" `
+            -RuntimeArchiveDir "build\runtime-archives\windows-x86_64" `
+            -ToolchainDir "build\toolchain-windows-x86_64"
 
   # ─────────────────────────────────────────────
   # Native Link Embedding Smoke Test (Linux)

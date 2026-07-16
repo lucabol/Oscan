@@ -815,7 +815,16 @@ mod tests {
             random_suffix()
         ));
         fs::create_dir_all(&dir).expect("create scratch dir");
-        dir
+        // macOS exposes /var as a system-managed symlink to /private/var.
+        // Production cache roots still reject every symlink component, but
+        // these tests own this freshly-created private directory and can
+        // canonicalize the trusted OS temp alias before exercising that
+        // policy beneath it.
+        if cfg!(target_os = "macos") {
+            fs::canonicalize(&dir).expect("canonicalize macOS scratch dir")
+        } else {
+            dir
+        }
     }
 
     fn make_asset(
