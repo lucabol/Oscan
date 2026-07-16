@@ -1,0 +1,163 @@
+{
+  "schema_version": 2,
+  "archive_kind": "runtime",
+  "description": "Statically compiled, per-target Oscan runtime archives suitable for linking with native-backend object files. Hosted archives link against libc; freestanding archives have no libc or shared runtime dependency (they still link against small per-target system import libraries at final executable link time, e.g. Win32 kernel32/ws2_32 or nothing at all on Unix).",
+  "output_root_template": "build/runtime-archives/{target}",
+  "compiler_validation": {
+    "target_probe": "-dumpmachine",
+    "manifest_fields": [
+      "cc",
+      "cc_args",
+      "cc_target",
+      "sysroot"
+    ],
+    "cross_target_rule": "The configured compiler triple must match {target}. Bare clang may be retargeted only with an explicit target triple and sysroot.",
+    "publication_rule": "The manifest is published before its matching archive; the archive rename is the atomic visibility point."
+  },
+  "modes": {
+    "hosted": {
+      "description": "libc-linked Oscan runtime (osc_runtime.c compiled in its default, non-OSC_FREESTANDING mode). Portable to any host with a C toolchain and standard library.",
+      "sources": ["osc_runtime.c", "osc_native_shim.c"],
+      "archive_name": "libosc_runtime_hosted.a",
+      "manifest_name": "libosc_runtime_hosted.json",
+      "requires_libc": true,
+      "contains_native_shim": true
+    },
+    "freestanding": {
+      "description": "libc-free Oscan runtime: arena allocator, checked arithmetic, strings, panic handler, plus the OS/graphics/image/SVG/TrueType/TLS feature libraries from deps/laststanding that osc_runtime.c calls into directly in OSC_FREESTANDING mode. Mirrors the freestanding include preamble emitted by src/codegen.rs so its ABI matches what transpiled freestanding programs already produce.",
+      "sources": ["osc_runtime_freestanding.c", "osc_native_shim.c"],
+      "archive_name": "libosc_runtime_freestanding.a",
+      "manifest_name": "libosc_runtime_freestanding.json",
+      "requires_libc": false,
+      "supported_targets": ["linux-x86_64", "linux-aarch64", "linux-riscv64", "windows-x86_64"],
+      "contains_native_shim": true
+    },
+    "freestanding_core": {
+      "description": "Sibling of 'freestanding' without the graphics/image/SVG/TrueType feature libraries (l_gfx.h/l_img.h/l_svg.h/l_tt.h) — same core runtime, sockets, and TLS. src/backend/link.rs links a program against this smaller archive instead of 'freestanding' whenever the program's own object has no undefined osc_gfx_*/osc_canvas_*/osc_clipboard_*/osc_img_*/osc_svg_*/osc_tt_* symbol, since --gc-sections cannot fully strip the graphics feature libraries' shared floating-point constant pool out of the full archive (see osc_runtime_freestanding_core.c's docs). Same ABI/ordering as 'freestanding' otherwise.",
+      "sources": ["osc_runtime_freestanding_core.c", "osc_native_shim.c"],
+      "archive_name": "libosc_runtime_freestanding_core.a",
+      "manifest_name": "libosc_runtime_freestanding_core.json",
+      "requires_libc": false,
+      "supported_targets": ["linux-x86_64", "linux-aarch64", "linux-riscv64", "windows-x86_64"],
+      "contains_native_shim": true
+    }
+  },
+  "targets": {
+    "linux-x86_64": {
+      "release_toolchain": {
+        "manifest": "linux-x86_64.json",
+        "vendor": "musl.cc",
+        "version": "x86_64-linux-musl-cross",
+        "abi": "musl",
+        "crt": "musl",
+        "compiler_family": "gcc",
+        "compiler_version": "11.2.1",
+        "compiler_target": "x86_64-linux-musl",
+        "compile_size_flag": "-Os",
+        "archiver_family": "gnu-ar",
+        "archiver_version": "2.37",
+        "linker_family": "gnu-ld",
+        "linker_version": "2.37",
+        "linker_driver_flags": []
+      },
+      "hosted": {
+        "link_flags": ["-lm"]
+      },
+      "freestanding": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
+      },
+      "freestanding_core": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
+      }
+    },
+    "linux-aarch64": {
+      "release_toolchain": {
+        "manifest": "linux-aarch64.json",
+        "vendor": "musl.cc",
+        "version": "aarch64-linux-musl-cross",
+        "abi": "musl",
+        "crt": "musl",
+        "compiler_family": "gcc",
+        "compiler_version": "11.2.1",
+        "compiler_target": "aarch64-linux-musl",
+        "compile_size_flag": "-Os",
+        "archiver_family": "gnu-ar",
+        "archiver_version": "2.37",
+        "linker_family": "gnu-ld",
+        "linker_version": "2.37",
+        "linker_driver_flags": []
+      },
+      "hosted": {
+        "link_flags": ["-lm"]
+      },
+      "freestanding": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
+      },
+      "freestanding_core": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
+      }
+    },
+    "linux-riscv64": {
+      "release_toolchain": {
+        "manifest": "linux-riscv64.json",
+        "vendor": "musl.cc",
+        "version": "riscv64-linux-musl-cross",
+        "abi": "musl",
+        "crt": "musl",
+        "compiler_family": "gcc",
+        "compiler_version": "11.2.1",
+        "compiler_target": "riscv64-linux-musl",
+        "compile_size_flag": "-Os",
+        "archiver_family": "gnu-ar",
+        "archiver_version": "2.37",
+        "linker_family": "gnu-ld",
+        "linker_version": "2.37",
+        "linker_driver_flags": []
+      },
+      "hosted": {
+        "link_flags": ["-lm"]
+      },
+      "freestanding": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
+      },
+      "freestanding_core": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
+      }
+    },
+    "windows-x86_64": {
+      "release_toolchain": {
+        "manifest": "windows-x86_64.json",
+        "vendor": "llvm-mingw",
+        "version": "20260324",
+        "abi": "gnu",
+        "crt": "ucrt",
+        "compiler_family": "clang",
+        "compiler_version": "22.1.2",
+        "compiler_target": "x86_64-w64-windows-gnu",
+        "compile_size_flag": "-Oz",
+        "archiver_family": "llvm-ar",
+        "archiver_version": "22.1.2",
+        "linker_family": "lld",
+        "linker_version": "22.1.2",
+        "linker_driver_flags": ["-fuse-ld=lld"]
+      },
+      "hosted": {
+        "link_flags": []
+      },
+      "freestanding": {
+        "link_flags": ["-lkernel32"],
+        "note": "Windows freestanding TLS uses Schannel (secur32/crypt32) instead of BearSSL, so no embed_bearssl_from entry is needed here. Only -lkernel32 is part of the archive contract. For GNU ld, src/backend/link.rs adds -lws2_32/-luser32/-lgdi32/-lsecur32/-lcrypt32 per program via detect_windows_feature_libs. LLD must see all five while resolving undefined imports in dead runtime sections, then garbage-collects unused import thunks; both paths keep hello_world's final dependency set at KERNEL32.dll only."
+      },
+      "freestanding_core": {
+        "link_flags": ["-lkernel32"],
+        "note": "Same link-time contract as 'freestanding' (sockets/TLS are unchanged, so the same optional import libraries can be needed); only the source translation unit differs (no gfx/img/svg/tt)."
+      }
+    }
+  }
+}

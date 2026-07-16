@@ -1,0 +1,55 @@
+// Test: `for-in` loop variables must be independent *copies* of each
+// array element (matching C's value-copy struct-assignment semantics —
+// see src/codegen.rs's `const T x = arr->data[i];`), not aliases into the
+// array's own backing storage. Exercises this by mutating the
+// currently-iterated slot *before* reading the loop variable in the same
+// iteration, for every inline-aggregate element type (str, struct,
+// payload-bearing enum) — a plain reference/pointer binding would observe
+// the mutation retroactively and print the mutated value instead of the
+// one that was actually iterated over.
+
+struct Pair {
+    a: i32,
+    b: i32,
+}
+
+enum Item {
+    Num(i32),
+    Empty,
+}
+
+fn! main() {
+    // str elements
+    let mut strs: [str] = ["a", "b", "c"];
+    let mut si: i32 = 0;
+    for x in strs {
+        strs[si] = "MUTATED";
+        println(x);
+        si += 1;
+    };
+
+    // struct elements
+    let mut pairs: [Pair] = [Pair { a: 1, b: 2 }, Pair { a: 3, b: 4 }];
+    let mut pi: i32 = 0;
+    for p in pairs {
+        pairs[pi] = Pair { a: -1, b: -1 };
+        print_i32(p.a);
+        print_i32(p.b);
+        println("");
+        pi += 1;
+    };
+
+    // payload-bearing enum elements
+    let mut items: [Item] = [Item::Num(10), Item::Num(20)];
+    let mut ii: i32 = 0;
+    for it in items {
+        items[ii] = Item::Empty;
+        match it {
+            Item::Num(v) => { print_i32(v); println(""); },
+            Item::Empty => { println("empty"); },
+        };
+        ii += 1;
+    };
+
+    println("done");
+}

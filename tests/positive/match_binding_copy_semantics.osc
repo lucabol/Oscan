@@ -1,0 +1,76 @@
+// Test: `match` arms must bind their scrutinee — whether via a bare
+// identifier/catch-all pattern, a payload-bearing enum pattern, or a
+// `Result::Ok`/`Result::Err` pattern — as an independent, C value-copy
+// semantics snapshot, not a pointer aliased into the scrutinee's own
+// backing storage (see src/backend/func.rs's `bind_pattern`, which mirrors
+// `let`'s `bind_value` copy for every other binding). Exercises this by
+// mutating the scrutinee's backing storage (an array slot, so it can be
+// reassigned in place — enum/Result payloads have no directly-mutable
+// field syntax of their own) *inside* the matched arm, immediately after
+// the pattern binds its name(s), and confirming the bound name still
+// reads the pre-mutation value instead of retroactively observing the
+// overwrite.
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+enum Item {
+    Holds(Point),
+    Empty,
+}
+
+fn make_err() -> Result<str, str> {
+    Result::Err("changed")
+}
+
+fn! main() {
+    // Bare identifier/catch-all pattern over a struct scrutinee.
+    let mut points: [Point] = [Point { x: 1, y: 2 }];
+    match points[0] {
+        other => {
+            points[0] = Point { x: -1, y: -1 };
+            print_i32(other.x);
+            print_i32(other.y);
+            println("");
+        },
+    };
+
+    // Bare identifier/catch-all pattern over a str scrutinee.
+    let mut strs: [str] = ["original"];
+    match strs[0] {
+        other => {
+            strs[0] = "MUTATED";
+            println(other);
+        },
+    };
+
+    // Payload-bearing enum pattern, payload itself an inline aggregate.
+    let mut items: [Item] = [Item::Holds(Point { x: 7, y: 8 })];
+    match items[0] {
+        Item::Holds(p) => {
+            items[0] = Item::Empty;
+            print_i32(p.x);
+            print_i32(p.y);
+            println("");
+        },
+        Item::Empty => { println("empty"); },
+    };
+
+    // `Result::Ok` payload pattern (reassigned through a helper call —
+    // see module docs — rather than a literal `Result::Err(...)` place
+    // assignment, which hits an unrelated, pre-existing type-inference
+    // gap for `Result` place assignments outside this backend).
+    let ok0: Result<str, str> = Result::Ok("hello");
+    let mut results: [Result<str, str>] = [ok0];
+    match results[0] {
+        Result::Ok(s) => {
+            results[0] = make_err();
+            println(s);
+        },
+        Result::Err(e) => { println(e); },
+    };
+
+    println("done");
+}

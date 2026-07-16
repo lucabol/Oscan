@@ -12,6 +12,7 @@
 - Generated C tested with GCC + Clang for portability
 - Sanitizers verify zero UB in generated code
 - Each requirement in the spec maps to at least one test case
+- **2025-07-14 to 2025-07-17:** Test infrastructure complete (20 positive, 14 negative). Mixed allocation corner cases, arena growth, bitwise/string/args/file I/O feature expansion discovered. Empty array elem_size bug found and tracked.
 
 ## Learnings
 

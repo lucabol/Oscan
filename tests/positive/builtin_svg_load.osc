@@ -1,0 +1,27 @@
+// Test: svg_load (headless SVG rasterization)
+// Exercises: svg_load with an inline SVG string (plain text, no encoding
+// needed) rasterized at a requested pixel size, plus the garbage/invalid
+// input error path. svg_load doesn't touch any canvas/window state (see
+// runtime/osc_runtime.c's osc_svg_load: it only rasterizes into a fresh
+// arena-allocated pixel array), so this is fully headless.
+
+fn! main() {
+    let svg_data: str = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"8\"><rect width=\"8\" height=\"8\" fill=\"#ff0000\"/></svg>";
+
+    match svg_load(svg_data, 8, 8) {
+        Result::Ok(px) => {
+            let w: i32 = px[0];
+            let h: i32 = px[1];
+            print_i32(w); print(" "); print_i32(h); println("");
+            // Solid red fill: every pixel should be opaque red.
+            print_i32(px[2]); println("");
+        },
+        Result::Err(e) => { println("err: {e}"); },
+    };
+
+    // Empty/invalid input must fail cleanly (Result::Err), not panic.
+    match svg_load("", 4, 4) {
+        Result::Ok(_) => { println("unexpected: empty input rasterized"); },
+        Result::Err(_) => { println("empty input rejected: ok"); },
+    };
+}

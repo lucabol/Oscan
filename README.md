@@ -154,7 +154,7 @@ cd Oscan
 cargo build --release
 ```
 
-The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime.
+The binary is `target/release/oscan` (or `oscan.exe` on Windows). The compiler is self-contained — it embeds the runtime. Note: a plain `cargo build --release` like this does **not** embed the Windows native linker assets (see "Self-contained native builds (Windows & Linux)" below) — that only happens in the release pipeline, which stages those assets before building. A locally-built `oscan.exe` still works for `--backend native`, but falls back to an external C toolchain as the linker driver, with a one-line `note:` printed on first native link.
 
 <details>
 <summary><strong>Why bundles include <code>toolchain/</code> on Windows and Linux</strong></summary>
@@ -212,9 +212,13 @@ oscan [OPTIONS] <file.osc>
   -o <path>       Output path (exe by default; .c extension for C output)
   --run           Compile and execute immediately
   --emit-c        Emit generated C to stdout
-  --libc          Use hosted libc mode instead of freestanding mode
+  --libc          Use hosted libc mode (also explicit for --backend native)
+  --backend <name>  Code generator: c (default) or native
+  --native-target <tag>  Native object target (default: host)
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
   --extra-c <file>  Extra C source file to compile and link (repeatable)
+  --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)
+  --extra-lib <file>  Precompiled static library to link (.a/.lib, repeatable)
   --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)
   --dump-ast      Print AST (debug)
   --dump-tokens   Print tokens (debug)
@@ -237,14 +241,31 @@ When a bundled toolchain directory is used (`OSCAN_TOOLCHAIN_DIR`, sibling `tool
 
 If your Windows/Linux Oscan distribution includes that bundled `toolchain/` directory, you do not always need to install a separate system compiler. If it does not, host compiler fallback still works as before. Cross-compilation targets such as `--target riscv64` and `--target wasi` still require their own target-specific toolchains.
 
+### Self-contained native builds (Windows & Linux)
+
+**On Windows x86-64 and Linux x86-64, `oscan --backend native` (the default, freestanding mode, no `.c` files involved) needs no external C compiler or linker at all.** `oscan` itself embeds a linker plus the minimal support files it needs — not a full C toolchain — and extracts them on first use to a local cache (`%LOCALAPPDATA%\oscan\native-assets\` on Windows; `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on Linux). That cache is safe to delete or ignore: Oscan verifies it by content hash and rebuilds it automatically the next time it's needed. This is **not** the same as the `toolchain/` directory described above, which is a full bundled/host C compiler used by other build paths.
+
+The embedded payload size differs by platform:
+- **Windows:** 13 files (~85.4 MB) — `ld.lld.exe` plus 5 required runtime DLLs (`libLLVM-22.dll`, `libc++.dll`, `libwinpthread-1.dll`, `libunwind.dll`, `libffi-8.dll`), 6 MinGW import libraries, and compiler-builtins.
+- **Linux:** 1 file (~2.78 MB) — a fully static `x86_64-linux-musl-ld` binary from the pinned musl-cross toolchain with zero shared-library dependencies.
+
+This self-contained story is scoped narrowly — it does **not** extend to:
+
+- **Hosted `--libc` mode** on any platform (still uses the external/bundled C-toolchain driver path).
+- **Explicit `--extra-c <file>` sources** (compiling user-supplied C always goes through the external/bundled C-toolchain driver, even on Windows and Linux).
+
+**Linux AArch64/RISC-V64 native backend support:** `--backend native` can now cross-link for `linux-aarch64` and `linux-riscv64` targets via a cross-linker sidecar mechanism. The standard Linux x86_64 release binary embeds only its own native linker; cross-linking for other targets requires distributing additional linker binaries alongside the release. See `docs/releasing.md` for cross-linker sidecar setup (`OSCAN_NATIVE_LINKER`, `OSCAN_NATIVE_LINKER_FLAVOR=elf`, `OSCAN_RUNTIME_ARCHIVE_DIR`). **Note:** this is separate from the **C backend**'s existing ARM64/RISC-V64 support via `aarch64-linux-gnu-gcc` / `--target riscv64`.
+
+Advanced overrides (rarely needed): `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` select a different linker or force the legacy compiler-driver path (`OSCAN_NATIVE_LINKER_FLAVOR=mingw` for Windows, `=elf` for Linux); `OSCAN_NATIVE_ASSET_CACHE_DIR` relocates the extraction cache. See `oscan --help` and `docs/design/native-link-embedding.md` for details.
+
 **Supported targets:**
 
 | Target | Mode | Compiler | Notes |
 |--------|------|----------|-------|
-| x86_64 Linux | Freestanding | bundled or host gcc / clang | Default on Linux |
-| x86_64 Windows | Freestanding | bundled or host clang / MSVC | Default on Windows |
-| ARM64 Linux | Freestanding | aarch64-linux-gnu-gcc | CI via QEMU |
-| RISC-V 64 Linux | Freestanding | `--target riscv64` | CI via QEMU |
+| x86_64 Linux | Freestanding (native backend) | embedded linker (no external compiler/linker needed) | Default on Linux with `--backend native`; see "Self-contained native builds" above |
+| x86_64 Windows | Freestanding (native backend) | embedded linker (no external compiler/linker needed) | Default on Windows with `--backend native`; see "Self-contained native builds" above |
+| ARM64 Linux | Freestanding (native backend) | cross-linker sidecar (`aarch64-linux-musl-ld`) | C backend default; native backend via `--backend native --native-target linux-aarch64` + `OSCAN_NATIVE_LINKER` override; CI via QEMU |
+| RISC-V 64 Linux | Freestanding (native backend) | cross-linker sidecar (`riscv64-linux-musl-ld`) | C backend default via `--target riscv64`; native backend via `--backend native --native-target linux-riscv64` + `OSCAN_NATIVE_LINKER` override; CI via QEMU |
 | WebAssembly | Libc (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
 | macOS | Libc | gcc / clang | No freestanding (Apple policy) |
 

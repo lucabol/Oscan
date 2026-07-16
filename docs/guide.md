@@ -724,6 +724,18 @@ oscan myapp.osc --extra-c helper.c --extra-c utils.c -o myapp
 
 Both flags are repeatable — use one per file or flag.
 
+### Linking Precompiled Objects and Libraries
+
+Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`) and static libraries (`.a` or `.lib`) without requiring a C compiler. Both flags work with `--backend c` (the default) and `--backend native`:
+
+```
+oscan myapp.osc --extra-obj mylib.o --run
+oscan myapp.osc --extra-obj obj1.o --extra-obj obj2.o --extra-lib mylib.a -o myapp
+oscan myapp.osc --backend native --extra-lib precompiled.a --native-target linux-aarch64 -o myapp
+```
+
+Both flags are repeatable. This is useful for linking hand-written assembly, C libraries precompiled with different flags, or FFI bindings that don't need recompilation.
+
 ---
 
 ## Built-in Functions
@@ -887,6 +899,23 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 - Linux: `toolchain/linux/bin/`, then `toolchain/bin/`
 
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
+
+**Exception — Windows and Linux x86-64 freestanding native builds:** the lookup
+above is for the external/bundled **C compiler**. On Windows x86-64 and Linux
+x86-64, default `oscan --backend native` (freestanding, no `.c` files) skips
+this entirely: `oscan` embeds its own linker plus the minimal support files it
+needs (`ld.lld` + 5 DLLs on Windows; a fully static `x86_64-linux-musl-ld` on
+Linux), extracting them on first use to a local cache
+(`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
+`$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
+Linux — safe to delete; rebuilt automatically). Linux AArch64/RISC-V64 **native
+backend** builds (the `--backend native` path), hosted `--libc` mode, and
+explicit `--extra-c` sources still go through the C-compiler lookup above, even
+on Windows and Linux x86-64. Note: the AArch64/RISC-V64 limitation applies only
+to the **native backend** (Cranelift AOT) — the **C backend** (default,
+transpiles to C) already supports these architectures via
+`aarch64-linux-gnu-gcc`/`--target riscv64`. See
+`docs/design/native-link-embedding.md` for the full design.
 
 ---
 

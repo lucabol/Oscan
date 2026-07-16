@@ -355,12 +355,20 @@ impl SemanticAnalyzer {
         // @builtin category="File I/O" name="file_open_read" sig="fn! file_open_read(path: str) -> Result<i32, str>" desc="Open file for reading, returns fd"
         self.functions.insert(
             "file_open_read".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="File I/O" name="file_open_write" sig="fn! file_open_write(path: str) -> Result<i32, str>" desc="Open file for writing, returns fd"
         self.functions.insert(
             "file_open_write".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="File I/O" name="read_byte" sig="fn! read_byte(fd: i32) -> i32" desc="Read one byte from fd"
         self.functions.insert(
@@ -393,13 +401,23 @@ impl SemanticAnalyzer {
         // @builtin category="File I/O" name="file_delete" sig="fn! file_delete(path: str) -> Result<str, str>" desc="Delete a file"
         self.functions.insert(
             "file_delete".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
         );
 
         // Socket I/O (fn!)
         // @builtin category="Socket" name="socket_tcp" sig="fn! socket_tcp() -> Result<i32, str>" desc="Create TCP socket"
-        self.functions
-            .insert("socket_tcp".into(), builtin(vec![], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false));
+        self.functions.insert(
+            "socket_tcp".into(),
+            builtin(
+                vec![],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
+        );
         // @builtin category="Socket" name="socket_connect" sig="fn! socket_connect(sock: i32, addr: str, port: i32) -> Result<str, str>" desc="Connect to address and port"
         self.functions.insert(
             "socket_connect".into(),
@@ -438,7 +456,11 @@ impl SemanticAnalyzer {
         // @builtin category="Socket" name="socket_accept" sig="fn! socket_accept(sock: i32) -> Result<i32, str>" desc="Accept incoming connection"
         self.functions.insert(
             "socket_accept".into(),
-            builtin(vec![("sock", BcType::I32)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("sock", BcType::I32)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="Socket" name="socket_send" sig="fn! socket_send(sock: i32, data: str) -> Result<i32, str>" desc="Send data on socket"
         self.functions.insert(
@@ -466,8 +488,14 @@ impl SemanticAnalyzer {
 
         // UDP Socket I/O (fn!)
         // @builtin category="Socket" name="socket_udp" sig="fn! socket_udp() -> Result<i32, str>" desc="Create UDP socket"
-        self.functions
-            .insert("socket_udp".into(), builtin(vec![], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false));
+        self.functions.insert(
+            "socket_udp".into(),
+            builtin(
+                vec![],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
+        );
         // @builtin category="Socket" name="socket_sendto" sig="fn! socket_sendto(sock: i32, data: str, addr: str, port: i32) -> i32" desc="Send UDP data to address"
         self.functions.insert(
             "socket_sendto".into(),
@@ -707,12 +735,20 @@ impl SemanticAnalyzer {
         // @builtin category="Filesystem" name="dir_create" sig="fn! dir_create(path: str) -> Result<str, str>" desc="Create a directory"
         self.functions.insert(
             "dir_create".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="Filesystem" name="dir_remove" sig="fn! dir_remove(path: str) -> Result<str, str>" desc="Remove a directory"
         self.functions.insert(
             "dir_remove".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="Filesystem" name="dir_current" sig="fn! dir_current() -> str" desc="Get current working directory"
         self.functions
@@ -720,12 +756,20 @@ impl SemanticAnalyzer {
         // @builtin category="Filesystem" name="dir_change" sig="fn! dir_change(path: str) -> Result<str, str>" desc="Change working directory"
         self.functions.insert(
             "dir_change".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="File I/O" name="file_open_append" sig="fn! file_open_append(path: str) -> Result<i32, str>" desc="Open file for appending, returns fd"
         self.functions.insert(
             "file_open_append".into(),
-            builtin(vec![("path", BcType::Str)], BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("path", BcType::Str)],
+                BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+                false,
+            ),
         );
         // @builtin category="File I/O" name="file_size" sig="fn! file_size(path: str) -> i64" desc="Get file size in bytes"
         self.functions.insert(
@@ -857,8 +901,10 @@ impl SemanticAnalyzer {
             ),
         );
         // @builtin category="File I/O" name="fd_dup" sig="fn! fd_dup(fd: i32) -> i32" desc="Duplicate file descriptor"
-        self.functions
-            .insert("fd_dup".into(), builtin(vec![("fd", BcType::I32)], BcType::I32, false));
+        self.functions.insert(
+            "fd_dup".into(),
+            builtin(vec![("fd", BcType::I32)], BcType::I32, false),
+        );
         // @builtin category="File I/O" name="fd_dup2" sig="fn! fd_dup2(oldfd: i32, newfd: i32) -> i32" desc="Redirect file descriptor"
         self.functions.insert(
             "fd_dup2".into(),
@@ -881,11 +927,15 @@ impl SemanticAnalyzer {
             ),
         );
         // @builtin category="Process" name="proc_wait" sig="fn! proc_wait(pid: i32) -> i32" desc="Wait for process, returns exit code"
-        self.functions
-            .insert("proc_wait".into(), builtin(vec![("pid", BcType::I32)], BcType::I32, false));
+        self.functions.insert(
+            "proc_wait".into(),
+            builtin(vec![("pid", BcType::I32)], BcType::I32, false),
+        );
         // @builtin category="Process" name="pipe_create" sig="fn! pipe_create() -> [i32]" desc="Create pipe, returns [read_fd, write_fd]"
-        self.functions
-            .insert("pipe_create".into(), builtin(vec![], BcType::Array(Box::new(BcType::I32)), false));
+        self.functions.insert(
+            "pipe_create".into(),
+            builtin(vec![], BcType::Array(Box::new(BcType::I32)), false),
+        );
         // @builtin category="Path" name="path_find_exec" sig="fn! path_find_exec(name: str) -> Result<str, str>" desc="Find executable in PATH"
         self.functions.insert(
             "path_find_exec".into(),
@@ -904,11 +954,23 @@ impl SemanticAnalyzer {
 
         // Tier 8: Raw terminal I/O (fn!)
         // @builtin category="Terminal" name="term_raw" sig="fn! term_raw() -> Result<str, str>" desc="Enter raw terminal mode"
-        self.functions
-            .insert("term_raw".into(), builtin(vec![], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false));
+        self.functions.insert(
+            "term_raw".into(),
+            builtin(
+                vec![],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
         // @builtin category="Terminal" name="term_restore" sig="fn! term_restore() -> Result<str, str>" desc="Restore normal terminal mode"
-        self.functions
-            .insert("term_restore".into(), builtin(vec![], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false));
+        self.functions.insert(
+            "term_restore".into(),
+            builtin(
+                vec![],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
+        );
         // @builtin category="Terminal" name="read_nonblock" sig="fn! read_nonblock() -> i32" desc="Non-blocking read from stdin"
         self.functions
             .insert("read_nonblock".into(), builtin(vec![], BcType::I32, false));
@@ -1075,7 +1137,11 @@ impl SemanticAnalyzer {
         // @builtin category="Environment" name="env_delete" sig="fn! env_delete(name: str) -> Result<str, str>" desc="Delete environment variable"
         self.functions.insert(
             "env_delete".into(),
-            builtin(vec![("name", BcType::Str)], BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)), false),
+            builtin(
+                vec![("name", BcType::Str)],
+                BcType::Result(Box::new(BcType::Str), Box::new(BcType::Str)),
+                false,
+            ),
         );
 
         // Graphics: Canvas Lifecycle (fn!)
@@ -1116,8 +1182,10 @@ impl SemanticAnalyzer {
         self.functions
             .insert("canvas_scale".into(), builtin(vec![], BcType::I32, false));
         // @builtin category="Graphics" name="canvas_resized" sig="fn! canvas_resized() -> bool" desc="True once per resize event; auto-clears after each call"
-        self.functions
-            .insert("canvas_resized".into(), builtin(vec![], BcType::Bool, false));
+        self.functions.insert(
+            "canvas_resized".into(),
+            builtin(vec![], BcType::Bool, false),
+        );
         // @builtin category="Graphics" name="canvas_set_icon" sig="fn! canvas_set_icon(pixels: [i32], w: i32, h: i32) -> Result<str, str>" desc="Set window/taskbar icon from RGBA pixel array"
         self.functions.insert(
             "canvas_set_icon".into(),
@@ -1264,10 +1332,7 @@ impl SemanticAnalyzer {
         self.functions.insert(
             "gfx_text_width".into(),
             builtin(
-                vec![
-                    ("text", BcType::Str),
-                    ("font", BcType::I32),
-                ],
+                vec![("text", BcType::Str), ("font", BcType::I32)],
                 BcType::I32,
                 true,
             ),
@@ -1526,13 +1591,19 @@ impl SemanticAnalyzer {
 
         // Typed HashMap builtins: map_str_i32
         // @builtin category="HashMap" name="map_str_i32_new" sig="fn! map_str_i32_new() -> map_str_i32" desc="Create empty str→i32 map"
-        self.functions
-            .insert("map_str_i32_new".into(), builtin(vec![], BcType::MapStrI32, false));
+        self.functions.insert(
+            "map_str_i32_new".into(),
+            builtin(vec![], BcType::MapStrI32, false),
+        );
         // @builtin category="HashMap" name="map_str_i32_set" sig="fn! map_str_i32_set(m: map_str_i32, key: str, value: i32)" desc="Set key-value pair"
         self.functions.insert(
             "map_str_i32_set".into(),
             builtin(
-                vec![("m", BcType::MapStrI32), ("key", BcType::Str), ("value", BcType::I32)],
+                vec![
+                    ("m", BcType::MapStrI32),
+                    ("key", BcType::Str),
+                    ("value", BcType::I32),
+                ],
                 BcType::Unit,
                 false,
             ),
@@ -1572,13 +1643,19 @@ impl SemanticAnalyzer {
 
         // Typed HashMap builtins: map_str_i64
         // @builtin category="HashMap" name="map_str_i64_new" sig="fn! map_str_i64_new() -> map_str_i64" desc="Create empty str→i64 map"
-        self.functions
-            .insert("map_str_i64_new".into(), builtin(vec![], BcType::MapStrI64, false));
+        self.functions.insert(
+            "map_str_i64_new".into(),
+            builtin(vec![], BcType::MapStrI64, false),
+        );
         // @builtin category="HashMap" name="map_str_i64_set" sig="fn! map_str_i64_set(m: map_str_i64, key: str, value: i64)" desc="Set key-value pair"
         self.functions.insert(
             "map_str_i64_set".into(),
             builtin(
-                vec![("m", BcType::MapStrI64), ("key", BcType::Str), ("value", BcType::I64)],
+                vec![
+                    ("m", BcType::MapStrI64),
+                    ("key", BcType::Str),
+                    ("value", BcType::I64),
+                ],
                 BcType::Unit,
                 false,
             ),
@@ -1618,13 +1695,19 @@ impl SemanticAnalyzer {
 
         // Typed HashMap builtins: map_str_f64
         // @builtin category="HashMap" name="map_str_f64_new" sig="fn! map_str_f64_new() -> map_str_f64" desc="Create empty str→f64 map"
-        self.functions
-            .insert("map_str_f64_new".into(), builtin(vec![], BcType::MapStrF64, false));
+        self.functions.insert(
+            "map_str_f64_new".into(),
+            builtin(vec![], BcType::MapStrF64, false),
+        );
         // @builtin category="HashMap" name="map_str_f64_set" sig="fn! map_str_f64_set(m: map_str_f64, key: str, value: f64)" desc="Set key-value pair"
         self.functions.insert(
             "map_str_f64_set".into(),
             builtin(
-                vec![("m", BcType::MapStrF64), ("key", BcType::Str), ("value", BcType::F64)],
+                vec![
+                    ("m", BcType::MapStrF64),
+                    ("key", BcType::Str),
+                    ("value", BcType::F64),
+                ],
                 BcType::Unit,
                 false,
             ),
@@ -1664,13 +1747,19 @@ impl SemanticAnalyzer {
 
         // Typed HashMap builtins: map_i32_str
         // @builtin category="HashMap" name="map_i32_str_new" sig="fn! map_i32_str_new() -> map_i32_str" desc="Create empty i32→str map"
-        self.functions
-            .insert("map_i32_str_new".into(), builtin(vec![], BcType::MapI32Str, false));
+        self.functions.insert(
+            "map_i32_str_new".into(),
+            builtin(vec![], BcType::MapI32Str, false),
+        );
         // @builtin category="HashMap" name="map_i32_str_set" sig="fn! map_i32_str_set(m: map_i32_str, key: i32, value: str)" desc="Set key-value pair"
         self.functions.insert(
             "map_i32_str_set".into(),
             builtin(
-                vec![("m", BcType::MapI32Str), ("key", BcType::I32), ("value", BcType::Str)],
+                vec![
+                    ("m", BcType::MapI32Str),
+                    ("key", BcType::I32),
+                    ("value", BcType::Str),
+                ],
                 BcType::Unit,
                 false,
             ),
@@ -1710,13 +1799,19 @@ impl SemanticAnalyzer {
 
         // Typed HashMap builtins: map_i32_i32
         // @builtin category="HashMap" name="map_i32_i32_new" sig="fn! map_i32_i32_new() -> map_i32_i32" desc="Create empty i32→i32 map"
-        self.functions
-            .insert("map_i32_i32_new".into(), builtin(vec![], BcType::MapI32I32, false));
+        self.functions.insert(
+            "map_i32_i32_new".into(),
+            builtin(vec![], BcType::MapI32I32, false),
+        );
         // @builtin category="HashMap" name="map_i32_i32_set" sig="fn! map_i32_i32_set(m: map_i32_i32, key: i32, value: i32)" desc="Set key-value pair"
         self.functions.insert(
             "map_i32_i32_set".into(),
             builtin(
-                vec![("m", BcType::MapI32I32), ("key", BcType::I32), ("value", BcType::I32)],
+                vec![
+                    ("m", BcType::MapI32I32),
+                    ("key", BcType::I32),
+                    ("value", BcType::I32),
+                ],
                 BcType::Unit,
                 false,
             ),
@@ -1797,11 +1892,7 @@ impl SemanticAnalyzer {
         self.functions.insert(
             "clamp_i32".into(),
             builtin(
-                vec![
-                    ("v", BcType::I32),
-                    ("lo", BcType::I32),
-                    ("hi", BcType::I32),
-                ],
+                vec![("v", BcType::I32), ("lo", BcType::I32), ("hi", BcType::I32)],
                 BcType::I32,
                 true,
             ),
@@ -1828,11 +1919,7 @@ impl SemanticAnalyzer {
         self.functions.insert(
             "clamp_i64".into(),
             builtin(
-                vec![
-                    ("v", BcType::I64),
-                    ("lo", BcType::I64),
-                    ("hi", BcType::I64),
-                ],
+                vec![("v", BcType::I64), ("lo", BcType::I64), ("hi", BcType::I64)],
                 BcType::I64,
                 true,
             ),
@@ -1859,11 +1946,7 @@ impl SemanticAnalyzer {
         self.functions.insert(
             "clamp_f64".into(),
             builtin(
-                vec![
-                    ("v", BcType::F64),
-                    ("lo", BcType::F64),
-                    ("hi", BcType::F64),
-                ],
+                vec![("v", BcType::F64), ("lo", BcType::F64), ("hi", BcType::F64)],
                 BcType::F64,
                 true,
             ),
@@ -2179,14 +2262,21 @@ impl SemanticAnalyzer {
                 Self::collect_calls_in_expr(index, out);
             }
             Expr::Block(block) => Self::collect_calls_in_block(block, out),
-            Expr::If { condition, then_block, else_branch, .. } => {
+            Expr::If {
+                condition,
+                then_block,
+                else_branch,
+                ..
+            } => {
                 Self::collect_calls_in_expr(condition, out);
                 Self::collect_calls_in_block(then_block, out);
                 if let Some(eb) = else_branch {
                     Self::collect_calls_in_expr(eb, out);
                 }
             }
-            Expr::Match { scrutinee, arms, .. } => {
+            Expr::Match {
+                scrutinee, arms, ..
+            } => {
                 Self::collect_calls_in_expr(scrutinee, out);
                 for arm in arms {
                     Self::collect_calls_in_expr(&arm.body, out);
@@ -2216,8 +2306,11 @@ impl SemanticAnalyzer {
             }
             Expr::Try { call, .. } => Self::collect_calls_in_expr(call, out),
             Expr::Arena { body, .. } => Self::collect_calls_in_block(body, out),
-            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StringLit(..)
-            | Expr::BoolLit(..) | Expr::Ident(..) => {}
+            Expr::IntLit(..)
+            | Expr::FloatLit(..)
+            | Expr::StringLit(..)
+            | Expr::BoolLit(..)
+            | Expr::Ident(..) => {}
         }
     }
 
@@ -2608,7 +2701,8 @@ impl SemanticAnalyzer {
                             format!("extern function '{}' cannot be used as a value", name),
                         ));
                     }
-                    let param_types: Vec<BcType> = fi.params.iter().map(|(_, t)| t.clone()).collect();
+                    let param_types: Vec<BcType> =
+                        fi.params.iter().map(|(_, t)| t.clone()).collect();
                     let ret_type = fi.return_type.clone();
                     return Ok(BcType::FnPtr(param_types, Box::new(ret_type)));
                 }
@@ -3855,7 +3949,16 @@ impl SemanticAnalyzer {
     /// Returns true if a type is safe to escape from an arena block.
     /// Only primitives (i32, i64, f64, bool, unit) are safe.
     fn is_arena_safe_type(ty: &BcType) -> bool {
-        matches!(ty, BcType::I32 | BcType::I64 | BcType::F64 | BcType::Bool | BcType::Unit | BcType::Handle | BcType::FnPtr(_, _))
+        matches!(
+            ty,
+            BcType::I32
+                | BcType::I64
+                | BcType::F64
+                | BcType::Bool
+                | BcType::Unit
+                | BcType::Handle
+                | BcType::FnPtr(_, _)
+        )
     }
 }
 

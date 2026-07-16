@@ -8,10 +8,35 @@
     "archive": {
       "url": "https://github.com/lucabol/Oscan/releases/download/toolchains/x86_64-linux-musl-cross.tgz",
       "type": "tgz",
-      "digest": null
+      "digest": {
+        "algorithm": "sha256",
+        "value": "c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea"
+      }
     },
     "extract": {
       "strip_components": 1
+    },
+    "runtime": {
+      "abi": "musl",
+      "crt": "musl",
+      "compiler": {
+        "path": "bin/x86_64-linux-musl-gcc",
+        "family": "gcc",
+        "version": "11.2.1",
+        "target": "x86_64-linux-musl",
+        "size_flag": "-Os"
+      },
+      "archiver": {
+        "path": "bin/x86_64-linux-musl-ar",
+        "family": "gnu-ar",
+        "version": "2.37"
+      },
+      "linker": {
+        "path": "bin/x86_64-linux-musl-ld",
+        "family": "gnu-ld",
+        "version": "2.37",
+        "driver_flags": []
+      }
     },
     "prune": {
       "remove_globs": [

@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "target": "linux-riscv64",
+  "bundle_kind": "full",
+  "toolchain": {
+    "vendor": "musl.cc",
+    "version": "riscv64-linux-musl-cross",
+    "archive": {
+      "url": "https://github.com/lucabol/Oscan/releases/download/toolchains/riscv64-linux-musl-cross.tgz",
+      "type": "tgz",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "db0bc413bd4a93f2012cc74b9ba0c4af29d8bc18b88e9c61998738ccb918604b"
+      }
+    },
+    "extract": {
+      "strip_components": 1
+    },
+    "runtime": {
+      "abi": "musl",
+      "crt": "musl",
+      "compiler": {
+        "path": "bin/riscv64-linux-musl-gcc",
+        "family": "gcc",
+        "version": "11.2.1",
+        "target": "riscv64-linux-musl",
+        "size_flag": "-Os"
+      },
+      "archiver": {
+        "path": "bin/riscv64-linux-musl-ar",
+        "family": "gnu-ar",
+        "version": "2.37"
+      },
+      "linker": {
+        "path": "bin/riscv64-linux-musl-ld",
+        "family": "gnu-ld",
+        "version": "2.37",
+        "driver_flags": []
+      }
+    },
+    "prune": {
+      "remove_globs": [
+        "lib/libstdc++*",
+        "lib/libsupc++*",
+        "lib/libgomp*",
+        "lib/libatomic*",
+        "lib/libitm*",
+        "lib/libssp*",
+        "lib/libquadmath*",
+        "lib/libgfortran*",
+        "lib/libasan*",
+        "lib/liblsan*",
+        "lib/libtsan*",
+        "lib/libubsan*",
+        "lib/libsanitizer*",
+        "include/c++",
+        "share/doc",
+        "share/info",
+        "share/man",
+        "share/locale",
+        "share/gcc-*"
+      ],
+      "strip_debug": true
+    }
+  },
+  "stage": {
+    "root": "toolchain",
+    "license_globs": [
+      "COPYING*",
+      "COPYRIGHT*",
+      "LICENSE*"
+    ],
+    "wrappers": [
+      {
+        "path": "bin/gcc",
+        "kind": "posix-exec",
+        "target": "riscv64-linux-musl-gcc"
+      }
+    ]
+  }
+}

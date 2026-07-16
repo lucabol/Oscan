@@ -1036,13 +1036,29 @@ pub(self) fn is_elf_eligible(
 
 Replace the blanket `if !target.is_host() { return Err(...) }` at the top of
 `link_executable` (`src/backend/link/mod.rs` ~line 282) with a target-aware
-check that allows non-host targets **only** when they are elf-eligible **and**
-this build has embedded assets. The new logic:
+check that allows non-host targets when they are elf-eligible **and** either
+(a) this build has embedded assets *matching that specific target*, or (b)
+an explicit `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` override
+targets the same linker flavor. The new logic (as actually implemented,
+`cross_link_permitted()` in `src/backend/link/mod.rs`):
 
 ```rust
+fn cross_link_permitted(
+    elf_eligible: bool,
+    mingw_eligible: bool,
+    has_native_linker_override: bool,
+    flavor_override: Option<&str>,
+    embedded_assets_present: bool,
+    embedded_target_matches: bool,
+) -> bool {
+    let explicit_cross_override = has_native_linker_override
+        && ((elf_eligible && flavor_override == Some("elf"))
+            || (mingw_eligible && flavor_override == Some("mingw")));
+    explicit_cross_override || (elf_eligible && embedded_assets_present && embedded_target_matches)
+}
+
 if !target.is_host() {
-    // Allow cross-linking for ELF targets that have embedded linker assets.
-    let can_cross = elf_eligible && native_assets::EMBEDDED_ASSETS_PRESENT;
+    let can_cross = cross_link_permitted(/* ... */);
     if !can_cross {
         return Err(format!(
             "'{}' is not the host target ({}); cross-linking requires a matching \
@@ -1059,15 +1075,38 @@ if !target.is_host() {
 
 This preserves the existing loud error for truly unsupported cross-link
 attempts (e.g. Windows host → Linux target, or a dev build with no embedded
-assets), while allowing the embedded-linker path for aarch64/riscv64 when
-the binary was built with assets for that target. When an override
-`OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR=elf` is set, it bypasses
-embedded-asset extraction entirely (the existing `LinkerSelection::Elf(Override)`
-branch), so the gate only blocks the "no linker at all" case.
+assets and no override), while allowing:
+- the embedded-linker path for aarch64/riscv64 when the binary was built
+  with assets for **that specific target** (§11.1's single-target-per-build
+  decision means "some embedded assets" is not enough — they must match the
+  requested target, hence `embedded_target_matches`);
+- the `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR=elf`/`mingw`
+  override path (the "cross-linker sidecar" mechanism — a plain, no-embedded-
+  assets oscan binary paired with a standalone external linker binary for a
+  foreign target) **even when no matching embedded assets exist at all**.
 
-Note: move the `elf_eligible` computation (currently at ~line 314) **above**
-this gate so it is available for the check. The `mingw_eligible` computation
-can stay where it is or move alongside — no behavioral change either way.
+**Corrected from an earlier draft of this section:** an initial version of
+this pseudocode omitted the override bypass from the `can_cross` condition
+entirely — it only ever checked `elf_eligible && EMBEDDED_ASSETS_PRESENT`,
+while its prose incorrectly asserted the override "bypasses embedded-asset
+extraction entirely." Because the implementation matched the code sample
+(understandably) rather than the aspirational prose, `OSCAN_NATIVE_LINKER` +
+`OSCAN_NATIVE_LINKER_FLAVOR=elf` never actually worked for a non-host
+target — the gate rejected the request before `resolve_linker_selection`
+(which *does* correctly implement the override) was ever consulted. This
+made the release's own documented "cross-linker sidecar" bundle mechanism
+(`cross-linkers/<target>/` in a packaged release, see `release_tools.py`'s
+`write_install_readme()`) completely non-functional. Found via live
+end-to-end validation (a real x86_64 release binary + an extracted
+`aarch64-linux-musl-ld`/`riscv64-linux-musl-ld` sidecar binary, both
+successfully cross-linking and `qemu-{aarch64,riscv64}`-executing a real
+program only *after* this fix). Regression-covered by
+`cross_link_permitted`'s unit tests in `src/backend/link/mod.rs` and by new
+"cross-linker sidecar" CI steps in both
+`native-link-embedding-smoke-linux-{aarch64,riscv64}` jobs.
+
+Note: move the `elf_eligible`/`mingw_eligible` computations (currently at
+~line 314) **above** this gate so they are available for the check.
 
 ### 11.5 Target-aware emulation in `build_elf_plan`
 
@@ -1434,31 +1473,20 @@ user archives → runtime archive). Instead, add a new field:
 
 ```rust
 /// User-supplied precompiled static libraries (`--extra-lib`). Rendered
-/// after the runtime archive(s) in the link order, so they can reference
-/// runtime symbols but the runtime archive's member selection is not
-/// affected by their undefined symbols.
+/// before the runtime archive(s), so undefined runtime references from
+/// selected user archive members are resolved by the later runtime scan.
 pub extra_libs: Vec<PathBuf>,
 ```
 
-Each renderer appends these after `archives` (and `system_libs` for
-MingwDirect/ElfDirect, or after `-l` libs for CompilerDriver). This ordering
-means user libs can call runtime functions (resolved leftward from the runtime
-archive) but do not pull spurious archive members from the runtime. If the user
-needs the opposite ordering (their lib before the runtime archive), they can use
-`--extra-obj` with the individual `.o` files instead.
+Each renderer appends these after object inputs but before `archives`. Static
+archive resolution is left-to-right: a selected user archive member may
+introduce undefined Oscan runtime symbols, and the later runtime archive scan
+must see and resolve them.
 
 ### 12.5 Renderer changes
 
-**`render_mingw_direct` / `render_elf_direct`:** after the `builtins` block,
-append:
-```rust
-for lib in &self.extra_libs {
-    args.push(lib.clone().into_os_string());
-}
-```
-
-**`render_compiler_driver`:** after the `builtins` (passthrough_cflags) block,
-before the trailing passthrough flags, append:
+**All three renderers:** after object/C inputs and before the runtime `archives`
+block, append:
 ```rust
 for lib in &self.extra_libs {
     args.push(lib.clone().into_os_string());
@@ -1511,9 +1539,11 @@ in the help output.
 |---|---|---|---|
 | `native-link-embedding-smoke-linux-aarch64` | `ci.yml` | Mirrors `native-link-embedding-smoke-linux` (§10's existing x86-64 job): fetch aarch64 musl-cross toolchain, build runtime archives for `linux-aarch64`, stage embedded assets, build oscan with `OSCAN_EMBED_ASSETS_DIR` for aarch64, PATH-scrub compilers. Produces an aarch64 ELF. | ✅ Feasible. `ubuntu-latest` runners are x86-64 but can build oscan for x86-64 host while embedding aarch64 linker assets (single-target-per-build means the oscan binary itself is still an x86-64 host binary, just with aarch64's linker embedded). |
 | `native-link-embedding-smoke-linux-riscv64` | `ci.yml` | Same as above but for `linux-riscv64`. | ✅ Feasible. |
-| QEMU smoke test step (aarch64) | Added as a step within `native-link-embedding-smoke-linux-aarch64` | After producing the aarch64 ELF: `sudo apt-get install -y qemu-user-static`, then `qemu-aarch64-static ./hello_aarch64`. The binary is statically linked with no interpreter, so `-L` sysroot is unnecessary. | ✅ Feasible. `qemu-user-static` is available as an apt package on `ubuntu-latest`. Statically linked, no-interpreter ELFs require no sysroot. Mark `continue-on-error: true` consistent with the existing x86-64 smoke job pattern in case GH runner kernel config changes break `binfmt_misc`. |
-| QEMU smoke test step (riscv64) | Added as a step within `native-link-embedding-smoke-linux-riscv64` | Same: `qemu-riscv64-static ./hello_riscv64`. | ✅ Feasible. Same `qemu-user-static` package provides `qemu-riscv64-static`. Same `continue-on-error: true`. |
+| QEMU smoke test step (aarch64) | Added as a step within `native-link-embedding-smoke-linux-aarch64` | After producing the aarch64 ELF: `sudo apt-get install -y qemu-user-static`, then `qemu-aarch64-static ./hello_aarch64`. The binary is statically linked with no interpreter, so `-L` sysroot is unnecessary. | ✅ Feasible. `qemu-user-static` is available as an apt package on `ubuntu-latest`. Statically linked, no-interpreter ELFs require no sysroot. **Decision (coordinator, post-live-validation): required/blocking, not `continue-on-error: true`.** The original draft of this row recommended `continue-on-error: true` as a safety net against IA32-compat/`binfmt_misc` runner drift (see §13.4); the coordinator overrode this after reproducing the full pipeline (toolchain fetch → runtime archive → embed → cross-link → `readelf` → `qemu-aarch64` execution) live end-to-end in a real Linux environment and per the user's explicit instruction that these jobs be required. |
+| QEMU smoke test step (riscv64) | Added as a step within `native-link-embedding-smoke-linux-riscv64` | Same: `qemu-riscv64-static ./hello_riscv64`. | ✅ Feasible. Same `qemu-user-static` package provides `qemu-riscv64-static`. **Same required/blocking decision as aarch64 above.** |
 | `readelf` shape checks (aarch64/riscv64) | Steps within the above jobs | `readelf -h <binary>` to confirm `Machine: AArch64` / `RISC-V`, `readelf -l` for no `PT_INTERP`, `readelf -d` for no `NEEDED`. Must use cross-capable `readelf` — the system `readelf` (GNU binutils) on `ubuntu-latest` handles any ELF architecture. | ✅ Feasible. |
+| Cross-codegen object-only emission (aarch64/riscv64) | Steps within the above jobs | `oscan examples/hello.osc --backend native --native-target linux-{aarch64,riscv64} -o hello.o`, then `readelf -h` confirms `REL (Relocatable file)` + correct machine type. Closes the §13.2 gap noted below. | ✅ Implemented and live-verified. |
+| Cross-linker sidecar override smoke (aarch64/riscv64) | Steps within the above jobs | A plain oscan build (no `OSCAN_EMBED_ASSETS_DIR`) cross-links via `OSCAN_NATIVE_LINKER=<fetched toolchain's own ld>` + `OSCAN_NATIVE_LINKER_FLAVOR=elf`, then `readelf`/`qemu-{aarch64,riscv64}` verify the result — reproducing the release bundle's documented "cross-linker sidecar" workflow end-to-end in CI. Added after live-validation surfaced that the override path was silently broken (see §11.4's "Corrected from an earlier draft" note) — this step exists specifically so CI would have caught that regression. | ✅ Implemented and live-verified with the exact CI commands prior to committing them to `ci.yml`. |
 
 ### 13.2 Existing jobs — `--backend c` / `--backend native` coverage check
 
@@ -1567,9 +1597,41 @@ In `.github/workflows/release.yml`, the Linux matrix entry must:
 3. Stage embedded assets for the host target (x86_64) into
    `OSCAN_EMBED_ASSETS_DIR` for the main `cargo build --release`.
 4. Package the aarch64 and riscv64 linker binaries as sidecar files in the
-   release archive (under e.g. `toolchain/cross-linkers/`), so users can point
-   `OSCAN_NATIVE_LINKER` at them.
+   release archive under `cross-linkers/<target>/` at the bundle root
+   (as actually implemented via `release_tools.py`'s `--cross-linker-sidecar-dir`
+   / `stage_release()`, rather than nested under `toolchain/` as this row
+   originally suggested — kept at the bundle root since these binaries are
+   for cross-linking to *other* targets, unrelated to the bundle's own
+   `toolchain/` which supports the bundle's native host target), so users
+   can point `OSCAN_NATIVE_LINKER` at them. `write_install_readme()`
+   documents the exact `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR`
+   invocation in the bundle's `README-install.txt` when sidecars are present.
 5. Package the aarch64 and riscv64 runtime archives alongside the x86_64 ones.
+   **Corrected from an earlier draft (coordinator, post-live-validation):** this
+   originally meant only "build the archives for x86_64's own bundle" — the
+   workflow built `build\runtime-archives\linux-{aarch64,riscv64}\` (step 2,
+   used for compatibility testing) but the "Prepare cross-linker sidecars for
+   packaging" step only copied each target's `ld` binary into
+   `build\cross-linker-sidecars\linux-{target}\`, never the matching runtime
+   archive. Since `--backend native` cross-linking needs **both** a linker
+   (`OSCAN_NATIVE_LINKER`/`FLAVOR`) **and** a matching-target freestanding
+   runtime archive (`OSCAN_RUNTIME_ARCHIVE_DIR`; see `src/backend/link/archive.rs`),
+   a real user with only the downloaded release archive had no archive to
+   point `OSCAN_RUNTIME_ARCHIVE_DIR` at — the sidecar mechanism was
+   non-functional as actually packaged, even after the code-level gate bug
+   (§11.4) was fixed. Fixed by also copying
+   `build\runtime-archives\linux-{target}\*` into each
+   `build\cross-linker-sidecars\linux-{target}\` directory, so
+   `cross-linkers/<target>/` in the shipped archive contains both the `ld`
+   binary and its `libosc_runtime_freestanding*.a`/`libosc_runtime_hosted.a`
+   archives together. `write_install_readme()`'s `cross_linker_note` now also
+   documents `OSCAN_RUNTIME_ARCHIVE_DIR=./cross-linkers/<target>` alongside
+   `OSCAN_NATIVE_LINKER`/`FLAVOR`. Live-validated: a sidecar directory
+   containing only these two file groups (no separately-built runtime
+   archive elsewhere) successfully cross-linked and QEMU-executed a real
+   `linux-aarch64` freestanding binary using only
+   `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR=elf`/
+   `OSCAN_RUNTIME_ARCHIVE_DIR` pointed at that one directory.
 
 ---
 

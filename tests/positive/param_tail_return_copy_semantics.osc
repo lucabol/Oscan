@@ -1,0 +1,70 @@
+// Test: aggregate function parameters and implicit (bare tail-expression)
+// `return`s must obey C value-copy semantics — the same `const T x = ...;`
+// by-value copy a real C ABI performs when passing a struct argument or
+// returning one — rather than retaining a pointer into the *caller's*
+// mutable storage (see src/backend/func.rs module docs on inline
+// aggregates). A parameter is always an immutable binding, and an
+// explicit `return expr;` already copies (`bind_value` runs for it), so
+// neither alone can surface a stale/aliased parameter or a bare tail
+// expression that skips that copy: the caller's own consuming `let`
+// would silently re-copy the result anyway. The only way to observe a
+// missing copy at *either* the parameter-binding or the implicit-return
+// boundary is to route the value through a `match` identifier binding
+// (which must itself be a real copy — see match_binding_copy_semantics.osc)
+// immediately afterwards, and mutate the original source in between.
+//
+// Exercises: a pass-through helper whose body is a *bare* tail expression
+// (no `return` keyword) of its own by-value parameter, for both a plain
+// struct and a payload-bearing enum passed by value, with the source
+// mutated after the call returns but before the bound match identifier is
+// read.
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn identity(p: Point) -> Point {
+    p
+}
+
+enum Item {
+    Holds(Point),
+    Empty,
+}
+
+fn identity_item(it: Item) -> Item {
+    it
+}
+
+fn! main() {
+    // Struct parameter + bare tail return.
+    let mut p: Point = Point { x: 1, y: 2 };
+    match identity(p) {
+        y => {
+            p.x = 999;
+            p.y = 999;
+            print_i32(y.x);
+            print_i32(y.y);
+            println("");
+        },
+    };
+    print_i32(p.x);
+    print_i32(p.y);
+    println("");
+
+    // Payload-bearing enum parameter (payload is itself an inline
+    // aggregate) + bare tail return. The source lives in an array slot so
+    // it can be reassigned in place after the call (enum payloads have no
+    // directly-mutable field syntax of their own).
+    let mut items: [Item] = [Item::Holds(Point { x: 7, y: 8 })];
+    match identity_item(items[0]) {
+        Item::Holds(y) => {
+            items[0] = Item::Empty;
+            print_i32(y.x);
+            print_i32(y.y);
+            println("");
+        },
+        Item::Empty => { println("empty"); },
+    };
+}

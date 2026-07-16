@@ -16,6 +16,7 @@
 - Order-independent definitions (no forward declarations needed)
 - Context-free grammar, single-pass parseable
 - C-FFI for interoperability with existing C ecosystem
+- **2025-07-14 to 2025-07-25:** Phase 1 language spec completed. Phase 0 doc sync established (README rewrite, guide alignment, compound assignment/break/continue support added, spec/guide/README synchronized). Phase 2 string interpolation research & feature batch prioritization complete.
 
 ## Learnings
 

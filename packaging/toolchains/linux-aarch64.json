@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "target": "linux-aarch64",
+  "bundle_kind": "full",
+  "toolchain": {
+    "vendor": "musl.cc",
+    "version": "aarch64-linux-musl-cross",
+    "archive": {
+      "url": "https://github.com/lucabol/Oscan/releases/download/toolchains/aarch64-linux-musl-cross.tgz",
+      "type": "tgz",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "c909817856d6ceda86aa510894fa3527eac7989f0ef6e87b5721c58737a06c38"
+      }
+    },
+    "extract": {
+      "strip_components": 1
+    },
+    "runtime": {
+      "abi": "musl",
+      "crt": "musl",
+      "compiler": {
+        "path": "bin/aarch64-linux-musl-gcc",
+        "family": "gcc",
+        "version": "11.2.1",
+        "target": "aarch64-linux-musl",
+        "size_flag": "-Os"
+      },
+      "archiver": {
+        "path": "bin/aarch64-linux-musl-ar",
+        "family": "gnu-ar",
+        "version": "2.37"
+      },
+      "linker": {
+        "path": "bin/aarch64-linux-musl-ld",
+        "family": "gnu-ld",
+        "version": "2.37",
+        "driver_flags": []
+      }
+    },
+    "prune": {
+      "remove_globs": [
+        "lib/libstdc++*",
+        "lib/libsupc++*",
+        "lib/libgomp*",
+        "lib/libatomic*",
+        "lib/libitm*",
+        "lib/libssp*",
+        "lib/libquadmath*",
+        "lib/libgfortran*",
+        "lib/libasan*",
+        "lib/liblsan*",
+        "lib/libtsan*",
+        "lib/libubsan*",
+        "lib/libsanitizer*",
+        "include/c++",
+        "share/doc",
+        "share/info",
+        "share/man",
+        "share/locale",
+        "share/gcc-*"
+      ],
+      "strip_debug": true
+    }
+  },
+  "stage": {
+    "root": "toolchain",
+    "license_globs": [
+      "COPYING*",
+      "COPYRIGHT*",
+      "LICENSE*"
+    ],
+    "wrappers": [
+      {
+        "path": "bin/gcc",
+        "kind": "posix-exec",
+        "target": "aarch64-linux-musl-gcc"
+      }
+    ]
+  }
+}

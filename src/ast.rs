@@ -306,10 +306,7 @@ pub enum Expr {
         span: Span,
     },
     /// Arena block: `arena { ... }`
-    Arena {
-        body: Block,
-        span: Span,
-    },
+    Arena { body: Block, span: Span },
 }
 
 impl Expr {

@@ -1927,7 +1927,13 @@ oscan [OPTIONS] <file.osc>
 | `--run`         | Compile and execute immediately. |
 | `--emit-c`      | Emit generated C code to stdout. |
 | `--libc`        | Use hosted libc mode instead of freestanding mode. Enables access to standard C library functions. |
-| `--target <arch>` | Cross-compile for target architecture. Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
+| `--backend <name>` | Code generator: `c` (default, transpiles to C99) or `native` (Cranelift AOT compilation). |
+| `--native-target <tag>` | Native object target for `--backend native`. Supported: `linux-x86_64` (default on Linux x86_64), `windows-x86_64` (default on Windows), `linux-aarch64`, `linux-riscv64`. |
+| `--target <arch>` | Cross-compile for target architecture (C backend only). Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
+| `--extra-c <file>` | Extra C source file to compile and link (repeatable). Requires C compiler. |
+| `--extra-obj <file>` | Precompiled object file to link (`.o` or `.obj`, repeatable). Works with both backends. |
+| `--extra-lib <file>` | Precompiled static library to link (`.a` or `.lib`, repeatable). Works with both backends. |
+| `--extra-cflags <flag>` | Extra flag passed to the C compiler (repeatable). |
 | `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
 | `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |
 
@@ -1949,6 +1955,33 @@ When a bundled toolchain root is used (`OSCAN_TOOLCHAIN_DIR`, sibling `toolchain
 - Linux: `toolchain/linux/bin/`, then `toolchain/bin/`
 
 A Windows/Linux Oscan distribution that includes a bundled `toolchain/` directory therefore does not always require a separately installed system compiler. This does not replace host compiler fallback; if no override or bundled toolchain is present, normal host compiler detection still applies. Cross-compilation targets still require their own target-specific toolchains.
+
+**Exception — Windows and Linux x86-64 freestanding native builds:** the
+resolution order above governs the external/bundled **C compiler** path. On
+Windows x86-64 and Linux x86-64, default `oscan --backend native`
+(freestanding, no explicit `.c` files) bypasses it entirely: `oscan` embeds its
+own linker plus the minimal support files it needs — on Windows, `ld.lld` plus
+5 MinGW runtime DLLs and import libraries; on Linux, a fully static
+`x86_64-linux-musl-ld` from the pinned musl-cross toolchain — and extracts them
+on first use to a content-verified local cache
+(`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
+`$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
+Linux — safe to delete or ignore; rebuilt automatically on next use).
+
+**Linux AArch64 / RISC-V64 native backend support:** `--backend native` now
+supports cross-linking to `linux-aarch64` and `linux-riscv64` via a cross-linker
+sidecar mechanism. The standard Linux x86_64 release embeds only its own linker;
+cross-linker binaries for aarch64 and riscv64 must be provided separately
+(typically as part of the release bundle). Set `OSCAN_NATIVE_LINKER` and
+`OSCAN_NATIVE_LINKER_FLAVOR=elf` to enable cross-linking. **Note:** this is
+separate from the **C backend**'s existing ARM64/RISC-V64 support via
+`aarch64-linux-gnu-gcc` / `--target riscv64`.
+
+Hosted `--libc` mode (any platform) and explicit `--extra-c` sources still
+require the external/bundled C toolchain above, even on Windows and Linux x86-64. See
+`docs/design/native-link-embedding.md` for the full design and
+`OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` (`=mingw` for Windows, `=elf`
+for Linux)/`OSCAN_NATIVE_ASSET_CACHE_DIR` for advanced overrides.
 
 ### Target Architectures
 
