@@ -14,6 +14,7 @@
 - [A Quick Look](#a-quick-look)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
+- [Tutorial](docs/tutorial.md)
 - [Examples](#examples)
 - [Built-in Functions](#built-in-functions)
 - [Learn More](#learn-more)
@@ -206,6 +207,10 @@ oscan hello.osc              # compile to hello.exe (Windows) / hello (Linux)
 oscan hello.osc -o out.c     # transpile to C only
 ```
 
+**Continue with the [introductory tutorial](docs/tutorial.md):** build a small
+`wc`-style command-line tool while learning types, loops, pure and impure
+functions, structs, and `Result` error handling.
+
 **CLI options:**
 ```
 oscan [OPTIONS] <file.osc>
@@ -300,6 +305,7 @@ See the [full built-in function reference](docs/builtins.md) for signatures and 
 
 ## Learn More
 
+- **[Introductory Tutorial](docs/tutorial.md)** — Build a useful command-line program step by step
 - **[Language Guide](docs/guide.md)** — Concise walkthrough of syntax, types, and patterns
 - **[Safety Guide](docs/safety.md)** — How Oscan prevents 11 of 11 major bug categories
 - **[Language Specification](docs/spec/oscan-spec.md)** — Full formal semantics, grammar, and standard library reference
