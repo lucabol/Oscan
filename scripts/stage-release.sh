@@ -10,6 +10,7 @@ BINARY_PATH=""
 OUTPUT_DIR="$REPO_ROOT/target/release-artifacts"
 CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
 RUNTIME_ARCHIVE_DIR=""
+CROSS_LINKER_SIDECAR_DIR=""
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -37,8 +38,12 @@ while [ "$#" -gt 0 ]; do
             RUNTIME_ARCHIVE_DIR="$2"
             shift 2
             ;;
+        --cross-linker-sidecar-dir)
+            CROSS_LINKER_SIDECAR_DIR="$2"
+            shift 2
+            ;;
         *)
-            echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>]" >&2
+            echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>] [--cross-linker-sidecar-dir <path>]" >&2
             exit 1
             ;;
     esac
@@ -55,4 +60,5 @@ set -- "$SCRIPT_DIR/release_tools.py" stage-release \
     --output-dir "$OUTPUT_DIR" \
     --contract "$CONTRACT_PATH"
 [ -n "$RUNTIME_ARCHIVE_DIR" ] && set -- "$@" --runtime-archive-dir "$RUNTIME_ARCHIVE_DIR"
+[ -n "$CROSS_LINKER_SIDECAR_DIR" ] && set -- "$@" --cross-linker-sidecar-dir "$CROSS_LINKER_SIDECAR_DIR"
 python3 "$@"

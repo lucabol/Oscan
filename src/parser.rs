@@ -156,10 +156,7 @@ impl Parser {
                         _ => {
                             return Err(CompileError::new(
                                 self.peek_span(),
-                                format!(
-                                    "expected identifier after 'as', found '{}'",
-                                    self.peek()
-                                ),
+                                format!("expected identifier after 'as', found '{}'", self.peek()),
                             ))
                         }
                     }

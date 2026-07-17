@@ -203,6 +203,31 @@ if [ -n "$NATIVE_RUNTIME_MODES" ]; then
         fi
     fi
 
+    if [ "$TARGET" = "linux-x86_64" ] && [ "$NATIVE_SMOKE_MODE" = "freestanding" ]; then
+        cat > "$SCRATCH_DIR/tls-link.osc" <<'EOF'
+fn! main() {
+    let conn: Result<i32, str> = tls_connect("localhost", 443);
+    match conn {
+        Result::Ok(fd) => { tls_close(fd); },
+        Result::Err(_) => { },
+    };
+    tls_cleanup();
+}
+EOF
+        TLS_LINK_LOG="$SCRATCH_DIR/tls-link.stderr.txt"
+        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
+            "$OSCAN_COMMAND" --backend native "$SCRATCH_DIR/tls-link.osc" \
+            -o "$SCRATCH_DIR/tls-link" 2>"$TLS_LINK_LOG"; then
+            cat "$TLS_LINK_LOG" >&2
+            exit 1
+        fi
+        grep -qi embedded "$TLS_LINK_LOG" || {
+            echo "packaged Linux native TLS smoke did not use the embedded linker" >&2
+            cat "$TLS_LINK_LOG" >&2
+            exit 1
+        }
+    fi
+
     NATIVE_ACTUAL="$("$NATIVE_OUTPUT_EXE")"
     [ "$NATIVE_ACTUAL" = "Hello, Release!" ] || {
         echo "unexpected packaged native smoke output: $NATIVE_ACTUAL" >&2

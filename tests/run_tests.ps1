@@ -1,5 +1,5 @@
 # Oscan Test Runner (PowerShell) — quiet by default, -VerboseOutput for details
-# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-Backend <name> | --backend <name>] [-VerboseOutput]
+# Usage: .\run_tests.ps1 -Oscan <oscan-binary> [-Backend <name>] [-VerboseOutput]
 
 param(
     [Parameter(Mandatory=$true)]
@@ -19,19 +19,10 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ScriptDir
 . (Join-Path $ScriptDir "backend_oracle.ps1")
 
-try {
-    $backendSelection = Resolve-OracleBackendSelection -Backend $Backend -BackendOption $BackendOption
-    $Backend = $backendSelection.Backend
-    $BackendOption = $backendSelection.BackendOption
-} catch {
-    Pop-Location
-    Write-Error $_
-    exit 2
-}
-
 $Pass = 0; $Fail = 0; $NegPass = 0; $NegFail = 0
 $Failures = [System.Collections.ArrayList]::new()
 $LibcRegressionTests = @('builtin_typed_maps')
+$OracleOnlyStdoutTests = @('tls_fetch')
 
 if (-not (Test-Path "build")) {
     New-Item -ItemType Directory -Path "build" | Out-Null
@@ -91,7 +82,8 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
             -FixtureRoot (Join-Path $ScriptDir "fixtures") `
             -ExpectedFixtureRoot (Join-Path $ScriptDir "expected_files") `
             -CompileArguments $compileArgs `
-            -CompareStderr ($UnstableStderrTests -notcontains $name)
+            -CompareStderr ($UnstableStderrTests -notcontains $name) `
+            -CompareExpectedStdout ($OracleOnlyStdoutTests -notcontains $name)
         if (-not $oracleResult.Success) {
             [void]$Failures.Add("$name — $($oracleResult.Failures -join '; ')")
             $Fail++
@@ -124,12 +116,29 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
 # --- Negative Tests ---
 foreach ($oscFile in Get-ChildItem "negative\*.osc") {
     $name = $oscFile.BaseName
-    & $Oscan $oscFile.FullName -o "build\$name.c" 2>"build\$name.err"
-    if ($LASTEXITCODE -eq 0) {
-        [void]$Failures.Add("$name — should have been rejected")
+    $negativeBackends = @("c")
+    if ($Backend -ne "c") { $negativeBackends += $Backend }
+    $rejectedByAllBackends = $true
+    foreach ($negativeBackend in $negativeBackends) {
+        $backendTag = ConvertTo-OracleBackendTag $negativeBackend
+        $backendArgs = @()
+        if ($negativeBackend -ne "c") {
+            $backendArgs += @($BackendOption, $negativeBackend)
+        }
+        & $Oscan @backendArgs $oscFile.FullName `
+            -o "build\$name.$backendTag.negative" `
+            2>"build\$name.$backendTag.err"
+        if ($LASTEXITCODE -eq 0) {
+            [void]$Failures.Add("$name — should have been rejected by $negativeBackend")
+            $rejectedByAllBackends = $false
+        }
+    }
+    if (-not $rejectedByAllBackends) {
         $NegFail++
     } else {
-        if ($VerboseOutput) { Write-Host "  PASS: $name — correctly rejected" -ForegroundColor Green }
+        if ($VerboseOutput) {
+            Write-Host "  PASS: $name — correctly rejected by $($negativeBackends -join ', ')" -ForegroundColor Green
+        }
         $NegPass++
     }
 }
@@ -137,10 +146,15 @@ foreach ($oscFile in Get-ChildItem "negative\*.osc") {
 # --- Freestanding Verification ---
 $VPass = 0; $VFail = 0
 $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
+$readelf = Get-Command readelf -ErrorAction SilentlyContinue
 $verificationBackendTag = ConvertTo-OracleBackendTag $Backend
-foreach ($exe in Get-ChildItem "build\*.exe" -ErrorAction SilentlyContinue) {
-    if ($exe.BaseName -match '^ffi' -or $exe.BaseName -like '*.libc') { continue }
-    if (($Backend -ne "c") -and ($exe.BaseName -notlike "*.$verificationBackendTag")) { continue }
+$executablePattern = if ($Backend -eq "c") {
+    "build\*.exe"
+} else {
+    "build\*.backend-$verificationBackendTag$(Get-OracleExecutableSuffix)"
+}
+foreach ($exe in Get-ChildItem $executablePattern -File -ErrorAction SilentlyContinue) {
+    if ($exe.Name -match '^ffi' -or $exe.Name -like '*.libc*') { continue }
     $stdlibPatterns = @('msvcrt', 'ucrt', 'vcruntime', 'api-ms-win-crt')
     $ok = $true
 
@@ -149,6 +163,14 @@ foreach ($exe in Get-ChildItem "build\*.exe" -ErrorAction SilentlyContinue) {
         $deps = $raw | Where-Object { $_ -match '^\s+\S+\.dll\s*$' } | ForEach-Object { $_.Trim() }
         $badDeps = $deps | Where-Object { $_ -notmatch '^(?i)KERNEL32\.dll$' }
         if ($badDeps) { $ok = $false }
+    }
+
+    if ($readelf -and [System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+        $programHeaders = & $readelf.Source -l $exe.FullName 2>$null | Out-String
+        $dynamicSection = & $readelf.Source -d $exe.FullName 2>&1 | Out-String
+        if ($programHeaders -match '\bINTERP\b' -or $dynamicSection -match '\bNEEDED\b') {
+            $ok = $false
+        }
     }
 
     try {

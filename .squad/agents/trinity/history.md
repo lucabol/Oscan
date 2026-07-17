@@ -16,6 +16,7 @@
 - Side-effect signatures on functions
 - Order-independent definitions
 - All generated C must guard against UB (bounds checks, overflow, null)
+- **2025-07-14 to 2026-03-28:** Full compiler pipeline (lexer/parser/AST/semantic/codegen) implemented & verified. Phase 3-4 completed with empty array elem_size bug fixed. Phase 5 expanded micro-lib: bitwise ops, string functions, CLI args. String interpolation MVP shipped with purity constraints. arena_reset() removed for memory safety. defer statement implemented full pipeline (LIFO, function-scoped). All 62 unit tests + 74 positive + 26 negative integration tests passing.
 
 ## Learnings
 

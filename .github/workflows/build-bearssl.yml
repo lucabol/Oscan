@@ -8,44 +8,81 @@ permissions:
 
 jobs:
   build:
-    name: Build libbearssl.a (freestanding x86_64)
+    name: Build libbearssl.a (freestanding, ${{ matrix.target }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: linux-x86_64
+            cc: gcc
+            ar: ar
+            toolchain_manifest: ""
+            toolchain_dir: ""
+          - target: linux-aarch64
+            cc: bin/aarch64-linux-musl-gcc
+            ar: bin/aarch64-linux-musl-ar
+            toolchain_manifest: packaging/toolchains/linux-aarch64.json
+            toolchain_dir: build/toolchain-linux-aarch64
+          - target: linux-riscv64
+            cc: bin/riscv64-linux-musl-gcc
+            ar: bin/riscv64-linux-musl-ar
+            toolchain_manifest: packaging/toolchains/linux-riscv64.json
+            toolchain_dir: build/toolchain-linux-riscv64
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
+
+      - name: Fetch cross toolchain (aarch64/riscv64 only)
+        if: matrix.toolchain_manifest != ''
+        shell: bash
+        run: |
+          ./scripts/fetch-toolchain.sh \
+            --manifest ${{ matrix.toolchain_manifest }} \
+            --destination ${{ matrix.toolchain_dir }} \
+            --download-dir "$RUNNER_TEMP/toolchain-downloads"
 
       - name: Build libbearssl.a
         shell: bash
         run: |
           BEARSSL_SRC=deps/laststanding/bearssl/src
           BEARSSL_INC=deps/laststanding/bearssl/inc
-          OUTDIR="$RUNNER_TEMP/bearssl-build"
+          OUTDIR="$RUNNER_TEMP/bearssl-build-${{ matrix.target }}"
 
           mkdir -p "$OUTDIR"
           FILE_COUNT=$(find $BEARSSL_SRC -name '*.c' | wc -l)
-          echo "Compiling BearSSL ($FILE_COUNT files) with system gcc (freestanding)..."
+
+          # Determine compiler and archiver paths
+          if [ -z "${{ matrix.toolchain_dir }}" ]; then
+            CC="${{ matrix.cc }}"
+            AR="${{ matrix.ar }}"
+          else
+            CC="${{ matrix.toolchain_dir }}/${{ matrix.cc }}"
+            AR="${{ matrix.toolchain_dir }}/${{ matrix.ar }}"
+          fi
+
+          echo "Compiling BearSSL ($FILE_COUNT files) for ${{ matrix.target }} with $CC (freestanding)..."
           for f in $BEARSSL_SRC/*/*.c; do
-            gcc -c -I$BEARSSL_INC -I$BEARSSL_SRC -Os -ffreestanding -fno-builtin \
+            $CC -c -I$BEARSSL_INC -I$BEARSSL_SRC -Os -ffreestanding -fno-builtin \
                 -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
                 -ffunction-sections -fdata-sections -w \
                 "$f" -o "$OUTDIR/$(basename ${f%.c}.o)" || exit 1
           done
-          ar rcs "$OUTDIR/libbearssl.a" "$OUTDIR"/*.o
+          $AR rcs "$OUTDIR/libbearssl.a" "$OUTDIR"/*.o
           echo "Built libbearssl.a ($(du -h "$OUTDIR/libbearssl.a" | cut -f1))"
 
-          cp "$OUTDIR/libbearssl.a" packaging/prebuilt/linux-x86_64/libbearssl.a
+          cp "$OUTDIR/libbearssl.a" packaging/prebuilt/${{ matrix.target }}/libbearssl.a
 
       - name: Commit pre-built library
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packaging/prebuilt/linux-x86_64/libbearssl.a
+          git add packaging/prebuilt/${{ matrix.target }}/libbearssl.a
           if git diff --cached --quiet; then
-            echo "No changes — libbearssl.a is up to date"
+            echo "No changes — libbearssl.a is up to date for ${{ matrix.target }}"
           else
-            git commit -m "Update pre-built libbearssl.a (freestanding x86_64)"
+            git commit -m "Update pre-built libbearssl.a (freestanding ${{ matrix.target }})"
             git push
-            echo "Committed and pushed updated libbearssl.a"
+            echo "Committed and pushed updated libbearssl.a for ${{ matrix.target }}"
           fi

@@ -260,7 +260,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib>] [-o output] <file.osc>",
     );
     print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
@@ -271,11 +271,22 @@ fn print_usage(to_stderr: bool) {
     ));
     print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
     print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
+    print_line("  --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)");
+    print_line("  --extra-lib <file>  Precompiled static library to link (.a/.lib, repeatable)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
     print_line(&format!(
         "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
         toolchain_search_hint()
     ));
+    print_line(
+        "  OSCAN_NATIVE_LINKER  Override the linker used by --backend native (Windows freestanding: a ld.lld-compatible binary; Linux freestanding: a GNU ld-compatible binary; otherwise a compiler driver)",
+    );
+    print_line(
+        "  OSCAN_NATIVE_LINKER_FLAVOR  How to invoke OSCAN_NATIVE_LINKER/the default native linker: 'mingw' (direct ld.lld, Windows), 'elf' (direct GNU ld, Linux), or 'compiler-driver' (legacy)",
+    );
+    print_line(
+        "  OSCAN_NATIVE_ASSET_CACHE_DIR  Override where extracted embedded native-link assets are cached (default: %LOCALAPPDATA%\\oscan\\native-assets\\ on Windows, $XDG_CACHE_HOME/oscan/native-assets on Linux)",
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -302,6 +313,8 @@ fn main() {
     let mut program_args: Vec<String> = Vec::new();
     let mut extra_c_files: Vec<String> = Vec::new();
     let mut extra_cflags: Vec<String> = Vec::new();
+    let mut extra_obj_files: Vec<String> = Vec::new();
+    let mut extra_lib_files: Vec<String> = Vec::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -386,6 +399,24 @@ fn main() {
                     extra_cflags.push(args[i].clone());
                 } else {
                     eprintln!("--extra-cflags requires a compiler flag");
+                    process::exit(1);
+                }
+            }
+            "--extra-obj" => {
+                i += 1;
+                if i < args.len() {
+                    extra_obj_files.push(args[i].clone());
+                } else {
+                    eprintln!("--extra-obj requires an object file path (.o/.obj)");
+                    process::exit(1);
+                }
+            }
+            "--extra-lib" => {
+                i += 1;
+                if i < args.len() {
+                    extra_lib_files.push(args[i].clone());
+                } else {
+                    eprintln!("--extra-lib requires a static library path (.a/.lib)");
                     process::exit(1);
                 }
             }
@@ -561,6 +592,8 @@ fn main() {
             &program_args,
             &extra_c_files,
             &extra_cflags,
+            &extra_obj_files,
+            &extra_lib_files,
         );
         return;
     }
@@ -611,6 +644,8 @@ fn main() {
             &program_args,
             &extra_c_files,
             &extra_cflags,
+            &extra_obj_files,
+            &extra_lib_files,
         );
     } else if emit_c || output_ends_in_c {
         // Emit C mode
@@ -664,6 +699,8 @@ fn main() {
             show_warnings,
             &extra_c_files,
             &extra_cflags,
+            &extra_obj_files,
+            &extra_lib_files,
         );
     }
 }
@@ -674,6 +711,42 @@ fn main() {
 /// `--run`, executing it). Never touches `crate::codegen`/the C backend —
 /// see `src/backend/mod.rs`'s module docs on why that would be a "silent
 /// fallback" this backend deliberately never performs.
+/// Create a private, unpredictable scratch directory for one `--backend
+/// native` compile invocation (Finding 3 hardening, security review): the
+/// old `env::temp_dir().join(format!("oscan_native_{}", process::id()))`
+/// was predictable (bare PID), and on multi-user Unix systems
+/// `env::temp_dir()` is typically world-writable (`/tmp`) — a local
+/// attacker could pre-create/symlink that exact path ahead of time, and in
+/// `--run` mode race to substitute the compiled executable before it's
+/// launched. `tempfile::Builder` instead creates an atomically-named
+/// directory with a cryptographically-random suffix.
+///
+/// Security review 2026-07-15 (finding 3): on Unix, permissions are no
+/// longer left to `tempfile`'s own internal default alone — this
+/// explicitly calls [`harden_native_scratch_dir_unix`] immediately after
+/// creation and **fails the build** (propagates the `io::Error`, handled
+/// by this function's one caller as a fatal `error creating temp
+/// directory: ...` + `process::exit(1)`) if the mode cannot be set to
+/// exactly `0700`, rather than silently trusting a best-effort default
+/// (verified explicitly by `native_scratch_dir_has_0700_permissions_on_unix`
+/// below).
+fn create_native_scratch_dir() -> std::io::Result<tempfile::TempDir> {
+    let dir = tempfile::Builder::new().prefix("oscan_native_").tempdir()?;
+    #[cfg(unix)]
+    harden_native_scratch_dir_unix(dir.path())?;
+    Ok(dir)
+}
+
+/// Unix-only: explicitly set the native-backend scratch directory's mode
+/// to `0700` (owner-only), and propagate any failure to do so as a hard
+/// error rather than a silent best-effort attempt (security review
+/// 2026-07-15, finding 3).
+#[cfg(unix)]
+fn harden_native_scratch_dir_unix(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
 fn run_native_backend(
     ir_program: &ir::Program,
     native_target: backend::NativeTarget,
@@ -685,6 +758,8 @@ fn run_native_backend(
     program_args: &[String],
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) {
     if is_verbose() {
         eprintln!("[verbose] Native backend target: {native_target}, runtime: {runtime_mode}");
@@ -727,36 +802,119 @@ fn run_native_backend(
         return;
     }
 
+    // Security review 2026-07-15 (findings 2 & 3): refuse a native final
+    // link (or `--run`, which requires one) entirely while this process is
+    // running elevated on Windows, *before* creating any scratch directory
+    // or touching the native-asset cache. This replaces last round's
+    // "route an elevated process to a fresh, isolated directory" mitigation
+    // — Windows handle-based TOCTOU races between a path check and a
+    // subsequent open/rename are not fully closed by re-checking paths,
+    // however carefully, so this no longer tries to sandbox an elevated
+    // process, it refuses the operation outright. `output_is_object` is
+    // never gated (handled and returned above): that path never extracts
+    // or executes an embedded asset, or writes a final linked executable.
+    // Unix gets a separate, unrelated fix instead (explicit scratch-dir
+    // permissions, see `harden_native_scratch_dir_unix`) — elevation in the
+    // Windows Administrator sense has no Unix equivalent gated here.
+    #[cfg(windows)]
+    {
+        let elevation = backend::native_assets::is_elevated();
+        if let Err(reason) = backend::native_assets::check_elevation_policy(
+            elevation,
+            backend::native_assets::NativeLinkOperation::FinalLink,
+        ) {
+            eprintln!("error: {reason}");
+            process::exit(1);
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let elevation = backend::native_assets::is_setuid_elevated();
+        if let Err(reason) = backend::native_assets::check_elevation_policy(
+            elevation,
+            backend::native_assets::NativeLinkOperation::FinalLink,
+        ) {
+            eprintln!("error: {reason}");
+            process::exit(1);
+        }
+    }
+
     let link_options = backend::link::NativeLinkOptions {
         runtime_mode,
         show_warnings,
-        extra_c_files,
-        extra_cflags,
+        extra_c_files: &extra_c_files,
+        extra_cflags: &extra_cflags,
+        extra_objects: &extra_obj_files,
+        extra_libs: &extra_lib_files,
     };
-    let temp_dir = env::temp_dir().join(format!("oscan_native_{}", process::id()));
-    if let Err(e) = fs::create_dir_all(&temp_dir) {
-        eprintln!("error creating temp directory: {e}");
-        process::exit(1);
+
+    // Validate --extra-obj files (design §12.2)
+    for obj_file in extra_obj_files {
+        let path = std::path::Path::new(obj_file);
+        if !path.exists() {
+            eprintln!("error: --extra-obj file does not exist: {}", obj_file);
+            process::exit(1);
+        }
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if !ext.eq_ignore_ascii_case("o") && !ext.eq_ignore_ascii_case("obj") {
+            eprintln!(
+                "warning: --extra-obj file does not have .o or .obj extension: {}",
+                obj_file
+            );
+        }
     }
-    let obj_path = temp_dir.join(format!("program{}", native_target.obj_suffix()));
+
+    // Validate --extra-lib files (design §12.2)
+    for lib_file in extra_lib_files {
+        let path = std::path::Path::new(lib_file);
+        if !path.exists() {
+            eprintln!("error: --extra-lib file does not exist: {}", lib_file);
+            process::exit(1);
+        }
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+        if !ext.eq_ignore_ascii_case("a") && !ext.eq_ignore_ascii_case("lib") {
+            eprintln!(
+                "warning: --extra-lib file does not have .a or .lib extension: {}",
+                lib_file
+            );
+        }
+    }
+
+    let temp_dir = match create_native_scratch_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("error creating temp directory: {e}");
+            process::exit(1);
+        }
+    };
+    let obj_path = temp_dir
+        .path()
+        .join(format!("program{}", native_target.obj_suffix()));
     if let Err(e) = backend::link::write_object_file(&object_bytes, &obj_path) {
         eprintln!("error: {e}");
-        let _ = fs::remove_dir_all(&temp_dir);
+        // `process::exit` skips `Drop`, so the `TempDir` guard must be
+        // dropped explicitly first to still clean up (Finding 3).
+        drop(temp_dir);
         process::exit(1);
     }
 
     if run_mode {
-        let exe_path = temp_dir.join(format!("program{}", native_target.exe_suffix()));
+        let exe_path = temp_dir
+            .path()
+            .join(format!("program{}", native_target.exe_suffix()));
         if let Err(e) =
             backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options)
         {
             eprintln!("error: {e}");
-            let _ = fs::remove_dir_all(&temp_dir);
+            drop(temp_dir);
             process::exit(1);
         }
         eprintln!("\n=== Running {} ===\n", source_path);
+        // Keep the `TempDir` guard alive through the run itself — the
+        // compiled executable lives inside it.
         let status = Command::new(&exe_path).args(program_args).status();
-        let _ = fs::remove_dir_all(&temp_dir);
+        drop(temp_dir);
         match status {
             Ok(exit_status) => {
                 if !exit_status.success() {
@@ -794,7 +952,7 @@ fn run_native_backend(
         }
     };
     let result = backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options);
-    let _ = fs::remove_dir_all(&temp_dir);
+    drop(temp_dir);
     if let Err(e) = result {
         eprintln!("error: {e}");
         process::exit(1);
@@ -893,11 +1051,16 @@ pub(crate) fn gcc_or_clang_cmd(compiler: &CCompiler) -> Option<(&str, CompilerSo
     }
 }
 
+/// Finding 2b (security review): the bundled toolchain lookup no longer
+/// has a bare CWD-relative fallback (only `<exe-dir>/toolchain`, or the
+/// explicit `OSCAN_TOOLCHAIN_DIR` override) — an executed compiler binary
+/// must never be resolved against whatever directory `oscan` happened to
+/// be launched from.
 fn toolchain_search_hint() -> &'static str {
     if cfg!(windows) {
-        "<exe-dir>\\toolchain, then .\\toolchain"
+        "<exe-dir>\\toolchain (never the current directory)"
     } else {
-        "<exe-dir>/toolchain, then ./toolchain"
+        "<exe-dir>/toolchain (never the current directory)"
     }
 }
 
@@ -909,10 +1072,19 @@ fn bundled_toolchain_platform() -> Option<&'static str> {
     }
 }
 
+/// `include_cwd` gates the bare `PathBuf::from(resource_name)` candidate,
+/// which resolves against this process's current working directory: it
+/// must be `false` for any resource that ends up **executed** (e.g. the
+/// bundled-toolchain compiler binary looked up by [`find_toolchain_dir`]) —
+/// a malicious/incidental CWD must never be able to substitute a planted
+/// executable there. It remains `true` for resources that are only ever
+/// read as **data** (e.g. [`find_runtime_dir`]'s `runtime/` C sources),
+/// which is out of scope for this hardening pass.
 fn resource_dir_candidates(
     resource_name: &str,
     explicit: Option<PathBuf>,
     exe_path: Option<&Path>,
+    include_cwd: bool,
 ) -> Vec<PathBuf> {
     if let Some(path) = explicit {
         return vec![path];
@@ -922,7 +1094,9 @@ fn resource_dir_candidates(
     if let Some(exe_dir) = exe_path.and_then(|path| path.parent()) {
         candidates.push(exe_dir.join(resource_name));
     }
-    candidates.push(PathBuf::from(resource_name));
+    if include_cwd {
+        candidates.push(PathBuf::from(resource_name));
+    }
     candidates
 }
 
@@ -1152,10 +1326,14 @@ fn compiler_can_execute(cmd: &str) -> bool {
     }
 }
 
-fn find_toolchain_dir() -> Option<PathBuf> {
+pub(crate) fn find_toolchain_dir() -> Option<PathBuf> {
     let exe = env::current_exe().ok();
     let explicit = env_var_nonempty("OSCAN_TOOLCHAIN_DIR").map(PathBuf::from);
-    let candidates = resource_dir_candidates("toolchain", explicit, exe.as_deref());
+    // include_cwd = false: this resolves to an *executed* compiler binary
+    // (see `resource_dir_candidates`'s docs) -- a bare `./toolchain`
+    // relative to whatever directory `oscan` happened to be launched from
+    // must never be trusted (Finding 2b).
+    let candidates = resource_dir_candidates("toolchain", explicit, exe.as_deref(), false);
     find_first_existing_dir(&candidates)
 }
 
@@ -1223,7 +1401,10 @@ pub(crate) fn find_c_compiler() -> Option<CCompiler> {
 /// will be used as a fallback).
 fn find_runtime_dir() -> Option<PathBuf> {
     let exe = env::current_exe().ok();
-    let candidates = resource_dir_candidates("runtime", None, exe.as_deref());
+    // include_cwd = true: unchanged, out-of-scope behavior for this pass —
+    // `runtime/` is only ever read as data, never executed (see
+    // `resource_dir_candidates`'s docs).
+    let candidates = resource_dir_candidates("runtime", None, exe.as_deref(), true);
     find_first_existing_dir(&candidates)
 }
 
@@ -1313,6 +1494,8 @@ fn compile_to_executable(
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) {
     let temp_dir = env::temp_dir().join(unique_temp_dir_name());
     if is_verbose() {
@@ -1423,6 +1606,8 @@ fn compile_to_executable(
         show_warnings,
         extra_c_files,
         extra_cflags,
+        extra_obj_files,
+        extra_lib_files,
     );
     // Clean up temp files and directory
     let _ = fs::remove_dir_all(&temp_dir);
@@ -1443,6 +1628,8 @@ fn run_program(
     program_args: &[String],
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) {
     let temp_dir = env::temp_dir().join(unique_temp_dir_name());
     if is_verbose() {
@@ -1552,6 +1739,8 @@ fn run_program(
         show_warnings,
         extra_c_files,
         extra_cflags,
+        extra_obj_files,
+        extra_lib_files,
     );
 
     if !compiled {
@@ -1586,6 +1775,8 @@ fn invoke_c_compiler(
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) -> bool {
     // Cross-compilation targets bypass normal compiler detection
     if let Some(ct) = target {
@@ -1606,6 +1797,8 @@ fn invoke_c_compiler(
                     show_warnings,
                     extra_c_files,
                     extra_cflags,
+                    extra_obj_files,
+                    extra_lib_files,
                 );
             }
             CrossTarget::Wasi => {
@@ -1634,6 +1827,8 @@ fn invoke_c_compiler(
                     show_warnings,
                     extra_c_files,
                     extra_cflags,
+                    extra_obj_files,
+                    extra_lib_files,
                 );
             }
         }
@@ -1694,6 +1889,8 @@ fn invoke_c_compiler(
                         show_warnings,
                         extra_c_files,
                         extra_cflags,
+                        extra_obj_files,
+                        extra_lib_files,
                     );
                 }
             }
@@ -1713,6 +1910,8 @@ fn invoke_c_compiler(
                 show_warnings,
                 extra_c_files,
                 extra_cflags,
+                extra_obj_files,
+                extra_lib_files,
             )
         }
         CCompiler::Clang { cmd, source } => {
@@ -1735,6 +1934,8 @@ fn invoke_c_compiler(
                         show_warnings,
                         extra_c_files,
                         extra_cflags,
+                        extra_obj_files,
+                        extra_lib_files,
                     );
                 }
             }
@@ -1754,6 +1955,8 @@ fn invoke_c_compiler(
                 show_warnings,
                 extra_c_files,
                 extra_cflags,
+                extra_obj_files,
+                extra_lib_files,
             )
         }
         CCompiler::Msvc {
@@ -1780,6 +1983,8 @@ fn invoke_c_compiler(
                             show_warnings,
                             extra_c_files,
                             extra_cflags,
+                            extra_obj_files,
+                            extra_lib_files,
                         );
                     }
                 }
@@ -1818,6 +2023,8 @@ fn compile_with_gcc_or_clang(
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
 
@@ -1889,9 +2096,19 @@ fn compile_with_gcc_or_clang(
             command.arg(format!("-I{}", dir.display()));
         }
         command.arg("-o").arg(exe_file);
-        // On Windows, math functions live in ucrt (no separate libm);
-        // -lm is only needed on Unix.
-        if !cfg!(windows) {
+        if cfg!(windows) {
+            // The hosted runtime still exposes sockets, graphics, and TLS.
+            // Unlike the freestanding Laststanding translation unit, these
+            // wrappers are compiled separately and their Win32 imports must
+            // be supplied explicitly to Clang/GCC.
+            command
+                .arg("-lws2_32")
+                .arg("-luser32")
+                .arg("-lgdi32")
+                .arg("-lsecur32")
+                .arg("-lcrypt32");
+        } else {
+            // On Windows, math functions live in ucrt (no separate libm).
             command.arg("-lm");
         }
     }
@@ -1900,8 +2117,17 @@ fn compile_with_gcc_or_clang(
     for f in extra_c_files {
         command.arg(f);
     }
+    // Add user-supplied precompiled object files (design §12.6)
+    for obj in extra_obj_files {
+        command.arg(obj);
+    }
     for flag in extra_cflags {
         command.arg(flag);
+    }
+    // Add user-supplied precompiled static libraries (design §12.6)
+    // These go last per spec: after all other inputs
+    for lib in extra_lib_files {
+        command.arg(lib);
     }
 
     verbose_command("C compiler", &command);
@@ -1935,6 +2161,8 @@ fn compile_cross_riscv64(
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
     // Freestanding single-TU build for RISC-V 64-bit
@@ -1964,8 +2192,16 @@ fn compile_cross_riscv64(
     for f in extra_c_files {
         command.arg(f);
     }
+    // Add user-supplied precompiled object files (design §12.6)
+    for obj in extra_obj_files {
+        command.arg(obj);
+    }
     for flag in extra_cflags {
         command.arg(flag);
+    }
+    // Add user-supplied precompiled static libraries (design §12.6)
+    for lib in extra_lib_files {
+        command.arg(lib);
     }
 
     verbose_command("RISC-V cross-compile", &command);
@@ -1996,6 +2232,8 @@ fn compile_cross_wasi(
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
+    extra_obj_files: &[String],
+    extra_lib_files: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
     // WASI libc mode: two TUs, wasm32 target
@@ -2015,8 +2253,16 @@ fn compile_cross_wasi(
     for f in extra_c_files {
         command.arg(f);
     }
+    // Add user-supplied precompiled object files (design §12.6)
+    for obj in extra_obj_files {
+        command.arg(obj);
+    }
     for flag in extra_cflags {
         command.arg(flag);
+    }
+    // Add user-supplied precompiled static libraries (design §12.6)
+    for lib in extra_lib_files {
+        command.arg(lib);
     }
 
     verbose_command("WASI cross-compile", &command);
@@ -2250,21 +2496,34 @@ mod tests {
         let exe = PathBuf::from("install").join("oscan");
 
         assert_eq!(
-            resource_dir_candidates("toolchain", Some(override_dir.clone()), Some(&exe)),
+            resource_dir_candidates("toolchain", Some(override_dir.clone()), Some(&exe), false),
             vec![override_dir]
         );
     }
 
     #[test]
-    fn toolchain_candidates_mirror_runtime_search_order() {
+    fn toolchain_candidates_never_include_a_bare_cwd_relative_path() {
+        // Finding 2b: an executed resource (the bundled toolchain) must
+        // never fall back to a bare `./toolchain` relative to whatever
+        // directory `oscan` was launched from.
         let exe = PathBuf::from("install").join("oscan");
-        let candidates = resource_dir_candidates("toolchain", None, Some(&exe));
+        let candidates = resource_dir_candidates("toolchain", None, Some(&exe), false);
+
+        assert_eq!(candidates, vec![PathBuf::from("install").join("toolchain")]);
+    }
+
+    #[test]
+    fn runtime_candidates_still_include_a_bare_cwd_relative_path() {
+        // Unchanged, out-of-scope behavior: `runtime/` is only ever read as
+        // data, never executed.
+        let exe = PathBuf::from("install").join("oscan");
+        let candidates = resource_dir_candidates("runtime", None, Some(&exe), true);
 
         assert_eq!(
             candidates,
             vec![
-                PathBuf::from("install").join("toolchain"),
-                PathBuf::from("toolchain")
+                PathBuf::from("install").join("runtime"),
+                PathBuf::from("runtime")
             ]
         );
     }
@@ -2338,5 +2597,132 @@ mod tests {
         assert_eq!(compiler_source_label(CompilerSource::Override), "override");
         assert_eq!(compiler_source_label(CompilerSource::Bundled), "bundled");
         assert_eq!(compiler_source_label(CompilerSource::Host), "host");
+    }
+
+    // --- Finding 3: unpredictable, private native-backend scratch dir. ---
+
+    #[test]
+    fn native_scratch_dir_names_are_unpredictable_across_repeated_calls() {
+        let dirs: Vec<_> = (0..8)
+            .map(|_| create_native_scratch_dir().expect("create scratch dir"))
+            .collect();
+        let names: Vec<String> = dirs
+            .iter()
+            .map(|d| d.path().file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+
+        let old_predictable_name = format!("oscan_native_{}", process::id());
+        for name in &names {
+            assert!(name.starts_with("oscan_native_"));
+            assert_ne!(
+                name, &old_predictable_name,
+                "must never reproduce the old bare-PID predictable name"
+            );
+        }
+        let unique: HashSet<&String> = names.iter().collect();
+        assert_eq!(
+            unique.len(),
+            names.len(),
+            "each call must produce a distinct, non-sequential random suffix"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_scratch_dir_has_0700_permissions_on_unix() {
+        // Security review 2026-07-15 (finding 3): asserts the *explicit*
+        // `harden_native_scratch_dir_unix` call took effect, not just
+        // `tempfile`'s own internal default.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = create_native_scratch_dir().expect("create scratch dir");
+        let mode = fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "native scratch dir must be private (0700) on Unix"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harden_native_scratch_dir_unix_sets_exactly_0700() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::Builder::new()
+            .prefix("oscan_native_harden_test_")
+            .tempdir()
+            .expect("create a plain temp dir to harden");
+        // Start from a deliberately looser mode so the assertion below
+        // proves this function actively narrows it, rather than merely
+        // reading back a mode some other mechanism already set.
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755))
+            .expect("set a loose starting mode");
+        harden_native_scratch_dir_unix(dir.path()).expect("must succeed against a real directory");
+        let mode = fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn harden_native_scratch_dir_unix_fails_hard_when_permissions_cannot_be_set() {
+        // Security review 2026-07-15 (finding 3): a permission-setting
+        // failure must be a hard error, not a silently-ignored best-effort
+        // attempt. A path that does not exist is a portable, reliable way
+        // to make `fs::set_permissions` fail (`ENOENT`) without depending
+        // on any particular privileged/unprivileged user setup.
+        let missing = env::temp_dir().join(format!(
+            "oscan-native-harden-missing-{}-{}",
+            process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        assert!(!missing.exists(), "the probe path must not already exist");
+        let err = harden_native_scratch_dir_unix(&missing).expect_err(
+            "setting permissions on a nonexistent path must fail, not succeed silently",
+        );
+        // `create_native_scratch_dir`'s caller (`run_native_backend`)
+        // propagates this `io::Error` as a fatal
+        // "error creating temp directory: ..." + `process::exit(1)` — this
+        // just proves the error itself is produced, not swallowed.
+        let _ = err;
+    }
+
+    #[test]
+    fn native_scratch_dir_never_reuses_the_old_predictable_planted_path() {
+        let old_style = env::temp_dir().join(format!("oscan_native_{}", process::id()));
+        fs::create_dir_all(&old_style).expect("pre-create the old-style vulnerable path");
+        fs::write(old_style.join("planted"), b"attacker-controlled content")
+            .expect("plant attacker content");
+
+        let dir = create_native_scratch_dir().expect("create scratch dir");
+        assert_ne!(
+            dir.path(),
+            old_style.as_path(),
+            "must never reuse the predictable oscan_native_<pid> path"
+        );
+        assert!(
+            !dir.path().join("planted").exists(),
+            "must never pick up attacker-planted content from the old predictable path"
+        );
+
+        let _ = fs::remove_dir_all(&old_style);
+    }
+
+    #[test]
+    fn native_scratch_dir_is_removed_once_the_guard_drops() {
+        let path = {
+            let dir = create_native_scratch_dir().expect("create scratch dir");
+            let p = dir.path().to_path_buf();
+            assert!(
+                p.is_dir(),
+                "scratch dir must exist while the guard is alive"
+            );
+            p
+            // `dir` (the `TempDir` guard) drops here.
+        };
+        assert!(
+            !path.exists(),
+            "scratch dir must be removed once the TempDir guard drops"
+        );
     }
 }

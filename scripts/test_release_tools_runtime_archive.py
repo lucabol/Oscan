@@ -162,6 +162,45 @@ class DefaultArForTests(unittest.TestCase):
         self.assertIn("--ar", message)
 
 
+class CanonicalizeToolPathTests(unittest.TestCase):
+    """Manifest provenance safety: _canonicalize_tool_path must never record
+    a bare/relative compiler-tool reference verbatim. See the security
+    review finding that motivated this — a manifest-recorded relative 'cc'
+    resolved against the wrong CWD is how a malicious project directory
+    could get an attacker-planted binary trusted as toolchain provenance."""
+
+    def test_bare_name_is_resolved_via_which_not_raw_cwd(self):
+        # A bare name must not be resolved against the current working
+        # directory at all; it has to go through shutil.which() (PATH
+        # lookup) first, only then get canonicalized.
+        fake_absolute = str(Path.cwd() / "unrelated-dir" / "clang.exe")
+        with mock.patch.object(rt.shutil, "which", return_value=fake_absolute):
+            resolved = rt._canonicalize_tool_path("clang")
+        self.assertEqual(resolved, str(Path(fake_absolute).resolve()))
+        self.assertTrue(Path(resolved).is_absolute())
+
+    def test_which_miss_still_resolves_best_effort(self):
+        # If shutil.which() can't find it (e.g. a relative path that exists
+        # but isn't marked executable in this environment), fall back to
+        # resolving the raw input rather than raising, so a directly-
+        # supplied --cc/--ar still ends up as an absolute path.
+        with mock.patch.object(rt.shutil, "which", return_value=None):
+            resolved = rt._canonicalize_tool_path("relative/cc")
+        self.assertTrue(Path(resolved).is_absolute())
+        self.assertEqual(resolved, str((Path.cwd() / "relative" / "cc").resolve()))
+
+    def test_already_absolute_path_is_canonicalized_not_left_as_is(self):
+        # ".." components must be normalized away even when the input is
+        # already absolute, so two different-looking manifest strings that
+        # refer to the same file always canonicalize identically.
+        messy = str(Path.cwd() / "a" / ".." / "b" / "cc.exe")
+        with mock.patch.object(rt.shutil, "which") as which_mock:
+            resolved = rt._canonicalize_tool_path(messy)
+        which_mock.assert_not_called()
+        self.assertEqual(resolved, str((Path.cwd() / "b" / "cc.exe").resolve()))
+        self.assertNotIn("..", resolved)
+
+
 class RunToolMissingBinaryTests(unittest.TestCase):
     def test_run_tool_raises_clean_systemexit_not_traceback(self):
         with mock.patch.object(
@@ -344,6 +383,27 @@ class PinnedLinuxToolchainTests(unittest.TestCase):
             source["archive"]["digest"]["value"],
             "c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea",
         )
+
+    def test_unpinned_linux_clang_uses_the_default_gnu_linker_family(self):
+        with mock.patch.object(
+            rt,
+            "_tool_identity_output",
+            side_effect=[
+                "Ubuntu clang version 18.1.3",
+                "GNU ar (GNU Binutils) 2.42",
+            ],
+        ):
+            provenance = rt._runtime_toolchain_provenance(
+                target="linux-x86_64",
+                cc="/usr/bin/clang",
+                ar="/usr/bin/ar",
+                cc_target="x86_64-unknown-linux-gnu",
+                target_spec={},
+                toolchain_manifest_path=None,
+            )
+
+        self.assertEqual(provenance["linker"]["family"], "gnu-ld")
+        self.assertEqual(provenance["linker"]["driver_flags"], [])
 
     def test_windows_and_linux_release_toolchains_share_the_same_shape(self):
         """Both bundled targets must expose the exact same release_toolchain
@@ -579,6 +639,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
                 "target": "linux-x86_64",
                 "mode": mode,
                 "toolchain": _pinned_linux_runtime_toolchain(),
+                "embedded_bearssl": mode in {"freestanding", "freestanding_core"},
                 "sha256": rt.compute_digest(archive, "sha256"),
             }
             (runtime_archive_dir / mode_spec["manifest_name"]).write_text(
@@ -700,6 +761,359 @@ class ReleaseStagingTests(RepositoryScratchTests):
                 runtime_archive_dir,
             )
         self.assertIn("compiler target mismatch", str(ctx.exception))
+
+
+class RuntimeArchiveContractShimSchemaTests(unittest.TestCase):
+    """docs/design/native-link-embedding.md §3.1: schema_version bumped to 2,
+    with osc_native_shim.c precompiled into every mode's archive."""
+
+    def test_schema_version_is_bumped_to_2_with_shim_in_every_mode(self):
+        contract = rt.load_runtime_archive_contract(rt.RUNTIME_ARCHIVE_CONTRACT_PATH)
+        self.assertEqual(contract["schema_version"], 2)
+        for mode_name, mode_spec in contract["modes"].items():
+            self.assertIn(
+                "osc_native_shim.c",
+                mode_spec["sources"],
+                f"mode '{mode_name}' is missing osc_native_shim.c in its sources",
+            )
+            self.assertTrue(
+                mode_spec.get("contains_native_shim"),
+                f"mode '{mode_name}' does not set contains_native_shim: true",
+            )
+
+
+class NativeShimManifestValidationTests(unittest.TestCase):
+    """docs/design/native-link-embedding.md §3.2: validate_runtime_archive_
+    release_toolchain must assert the shim member is present for schema_version
+    2 archive manifests, without disturbing schema_version 1 (pre-shim)
+    manifests."""
+
+    def _runtime_contract(self):
+        return rt.load_runtime_archive_contract(rt.RUNTIME_ARCHIVE_CONTRACT_PATH)
+
+    def test_schema_2_manifest_with_shim_passes(self):
+        manifest = {
+            "schema_version": 2,
+            "contains_native_shim": True,
+            "native_shim_member": "osc_native_shim.o",
+            "toolchain": _pinned_windows_runtime_toolchain(),
+        }
+        rt.validate_runtime_archive_release_toolchain(
+            self._runtime_contract(), "windows-x86_64", manifest, Path("fake.json")
+        )
+
+    def test_schema_2_manifest_missing_shim_flag_fails(self):
+        manifest = {
+            "schema_version": 2,
+            "contains_native_shim": False,
+            "native_shim_member": None,
+            "toolchain": _pinned_windows_runtime_toolchain(),
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            rt.validate_runtime_archive_release_toolchain(
+                self._runtime_contract(), "windows-x86_64", manifest, Path("fake.json")
+            )
+        self.assertIn("contains_native_shim is not true", str(ctx.exception))
+
+    def test_schema_2_manifest_with_wrong_shim_member_fails(self):
+        manifest = {
+            "schema_version": 2,
+            "contains_native_shim": True,
+            "native_shim_member": "wrong.o",
+            "toolchain": _pinned_windows_runtime_toolchain(),
+        }
+        with self.assertRaises(SystemExit) as ctx:
+            rt.validate_runtime_archive_release_toolchain(
+                self._runtime_contract(), "windows-x86_64", manifest, Path("fake.json")
+            )
+        self.assertIn("native_shim_member is", str(ctx.exception))
+
+    def test_schema_1_manifest_without_shim_fields_is_unaffected(self):
+        manifest = {
+            "schema_version": 1,
+            "toolchain": _pinned_windows_runtime_toolchain(),
+        }
+        # Legacy pre-shim manifests must not be newly rejected.
+        rt.validate_runtime_archive_release_toolchain(
+            self._runtime_contract(), "windows-x86_64", manifest, Path("fake.json")
+        )
+
+
+class LinuxReleaseBearSslValidationTests(unittest.TestCase):
+    def _runtime_contract(self):
+        return rt.load_runtime_archive_contract(rt.RUNTIME_ARCHIVE_CONTRACT_PATH)
+
+    def _manifest(self, mode: str, embedded_bearssl: bool):
+        return {
+            "schema_version": 2,
+            "mode": mode,
+            "contains_native_shim": True,
+            "native_shim_member": "osc_native_shim.o",
+            "embedded_bearssl": embedded_bearssl,
+            "toolchain": _pinned_linux_runtime_toolchain(),
+        }
+
+    def test_linux_freestanding_release_rejects_tls_less_archive(self):
+        with self.assertRaises(SystemExit) as ctx:
+            rt.validate_runtime_archive_release_toolchain(
+                self._runtime_contract(),
+                "linux-x86_64",
+                self._manifest("freestanding", False),
+                Path("fake.json"),
+            )
+        self.assertIn("does not embed BearSSL", str(ctx.exception))
+
+    def test_linux_freestanding_release_accepts_embedded_bearssl(self):
+        rt.validate_runtime_archive_release_toolchain(
+            self._runtime_contract(),
+            "linux-x86_64",
+            self._manifest("freestanding_core", True),
+            Path("fake.json"),
+        )
+
+    def test_linux_hosted_release_does_not_require_bearssl(self):
+        rt.validate_runtime_archive_release_toolchain(
+            self._runtime_contract(),
+            "linux-x86_64",
+            self._manifest("hosted", False),
+            Path("fake.json"),
+        )
+
+
+class PrepareEmbedAssetsTests(RepositoryScratchTests):
+    """The prepare-embed-assets subcommand stages each target's exact linker
+    payload and writes the manifest consumed by the Rust asset reader."""
+
+    def _write_fake_toolchain_manifest(self, path: Path) -> None:
+        manifest = {
+            "schema_version": 1,
+            "target": "windows-x86_64",
+            "bundle_kind": "full",
+            "toolchain": {
+                "vendor": "llvm-mingw",
+                "version": "20260324",
+                "archive": {
+                    "url": "https://example.invalid/llvm-mingw.zip",
+                    "type": "zip",
+                    "digest": {"algorithm": "sha256", "value": "fake-digest-value"},
+                },
+            },
+            "stage": {"root": "toolchain"},
+        }
+        path.write_text(rt.json.dumps(manifest), encoding="utf-8")
+
+    def _write_fake_toolchain_dir(self, toolchain_dir: Path) -> None:
+        files = {
+            "bin/ld.lld.exe": b"fake-linker-bytes",
+            "bin/libLLVM-22.dll": b"fake-libllvm",
+            "bin/libwinpthread-1.dll": b"fake-libwinpthread",
+            "bin/libunwind.dll": b"fake-libunwind",
+            "bin/libffi-8.dll": b"fake-libffi",
+            "bin/libc++.dll": b"fake-libcxx",
+            "x86_64-w64-mingw32/lib/libkernel32.a": b"fake-kernel32",
+            "x86_64-w64-mingw32/lib/libws2_32.a": b"fake-ws2_32",
+            "x86_64-w64-mingw32/lib/libuser32.a": b"fake-user32",
+            "x86_64-w64-mingw32/lib/libgdi32.a": b"fake-gdi32",
+            "x86_64-w64-mingw32/lib/libsecur32.a": b"fake-secur32",
+            "x86_64-w64-mingw32/lib/libcrypt32.a": b"fake-crypt32",
+            "lib/clang/22/lib/windows/libclang_rt.builtins-x86_64.a": b"fake-builtins",
+        }
+        for rel, content in files.items():
+            dest = toolchain_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(content)
+
+    def test_stages_exactly_thirteen_files_with_matching_manifest_digests(self):
+        toolchain_dir = self.scratch / "toolchain"
+        self._write_fake_toolchain_dir(toolchain_dir)
+        manifest_path = self.scratch / "windows-x86_64.json"
+        self._write_fake_toolchain_manifest(manifest_path)
+        output_dir = self.scratch / "prebuilt"
+
+        manifest = rt.prepare_embed_assets(
+            "windows-x86_64", toolchain_dir, manifest_path, output_dir
+        )
+
+        self.assertEqual(manifest["schema_version"], 1)
+        self.assertEqual(manifest["target"], "windows-x86_64")
+        self.assertEqual(manifest["toolchain"]["vendor"], "llvm-mingw")
+        self.assertEqual(manifest["toolchain"]["version"], "20260324")
+        self.assertEqual(
+            manifest["toolchain"]["archive_digest"],
+            {"algorithm": "sha256", "value": "fake-digest-value"},
+        )
+        self.assertEqual(manifest["linker"]["role"], "linker")
+        self.assertEqual(manifest["linker"]["install_subpath"], "bin/ld.lld.exe")
+        self.assertEqual(manifest["linker"]["flavor"], "mingw")
+        self.assertEqual(manifest["linker"]["emulation"], "i386pep")
+        self.assertEqual(len(manifest["assets"]), 12)
+        roles = [asset["role"] for asset in manifest["assets"]]
+        self.assertEqual(roles.count("linker_runtime"), 5)
+        self.assertEqual(roles.count("import_lib"), 6)
+        self.assertEqual(roles.count("compiler_builtins"), 1)
+        linker_runtime_names = {
+            asset["name"] for asset in manifest["assets"] if asset["role"] == "linker_runtime"
+        }
+        self.assertEqual(
+            linker_runtime_names,
+            {
+                "libLLVM-22.dll",
+                "libwinpthread-1.dll",
+                "libunwind.dll",
+                "libffi-8.dll",
+                "libc++.dll",
+            },
+        )
+        libs = {
+            asset["lib"] for asset in manifest["assets"] if asset["role"] == "import_lib"
+        }
+        self.assertEqual(
+            libs, {"kernel32", "ws2_32", "user32", "gdi32", "secur32", "crypt32"}
+        )
+
+        staged_files = sorted(
+            p.relative_to(output_dir).as_posix()
+            for p in output_dir.rglob("*")
+            if p.is_file()
+        )
+        self.assertEqual(
+            staged_files,
+            sorted(
+                [
+                    "native-link-assets.json",
+                    "bin/ld.lld.exe",
+                    "bin/libLLVM-22.dll",
+                    "bin/libwinpthread-1.dll",
+                    "bin/libunwind.dll",
+                    "bin/libffi-8.dll",
+                    "bin/libc++.dll",
+                    "lib/libkernel32.a",
+                    "lib/libws2_32.a",
+                    "lib/libuser32.a",
+                    "lib/libgdi32.a",
+                    "lib/libsecur32.a",
+                    "lib/libcrypt32.a",
+                    "lib/clang/libclang_rt.builtins-x86_64.a",
+                ]
+            ),
+        )
+
+    def test_linux_stages_only_the_static_linker(self):
+        toolchain_dir = self.scratch / "toolchain-linux"
+        linker = toolchain_dir / "bin" / "x86_64-linux-musl-ld"
+        linker.parent.mkdir(parents=True)
+        linker.write_bytes(b"fake-static-linux-linker")
+
+        manifest_path = self.scratch / "linux-x86_64.json"
+        manifest_path.write_text(
+            rt.json.dumps(
+                {
+                    "schema_version": 1,
+                    "target": "linux-x86_64",
+                    "bundle_kind": "full",
+                    "toolchain": {
+                        "vendor": "musl.cc",
+                        "version": "gcc-11.2.1-binutils-2.37",
+                        "archive": {
+                            "url": "https://example.invalid/musl-cross.tgz",
+                            "type": "tar.gz",
+                            "digest": {
+                                "algorithm": "sha256",
+                                "value": "fake-linux-digest",
+                            },
+                        },
+                    },
+                    "stage": {"root": "toolchain"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        output_dir = self.scratch / "prebuilt-linux"
+
+        manifest = rt.prepare_embed_assets(
+            "linux-x86_64", toolchain_dir, manifest_path, output_dir
+        )
+
+        self.assertEqual(manifest["target"], "linux-x86_64")
+        self.assertEqual(manifest["linker"]["flavor"], "elf")
+        self.assertEqual(manifest["linker"]["emulation"], "elf_x86_64")
+        self.assertEqual(
+            manifest["linker"]["install_subpath"],
+            "linker/x86_64-linux-musl-ld",
+        )
+        self.assertEqual(manifest["assets"], [])
+        self.assertEqual(
+            sorted(
+                p.relative_to(output_dir).as_posix()
+                for p in output_dir.rglob("*")
+                if p.is_file()
+            ),
+            [
+                "linker/x86_64-linux-musl-ld",
+                "native-link-assets.json",
+            ],
+        )
+
+        for entry in [manifest["linker"], *manifest["assets"]]:
+            staged_path = output_dir / entry["install_subpath"]
+            self.assertEqual(staged_path.stat().st_size, entry["size"])
+            self.assertEqual(rt.compute_digest(staged_path, "sha256"), entry["sha256"])
+
+        written_manifest = rt.json.loads(
+            (output_dir / "native-link-assets.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(written_manifest, manifest)
+
+    def test_fails_actionably_when_toolchain_dir_missing(self):
+        with self.assertRaises(SystemExit) as ctx:
+            rt.prepare_embed_assets(
+                "windows-x86_64",
+                self.scratch / "does-not-exist",
+                self.scratch / "windows-x86_64.json",
+                self.scratch / "prebuilt",
+            )
+        self.assertIn("run fetch-toolchain first", str(ctx.exception))
+
+    def test_fails_for_an_unsupported_target(self):
+        toolchain_dir = self.scratch / "toolchain"
+        toolchain_dir.mkdir(parents=True)
+        with self.assertRaises(SystemExit) as ctx:
+            rt.prepare_embed_assets(
+                "macos-x86_64",
+                toolchain_dir,
+                self.scratch / "macos-x86_64.json",
+                self.scratch / "prebuilt",
+            )
+        self.assertIn(
+            "does not know the embedded native-link asset", str(ctx.exception)
+        )
+
+    def test_ambiguous_compiler_builtins_glob_fails_actionably(self):
+        toolchain_dir = self.scratch / "toolchain"
+        self._write_fake_toolchain_dir(toolchain_dir)
+        # A second clang version directory makes the builtins glob ambiguous.
+        extra = (
+            toolchain_dir
+            / "lib"
+            / "clang"
+            / "23"
+            / "lib"
+            / "windows"
+            / "libclang_rt.builtins-x86_64.a"
+        )
+        extra.parent.mkdir(parents=True, exist_ok=True)
+        extra.write_bytes(b"another-fake-builtins")
+        manifest_path = self.scratch / "windows-x86_64.json"
+        self._write_fake_toolchain_manifest(manifest_path)
+
+        with self.assertRaises(SystemExit) as ctx:
+            rt.prepare_embed_assets(
+                "windows-x86_64",
+                toolchain_dir,
+                manifest_path,
+                self.scratch / "prebuilt",
+            )
+        self.assertIn("ambiguous embedded asset source", str(ctx.exception))
 
 
 if __name__ == "__main__":

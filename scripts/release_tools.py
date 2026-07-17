@@ -653,7 +653,12 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
     return manifest, destination
 
 
-def write_install_readme(path: Path, target_spec: dict, asset_name: str) -> None:
+def write_install_readme(
+    path: Path,
+    target_spec: dict,
+    asset_name: str,
+    cross_linker_targets: list[str] | None = None,
+) -> None:
     platform, arch = target_spec["target"].split("-", 1)
     bundle_kind = target_spec["bundle_kind"]
     if platform == "windows":
@@ -671,6 +676,26 @@ def write_install_readme(path: Path, target_spec: dict, asset_name: str) -> None
         if target_spec.get("note_file"):
             extra = f"{extra} See {target_spec['note_file']}."
 
+    cross_linker_note = ""
+    if cross_linker_targets:
+        targets_list = "\n".join(f"  - cross-linkers/{t}/" for t in cross_linker_targets)
+        cross_linker_note = (
+            "\n"
+            "This bundle also includes static cross-linker sidecars for\n"
+            "cross-compiling `--backend native` freestanding executables to\n"
+            "other Linux targets from this host, without needing an external\n"
+            "toolchain. Each target's directory ships both the linker binary\n"
+            "and its matching freestanding runtime archive:\n"
+            f"{targets_list}\n"
+            "To use one, point oscan at both explicitly:\n"
+            "  OSCAN_NATIVE_LINKER=./cross-linkers/<target>/<triple>-ld \\\n"
+            "  OSCAN_NATIVE_LINKER_FLAVOR=elf \\\n"
+            "  OSCAN_RUNTIME_ARCHIVE_DIR=./cross-linkers/<target> \\\n"
+            "  oscan prog.osc --backend native --native-target <target> -o prog\n"
+            f"This binary's own embedded linker only targets {target_spec['target']};\n"
+            "the sidecars are separate opt-in binaries for the other targets listed above.\n"
+        )
+
     text = textwrap.dedent(
         f"""\
         Oscan release asset: {asset_name}
@@ -679,7 +704,9 @@ def write_install_readme(path: Path, target_spec: dict, asset_name: str) -> None
 
         {install_hint}
         {extra}
-
+        """
+    ) + cross_linker_note + textwrap.dedent(
+        """
         GitHub Releases are the canonical install surface for phase 1 bundles.
         """
     )
@@ -875,6 +902,36 @@ def validate_runtime_archive_release_toolchain(
             "does not match the pinned release manifest"
         )
 
+    # Schema 2 archives must carry the precompiled native shim (§3.2 of
+    # docs/design/native-link-embedding.md); the freestanding native backend
+    # no longer compiles osc_native_shim.c locally, so a schema-2 archive
+    # that is missing the shim member would silently break that contract.
+    if manifest.get("schema_version") == 2:
+        if manifest.get("contains_native_shim") is not True:
+            fail(
+                f"native runtime manifest {manifest_path} is schema_version 2 but "
+                "contains_native_shim is not true; rebuild it with "
+                "'scripts/build-runtime-archive.ps1|.sh' from the current "
+                "runtime-archive-contract.json"
+            )
+        if manifest.get("native_shim_member") != "osc_native_shim.o":
+            fail(
+                f"native runtime manifest {manifest_path} is schema_version 2 but "
+                f"native_shim_member is {manifest.get('native_shim_member')!r}, "
+                "expected 'osc_native_shim.o'"
+            )
+
+    if (
+        target in ("linux-x86_64", "linux-aarch64", "linux-riscv64")
+        and manifest.get("mode") in {"freestanding", "freestanding_core"}
+        and manifest.get("embedded_bearssl") is not True
+    ):
+        fail(
+            f"native runtime manifest {manifest_path} does not embed BearSSL; "
+            f"Linux release freestanding archives for {target} must be built with "
+            f"packaging/prebuilt/{target}/libbearssl.a present"
+        )
+
 
 def stage_native_runtime_assets(
     contract: dict,
@@ -974,10 +1031,26 @@ def stage_release(args: argparse.Namespace) -> int:
     if platform != "windows":
         install_destination.chmod(0o755)
 
+    cross_linker_targets: list[str] = []
+    if args.cross_linker_sidecar_dir:
+        sidecar_source = Path(args.cross_linker_sidecar_dir).resolve()
+        if sidecar_source.is_dir():
+            cross_linkers_dest = bundle_dir / "cross-linkers"
+            for child in sorted(sidecar_source.iterdir(), key=lambda item: item.name):
+                if not child.is_dir():
+                    continue
+                copy_path(child, cross_linkers_dest / child.name)
+                if platform != "windows":
+                    for linker_bin in (cross_linkers_dest / child.name).iterdir():
+                        if linker_bin.is_file():
+                            linker_bin.chmod(0o755)
+                cross_linker_targets.append(child.name)
+
     write_install_readme(
         bundle_dir / "README-install.txt",
         target_spec,
         archive_name,
+        cross_linker_targets=cross_linker_targets,
     )
 
     runtime_archive_dir = (
@@ -1073,7 +1146,13 @@ def write_checksums(args: argparse.Namespace) -> int:
 
 def load_runtime_archive_contract(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema_version") != 1:
+    # Schema 1: no precompiled native shim member. Schema 2 (current): every
+    # mode's "sources" includes "osc_native_shim.c" and sets
+    # "contains_native_shim": true (see docs/design/native-link-embedding.md
+    # §3.1). Both are accepted here; build_runtime_archive derives
+    # contains_native_shim per mode from "sources" rather than trusting a
+    # stale top-level version number.
+    if data.get("schema_version") not in (1, 2):
         fail(f"unsupported runtime archive contract schema in {path}")
     for key in ("modes", "targets"):
         if key not in data:
@@ -1157,6 +1236,10 @@ def _cc_candidates_for_target(target: str, host_target: str | None) -> list[str]
     candidates: list[str] = []
     if target == "linux-x86_64":
         candidates.append("x86_64-linux-musl-gcc")
+    elif target == "linux-aarch64":
+        candidates.append("aarch64-linux-musl-gcc")
+    elif target == "linux-riscv64":
+        candidates.append("riscv64-linux-musl-gcc")
     elif target == "windows-x86_64":
         # llvm-mingw (the bundled Windows toolchain) ships a bare clang.exe
         # driven by its own default target triple; some standalone MinGW-w64
@@ -1336,6 +1419,31 @@ def _archiver_family(ar: str) -> str:
     return "llvm-ar" if "llvm-ar" in name else "gnu-ar"
 
 
+def _canonicalize_tool_path(tool: str) -> str:
+    """Resolve a compiler/archiver/linker reference to a canonical absolute path.
+
+    `tool` may be a bare command name discovered on PATH (e.g. "clang"), a
+    relative path, or an already-absolute path. Recording any of the first
+    two forms verbatim in a runtime archive manifest is ambiguous at best and
+    spoofable at worst (a relative path canonicalized against the wrong CWD
+    could silently point at an attacker-planted binary in some other
+    directory). To avoid that: bare/relative inputs are first located via
+    shutil.which(), which searches the real PATH, and the result — or the
+    original input if it was already absolute — is then canonicalized with
+    Path.resolve(), which follows symlinks and normalizes '.'/'..'
+    components. This makes the manifest's recorded path unambiguous
+    provenance; it does not by itself make that path *trusted* for
+    execution — the Rust-side reader independently validates that against a
+    known trusted toolchain root before ever running it.
+    """
+    path = Path(tool)
+    if not path.is_absolute():
+        found = shutil.which(tool)
+        if found:
+            path = Path(found)
+    return str(path.resolve())
+
+
 def _toolchain_root_from_tool(tool: str, relative_path: str) -> Path:
     tool_path = Path(tool).resolve()
     relative = safe_relative_path(relative_path)
@@ -1385,7 +1493,14 @@ def _runtime_toolchain_provenance(
         "archiver": archiver,
         "linker": {
             "command": None,
-            "family": "lld" if compiler["family"] == "clang" else "gnu-ld",
+            # Clang only implies LLD for the pinned Windows llvm-mingw
+            # toolchain. On Linux, ordinary host Clang defaults to GNU ld
+            # unless explicitly configured otherwise.
+            "family": (
+                "lld"
+                if target.startswith("windows-") and compiler["family"] == "clang"
+                else "gnu-ld"
+            ),
             "version": "unknown",
             "driver_flags": (
                 ["-fuse-ld=lld"]
@@ -1814,6 +1929,12 @@ def build_runtime_archive(args: argparse.Namespace) -> int:
 
     cc = args.cc or default_cc_for_target(target)
     ar = args.ar or default_ar_for(cc)
+    # Canonicalize before anything gets recorded in the manifest: cc/ar may
+    # still be bare PATH-discovered names or relative paths at this point
+    # (see _canonicalize_tool_path), and only their resolved absolute form
+    # is safe, unambiguous provenance to write down.
+    cc = _canonicalize_tool_path(cc)
+    ar = _canonicalize_tool_path(ar)
     compiler_args, cc_target, configured_sysroot = resolve_compiler_configuration(
         target,
         cc,
@@ -1899,12 +2020,25 @@ def build_runtime_archive(args: argparse.Namespace) -> int:
         remove_path(staged_archive)
         run_tool([ar, "rcs", str(staged_archive)] + [str(p) for p in object_paths])
 
+        # Native shim (§3.2 of docs/design/native-link-embedding.md): derived
+        # from "sources" rather than trusted blindly, so a manifest never
+        # claims contains_native_shim when the shim wasn't actually one of
+        # the compiled translation units. The ar member name is the source
+        # stem + ".o", matching the compile loop above exactly.
+        native_shim_source = "osc_native_shim.c"
+        contains_native_shim = native_shim_source in mode_spec["sources"]
+        native_shim_member = (
+            Path(native_shim_source).stem + ".o" if contains_native_shim else None
+        )
+
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "target": target,
             "mode": mode,
             "requires_libc": mode_spec["requires_libc"],
             "sources": mode_spec["sources"],
+            "contains_native_shim": contains_native_shim,
+            "native_shim_member": native_shim_member,
             "cc": cc,
             "cc_args": compiler_args,
             "cc_target": cc_target,
@@ -1944,6 +2078,343 @@ def build_runtime_archive(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Embedded native-link asset staging (docs/design/native-link-embedding.md §5.4)
+#
+# Copies exactly the ~85.4 MB minimal linker/linker-runtime/import-lib/
+# compiler-builtins set out of an already-fetched, pinned toolchain directory
+# into packaging/prebuilt/<target>/, and writes the native-link-assets.json
+# manifest that build.rs (OSCAN_EMBED_ASSETS_DIR) reads at compiler build
+# time. Field names in the emitted manifest are a strict ABI shared with
+# Bishop's Rust reader (native_assets.rs) — see design §4.2/§8.3; do not
+# rename without updating both sides.
+# ---------------------------------------------------------------------------
+
+# Windows x86-64 asset set (design §4.1): the linker plus the six optional
+# Win32 import libraries LLD must see while resolving undefined imports in
+# dead runtime-archive sections, plus compiler-builtins for the intrinsics
+# clang's freestanding codegen may emit. Only these files are ever copied —
+# never a whole directory.
+_WINDOWS_X86_64_EMBED_LINKER = {
+    "role": "linker",
+    "name": "ld.lld.exe",
+    "source": "bin/ld.lld.exe",
+    "install_subpath": "bin/ld.lld.exe",
+    "flavor": "mingw",
+    "emulation": "i386pep",
+}
+
+# ld.lld.exe is NOT statically linked: it needs these 5 sibling DLLs present
+# in the exact same install directory (Windows resolves a loaded EXE's DLL
+# imports by searching the directory containing the EXE first — that's the
+# whole fix, no PATH manipulation). Confirmed by a real manual link of
+# hello.osc reproducing the exact working executable with this set.
+# libclang-cpp.dll is deliberately NOT included: it's only needed by
+# clang.exe/clang++.exe, not by ld.lld.exe, and is not part of this embed set.
+_WINDOWS_X86_64_EMBED_LINKER_RUNTIME = [
+    {
+        "name": "libLLVM-22.dll",
+        "source": "bin/libLLVM-22.dll",
+        "install_subpath": "bin/libLLVM-22.dll",
+    },
+    {
+        "name": "libwinpthread-1.dll",
+        "source": "bin/libwinpthread-1.dll",
+        "install_subpath": "bin/libwinpthread-1.dll",
+    },
+    {
+        "name": "libunwind.dll",
+        "source": "bin/libunwind.dll",
+        "install_subpath": "bin/libunwind.dll",
+    },
+    {
+        "name": "libffi-8.dll",
+        "source": "bin/libffi-8.dll",
+        "install_subpath": "bin/libffi-8.dll",
+    },
+    {
+        "name": "libc++.dll",
+        "source": "bin/libc++.dll",
+        "install_subpath": "bin/libc++.dll",
+    },
+]
+
+_WINDOWS_X86_64_EMBED_IMPORT_LIBS = [
+    {
+        "lib": "kernel32",
+        "name": "libkernel32.a",
+        "source": "x86_64-w64-mingw32/lib/libkernel32.a",
+        "install_subpath": "lib/libkernel32.a",
+    },
+    {
+        "lib": "ws2_32",
+        "name": "libws2_32.a",
+        "source": "x86_64-w64-mingw32/lib/libws2_32.a",
+        "install_subpath": "lib/libws2_32.a",
+    },
+    {
+        "lib": "user32",
+        "name": "libuser32.a",
+        "source": "x86_64-w64-mingw32/lib/libuser32.a",
+        "install_subpath": "lib/libuser32.a",
+    },
+    {
+        "lib": "gdi32",
+        "name": "libgdi32.a",
+        "source": "x86_64-w64-mingw32/lib/libgdi32.a",
+        "install_subpath": "lib/libgdi32.a",
+    },
+    {
+        "lib": "secur32",
+        "name": "libsecur32.a",
+        "source": "x86_64-w64-mingw32/lib/libsecur32.a",
+        "install_subpath": "lib/libsecur32.a",
+    },
+    {
+        "lib": "crypt32",
+        "name": "libcrypt32.a",
+        "source": "x86_64-w64-mingw32/lib/libcrypt32.a",
+        "install_subpath": "lib/libcrypt32.a",
+    },
+]
+
+# NOT lib/clang/*/lib/linux/... (wrong target). The clang resource-dir
+# version component (e.g. "22") tracks the pinned toolchain's clang major
+# version, so it is resolved with a glob against the toolchain dir rather
+# than hardcoded, and the tool fails loudly if that resolves to anything
+# other than exactly one file.
+_WINDOWS_X86_64_EMBED_BUILTINS = {
+    "role": "compiler_builtins",
+    "name": "libclang_rt.builtins-x86_64.a",
+    "source_glob": "lib/clang/*/lib/windows/libclang_rt.builtins-x86_64.a",
+    "install_subpath": "lib/clang/libclang_rt.builtins-x86_64.a",
+}
+
+EMBED_ASSET_SPECS = {
+    "windows-x86_64": {
+        "linker": _WINDOWS_X86_64_EMBED_LINKER,
+        "linker_runtime": _WINDOWS_X86_64_EMBED_LINKER_RUNTIME,
+        "import_libs": _WINDOWS_X86_64_EMBED_IMPORT_LIBS,
+        "compiler_builtins": _WINDOWS_X86_64_EMBED_BUILTINS,
+    },
+    "linux-x86_64": {
+        "linker": {
+            "role": "linker",
+            "name": "x86_64-linux-musl-ld",
+            "source": "bin/x86_64-linux-musl-ld",
+            "install_subpath": "linker/x86_64-linux-musl-ld",
+            "flavor": "elf",
+            "emulation": "elf_x86_64",
+        },
+        "linker_runtime": [],
+        "import_libs": [],
+    },
+    "linux-aarch64": {
+        "linker": {
+            "role": "linker",
+            "name": "aarch64-linux-musl-ld",
+            "source": "bin/aarch64-linux-musl-ld",
+            "install_subpath": "linker/aarch64-linux-musl-ld",
+            "flavor": "elf",
+            "emulation": "aarch64linux",
+        },
+        "linker_runtime": [],
+        "import_libs": [],
+    },
+    "linux-riscv64": {
+        "linker": {
+            "role": "linker",
+            "name": "riscv64-linux-musl-ld",
+            "source": "bin/riscv64-linux-musl-ld",
+            "install_subpath": "linker/riscv64-linux-musl-ld",
+            "flavor": "elf",
+            "emulation": "elf64lriscv",
+        },
+        "linker_runtime": [],
+        "import_libs": [],
+    },
+}
+
+
+def _resolve_embed_asset_source(toolchain_dir: Path, spec: dict) -> Path:
+    if "source" in spec:
+        path = toolchain_dir / safe_relative_path(spec["source"])
+        if not path.is_file():
+            fail(
+                f"embedded asset source not found in toolchain dir {toolchain_dir}: "
+                f"{spec['source']} (needed for '{spec['name']}')"
+            )
+        return path
+
+    glob_pattern = spec["source_glob"]
+    matches = sorted(p for p in toolchain_dir.glob(glob_pattern) if p.is_file())
+    if not matches:
+        fail(
+            f"no file under toolchain dir {toolchain_dir} matches '{glob_pattern}' "
+            f"(needed for '{spec['name']}')"
+        )
+    if len(matches) > 1:
+        fail(
+            f"ambiguous embedded asset source: multiple files under {toolchain_dir} "
+            f"match '{glob_pattern}': {', '.join(str(m) for m in matches)}"
+        )
+    return matches[0]
+
+
+def _stage_embed_asset(toolchain_dir: Path, output_dir: Path, spec: dict) -> dict:
+    source_path = _resolve_embed_asset_source(toolchain_dir, spec)
+    install_subpath = safe_relative_path(spec["install_subpath"])
+    dest_path = output_dir / install_subpath
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    remove_path(dest_path)
+    shutil.copy2(source_path, dest_path)
+    return {
+        "path": dest_path,
+        "size": dest_path.stat().st_size,
+        "sha256": compute_digest(dest_path, "sha256"),
+    }
+
+
+def prepare_embed_assets(
+    target: str,
+    toolchain_dir: Path,
+    toolchain_manifest_path: Path,
+    output_dir: Path,
+) -> dict:
+    """Stage the embedded native-link asset set + native-link-assets.json.
+
+    No network access: the toolchain must already be fetched (fetch_toolchain)
+    to `toolchain_dir`. Returns the manifest dict that was written.
+    """
+    asset_spec = EMBED_ASSET_SPECS.get(target)
+    if asset_spec is None:
+        fail(
+            f"prepare-embed-assets does not know the embedded native-link asset "
+            f"set for target '{target}' (supported: "
+            f"{', '.join(sorted(EMBED_ASSET_SPECS))}); see "
+            "docs/design/native-link-embedding.md §1.1 for current scope"
+        )
+    if not toolchain_dir.is_dir():
+        fail(
+            f"toolchain directory not found: {toolchain_dir}\n"
+            f"run fetch-toolchain first, e.g.:\n"
+            f"  scripts/fetch-toolchain.ps1|.sh --manifest {toolchain_manifest_path} "
+            f"--destination {toolchain_dir}"
+        )
+    if not toolchain_manifest_path.is_file():
+        fail(f"toolchain manifest not found: {toolchain_manifest_path}")
+
+    manifest = load_manifest(toolchain_manifest_path)
+    if manifest["target"] != target:
+        fail(
+            f"toolchain manifest {toolchain_manifest_path} identifies target "
+            f"'{manifest['target']}', expected '{target}'"
+        )
+    toolchain_info = manifest["toolchain"]
+    archive_digest = toolchain_info.get("archive", {}).get("digest")
+    if not isinstance(archive_digest, dict):
+        fail(
+            f"toolchain manifest {toolchain_manifest_path} has no "
+            "toolchain.archive.digest"
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    linker_staged = _stage_embed_asset(toolchain_dir, output_dir, asset_spec["linker"])
+    linker_entry = {
+        "role": "linker",
+        "name": asset_spec["linker"]["name"],
+        "install_subpath": asset_spec["linker"]["install_subpath"],
+        "flavor": asset_spec["linker"]["flavor"],
+        "emulation": asset_spec["linker"]["emulation"],
+        "size": linker_staged["size"],
+        "sha256": linker_staged["sha256"],
+    }
+
+    assets_entries = []
+    for runtime_spec in asset_spec["linker_runtime"]:
+        staged = _stage_embed_asset(toolchain_dir, output_dir, runtime_spec)
+        assets_entries.append(
+            {
+                "role": "linker_runtime",
+                "name": runtime_spec["name"],
+                "install_subpath": runtime_spec["install_subpath"],
+                "size": staged["size"],
+                "sha256": staged["sha256"],
+            }
+        )
+
+    for lib_spec in asset_spec["import_libs"]:
+        staged = _stage_embed_asset(toolchain_dir, output_dir, lib_spec)
+        assets_entries.append(
+            {
+                "role": "import_lib",
+                "name": lib_spec["name"],
+                "lib": lib_spec["lib"],
+                "install_subpath": lib_spec["install_subpath"],
+                "size": staged["size"],
+                "sha256": staged["sha256"],
+            }
+        )
+
+    # compiler_builtins is optional — Linux freestanding has none (the musl
+    # toolchain supplies what intrinsics are needed via static linking), while
+    # Windows needs explicit clang_rt.builtins-x86_64.a.
+    builtins_spec = asset_spec.get("compiler_builtins")
+    if builtins_spec is not None:
+        builtins_staged = _stage_embed_asset(toolchain_dir, output_dir, builtins_spec)
+        assets_entries.append(
+            {
+                "role": "compiler_builtins",
+                "name": builtins_spec["name"],
+                "install_subpath": builtins_spec["install_subpath"],
+                "size": builtins_staged["size"],
+                "sha256": builtins_staged["sha256"],
+            }
+        )
+
+    out_manifest = {
+        "schema_version": 1,
+        "target": target,
+        "toolchain": {
+            "vendor": toolchain_info["vendor"],
+            "version": toolchain_info["version"],
+            "archive_digest": {
+                "algorithm": archive_digest["algorithm"],
+                "value": archive_digest["value"],
+            },
+        },
+        "linker": linker_entry,
+        "assets": assets_entries,
+    }
+
+    manifest_path = output_dir / "native-link-assets.json"
+    manifest_path.write_text(
+        json.dumps(out_manifest, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return out_manifest
+
+
+def prepare_embed_assets_command(args: argparse.Namespace) -> int:
+    target = args.target
+    toolchain_dir = Path(args.toolchain_dir).resolve()
+    toolchain_manifest_path = (
+        Path(args.toolchain_manifest).resolve()
+        if args.toolchain_manifest
+        else REPO_ROOT / "packaging" / "toolchains" / f"{target}.json"
+    )
+    output_dir = (
+        Path(args.output_dir).resolve()
+        if args.output_dir
+        else REPO_ROOT / "packaging" / "prebuilt" / target
+    )
+    prepare_embed_assets(target, toolchain_dir, toolchain_manifest_path, output_dir)
+    print(str(output_dir / "native-link-assets.json"))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Oscan release asset helpers")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1964,6 +2435,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime-archive-dir",
         default=None,
         help="directory containing the target's prebuilt runtime archive/manifest pairs",
+    )
+    stage.add_argument(
+        "--cross-linker-sidecar-dir",
+        default=None,
+        help="directory of per-target cross-linker sidecar subdirs (e.g. build/cross-linker-sidecars) to bundle as cross-linkers/<target>/ in the release archive",
     )
     stage.set_defaults(func=stage_release)
 
@@ -2002,6 +2478,32 @@ def build_parser() -> argparse.ArgumentParser:
     runtime_archive.add_argument("--contract", default=str(RUNTIME_ARCHIVE_CONTRACT_PATH))
     runtime_archive.add_argument("--keep-objects", action="store_true", help="keep intermediate .o files for inspection")
     runtime_archive.set_defaults(func=build_runtime_archive)
+
+    prepare_embed = subparsers.add_parser(
+        "prepare-embed-assets",
+        help=(
+            "stage the embedded native-link asset set (linker/linker-runtime "
+            "DLLs/import libs/compiler-builtins) + native-link-assets.json for "
+            "OSCAN_EMBED_ASSETS_DIR"
+        ),
+    )
+    prepare_embed.add_argument("--target", required=True, help="e.g. windows-x86_64")
+    prepare_embed.add_argument(
+        "--toolchain-dir",
+        required=True,
+        help="already-fetched pinned toolchain directory (see fetch-toolchain)",
+    )
+    prepare_embed.add_argument(
+        "--toolchain-manifest",
+        default=None,
+        help="toolchain manifest (defaults to packaging/toolchains/<target>.json)",
+    )
+    prepare_embed.add_argument(
+        "--output-dir",
+        default=None,
+        help="staging output directory (defaults to packaging/prebuilt/<target>)",
+    )
+    prepare_embed.set_defaults(func=prepare_embed_assets_command)
 
     return parser
 

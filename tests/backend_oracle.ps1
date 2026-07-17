@@ -33,31 +33,6 @@ function Normalize-OracleText {
     return $Text.Replace("`r`n", "`n").Replace("`r", "`n").TrimEnd("`n")
 }
 
-function Resolve-OracleBackendSelection {
-    param(
-        [Parameter(Mandatory = $true)][string]$Backend,
-        [Parameter(Mandatory = $true)][string]$BackendOption
-    )
-
-    # PowerShell treats GNU-style "--backend native" as two positional values:
-    # Backend="--backend", BackendOption="native". Normalize that common spelling
-    # while preserving the native PowerShell "-Backend native" form.
-    if ($Backend -eq "--backend") {
-        if ($BackendOption -eq "--backend") {
-            throw "--backend requires a backend name"
-        }
-        return [PSCustomObject]@{
-            Backend = $BackendOption
-            BackendOption = "--backend"
-        }
-    }
-
-    return [PSCustomObject]@{
-        Backend = $Backend
-        BackendOption = $BackendOption
-    }
-}
-
 # Compares normalized actual stdout against a primary expected file, falling
 # back to an optional secondary ("libc"-style, reduced-capability) expected
 # file when the primary doesn't match. A handful of builtins are legitimately
@@ -225,7 +200,8 @@ function Invoke-OracleBackendCase {
         [string]$ExpectedFixtureRoot,
         [string[]]$CompileArguments = @(),
         [string]$BackendOption = "--backend",
-        [switch]$ExplicitBackend
+        [switch]$ExplicitBackend,
+        [bool]$CompareExpectedStdout = $true
     )
 
     $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
@@ -245,7 +221,11 @@ function Invoke-OracleBackendCase {
     }
 
     $backendTag = ConvertTo-OracleBackendTag $Backend
-    $artifact = Join-Path $buildPath "$Name.$backendTag$(Get-OracleExecutableSuffix)"
+    # Never let a backend tag become the artifact's semantic extension:
+    # on Unix, "$Name.c" tells Oscan to emit C source instead of an
+    # executable. Keep the tag in the stem and reserve only the platform
+    # executable suffix for the extension.
+    $artifact = Join-Path $buildPath "$Name.backend-$backendTag$(Get-OracleExecutableSuffix)"
     $arguments = @($CompileArguments)
     if ($ExplicitBackend) {
         $arguments += @($BackendOption, $Backend)
@@ -291,12 +271,14 @@ function Invoke-OracleBackendCase {
         $failures.Add("$Backend exit mismatch (expected $expectedExit, got $($run.ExitCode))")
     }
 
-    if (-not (Test-Path -LiteralPath $ExpectedFile -PathType Leaf)) {
-        $failures.Add("missing expected stdout file '$ExpectedFile'")
-    } else {
-        $expectedStdout = Normalize-OracleText (Get-Content -LiteralPath $ExpectedFile -Raw)
-        if ($run.Stdout -ne $expectedStdout) {
-            $failures.Add("$Backend stdout differs from expected output")
+    if ($CompareExpectedStdout) {
+        if (-not (Test-Path -LiteralPath $ExpectedFile -PathType Leaf)) {
+            $failures.Add("missing expected stdout file '$ExpectedFile'")
+        } else {
+            $expectedStdout = Normalize-OracleText (Get-Content -LiteralPath $ExpectedFile -Raw)
+            if ($run.Stdout -ne $expectedStdout) {
+                $failures.Add("$Backend stdout differs from expected output")
+            }
         }
     }
 
@@ -340,7 +322,8 @@ function Invoke-DifferentialBackendTest {
         [string]$ExpectedFixtureRoot,
         [string[]]$CompileArguments = @(),
         [string]$BackendOption = "--backend",
-        [bool]$CompareStderr = $true
+        [bool]$CompareStderr = $true,
+        [bool]$CompareExpectedStdout = $true
     )
 
     if ($Backend -eq "c") {
@@ -352,6 +335,7 @@ function Invoke-DifferentialBackendTest {
         ExpectedStderrFile = $ExpectedStderrFile; ExpectedExitFile = $ExpectedExitFile
         FixtureRoot = $FixtureRoot; ExpectedFixtureRoot = $ExpectedFixtureRoot
         CompileArguments = $CompileArguments; BackendOption = $BackendOption
+        CompareExpectedStdout = $CompareExpectedStdout
         ExplicitBackend = $true
     }
     $oracle = Invoke-OracleBackendCase @common -Backend "c" -RunRoot (Join-Path $RunRoot "c")

@@ -72,6 +72,7 @@ mod ctx;
 mod func;
 mod layout;
 pub mod link;
+pub mod native_assets;
 pub mod target;
 
 use cranelift_codegen::ir::{AbiParam, InstBuilder, UserFuncName};

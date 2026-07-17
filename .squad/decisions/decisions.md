@@ -268,6 +268,98 @@ Users can now directly jump to example files via GitHub/static sites.
 
 ---
 
+## Security Review Remediation — Native Link Embedding, 4 HIGH Findings (2026-07-14)
+
+### Decision: Security Findings Remediation & Validation (Bishop, Hicks, Vasquez, Security Review)
+
+**Date:** 2026-07-14
+**Status:** IMPLEMENTED
+**Findings:** 4 HIGH + Windows DLL hardening
+
+#### Context
+
+Security review of native-link-embedding work identified 4 HIGH findings:
+1. CWD/ancestor script execution via `archive.rs`
+2. Untrusted manifest `cc` execution + toolchain-dir CWD fallback
+3. Predictable `oscan_native_<pid>` temp directory
+4. Cache verification gaps (length-only memoization, no symlink rejection, weak permissions)
+
+#### Findings & Remediation
+
+**Finding 1 — CWD/ancestor script execution (Bishop, archive.rs):**
+- Rewrote `find_release_tools_script()` to eliminate `repo_root_candidates()` walk
+- Exactly 2 trusted sources: explicit `OSCAN_RUNTIME_BUILDER` (hard error if invalid) or `CARGO_MANIFEST_DIR/scripts/release_tools.py` (dev builds only)
+- Embedded/release builds return `Ok(None)` — fails closed, no silent fallback
+- 4 new regression tests; verified CWD-planted `release_tools.py` never executed
+
+**Finding 2 — Untrusted manifest cc (Bishop Rust + Hicks Python):**
+- Bishop: Added `trusted_manifest_cc()` — validates absolute, canonicalized paths inside known trusted roots (toolchain dir or `CARGO_MANIFEST_DIR`)
+- Hicks: Added `_canonicalize_tool_path()` in Python — every `--cc`/`--ar` resolved via `shutil.which()` then `Path.resolve()` before manifest write
+- Independent, complementary fixes; verified end-to-end (both linker flavors produce working executables)
+- 4 Rust + 3 Python new tests
+
+**Finding 3 — Predictable temp dir (Bishop, main.rs):**
+- Added `tempfile = "3"` dependency
+- New `create_native_scratch_dir()` with randomized `oscan_native_` prefix
+- Verified `--verbose` output shows random suffix (e.g., `oscan_native_DUpKsY`), not PID
+- Concurrency test: 8 parallel jobs all succeeded with unique temp names
+- 4 new tests
+
+**Finding 4 — Cache hardening (Bishop, native_assets.rs):**
+- 4a: Removed `verified_cache()` memoization entirely; `verify_existing()` re-hashes every call (catches same-length content swaps)
+- 4b: Symlink rejection via `fs::symlink_metadata` on cache root, set directory, all asset destinations; new `create_dir_all_no_symlinks()` walks component-by-component
+- 4c: Unix `0o700` perms on cache root + set dir; Windows elevation detection via `windows-sys`, non-elevated=shared cache, elevated=fresh single-use temp dir
+- 4d: Module-doc disclosure of same-user TOCTOU boundary
+- 8+ new tests including same-length corruption re-proof
+
+**Windows DLL-search hardening (Bishop, execute.rs):**
+- `MingwDirect` child process: `current_dir` + `PATH` set to linker's bin directory
+- Fixed relative `-o` path regression by absolutizing `exe_path` at top of `link_executable` (before plan render)
+- Verified end-to-end; `MingwDirect` output byte-exact 6,656 B
+
+**Test-race follow-up (Bishop):**
+- Found unguarded `env::set_var`/`remove_var` race in 2 of 4 `OSCAN_RUNTIME_BUILDER` tests (only 2 acquired `CWD_TEST_LOCK`)
+- Introduced `RUNTIME_BUILDER_ENV_TEST_LOCK`, updated all 4 tests to acquire it
+- Verified: 5 full runs + 15 module runs + 10×8-thread stress = 30 consecutive clean passes
+
+#### Validation
+
+**Vasquez (black-box):** 10-item checklist all PASS
+- True isolation: external toolchain removed, PATH scrubbed, 6,656 B self-contained executable produced
+- Each finding independently proven closed via adversarial probes
+- Full oracle: 99 positive + 35 negative + 96 freestanding tests — PASS
+- Back-compat: legacy env vars (`OSCAN_RUNTIME_ARCHIVE_DIR`, `OSCAN_NATIVE_LINKER`, `OSCAN_NATIVE_LINKER_FLAVOR`) all honored
+
+**Security Review:** Independent re-assessment
+- Confidence 9/10 per finding (high-confidence black-box proof)
+- All 4 findings RESOLVED
+- No new HIGH-confidence issues found
+- Adjacent vector (CWD bare "python" execution) empirically ruled out
+- 1 already-disclosed lower-severity residual: CWD fallback for data-file location (not executed, deliberately scoped)
+
+#### Metrics
+
+- **Rust:** 161 unit + 2 integration tests; +16 security-fix + 1 race-fix = 18 new; all passing, no regressions
+- **Python:** 48/48 tests passing (45 pre-existing + 3 new canonicalization tests)
+- **End-to-end:** Both `CompilerDriver` (dev) and `MingwDirect` (release/embedded) produced working, byte-exact executables
+- **Concurrency:** 8 parallel jobs converged to single shared cache, unique temp dirs, zero collisions
+
+#### Impact
+
+- All 4 HIGH findings closed
+- No silent fallback behavior — hardened failures with clear diagnostics
+- Embedded native-linker feature remains production-ready
+- Windows freestanding self-contained linking fully validated
+- Code ready for security-focused release or hotfix merge
+
+#### Deviations (Documented, Out of Scope)
+
+1. `find_runtime_source_dir()` CWD fallback for data-file location (not executed)
+2. `unique_temp_dir_name()` C-backend temp dir (already PID+nanos+counter entropy)
+3. Windows elevated-cache single-use dir (best-effort unpredictability vs custom ACL)
+
+---
+
 ## Team Directives
 
 ### User Directive (2026-04-01T09:33:48Z)
@@ -280,4 +372,4 @@ Users can now directly jump to example files via GitHub/static sites.
 
 All major architectural and implementation decisions for Oscan v0.1–v0.2 are documented above. This file serves as the authoritative decision log for the project.
 
-Last decision entry: 2026-04-01T09:37:38Z (README example links, doc sync, spec expansion complete)
+Last decision entry: 2026-07-14T21:42:00Z (Security review remediation: 4 HIGH findings resolved + validated)

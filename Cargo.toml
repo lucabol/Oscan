@@ -16,4 +16,27 @@ cranelift-module = "0.133.1"
 cranelift-object = "0.133.1"
 object = "0.39.1"
 serde_json = "1.0"
+sha2 = "0.10"
 target-lexicon = "0.13.5"
+# Finding 3 (security review): atomic, cryptographically-random-suffixed
+# scratch-directory creation for the native backend, replacing a
+# predictable `oscan_native_<pid>` path under the (often world-writable)
+# system temp dir.
+tempfile = "3"
+
+# Finding 4c (security review): Windows-only process-elevation detection
+# (`OpenProcessToken`/`GetTokenInformation`) so the native-asset cache
+# never trusts/reuses the standard per-user cache directory when this
+# process is running elevated (see `src/backend/native_assets.rs`).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
+
+[build-dependencies]
+# build.rs verifies embedded native-link asset checksums at compiler build
+# time (docs/design/native-link-embedding.md §5.2) using the same crate
+# `src/backend/native_assets.rs` uses at runtime.
+sha2 = "0.10"

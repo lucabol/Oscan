@@ -11,7 +11,21 @@ param(
 
     [string]$OutputDir,
 
-    [string]$ContractPath
+    [string]$ContractPath,
+
+    # Reuse runtime archives already built earlier in the pipeline (e.g. the
+    # release workflow's "build runtime archives with the shim baked in"
+    # step, run before `cargo build --release` per
+    # docs/design/native-link-embedding.md §5.5) instead of re-fetching the
+    # toolchain and rebuilding them here.
+    [string]$PrebuiltRuntimeArchiveDir,
+
+    # Directory of per-target cross-linker sidecar subdirs (e.g.
+    # build/cross-linker-sidecars, produced by the release workflow's
+    # "Prepare cross-linker sidecars for packaging" step per
+    # docs/design/native-link-embedding.md §11.1/§13.5) to bundle as
+    # cross-linkers/<target>/ inside this archive.
+    [string]$CrossLinkerSidecarDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -52,7 +66,14 @@ $targetSpec = if ($contract["bundled_targets"].ContainsKey($Target)) {
 $runtimeBuildToolchain = $null
 $runtimeArchiveDir = $null
 $nativeModes = @($targetSpec["native_runtime_modes"])
-if ($nativeModes.Count -gt 0) {
+if ($PrebuiltRuntimeArchiveDir) {
+    # Reuse archives an earlier pipeline step already built (with the native
+    # shim baked in) instead of re-fetching the toolchain and rebuilding here.
+    if (-not (Test-Path -LiteralPath $PrebuiltRuntimeArchiveDir)) {
+        throw "PrebuiltRuntimeArchiveDir '$PrebuiltRuntimeArchiveDir' does not exist."
+    }
+    $runtimeArchiveDir = $PrebuiltRuntimeArchiveDir
+} elseif ($nativeModes.Count -gt 0) {
     # "all" builds every mode the runtime-archive contract knows about in one
     # pass (see release_tools.py's build_runtime_archive); only fall back to
     # naming a single mode when there is exactly one to build, so this keeps
@@ -102,6 +123,9 @@ $stageArgs = @{
 }
 if ($runtimeArchiveDir) {
     $stageArgs["RuntimeArchiveDir"] = $runtimeArchiveDir
+}
+if ($CrossLinkerSidecarDir) {
+    $stageArgs["CrossLinkerSidecarDir"] = $CrossLinkerSidecarDir
 }
 $result = & (Join-Path $PSScriptRoot "stage-release.ps1") @stageArgs
 $stageExitCode = $LASTEXITCODE

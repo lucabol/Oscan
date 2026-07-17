@@ -43,6 +43,18 @@ $nativeRuntimeModes = @($targetSpec["native_runtime_modes"])
 $nativeSmokeMode = [string]$targetSpec["native_smoke_mode"]
 $expectedCompilerSource = if ($expectsBundled) { "bundled" } else { "host" }
 
+# docs/design/native-link-embedding.md: Windows and Linux x86-64 freestanding
+# native links embed their own linker and skip the bundled toolchain sidecar
+# entirely; hosted (--libc) native links always use the compiler driver (design
+# §7.1 and §10.11), even on Windows/Linux.
+$expectedNativeLinkSource = if ($expectsBundled -and ($platform -eq "windows" -or $platform -eq "linux") -and $nativeSmokeMode -eq "freestanding") {
+    "embedded"
+} elseif ($expectsBundled) {
+    "bundled"
+} else {
+    $null
+}
+
 # Every bundled target (Windows, Linux) ships its own relocatable compiler
 # under toolchain/, so a packaged bundle must never need a host C compiler.
 # find_bundled_c_compiler_in_dir() walks the toolchain directory directly
@@ -64,7 +76,7 @@ function New-NoHostCompilerPathPrefix {
             Set-Content -Path (Join-Path $blockDir "$name.cmd") -Encoding ASCII -Value "@echo off`r`nexit /b 127"
         }
     } else {
-        foreach ($name in @("cc", "gcc", "clang")) {
+        foreach ($name in @("cc", "gcc", "clang", "ld", "x86_64-linux-musl-gcc", "x86_64-linux-musl-ld")) {
             $stub = Join-Path $blockDir $name
             Set-Content -Path $stub -Encoding ASCII -NoNewline -Value "#!/bin/sh`nexit 127`n"
             & chmod +x $stub
@@ -220,6 +232,7 @@ if ($Actual -ne "Hello, Release!") {
 if ($nativeRuntimeModes.Count -gt 0) {
     $NativeOutput = Join-Path $ScratchDir ("hello-native" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
     $NativeLog = Join-Path $ScratchDir "native.stderr.txt"
+    $TlsLinkLog = $null
     $savedRuntimeArchiveDir = $env:OSCAN_RUNTIME_ARCHIVE_DIR
     try {
         $env:OSCAN_RUNTIME_ARCHIVE_DIR = $RuntimeArchiveDir
@@ -239,12 +252,45 @@ if ($nativeRuntimeModes.Count -gt 0) {
         } else {
             & $nativeInvocation
         }
+
+        if ($Target -eq "linux-x86_64" -and $nativeSmokeMode -eq "freestanding") {
+            $TlsLinkSource = Join-Path $ScratchDir "tls-link.osc"
+            $TlsLinkOutput = Join-Path $ScratchDir "tls-link"
+            $TlsLinkLog = Join-Path $ScratchDir "tls-link.stderr.txt"
+            Set-Content -Path $TlsLinkSource -Encoding UTF8 -NoNewline -Value @'
+fn! main() {
+    let conn: Result<i32, str> = tls_connect("localhost", 443);
+    match conn {
+        Result::Ok(fd) => { tls_close(fd); },
+        Result::Err(_) => { },
+    };
+    tls_cleanup();
+}
+'@
+            $tlsLinkInvocation = {
+                & $OscanCommand --backend native $TlsLinkSource -o $TlsLinkOutput 2> $TlsLinkLog
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Packaged Linux native TLS link smoke failed:`n$((Get-Content $TlsLinkLog -Raw))"
+                }
+            }
+            if ($expectsBundled) {
+                Invoke-NoHostCompilerCommand -ScratchDir $ScratchDir -Body $tlsLinkInvocation
+            } else {
+                & $tlsLinkInvocation
+            }
+        }
     } finally {
         $env:OSCAN_RUNTIME_ARCHIVE_DIR = $savedRuntimeArchiveDir
     }
     $NativeCompileText = Get-Content $NativeLog -Raw
-    if ($expectsBundled -and $NativeCompileText -notmatch "\bbundled\b") {
-        throw "Packaged native link did not use the relocatable bundled toolchain:`n$NativeCompileText"
+    if ($expectedNativeLinkSource -and $NativeCompileText -notmatch "\b$expectedNativeLinkSource\b") {
+        throw "Packaged native link did not use the expected linker source ('$expectedNativeLinkSource'):`n$NativeCompileText"
+    }
+    if ($TlsLinkLog) {
+        $TlsLinkText = Get-Content $TlsLinkLog -Raw
+        if ($TlsLinkText -notmatch "\bembedded\b") {
+            throw "Packaged Linux native TLS smoke did not use the embedded linker:`n$TlsLinkText"
+        }
     }
 
     $NativeActual = & $NativeOutput 2>&1 | Out-String

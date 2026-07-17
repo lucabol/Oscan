@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Oscan Test Runner — quiet by default, verbose on --VerboseOutput or failure
-# Usage: .\test.ps1 [-Backend <name> | --backend <name>] [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-SkipLibc] [-VerboseOutput]
+# Usage: .\test.ps1 [-Backend <name>] [-SkipBuild] [-SkipUnit] [-SkipIntegration] [-SkipWSL] [-SkipARM] [-SkipLibc] [-VerboseOutput]
 
 param(
     [switch]$SkipBuild,
@@ -18,15 +18,6 @@ param(
 
 $ErrorActionPreference = "Continue"
 . (Join-Path $PSScriptRoot "tests\backend_oracle.ps1")
-
-try {
-    $backendSelection = Resolve-OracleBackendSelection -Backend $Backend -BackendOption $BackendOption
-    $Backend = $backendSelection.Backend
-    $BackendOption = $backendSelection.BackendOption
-} catch {
-    Write-Host "Backend selection failed: $_" -ForegroundColor Red
-    exit 2
-}
 
 # ── Result tracking ────────────────────────────────────
 $script:Results = [System.Collections.ArrayList]::new()
@@ -61,15 +52,6 @@ function Add-TestResult($Name, $Arch, $Category, $Status, $Detail) {
         $msg = "  ${Status}: $Name"
         if ($Detail -and $Status -ne 'PASS') { $msg += " — $Detail" }
         Write-Host $msg -ForegroundColor $color
-    }
-}
-
-function Write-PhaseFailures($Arch) {
-    if ($VerboseOutput) { return }
-    foreach ($failure in @($script:Results | Where-Object { $_.Arch -eq $Arch -and $_.Status -eq 'FAIL' })) {
-        $message = "    FAIL: $($failure.Name)"
-        if ($failure.Detail) { $message += " - $($failure.Detail)" }
-        Write-Host $message -ForegroundColor Red
     }
 }
 
@@ -254,6 +236,31 @@ function Test-WindowsFreestanding($exePath) {
     return @{ DepCheck = $depCheck; DepDetail = $depDetail; StdlibCheck = $stdlibCheck; Size = $size }
 }
 
+function Test-LinuxFreestanding($wslExePath, $wslDir) {
+    $fullPath = "$wslDir/$wslExePath"
+    $fileInfo = wsl bash -c "file '$fullPath'" 2>&1 | Out-String
+    $sizeStr = wsl bash -c "stat -c%s '$fullPath'" 2>&1 | Out-String
+    $size = [int64]($sizeStr.Trim())
+
+    $depCheck = "PASS"; $depDetail = "static"; $stdlibCheck = "PASS"
+
+    if ($fileInfo -notmatch 'statically linked') {
+        $depCheck = "FAIL"
+        $lddOut = wsl bash -c "ldd '$fullPath' 2>&1" | Out-String
+        if ($lddOut -match 'not a dynamic executable') {
+            $depDetail = "static (no dynamic section)"
+            $depCheck = "PASS"
+        } else {
+            $depDetail = "dynamic"
+        }
+    }
+
+    $cnt = wsl bash -c "strings '$fullPath' | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true" 2>&1 | Out-String
+    if ([int]($cnt.Trim()) -gt 0) { $stdlibCheck = "FAIL" }
+
+    return @{ DepCheck = $depCheck; DepDetail = $depDetail; StdlibCheck = $stdlibCheck; Size = $size }
+}
+
 # ── Display helpers ────────────────────────────────────
 
 function Format-Size($bytes) {
@@ -388,10 +395,6 @@ if (-not (Test-Path $oscan)) {
     Write-Host "Error: $oscan not found. Run without -SkipBuild first." -ForegroundColor Red
     exit 1
 }
-$projectRoot = (Get-Location).Path
-$throttle = [Math]::Max(1, [Environment]::ProcessorCount)
-$crossPlatformParallelism = [Math]::Max(1, [Math]::Min(8, $throttle))
-$crossPlatformTestTimeoutSeconds = 30
 
 if ($Backend -ne "c") {
     try {
@@ -433,11 +436,14 @@ if (-not $SkipIntegration) {
         New-Item -ItemType Directory -Path "tests\build" | Out-Null
     }
 
+    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
+
     # Positive tests (parallel compile + run)
     $positivePhase = if ($Backend -eq "c") { "Windows x64 (positive)" } else { "Windows x64 (C vs $Backend)" }
     Write-Phase $positivePhase
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (freestanding) ──" -ForegroundColor Yellow }
     $secPass = 0; $secFail = 0
+    $projectRoot = (Get-Location).Path
     # Skip socket_hostnames on Windows: binding to a hostname triggers the
     # Windows Firewall prompt (interactive popup) which hangs CI. Linux/WSL
     # and ARM still exercise the hostname path.
@@ -640,9 +646,6 @@ if (-not $SkipWSL) {
     } else {
         $script:WSLAvail = $true
         $wslDir = Convert-ToWSLPath (Get-Location).Path
-        # Each generated C file includes the full freestanding runtime. Compile
-        # several at once, but cap the fan-out to avoid DrvFS and memory contention.
-        $wslParallelism = $crossPlatformParallelism
 
         if (-not (Test-Path "tests\build")) {
             New-Item -ItemType Directory -Path "tests\build" | Out-Null
@@ -666,25 +669,17 @@ if (-not $SkipWSL) {
         } -ThrottleLimit $throttle
 
         # Phase 2: Generate batch bash script for compile + run
-        $bashLines = @(
-            "#!/bin/bash",
-            "cd '$wslDir'",
-            "rm -rf tests/build/wsl-results",
-            "mkdir -p tests/build/wsl-results"
-        )
-        $wslTestTimeoutSeconds = $crossPlatformTestTimeoutSeconds
-        $wslScheduledJobs = 0
+        $bashLines = @("#!/bin/bash", "cd '$wslDir'")
         # l_img.h's vendored stb_image integration requires laststanding's
         # freestanding stdlib/string shims on Linux (see its README).
         $freestandingCompat = "-Ideps/laststanding/compat"
         foreach ($t in $transpileResults) {
             if (-not $t.Success) {
-                $bashLines += "echo 'FAIL|$($t.Name)|transpile error' > tests/build/wsl-results/$($t.Name).result"
+                $bashLines += "echo 'FAIL|$($t.Name)|transpile error'"
                 continue
             }
             $n = $t.Name
             $isTls = $n -match '^tls_'
-            $bashLines += "("
             if ($t.IsFfi) {
                 $bashLines += "gcc -std=c99 tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_wsl -lm 2>/dev/null"
             } elseif ($isTls) {
@@ -695,18 +690,8 @@ if (-not $SkipWSL) {
                 $bashLines += "gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding $freestandingCompat -o tests/build/${n}_wsl 2>/dev/null"
             }
             $bashLines += "if [ `$? -ne 0 ]; then echo 'FAIL|$n|gcc compile error'; else"
-            $bashLines += "  timeout --kill-after=5s ${wslTestTimeoutSeconds}s ./tests/build/${n}_wsl > tests/build/${n}_wsl.out 2>&1"
-            $bashLines += "  rc=`$?"
-            $bashLines += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo 'FAIL|$n|timed out after ${wslTestTimeoutSeconds}s'; else echo `"OK|$n|`$rc`"; fi"
-            $bashLines += "fi"
-            $bashLines += ") > tests/build/wsl-results/$n.result &"
-            $wslScheduledJobs++
-            if (($wslScheduledJobs % $wslParallelism) -eq 0) {
-                $bashLines += "wait"
-            }
+            $bashLines += "  ./tests/build/${n}_wsl > tests/build/${n}_wsl.out 2>&1; echo `"OK|$n|`$?`"; fi"
         }
-        $bashLines += "wait"
-        $bashLines += "cat tests/build/wsl-results/*.result"
 
         $bashScript = $bashLines -join "`n"
         Set-Content "tests\build\_wsl_batch.sh" $bashScript -NoNewline
@@ -755,7 +740,6 @@ if (-not $SkipWSL) {
             $color = if ($wslFail -gt 0) { "Red" } else { "Green" }
             Write-PhaseResult "$wslPass passed, $wslFail failed" $color
         }
-        Write-PhaseFailures "wsl-x64"
 
         # WSL freestanding verification (batch: single WSL call)
         Write-Phase "Verifying (WSL)"
@@ -830,57 +814,21 @@ if (-not $SkipWSL) {
             $archiveDirWin = "build\runtime-archives\linux-x86_64"
             $archiveDirWSL = "$wslDir/build/runtime-archives/linux-x86_64"
             $archivePath = Join-Path $archiveDirWin "libosc_runtime_freestanding.a"
-            $archiveManifestPath = Join-Path $archiveDirWin "libosc_runtime_freestanding.json"
             $hostedArchivePath = Join-Path $archiveDirWin "libosc_runtime_hosted.a"
-            $hostedArchiveManifestPath = Join-Path $archiveDirWin "libosc_runtime_hosted.json"
+            $freestandingCC = if (Test-WSLCommand "x86_64-linux-musl-gcc") { "x86_64-linux-musl-gcc" } else { "gcc" }
             $hostedCC = "gcc"
+            $shimPath = Join-Path $archiveDirWin "osc_native_shim.freestanding.$freestandingCC.o"
+            $hostedShimPath = Join-Path $archiveDirWin "osc_native_shim.hosted.$hostedCC.o"
 
             if (-not (Test-Path $archiveDirWin)) { New-Item -ItemType Directory -Path $archiveDirWin -Force | Out-Null }
-            $freestandingSourceTime = (Get-ChildItem "runtime\osc_runtime*.c" | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1).LastWriteTimeUtc
-            if ((Test-Path $archivePath) -and ((Get-Item $archivePath).LastWriteTimeUtc -lt $freestandingSourceTime)) {
-                Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
-            }
-            $hostedSourceTime = (Get-Item "runtime\osc_runtime.c").LastWriteTimeUtc
-            if ((Test-Path $hostedArchivePath) -and ((Get-Item $hostedArchivePath).LastWriteTimeUtc -lt $hostedSourceTime)) {
-                Remove-Item -LiteralPath $hostedArchivePath, $hostedArchiveManifestPath -Force -ErrorAction SilentlyContinue
-            }
-            $freestandingCC = $null
-            if ((Test-Path $archivePath) -and (Test-Path $archiveManifestPath)) {
-                try {
-                    $recordedCC = (Get-Content -LiteralPath $archiveManifestPath -Raw | ConvertFrom-Json).cc
-                    if ($recordedCC -and (Test-WSLCommand $recordedCC)) {
-                        $freestandingCC = $recordedCC
-                    }
-                } catch {
-                    Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
-                }
-            }
-            if (-not $freestandingCC) {
-                $freestandingCandidates = @()
-                if (Test-WSLCommand "x86_64-linux-musl-gcc") {
-                    $freestandingCandidates += "x86_64-linux-musl-gcc"
-                }
-                $freestandingCandidates += "gcc"
-                foreach ($candidateCC in $freestandingCandidates) {
-                    Remove-Item -LiteralPath $archivePath, $archiveManifestPath -Force -ErrorAction SilentlyContinue
-                    wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode freestanding --target linux-x86_64 --cc $candidateCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
-                    if ((Test-Path $archivePath) -and (Test-Path $archiveManifestPath)) {
-                        $freestandingCC = $candidateCC
-                        break
-                    }
-                }
+            if (-not (Test-Path $archivePath)) {
+                wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode freestanding --target linux-x86_64 --cc $freestandingCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
             }
             if (-not (Test-Path $hostedArchivePath)) {
                 wsl bash -c "cd '$wslDir' && python3 scripts/release_tools.py build-runtime-archive --mode hosted --target linux-x86_64 --cc $hostedCC --ar ar --out-dir '$archiveDirWSL'" 2>&1 | Out-Null
             }
-            $shimPath = if ($freestandingCC) {
-                Join-Path $archiveDirWin "osc_native_shim.freestanding.$freestandingCC.o"
-            } else {
-                $null
-            }
-            $hostedShimPath = Join-Path $archiveDirWin "osc_native_shim.hosted.$hostedCC.o"
             $shimSrcTime = (Get-Item "runtime\osc_native_shim.c").LastWriteTimeUtc
-            $needShim = $shimPath -and ((-not (Test-Path $shimPath)) -or ((Get-Item $shimPath).LastWriteTimeUtc -lt $shimSrcTime))
+            $needShim = (-not (Test-Path $shimPath)) -or ((Get-Item $shimPath).LastWriteTimeUtc -lt $shimSrcTime)
             if ($needShim) {
                 wsl bash -c "cd '$wslDir' && $freestandingCC -std=gnu11 -ffreestanding -w -Os -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Iruntime -c runtime/osc_native_shim.c -o '$archiveDirWSL/osc_native_shim.freestanding.$freestandingCC.o'" 2>&1 | Out-Null
             }
@@ -889,7 +837,7 @@ if (-not $SkipWSL) {
                 wsl bash -c "cd '$wslDir' && $hostedCC -std=c99 -O2 -w -ffunction-sections -fdata-sections -Iruntime -c runtime/osc_native_shim.c -o '$archiveDirWSL/osc_native_shim.hosted.$hostedCC.o'" 2>&1 | Out-Null
             }
 
-            if (-not $freestandingCC -or -not (Test-Path $archivePath) -or -not (Test-Path $shimPath) -or -not (Test-Path $hostedArchivePath) -or -not (Test-Path $hostedShimPath)) {
+            if (-not (Test-Path $archivePath) -or -not (Test-Path $shimPath) -or -not (Test-Path $hostedArchivePath) -or -not (Test-Path $hostedShimPath)) {
                 Write-PhaseResult "skipped (could not build mode-matched linux-x86_64 runtime archives/shims under WSL)" Yellow
             } else {
                 $nDir = "tests\build\wsl-native"
@@ -897,30 +845,24 @@ if (-not $SkipWSL) {
 
                 # Cross-emit every positive test's object on the Windows side
                 # (fast — pure Cranelift codegen, no linker involved yet).
-                $objResults = Get-ChildItem "tests\positive\*.osc" | ForEach-Object -Parallel {
-                    $name = $_.BaseName
-                    $objArgs = @($_.FullName)
+                $objResults = foreach ($oscFile in (Get-ChildItem "tests\positive\*.osc")) {
+                    $name = $oscFile.BaseName
+                    $objArgs = @($oscFile.FullName)
                     if ($name -match '^ffi') { $objArgs += '--libc' }
-                    $objArgs += @('--backend', 'native', '--native-target', 'linux-x86_64', '-o', "$using:projectRoot\$using:nDir\$name.o")
-                    & "$using:projectRoot\target\release\oscan.exe" @objArgs 2>"$using:projectRoot\$using:nDir\$name.objerr"
+                    $objArgs += @('--backend', 'native', '--native-target', 'linux-x86_64', '-o', "$nDir\$name.o")
+                    & $oscan @objArgs 2>"$nDir\$name.objerr"
                     [PSCustomObject]@{ Name = $name; Success = ($LASTEXITCODE -eq 0) }
-                } -ThrottleLimit $crossPlatformParallelism
+                }
 
                 # One batched WSL call links + runs every object that was
                 # successfully cross-emitted (mirrors the C-backend WSL
                 # phase's single-call batching above). Each object is linked
                 # with the same explicit runtime mode used to emit it.
-                $nBash = @(
-                    "#!/bin/bash",
-                    "cd '$wslDir'",
-                    "rm -rf tests/build/wsl-native/results",
-                    "mkdir -p tests/build/wsl-native/results"
-                )
-                $nativeScheduledJobs = 0
+                $nBash = @("#!/bin/bash", "cd '$wslDir'")
                 foreach ($r in $objResults) {
                     $n = $r.Name
                     if (-not $r.Success) {
-                        $nBash += "echo `"FAIL|$n|native object generation error`" > tests/build/wsl-native/results/$n.result"
+                        $nBash += "echo `"FAIL|$n|native object generation error`""
                         continue
                     }
                     $obj = "tests/build/wsl-native/$n.o"
@@ -930,22 +872,12 @@ if (-not $SkipWSL) {
                     } else {
                         $linkCommand = "$freestandingCC '$obj' '$archiveDirWSL/osc_native_shim.freestanding.$freestandingCC.o' '$archiveDirWSL/libosc_runtime_freestanding.a' -nostdlib -static -Wl,--gc-sections,--build-id=none -o '$exe'"
                     }
-                    $nBash += "("
                     $nBash += "if $linkCommand 2>tests/build/wsl-native/$n.linkerr; then"
-                    $nBash += "  timeout --kill-after=5s ${wslTestTimeoutSeconds}s ./'$exe' > tests/build/wsl-native/$n.out 2>&1"
-                    $nBash += "  rc=`$?"
-                    $nBash += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo `"FAIL|$n|timed out after ${wslTestTimeoutSeconds}s`"; else echo `"OK|$n|`$rc`"; fi"
+                    $nBash += "  ./'$exe' > tests/build/wsl-native/$n.out 2>&1; echo `"OK|$n|`$?`""
                     $nBash += "else"
                     $nBash += "  echo `"FAIL|$n|link error`""
                     $nBash += "fi"
-                    $nBash += ") > tests/build/wsl-native/results/$n.result &"
-                    $nativeScheduledJobs++
-                    if (($nativeScheduledJobs % $wslParallelism) -eq 0) {
-                        $nBash += "wait"
-                    }
                 }
-                $nBash += "wait"
-                $nBash += "cat tests/build/wsl-native/results/*.result"
                 Set-Content "tests\build\wsl-native\_wsl_native_batch.sh" ($nBash -join "`n") -NoNewline
                 $nBatchOutput = wsl bash -c "cd '$wslDir' && bash tests/build/wsl-native/_wsl_native_batch.sh" 2>&1 | Out-String
                 $nBatchExitCode = $LASTEXITCODE
@@ -1015,37 +947,21 @@ if (-not $SkipWSL) {
                 }
                 $color = if ($nFail -gt 0) { "Red" } else { "Green" }
                 Write-PhaseResult "$nPass passed, $nFail failed" $color
-                Write-PhaseFailures "wsl-x64-$Backend"
 
-                # Every produced wsl-native binary must be statically linked
-                # with no libc/glibc symbols, same bar as the C-backend WSL
-                # executables. Verify them in one WSL call to avoid hundreds
-                # of process startups.
+                # Freestanding verification (Test-LinuxFreestanding): every
+                # produced wsl-native binary must be statically linked with
+                # no libc/glibc symbols, same bar as the C-backend WSL exes.
                 Write-Phase "Verifying (WSL $Backend)"
                 $nvPass = 0; $nvFail = 0
-                $nvBash = @("#!/bin/bash", "cd '$wslDir'")
                 foreach ($r in $objResults) {
                     if (-not $r.Success) { continue }
                     $n = $r.Name
                     if ($n -match '^ffi') { continue }
-                    $exe = "tests/build/wsl-native/${n}_native"
-                    $nvBash += "if [ -f '$exe' ]; then"
-                    $nvBash += "  sz=`$(stat -c%s '$exe' 2>/dev/null || echo 0)"
-                    $nvBash += "  fi=`$(file '$exe')"
-                    $nvBash += "  sc=`$(strings '$exe' | grep -ciE 'libc\.so|libm\.so|glibc|__libc_start_main' || true)"
-                    $nvBash += "  echo `"VERIFY|$n|`$sz|`$fi|`$sc`""
-                    $nvBash += "fi"
-                }
-                Set-Content "tests\build\wsl-native\_wsl_native_verify.sh" ($nvBash -join "`n") -NoNewline
-                $nvOutput = wsl bash -c "cd '$wslDir' && bash tests/build/wsl-native/_wsl_native_verify.sh" 2>&1 | Out-String
-                foreach ($line in ($nvOutput -split "`n" | Where-Object { $_ -match '^VERIFY\|' })) {
-                    $parts = $line.Trim() -split '\|', 5
-                    $name = $parts[1]; $size = [int64]$parts[2]; $fileInfo = $parts[3]; $stdlibCount = [int]$parts[4]
-                    $depCheck = if ($fileInfo -match 'statically linked' -or $fileInfo -match 'not a dynamic executable') { "PASS" } else { "FAIL" }
-                    $depDetail = if ($depCheck -eq "PASS") { "static" } else { "dynamic" }
-                    $stdlibCheck = if ($stdlibCount -gt 0) { "FAIL" } else { "PASS" }
-                    Add-VerifyResult $name "wsl-x64-$Backend" $depCheck $depDetail $stdlibCheck $size
-                    if (($depCheck -ne 'FAIL') -and ($stdlibCheck -ne 'FAIL')) { $nvPass++ } else { $nvFail++ }
+                    $wslExeRel = "tests/build/wsl-native/${n}_native"
+                    if (-not (Test-Path "tests\build\wsl-native\${n}_native")) { continue }
+                    $lf = Test-LinuxFreestanding $wslExeRel $wslDir
+                    Add-VerifyResult $n "wsl-x64-$Backend" $lf.DepCheck $lf.DepDetail $lf.StdlibCheck $lf.Size
+                    if (($lf.DepCheck -ne 'FAIL') -and ($lf.StdlibCheck -ne 'FAIL')) { $nvPass++ } else { $nvFail++ }
                 }
                 $vcolor = if ($nvFail -gt 0) { "Red" } else { "Green" }
                 Write-PhaseResult "$nvPass verified, $nvFail failed" $vcolor
@@ -1093,38 +1009,21 @@ if (-not $SkipARM) {
         }
 
         # Generate batch bash script for ARM64 compile + run
-        $bashLines = @(
-            "#!/bin/bash",
-            "cd '$wslDir'",
-            "rm -rf tests/build/arm-results",
-            "mkdir -p tests/build/arm-results"
-        )
-        $armScheduledJobs = 0
+        $bashLines = @("#!/bin/bash", "cd '$wslDir'")
         foreach ($bcFile in $oscFiles) {
             $n = $bcFile.BaseName
             if (-not (Test-Path "tests\build\$n.c")) {
-                $bashLines += "echo 'FAIL|$n|transpile error' > tests/build/arm-results/$n.result"
+                $bashLines += "echo 'FAIL|$n|transpile error'"
                 continue
             }
-            $bashLines += "("
             if ($n -match '^ffi') {
                 $bashLines += "aarch64-linux-gnu-gcc -std=c99 -static tests/build/$n.c runtime/osc_runtime.c -Iruntime -Ideps/laststanding -o tests/build/${n}_arm -lm 2>/dev/null"
             } else {
                 $bashLines += "aarch64-linux-gnu-gcc -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s tests/build/$n.c -Iruntime -Ideps/laststanding -o tests/build/${n}_arm 2>/dev/null"
             }
             $bashLines += "if [ `$? -ne 0 ]; then echo 'FAIL|$n|cross-compile error'; else"
-            $bashLines += "  timeout --kill-after=5s ${crossPlatformTestTimeoutSeconds}s qemu-aarch64 ./tests/build/${n}_arm > tests/build/${n}_arm.out 2>&1"
-            $bashLines += "  rc=`$?"
-            $bashLines += "  if [ `$rc -eq 124 ] || [ `$rc -eq 137 ]; then echo 'FAIL|$n|timed out after ${crossPlatformTestTimeoutSeconds}s'; else echo `"OK|$n|`$rc`"; fi"
-            $bashLines += "fi"
-            $bashLines += ") > tests/build/arm-results/$n.result &"
-            $armScheduledJobs++
-            if (($armScheduledJobs % $crossPlatformParallelism) -eq 0) {
-                $bashLines += "wait"
-            }
+            $bashLines += "  qemu-aarch64 ./tests/build/${n}_arm > tests/build/${n}_arm.out 2>&1; echo `"OK|$n|`$?`"; fi"
         }
-        $bashLines += "wait"
-        $bashLines += "cat tests/build/arm-results/*.result"
 
         Set-Content "tests\build\_arm_batch.sh" ($bashLines -join "`n") -NoNewline
         $batchOutput = wsl bash -c "cd '$wslDir' && bash tests/build/_arm_batch.sh" 2>&1 | Out-String
@@ -1170,7 +1069,6 @@ if (-not $SkipARM) {
             $color = if ($armFail -gt 0) { "Red" } else { "Green" }
             Write-PhaseResult "$armPass passed, $armFail failed" $color
         }
-        Write-PhaseFailures "arm64"
 
         # ARM64 freestanding verification (batch: single WSL call)
         Write-Phase "Verifying (ARM64)"
@@ -1222,20 +1120,14 @@ if (-not $SkipARM) {
 Write-Phase "Examples"
 if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Examples compilation ──" -ForegroundColor Yellow }
 $exPass = 0; $exFail = 0
-$exampleResults = Get-ChildItem "examples\*.osc" | ForEach-Object -Parallel {
-    $name = $_.BaseName
-    & "$using:projectRoot\target\release\oscan.exe" $_.FullName -o "$using:projectRoot\examples\$name.exe" 2>$null
-    [PSCustomObject]@{
-        Name = $name
-        Success = ($LASTEXITCODE -eq 0)
-    }
-} -ThrottleLimit $crossPlatformParallelism
-foreach ($result in $exampleResults) {
-    if ($result.Success) {
-        Add-TestResult $result.Name "win-x64" "examples" "PASS" ""
+foreach ($exFile in Get-ChildItem "examples\*.osc") {
+    $name = $exFile.BaseName
+    & $oscan $exFile.FullName -o "examples\${name}.exe" 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Add-TestResult $name "win-x64" "examples" "PASS" ""
         $exPass++
     } else {
-        Add-TestResult $result.Name "win-x64" "examples" "FAIL" "compile error"
+        Add-TestResult $name "win-x64" "examples" "FAIL" "compile error"
         $exFail++
     }
 }
@@ -1246,13 +1138,12 @@ if (-not $VerboseOutput) {
 
 # Graphics examples (freestanding only — may fail on platforms without display)
 if (Test-Path "examples\gfx\*.osc") {
-    $gfxResults = Get-ChildItem "examples\gfx\*.osc" | ForEach-Object -Parallel {
-        $name = $_.BaseName
-        & "$using:projectRoot\target\release\oscan.exe" $_.FullName -o "$using:projectRoot\examples\gfx\$name.exe" 2>$null
-        ($LASTEXITCODE -eq 0)
-    } -ThrottleLimit $crossPlatformParallelism
-    foreach ($success in $gfxResults) {
-        if ($success) { $exPass++ }
+    foreach ($exFile in Get-ChildItem "examples\gfx\*.osc") {
+        $name = $exFile.BaseName
+        & $oscan $exFile.FullName -o "examples\gfx\${name}.exe" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $exPass++
+        }
         # Don't count gfx failures — they require a display
     }
 }

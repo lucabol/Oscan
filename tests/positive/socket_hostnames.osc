@@ -3,7 +3,7 @@
 
 fn! main() {
     let mut tcp_port: i32 = 38451;
-    let mut udp_port: i32 = 39451;
+    let mut udp_port: i32 = 38551;
 
     let sr: Result<i32, str> = socket_tcp();
     let server: i32 = match sr {
@@ -18,16 +18,20 @@ fn! main() {
     if server < 0 or client < 0 {
         println("tcp setup failed");
     } else {
+        // Differential runs execute two binaries back-to-back. On POSIX the
+        // first TCP port can remain in TIME_WAIT, so probe a bounded range.
         let mut bind_ok: bool = false;
-        while not bind_ok and tcp_port < 38551 {
+        let mut bind_attempts: i32 = 0;
+        while not bind_ok and bind_attempts < 100 {
             let br: Result<str, str> = socket_bind(server, "127.0.0.1", tcp_port);
             bind_ok = match br {
                 Result::Ok(_) => { true },
                 Result::Err(_) => { false },
             };
             if not bind_ok {
-                tcp_port = tcp_port + 1;
+                tcp_port += 1;
             };
+            bind_attempts += 1;
         };
         let lr: Result<str, str> = socket_listen(server, 1);
         let listen_ok: bool = match lr {
@@ -81,15 +85,17 @@ fn! main() {
         println("udp setup failed");
     } else {
         let mut bind_ok: bool = false;
-        while not bind_ok and udp_port < 39551 {
+        let mut bind_attempts: i32 = 0;
+        while not bind_ok and bind_attempts < 100 {
             let br2: Result<str, str> = socket_bind(receiver, "127.0.0.1", udp_port);
             bind_ok = match br2 {
                 Result::Ok(_) => { true },
                 Result::Err(_) => { false },
             };
             if not bind_ok {
-                udp_port = udp_port + 1;
+                udp_port += 1;
             };
+            bind_attempts += 1;
         };
         let sent: i32 = if bind_ok {
             socket_sendto(sender, "udp localhost ok", "localhost", udp_port)

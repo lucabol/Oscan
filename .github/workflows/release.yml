@@ -113,50 +113,164 @@ jobs:
         with:
           python-version: "3.x"
 
+      # --- Embedded native-link assets (Windows and Linux x86-64 for now; see
+      # docs/design/native-link-embedding.md §1.1/§5.5/§10/§11). These steps
+      # must run BEFORE `cargo build --release` so the linker asset set can be
+      # embedded into the oscan binary at build time, and BEFORE
+      # `assemble-release.ps1` so its own runtime-archive build (with the shim
+      # baked in) isn't duplicated.
+      # For Linux x86_64, we also fetch and build aarch64/riscv64 toolchains
+      # and runtime archives to package as sidecars (§11.1, §13.5).
+      - name: Fetch pinned toolchain (Windows and Linux, for embedded native-link assets)
+        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+        shell: pwsh
+        run: |
+          & .\scripts\fetch-toolchain.ps1 `
+            -ManifestPath "packaging\toolchains\${{ matrix.target }}.json" `
+            -Destination "build\toolchain-${{ matrix.target }}" `
+            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
+
+      - name: Fetch aarch64 and riscv64 toolchains (Linux x86_64 only, for cross-linker sidecars)
+        if: matrix.target == 'linux-x86_64'
+        shell: pwsh
+        run: |
+          & .\scripts\fetch-toolchain.ps1 `
+            -ManifestPath "packaging\toolchains\linux-aarch64.json" `
+            -Destination "build\toolchain-linux-aarch64" `
+            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
+          & .\scripts\fetch-toolchain.ps1 `
+            -ManifestPath "packaging\toolchains\linux-riscv64.json" `
+            -Destination "build\toolchain-linux-riscv64" `
+            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
+
+      - name: Build runtime archives with native shim baked in (Windows and Linux)
+        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+        shell: pwsh
+        run: |
+          $manifestPath = "packaging\toolchains\${{ matrix.target }}.json"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+          $runtimeToolchain = $manifest['toolchain']['runtime']
+          $toolchainDir = "build\toolchain-${{ matrix.target }}"
+          $target = '${{ matrix.target }}'
+          if ($target -in @('linux-x86_64', 'linux-aarch64', 'linux-riscv64') -and
+              -not (Test-Path "packaging\prebuilt\$target\libbearssl.a" -PathType Leaf)) {
+            throw "Linux release archives for $target require packaging\prebuilt\$target\libbearssl.a; build or restore it before releasing"
+          }
+          & .\scripts\build-runtime-archive.ps1 `
+            -Target '${{ matrix.target }}' `
+            -Mode all `
+            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
+            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
+            -ToolchainManifest $manifestPath `
+            -OutDir "build\runtime-archives\${{ matrix.target }}"
+
+      - name: Build aarch64 and riscv64 runtime archives (Linux x86_64 only, for cross-linker sidecars)
+        if: matrix.target == 'linux-x86_64'
+        shell: pwsh
+        run: |
+          # Build aarch64 runtime archives
+          $manifestPath = "packaging\toolchains\linux-aarch64.json"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+          $runtimeToolchain = $manifest['toolchain']['runtime']
+          $toolchainDir = "build\toolchain-linux-aarch64"
+          & .\scripts\build-runtime-archive.ps1 `
+            -Target 'linux-aarch64' `
+            -Mode all `
+            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
+            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
+            -ToolchainManifest $manifestPath `
+            -OutDir "build\runtime-archives\linux-aarch64"
+
+          # Build riscv64 runtime archives
+          $manifestPath = "packaging\toolchains\linux-riscv64.json"
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
+          $runtimeToolchain = $manifest['toolchain']['runtime']
+          $toolchainDir = "build\toolchain-linux-riscv64"
+          & .\scripts\build-runtime-archive.ps1 `
+            -Target 'linux-riscv64' `
+            -Mode all `
+            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
+            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
+            -ToolchainManifest $manifestPath `
+            -OutDir "build\runtime-archives\linux-riscv64"
+
+      - name: Stage embedded native-link assets (Windows and Linux)
+        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+        shell: pwsh
+        run: |
+          & .\scripts\prepare-embed-assets.ps1 `
+            -Target '${{ matrix.target }}' `
+            -ToolchainDir "build\toolchain-${{ matrix.target }}" `
+            -ToolchainManifest "packaging\toolchains\${{ matrix.target }}.json" `
+            -OutputDir "packaging\prebuilt\${{ matrix.target }}"
+
+      - name: Prepare cross-linker sidecars for packaging (Linux x86_64 only)
+        if: matrix.target == 'linux-x86_64'
+        shell: pwsh
+        run: |
+          # Prepare staging area for cross-linker sidecars that will be bundled
+          # in the linux-x86_64 release archive (§11.1, §13.5).
+          # Users can point OSCAN_NATIVE_LINKER at these to cross-compile.
+          #
+          # Bugfix (coordinator, post-live-validation): the sidecar directory
+          # must also ship the target's freestanding runtime archive
+          # (libosc_runtime_freestanding_core.a/libosc_runtime_freestanding.a),
+          # not just the ld binary. --backend native cross-linking needs
+          # BOTH an OSCAN_NATIVE_LINKER-compatible linker AND an
+          # OSCAN_RUNTIME_ARCHIVE_DIR pointing at a matching-target runtime
+          # archive (src/backend/link/archive.rs); without the archive
+          # co-packaged, a user with only this release bundle had no way to
+          # supply one and the "point OSCAN_NATIVE_LINKER at these to
+          # cross-compile" comment above was not actually achievable from
+          # the shipped bundle alone. Verified live: cross-linked +
+          # qemu-executed a real program using ONLY files from a directory
+          # laid out exactly like $sidecarBase\linux-{aarch64,riscv64}\ below.
+          $sidecarBase = "build\cross-linker-sidecars"
+          New-Item -ItemType Directory -Path "$sidecarBase\linux-aarch64" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$sidecarBase\linux-riscv64" -Force | Out-Null
+
+          Copy-Item "build\toolchain-linux-aarch64\bin\aarch64-linux-musl-ld" "$sidecarBase\linux-aarch64\" -Force
+          Copy-Item "build\toolchain-linux-riscv64\bin\riscv64-linux-musl-ld" "$sidecarBase\linux-riscv64\" -Force
+
+          Copy-Item "build\runtime-archives\linux-aarch64\*" "$sidecarBase\linux-aarch64\" -Force
+          Copy-Item "build\runtime-archives\linux-riscv64\*" "$sidecarBase\linux-riscv64\" -Force
+
+          Write-Output "Cross-linker sidecars staged in $sidecarBase (linker + runtime archive per target)"
+
       - name: Build release binary
         run: cargo build --release
         env:
           OSCAN_VERSION: ${{ needs.prepare.outputs.tag }}
+          # Windows and Linux x86-64 freestanding native builds embed a linker;
+          # these are empty strings (no-ops for build.rs) on other targets.
+          OSCAN_EMBED_ASSETS_DIR: ${{ (startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')) && format('{0}/packaging/prebuilt/{1}', github.workspace, matrix.target) || '' }}
+          OSCAN_REQUIRE_EMBEDDED_ASSETS: ${{ (startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')) && '1' || '' }}
 
       - name: Assemble release asset
         id: assemble
         shell: pwsh
         run: |
           $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
-          $archivePath = & .\scripts\assemble-release.ps1 `
-            -Target '${{ matrix.target }}' `
-            -Version '${{ needs.prepare.outputs.version }}' `
-            -BinaryPath '${{ matrix.binary_path }}' `
-            -OutputDir $outputDir
+          $assembleArgs = @{
+            Target = '${{ matrix.target }}'
+            Version = '${{ needs.prepare.outputs.version }}'
+            BinaryPath = '${{ matrix.binary_path }}'
+            OutputDir = $outputDir
+          }
+          if ('${{ matrix.target }}'.StartsWith('windows') -or '${{ matrix.target }}'.StartsWith('linux')) {
+            # Reuse the archives built above instead of assemble-release.ps1
+            # re-fetching the toolchain and rebuilding them a second time.
+            $assembleArgs['PrebuiltRuntimeArchiveDir'] = (Resolve-Path "build\runtime-archives\${{ matrix.target }}").Path
+          }
+          if ('${{ matrix.target }}' -eq 'linux-x86_64' -and (Test-Path 'build\cross-linker-sidecars')) {
+            # Bundle the aarch64/riscv64 cross-linker sidecars staged above
+            # (docs/design/native-link-embedding.md §11.1/§13.5) into the
+            # linux-x86_64 archive so users can cross-link without an
+            # external toolchain via OSCAN_NATIVE_LINKER.
+            $assembleArgs['CrossLinkerSidecarDir'] = (Resolve-Path 'build\cross-linker-sidecars').Path
+          }
+          $archivePath = & .\scripts\assemble-release.ps1 @assembleArgs
           "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
-
-      - name: Inject pre-built libbearssl.a into bundle (Linux only)
-        if: startsWith(matrix.target, 'linux')
-        shell: bash
-        run: |
-          BEARSSL_LIB=packaging/prebuilt/linux-x86_64/libbearssl.a
-          if [ ! -f "$BEARSSL_LIB" ]; then
-            echo "::warning::Pre-built libbearssl.a not found — TLS will use stubs."
-            echo "Run the 'Build BearSSL' workflow to generate it."
-            exit 0
-          fi
-          ARCHIVE="${{ steps.assemble.outputs.archive_path }}"
-          STAGE_DIR="$(dirname "$ARCHIVE")/stage"
-          BUNDLE_DIR=$(find "$STAGE_DIR" -maxdepth 1 -mindepth 1 -type d | head -1)
-          if [ -z "$BUNDLE_DIR" ]; then
-            echo "Could not find bundle directory in $STAGE_DIR"
-            exit 1
-          fi
-          mkdir -p "$BUNDLE_DIR/toolchain/lib"
-          cp "$BEARSSL_LIB" "$BUNDLE_DIR/toolchain/lib/libbearssl.a"
-          echo "Injected pre-built libbearssl.a into $(basename $BUNDLE_DIR)/toolchain/lib/"
-          # Re-create the archive
-          ARCHIVE_NAME=$(basename "$ARCHIVE")
-          ARCHIVE_DIR=$(dirname "$ARCHIVE")
-          rm -f "$ARCHIVE"
-          cd "$STAGE_DIR"
-          XZ_OPT="-T0" tar -cJf "$ARCHIVE_DIR/$ARCHIVE_NAME" "$(basename $BUNDLE_DIR)"
-          echo "Re-packaged $ARCHIVE_NAME with BearSSL"
 
       - name: Smoke test packaged bundle
         shell: pwsh

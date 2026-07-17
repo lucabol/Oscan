@@ -316,6 +316,183 @@ chased further here. `scripts/size-matrix.ps1` enforces a ratio threshold
 (1.10 for core, looser for the feature families) instead of exact byte counts
 as a standing regression gate for this split.
 
+## Embedded native-link assets for self-contained Windows native builds
+
+On Windows x86-64, default `oscan --backend native` (freestanding) builds no
+longer need an external C compiler or linker: `oscan.exe` embeds a linker
+(`ld.lld`) plus the minimal MinGW support files it needs, and extracts them to
+a local cache at first use (see
+`docs/design/native-link-embedding.md` for the full design). This section
+covers the release-time steps that make that embedding possible; it does not
+change anything described above about `build-runtime-archive` on its own.
+
+The runtime shim (`runtime/osc_native_shim.c`) is now precompiled directly
+into every runtime archive's `sources` list (`runtime-archive-contract.json`,
+`schema_version: 2`) — `build-runtime-archive` compiles it like any other
+runtime source, and its manifest records `contains_native_shim`/
+`native_shim_member` so no C compilation is needed at native-build time
+downstream. A freestanding archive built without the shim is a hard,
+actionable error; a legacy hosted archive without it falls back to a
+diagnosed local compile.
+
+`scripts/release_tools.py`'s **`prepare-embed-assets`** subcommand stages the
+embedded linker asset set — for `windows-x86_64` today, exactly 13 files
+(`ld.lld.exe`, its 5 required runtime DLLs, 6 Win32 import libraries, and
+`libclang_rt.builtins-x86_64.a`), totaling ≈85.4 MB — from an already-fetched
+pinned toolchain directory into `packaging/prebuilt/<target>/`, alongside a
+`native-link-assets.json` manifest with a per-file sha256. `ld.lld.exe` is not
+a static binary; its runtime DLLs (`libLLVM-22.dll`, `libc++.dll`,
+`libwinpthread-1.dll`, `libunwind.dll`, `libffi-8.dll`) are staged into the
+same `bin/` subdirectory so Windows' default DLL search resolves them with no
+`PATH` changes. Thin wrappers `scripts/prepare-embed-assets.ps1`/`.sh` mirror
+the existing `build-runtime-archive.ps1`/`.sh` style:
+
+```powershell
+scripts\prepare-embed-assets.ps1 `
+  -Target windows-x86_64 `
+  -ToolchainDir build\toolchain-windows-x86_64 `
+  -ToolchainManifest packaging\toolchains\windows-x86_64.json `
+  -OutputDir packaging\prebuilt\windows-x86_64
+```
+
+`cargo build` then embeds those staged assets via two `build.rs` env vars:
+`OSCAN_EMBED_ASSETS_DIR` (path to the staged directory) and
+`OSCAN_REQUIRE_EMBEDDED_ASSETS=1` (fail the build if any asset is
+missing/incomplete/digest-mismatched, rather than silently skipping
+embedding). Neither is required for an ordinary dev `cargo build`; without
+`OSCAN_EMBED_ASSETS_DIR` the build still succeeds with nothing embedded, and
+the resulting `oscan.exe` falls back to the external/bundled C-toolchain
+linker driver at native-link time (printing a one-line `note:` the first time
+that happens).
+
+**The release `package` job's step order matters** — asset staging must
+happen *before* `cargo build --release` so there's something for it to embed,
+and *before* `assemble-release.ps1` so that script's own runtime-archive build
+isn't duplicated:
+
+1. Checkout / Rust / Python setup.
+2. **Fetch the pinned toolchain** (`fetch-toolchain.ps1`/`.sh`).
+3. **Build runtime archives with the shim baked in** (`build-runtime-archive.ps1`/`.sh`).
+4. **`prepare-embed-assets.ps1`/`.sh`** — stages the 13-file/≈85.4 MB asset set.
+5. **`cargo build --release`** with `OSCAN_EMBED_ASSETS_DIR`/
+   `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` set (Windows targets only) — this is the
+   build that actually embeds the assets, and fails loudly if any are missing.
+6. **Assemble the release asset** (`assemble-release.ps1`). Since steps 2–3
+   already built the runtime archives, `assemble-release.ps1` accepts an
+   optional `-PrebuiltRuntimeArchiveDir` parameter to reuse them instead of
+   fetching the toolchain and rebuilding a second time; omitting it preserves
+   its previous, fully self-sufficient behavior for any other caller. The
+   `toolchain/` sidecar described earlier in this document is still packaged,
+   but is now only needed for hosted/`--extra-c`/legacy native-link fallback —
+   default freestanding native builds on Windows no longer require it.
+
+CI (`ci.yml`) is unchanged in structure — its Windows job still builds without
+`OSCAN_EMBED_ASSETS_DIR`, exercising the dev/external-toolchain path — plus
+one new optional `native-link-embedding-smoke-windows` job that runs
+`prepare-embed-assets` and does an embedded build+link smoke test, so the
+embedded path has coverage without every `cargo build` needing staged assets.
+
+## Embedded native-link assets for self-contained Linux native builds
+
+On Linux x86-64, default `oscan --backend native` (freestanding) builds
+similarly no longer need an external C compiler or linker: `oscan` embeds a
+linker (a fully static `x86_64-linux-musl-ld` binary from the pinned
+musl-cross toolchain) and extracts it to a local cache at first use (see
+`docs/design/native-link-embedding.md` §10 for the Linux-specific details).
+The payload size contrast is notable: **Linux embeds exactly 1 file (~2.78 MB)**
+vs Windows' 13 files (~85.4 MB) — the Linux linker is a fully static binary
+with zero shared-library dependencies, while Windows' `ld.lld.exe` requires 5
+sibling DLLs.
+
+The same `scripts/release_tools.py` **`prepare-embed-assets`** subcommand handles
+both platforms. For Linux:
+
+```bash
+scripts/prepare-embed-assets.sh \
+  --target linux-x86_64 \
+  --toolchain-dir build/toolchain-linux-x86_64 \
+  --toolchain-manifest packaging/toolchains/linux-x86_64.json \
+  --output-dir packaging/prebuilt/linux-x86_64
+```
+
+The asset set (1 linker binary, `native-link-assets.json` manifest with sha256)
+is staged into `packaging/prebuilt/linux-x86_64/linker/`, then embedded via the
+same `OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS=1` mechanism when
+`cargo build --release` runs on the Linux package job. The Linux release job's
+step order mirrors Windows:
+
+1. Checkout / Rust / Python setup.
+2. **Fetch the pinned toolchain** (`fetch-toolchain.sh`).
+3. **Build runtime archives with the shim baked in** (`build-runtime-archive.sh`).
+4. **`prepare-embed-assets.sh --target linux-x86_64`** — stages the 1-file/~2.78 MB asset set.
+5. **`cargo build --release`** with `OSCAN_EMBED_ASSETS_DIR`/
+   `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` set (Linux x86-64 target only) — embeds the
+   linker and fails loudly if the asset is missing.
+6. **Assemble the release asset** (`assemble-release.sh` with `-PrebuiltRuntimeArchiveDir`).
+
+CI includes a `native-link-embedding-smoke-linux` job parallel to the Windows
+one, validating the Linux embedded path without requiring every dev `cargo
+build` to have staged assets.
+
+## Cross-linker sidecars for aarch64/riscv64 (Linux x86-64 bundle)
+
+A single Linux `oscan` binary only embeds the linker for its own host target
+(`linux-x86_64`) — see `docs/design/native-link-embedding.md` §11.1 for why
+multi-target embedding is deliberately out of scope. To let a `linux-x86_64`
+release still cross-link `--backend native` freestanding executables for
+`linux-aarch64`/`linux-riscv64` **without** requiring the user to install an
+external cross-toolchain, the `linux-x86_64` release archive also bundles a
+**cross-linker sidecar** per target under `cross-linkers/<target>/`:
+
+```
+cross-linkers/
+  linux-aarch64/
+    aarch64-linux-musl-ld
+    libosc_runtime_freestanding.a
+    libosc_runtime_freestanding_core.a
+    libosc_runtime_hosted.a
+    (+ matching .json manifests)
+  linux-riscv64/
+    riscv64-linux-musl-ld
+    libosc_runtime_freestanding.a
+    libosc_runtime_freestanding_core.a
+    libosc_runtime_hosted.a
+    (+ matching .json manifests)
+```
+
+Both the linker binary **and** the target's runtime archives must be present
+together — `--backend native` cross-linking needs a linker
+(`OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR=elf`) *and* a
+matching-target runtime archive to link against
+(`OSCAN_RUNTIME_ARCHIVE_DIR`; see `src/backend/link/archive.rs`). To
+cross-link from a `linux-x86_64` host using the bundled sidecar:
+
+```bash
+OSCAN_NATIVE_LINKER=./cross-linkers/linux-aarch64/aarch64-linux-musl-ld \
+OSCAN_NATIVE_LINKER_FLAVOR=elf \
+OSCAN_RUNTIME_ARCHIVE_DIR=./cross-linkers/linux-aarch64 \
+oscan prog.osc --backend native --native-target linux-aarch64 -o prog
+```
+
+In `release.yml`, the sidecars are staged in two steps: "Build aarch64 and
+riscv64 runtime archives" builds the `.a` files into
+`build/runtime-archives/linux-{target}/`, and "Prepare cross-linker sidecars
+for packaging" copies both that target's `ld` binary (from the previously
+fetched toolchain) *and* its runtime archives into
+`build/cross-linker-sidecars/linux-{target}/`, which
+`assemble-release.ps1`/`release_tools.py --cross-linker-sidecar-dir` then
+folds into `cross-linkers/<target>/` in the final `linux-x86_64` archive.
+`README-install.txt` documents this usage automatically when sidecars are
+present in the bundle.
+
+CI validates the underlying override mechanism itself (independent of the
+release archive's packaging) via a "Cross-link via OSCAN_NATIVE_LINKER
+sidecar override" step in each of the `native-link-embedding-smoke-linux-{aarch64,riscv64}`
+jobs, which builds a plain (non-embedding) `oscan` binary and cross-links
+using only the fetched toolchain's `ld` and the built runtime archive,
+mirroring exactly how a real user with only the release bundle would invoke
+it.
+
 ## Creating a release
 
 After both prerequisites are in place, tag a version and push:

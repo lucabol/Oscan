@@ -13,7 +13,9 @@ param(
 
     [string]$ContractPath,
 
-    [string]$RuntimeArchiveDir
+    [string]$RuntimeArchiveDir,
+
+    [string]$CrossLinkerSidecarDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +57,9 @@ $pythonArgs = @(
 )
 if ($RuntimeArchiveDir) {
     $pythonArgs += @("--runtime-archive-dir", $RuntimeArchiveDir)
+}
+if ($CrossLinkerSidecarDir) {
+    $pythonArgs += @("--cross-linker-sidecar-dir", $CrossLinkerSidecarDir)
 }
 
 $result = & python @pythonArgs

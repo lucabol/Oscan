@@ -35,3 +35,27 @@ fn short_help_flag_prints_usage_and_succeeds() {
     assert!(stdout.contains("usage: oscan"));
     assert!(stdout.contains("--target <arch>"));
 }
+
+#[test]
+fn help_mentions_extra_obj() {
+    let output = Command::new(oscan_binary_path())
+        .arg("--help")
+        .output()
+        .expect("failed to run oscan --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--extra-obj"));
+}
+
+#[test]
+fn help_mentions_extra_lib() {
+    let output = Command::new(oscan_binary_path())
+        .arg("--help")
+        .output()
+        .expect("failed to run oscan --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("--extra-lib"));
+}

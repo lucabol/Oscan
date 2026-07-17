@@ -84,8 +84,6 @@ The PowerShell runner can compare any opt-in native backend with the C backend:
 .\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend native
 # Full repository runner:
 .\test.ps1 -Backend native
-# GNU-style spelling is also accepted:
-.\test.ps1 --backend native
 # Focused native runtime/link-mode regression:
 .\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe
 ```
