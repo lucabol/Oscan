@@ -648,6 +648,16 @@ jobs:
         shell: pwsh
         run: ./tests/native_link_concurrency_linux.tests.ps1 -Oscan ./target/release/oscan
 
+      - name: Stage BearSSL for the C differential oracle
+        shell: bash
+        run: |
+          # The differential harness invokes the C backend from tests/build,
+          # where it cannot discover the source-tree prebuilt through runtime/.
+          # Use the supported release layout without changing the native assets:
+          # those remain the pinned musl archives staged above.
+          mkdir -p target/release/lib
+          cp packaging/prebuilt/linux-x86_64/libbearssl.a target/release/lib/
+
       - name: Full C vs native backend differential suite
         shell: pwsh
         run: ./tests/run_tests.ps1 -Oscan ../target/release/oscan -Backend native
