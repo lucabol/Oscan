@@ -72,7 +72,9 @@ type CBlock = cranelift_codegen::ir::Block;
 fn unsupported(span: Span, what: impl std::fmt::Display) -> CompileError {
     CompileError::new(
         span,
-        format!("native backend: {what} is not yet supported (use --backend c, or see the native-completeness tracking work)"),
+        format!(
+            "native backend: {what} is not supported (use --backend c when portable C lowering supports this construct)"
+        ),
     )
 }
 

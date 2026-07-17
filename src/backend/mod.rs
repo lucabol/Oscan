@@ -12,40 +12,21 @@
 //!
 //! # Coverage
 //!
-//! Implemented: `i32`/`i64`/`f64`/`bool` arithmetic (via the same checked
-//! `osc_*` runtime helpers the C backend calls, for bit-identical
-//! overflow/panic behavior), comparisons, short-circuiting `and`/`or`,
-//! casts, `if`/`while`/`for`/`for-in`/`break`/`continue`/`return`/blocks,
-//! `defer`, user function definitions and recursive/forward calls,
-//! `extern` calls with scalar signatures, indirect calls through
-//! function-pointer values, string literals/interpolation and a curated
-//! set of `str`-returning/accepting runtime builtins (via
-//! `runtime/osc_native_shim.c`), dynamic/fixed arrays (`len`/`push`/`pop`/
-//! literals/indexing), structs (literals/field access, including nested
-//! structs and array/str fields), payload and non-payload enums,
-//! `Result`/`try`/`match` (literal, wildcard/ident, bool, and enum
-//! patterns with simple identifier/wildcard payload bindings), the
-//! untyped `map` and all five typed `map_<k>_<v>` hashmap families,
-//! TCP/UDP/Unix-domain sockets, TLS (`tls_connect`/`tls_send`/`tls_recv`/
-//! `tls_recv_byte`/`tls_close`/`tls_cleanup`), terminal
-//! (`term_width`/`term_height`/`term_raw`/`term_restore`/`read_nonblock`/
-//! `is_tty`), environment iteration (`env_count`/`env_key`/`env_value`),
-//! directory listing (`dir_list`/`dir_change`), process/pipes
-//! (`proc_run`/`proc_spawn`/`proc_wait`/`pipe_create`/`fd_dup`/`fd_dup2`/
-//! `path_find_exec`), and the non-interactive graphics primitives
-//! (`gfx_pixel`..`gfx_text_width`/`gfx_blit`/`gfx_blit_alpha`, `rgb`/`rgba`).
+//! Implemented: the full language surface exercised by the positive
+//! integration corpus, including checked scalar arithmetic, structured
+//! control flow, `defer`, user/recursive/indirect calls, scalar-signature
+//! `extern` calls, strings/interpolation, arrays, structs, enums,
+//! `Result`/`try`/`match`, maps, sockets/TLS, terminal/environment/process
+//! builtins, graphics, interactive `canvas_*`/`clipboard_*`, and
+//! `img_load`/`svg_load`/`tt_*`. Aggregate-returning runtime calls cross
+//! the ABI through `runtime/osc_native_shim.c`.
 //!
-//! Not implemented (reported as a compile error naming the exact
-//! construct, never a panic or silent miscompilation): `extern`
-//! declarations with a `str`/struct/payload-enum/`Result` parameter or
-//! return type; the interactive `canvas_*`/`clipboard_*` builtins (they
-//! open a real OS window / touch the desktop clipboard — no headless
-//! test coverage exists for either backend) and `img_load`/`svg_load`/
-//! `tt_*` (image/SVG/TrueType asset decoding, which also need a
-//! `Result<[i32], str>`/`Result<handle, str>` shim shape the curated list
-//! above does not yet have); nested literal/enum sub-patterns inside an
-//! enum payload binding. See `native-completeness` for the tracked plan
-//! to close these.
+//! The remaining source-level limitation is user-declared `extern`
+//! functions with an inline-aggregate (`str`, struct, payload enum, or
+//! `Result`) parameter or return type. Those require an explicit C ABI
+//! shim; the native backend reports a compile error and the C portability
+//! backend remains the fallback. Nested enum payload subpatterns are
+//! rejected by the language grammar, so they are not a backend gap.
 //!
 //! # Runtime modes
 //!

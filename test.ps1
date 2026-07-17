@@ -465,9 +465,9 @@ if (-not $SkipIntegration) {
             }
 
             if ($name -match '^ffi') {
-                & $oscanExe --libc $_.FullName -o "$root\tests\build\$name.exe" 2>$null
+                & $oscanExe --backend c --libc $_.FullName -o "$root\tests\build\$name.exe" 2>$null
             } else {
-                & $oscanExe $_.FullName -o "$root\tests\build\$name.exe" 2>$null
+                & $oscanExe --backend c $_.FullName -o "$root\tests\build\$name.exe" 2>$null
             }
             if ($LASTEXITCODE -ne 0) {
                 return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'compile error' }
@@ -601,7 +601,7 @@ if (-not $SkipIntegration) {
             return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'missing expected file' }
         }
 
-        & $oscanExe --libc $_.FullName -o "$root\tests\build\${name}_libc.exe" 2>$null
+        & $oscanExe --backend c --libc $_.FullName -o "$root\tests\build\${name}_libc.exe" 2>$null
         if ($LASTEXITCODE -ne 0) {
             return [PSCustomObject]@{ Name = $name; Status = 'FAIL'; Detail = 'compile error' }
         }
@@ -1122,7 +1122,7 @@ if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Examples compilation �
 $exPass = 0; $exFail = 0
 foreach ($exFile in Get-ChildItem "examples\*.osc") {
     $name = $exFile.BaseName
-    & $oscan $exFile.FullName -o "examples\${name}.exe" 2>$null
+    & $oscan --backend c $exFile.FullName -o "examples\${name}.exe" 2>$null
     if ($LASTEXITCODE -eq 0) {
         Add-TestResult $name "win-x64" "examples" "PASS" ""
         $exPass++
@@ -1140,7 +1140,7 @@ if (-not $VerboseOutput) {
 if (Test-Path "examples\gfx\*.osc") {
     foreach ($exFile in Get-ChildItem "examples\gfx\*.osc") {
         $name = $exFile.BaseName
-        & $oscan $exFile.FullName -o "examples\gfx\${name}.exe" 2>$null
+        & $oscan --backend c $exFile.FullName -o "examples\gfx\${name}.exe" 2>$null
         if ($LASTEXITCODE -eq 0) {
             $exPass++
         }
