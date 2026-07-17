@@ -100,7 +100,27 @@ try {
     Assert-NativeLinkIsolation (Test-Path -LiteralPath $exePath -PathType Leaf) "no executable was produced"
 
     $size = (Get-Item -LiteralPath $exePath).Length
-    Assert-NativeLinkIsolation ($size -eq 6656) "expected exactly 6656 bytes for hello.osc via MingwDirect, got $size"
+    # PE file size can move by a file-alignment block when LLD/toolchain layout
+    # changes. Keep the established release-quality size as a regression ceiling
+    # rather than rejecting an improvement (scripts/size-matrix.ps1 does the
+    # same: thresholds, not exact byte counts).
+    $maxExpectedSize = 6656
+    Assert-NativeLinkIsolation ($size -le $maxExpectedSize) `
+        "expected at most $maxExpectedSize bytes for hello.osc via MingwDirect, got $size"
+
+    # Preserve the freestanding dependency invariant without relying on dumpbin
+    # being installed on the runner. Import names are stored as ASCII in the PE.
+    $exeAscii = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes($exePath)
+    )
+    $dllImports = @(
+        [regex]::Matches($exeAscii, '(?i)\b[A-Z0-9_.-]+\.dll\b') |
+            ForEach-Object { $_.Value.ToUpperInvariant() } |
+            Sort-Object -Unique
+    )
+    Assert-NativeLinkIsolation (
+        $dllImports.Count -eq 1 -and $dllImports[0] -eq 'KERNEL32.DLL'
+    ) "expected only KERNEL32.dll in isolated hello.exe, got: $($dllImports -join ', ')"
 
     $run = & $exePath
     $runExit = $LASTEXITCODE
@@ -108,7 +128,7 @@ try {
     $actual = ($run | Out-String).TrimEnd("`r", "`n")
     Assert-NativeLinkIsolation ($actual -eq "Hello, Oscan!") "isolated hello.exe stdout mismatch: got '$actual'"
 
-    Write-Host "native link true-isolation test passed (toolchain dir renamed away + PATH scrubbed of cc/gcc/clang/cl; 6656 B; embedded ld.lld.exe used)"
+    Write-Host "native link true-isolation test passed (toolchain dir renamed away + PATH scrubbed of cc/gcc/clang/cl; $size B within $maxExpectedSize B ceiling; KERNEL32-only; embedded ld.lld.exe used)"
 } finally {
     $env:PATH = $savedPath
     if ($toolchainRenamed -and (Test-Path -LiteralPath $renamedPath)) {

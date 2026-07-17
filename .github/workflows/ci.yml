@@ -611,7 +611,18 @@ jobs:
             fi
           done
 
-          ./target/release/oscan examples/hello.osc -o tests/build/embed_hello
+          compile_log="tests/build/embed_hello.compile.log"
+          if ! ./target/release/oscan examples/hello.osc \
+            --backend native \
+            -o tests/build/embed_hello >"$compile_log" 2>&1; then
+            cat "$compile_log"
+            exit 1
+          fi
+          cat "$compile_log"
+          if ! grep -q 'Linking freestanding executable.*(embedded)' "$compile_log"; then
+            echo "error: native smoke did not use the embedded direct linker"
+            exit 1
+          fi
           ./tests/build/embed_hello
 
       - name: Verify static linking (no PT_INTERP, no dynamic section)
