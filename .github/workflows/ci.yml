@@ -557,7 +557,7 @@ jobs:
             --cc "$toolchainDir/$compilerPath" \
             --ar "$toolchainDir/$archiverPath" \
             --toolchain-manifest "$manifestPath" \
-            --output-dir build/runtime-archives/linux-x86_64
+            --out-dir build/runtime-archives/linux-x86_64
 
           # Hosted mode intentionally uses the host libc/compiler driver.
           # Rebuild that one archive with the same host Clang the full
@@ -695,7 +695,7 @@ jobs:
             --cc "$toolchainDir/$compilerPath" \
             --ar "$toolchainDir/$archiverPath" \
             --toolchain-manifest "$manifestPath" \
-            --output-dir build/runtime-archives/linux-aarch64
+            --out-dir build/runtime-archives/linux-aarch64
 
       - name: Stage embedded native-link assets (aarch64)
         shell: bash
@@ -866,7 +866,7 @@ jobs:
             --cc "$toolchainDir/$compilerPath" \
             --ar "$toolchainDir/$archiverPath" \
             --toolchain-manifest "$manifestPath" \
-            --output-dir build/runtime-archives/linux-riscv64
+            --out-dir build/runtime-archives/linux-riscv64
 
       - name: Stage embedded native-link assets (riscv64)
         shell: bash

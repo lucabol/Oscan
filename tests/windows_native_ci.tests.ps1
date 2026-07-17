@@ -180,14 +180,18 @@ try {
             "-RuntimeArchiveDir $archiveLiteral -ToolchainDir $toolchainLiteral " +
             "-StandardUserStateDir $stateLiteral -StandardUserChild"
         )
-        $encodedChildCommand = [Convert]::ToBase64String(
-            [Text.Encoding]::Unicode.GetBytes($childCommand)
+        # CreateProcessWithLogonW limits its command line to 1,024 characters.
+        # An encoded command repeats these absolute paths at base64 size and can
+        # exceed that limit, so keep the long command in the private state dir.
+        $childScriptPath = Join-Path $stateDir "run-validation.ps1"
+        [IO.File]::WriteAllText(
+            $childScriptPath, $childCommand, [Text.UTF8Encoding]::new($false)
         )
         $arguments = @(
             "-NoProfile",
             "-NonInteractive",
             "-ExecutionPolicy", "Bypass",
-            "-EncodedCommand", $encodedChildCommand
+            "-File", "`"$childScriptPath`""
         )
         $process = Start-Process `
             -FilePath (Get-Command pwsh).Source `
