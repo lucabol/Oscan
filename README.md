@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20ARM64%20%7C%20RISC--V%20%7C%20WASI-blue)
 
-**A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile to C99 and run anywhere. Oscan is designed so that LLMs *understand what they are writing* — a small, explicit grammar with readable C output you can inspect or embed directly.
+**A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile through portable C99 or directly to native object code. Oscan is designed so that LLMs *understand what they are writing* — a small, explicit grammar with readable C output you can inspect or embed directly.
 
 ## Contents
 
@@ -24,7 +24,8 @@
 
 ## Language Highlights
 
-- **Runs without a C library.** Compiles to freestanding C99 via direct syscalls on x86_64, ARM64, and RISC-V. Also targets WebAssembly (via WASI, which uses libc). (A `--libc` mode is available for hosted builds when you want it.)
+- **Two deliberate backend roles.** Supported Windows/Linux hosts default to direct native object code; C remains the portability, reference, source-emission, macOS, and WASI path.
+- **Runs without a C library.** Both backends support freestanding direct-syscall builds on their validated targets. (A `--libc` mode is available for hosted builds when you want it.)
 - **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [11 of 11 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
 - **Socket networking.** TCP and UDP builtins with hostname resolution — build HTTP clients and web servers out of the box.
@@ -37,7 +38,7 @@
 - **[26 reserved words.](docs/spec/oscan-spec.md#11-reserved-words-26-total)** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
 - **Order-independent definitions.** Use functions, types, and constants before they are declared.
 - **Namespaced imports.** `use "math.osc" as math` — access imported symbols via `math.add(...)` to avoid name collisions in larger programs.
-- **162 tests, 37 examples.** Tested on Windows, Linux, macOS, and ARM64 via CI.
+- **99 positive tests, 35 negative tests, 27 examples.** Tested across C and native backends on Windows, Linux, macOS, ARM64, RISC-V64, and WASI via CI.
 
 ## For AI Coding Agents
 
@@ -144,7 +145,8 @@ xcode-select --install
 
 **Requirements:**
 - Rust toolchain (for building the compiler)
-- C compiler (GCC, Clang, or MSVC) for compiling Oscan source code
+- C compiler (GCC, Clang, or MSVC) for the C backend, hosted native builds,
+  `--extra-c`, and local native builds without packaged direct-link assets
 
 **Build the compiler:**
 
@@ -204,6 +206,7 @@ Run it:
 oscan hello.osc --run       # compile and execute
 oscan hello.osc              # compile to hello.exe (Windows) / hello (Linux)
 oscan hello.osc -o out.c     # transpile to C only
+oscan hello.osc --backend c --run       # force the portability/reference backend
 ```
 
 **CLI options:**
@@ -211,9 +214,9 @@ oscan hello.osc -o out.c     # transpile to C only
 oscan [OPTIONS] <file.osc>
   -o <path>       Output path (exe by default; .c extension for C output)
   --run           Compile and execute immediately
-  --emit-c        Emit generated C to stdout
+  --emit-c        Emit C-backend source to stdout
   --libc          Use hosted libc mode (also explicit for --backend native)
-  --backend <name>  Code generator: c (default) or native
+  --backend <name>  Code generator (native on supported hosts; c otherwise)
   --native-target <tag>  Native object target (default: host)
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
   --extra-c <file>  Extra C source file to compile and link (repeatable)
@@ -223,6 +226,22 @@ oscan [OPTIONS] <file.osc>
   --dump-ast      Print AST (debug)
   --dump-tokens   Print tokens (debug)
 ```
+
+**Backend roles:**
+
+- **`native` (implicit on supported hosts):** direct Cranelift object-code
+  backend for Windows x86-64 and Linux x86-64/AArch64/RISC-V64. It never
+  silently falls back to C code generation; unsupported C ABI shapes produce
+  an explicit error.
+- **`c`:** portability/reference backend. It is selected implicitly by
+  `--emit-c`, `-o file.c`, `--target riscv64|wasi`, and unsupported native
+  hosts such as macOS. It remains the differential correctness oracle for
+  native.
+
+An explicit `--backend c|native` always overrides implicit selection.
+`--native-target` selects native when no backend is named. `--libc`,
+`--extra-c`, and `--extra-cflags` do not force C because native can use its
+compiler-driver link path for those operations.
 
 **Windows/Linux toolchain lookup:**
 
@@ -243,7 +262,7 @@ If your Windows/Linux Oscan distribution includes that bundled `toolchain/` dire
 
 ### Self-contained native builds (Windows & Linux)
 
-**On Windows x86-64 and Linux x86-64, `oscan --backend native` (the default, freestanding mode, no `.c` files involved) needs no external C compiler or linker at all.** `oscan` itself embeds a linker plus the minimal support files it needs — not a full C toolchain — and extracts them on first use to a local cache (`%LOCALAPPDATA%\oscan\native-assets\` on Windows; `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on Linux). That cache is safe to delete or ignore: Oscan verifies it by content hash and rebuilds it automatically the next time it's needed. This is **not** the same as the `toolchain/` directory described above, which is a full bundled/host C compiler used by other build paths.
+**On Windows x86-64 and Linux x86-64, ordinary freestanding host builds implicitly select native and need no external C compiler or linker at all.** Explicit `--backend native` builds behave the same way. `oscan` itself embeds a linker plus the minimal support files it needs — not a full C toolchain — and extracts them on first use to a local cache (`%LOCALAPPDATA%\oscan\native-assets\` on Windows; `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on Linux). That cache is safe to delete or ignore: Oscan verifies it by content hash and rebuilds it automatically the next time it's needed. This is **not** the same as the `toolchain/` directory described above, which is a full bundled/host C compiler used by other build paths.
 
 The embedded payload size differs by platform:
 - **Windows:** 13 files (~85.4 MB) — `ld.lld.exe` plus 5 required runtime DLLs (`libLLVM-22.dll`, `libc++.dll`, `libwinpthread-1.dll`, `libunwind.dll`, `libffi-8.dll`), 6 MinGW import libraries, and compiler-builtins.
@@ -262,12 +281,12 @@ Advanced overrides (rarely needed): `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_F
 
 | Target | Mode | Compiler | Notes |
 |--------|------|----------|-------|
-| x86_64 Linux | Freestanding (native backend) | embedded linker (no external compiler/linker needed) | Default on Linux with `--backend native`; see "Self-contained native builds" above |
-| x86_64 Windows | Freestanding (native backend) | embedded linker (no external compiler/linker needed) | Default on Windows with `--backend native`; see "Self-contained native builds" above |
-| ARM64 Linux | Freestanding (native backend) | cross-linker sidecar (`aarch64-linux-musl-ld`) | C backend default; native backend via `--backend native --native-target linux-aarch64` + `OSCAN_NATIVE_LINKER` override; CI via QEMU |
-| RISC-V 64 Linux | Freestanding (native backend) | cross-linker sidecar (`riscv64-linux-musl-ld`) | C backend default via `--target riscv64`; native backend via `--backend native --native-target linux-riscv64` + `OSCAN_NATIVE_LINKER` override; CI via QEMU |
-| WebAssembly | Libc (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
-| macOS | Libc | gcc / clang | No freestanding (Apple policy) |
+| x86_64 Linux | Native freestanding | embedded linker (no external compiler/linker needed) | `--backend native`; see "Self-contained native builds" above |
+| x86_64 Windows | Native freestanding | embedded linker (no external compiler/linker needed) | `--backend native`; see "Self-contained native builds" above |
+| ARM64 Linux | C or native freestanding | C cross-compiler or `aarch64-linux-musl-ld` sidecar | Native via `--native-target linux-aarch64`; CI via QEMU |
+| RISC-V 64 Linux | C or native freestanding | C cross-compiler or `riscv64-linux-musl-ld` sidecar | C via `--target riscv64`; native via `--native-target linux-riscv64`; CI via QEMU |
+| WebAssembly | C backend (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
+| macOS | C backend (libc) | Apple Clang | Native backend not yet available |
 
 ## Examples
 
@@ -337,12 +356,13 @@ On Windows, you can also run the full validation suite:
 .\tests\run_tests.ps1 -Oscan .\target\debug\oscan.exe   # integration tests
 ```
 
-The repository currently includes **162 tests**:
-- **62 unit tests** — lexer, parser, typechecker, codegen
-- **74 positive integration tests** — programs that compile and run
-- **26 negative integration tests** — programs that must be rejected by the compiler
+The repository currently includes:
+- **99 positive integration tests** — programs that compile and run
+- **35 negative integration tests** — programs that must be rejected
+- Rust unit/integration tests for the compiler, native linker, packaging, and CLI
 
-Windows (MSVC), Linux (GCC), macOS (Clang), and ARM64 (QEMU) are tested in CI.
+Windows, Linux, macOS, ARM64 and RISC-V64 (QEMU), and WASI are tested in CI.
+Supported Windows/Linux targets also run C-vs-native differential validation.
 
 ## Contributing
 

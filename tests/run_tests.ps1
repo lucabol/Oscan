@@ -52,7 +52,7 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     if ($name -match '^ffi') { $compileArgs += '--libc' }
 
     if ($Backend -eq "c") {
-        & $Oscan @compileArgs $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
+        & $Oscan $BackendOption c @compileArgs $oscFile.FullName -o "build\$name.exe" 2>"build\$name.err"
         if ($LASTEXITCODE -ne 0) {
             [void]$Failures.Add("$name — compile error")
             $Fail++; continue
@@ -92,7 +92,7 @@ foreach ($oscFile in Get-ChildItem "positive\*.osc") {
     }
 
     if (($Backend -eq "c") -and ($LibcRegressionTests -contains $name) -and ($name -notmatch '^ffi')) {
-        & $Oscan --libc $oscFile.FullName -o "build\$name.libc.exe" 2>"build\$name.libc.err"
+        & $Oscan $BackendOption c --libc $oscFile.FullName -o "build\$name.libc.exe" 2>"build\$name.libc.err"
         if ($LASTEXITCODE -ne 0) {
             [void]$Failures.Add("$name — libc compile error")
             $Fail++
@@ -121,10 +121,7 @@ foreach ($oscFile in Get-ChildItem "negative\*.osc") {
     $rejectedByAllBackends = $true
     foreach ($negativeBackend in $negativeBackends) {
         $backendTag = ConvertTo-OracleBackendTag $negativeBackend
-        $backendArgs = @()
-        if ($negativeBackend -ne "c") {
-            $backendArgs += @($BackendOption, $negativeBackend)
-        }
+        $backendArgs = @($BackendOption, $negativeBackend)
         & $Oscan @backendArgs $oscFile.FullName `
             -o "build\$name.$backendTag.negative" `
             2>"build\$name.$backendTag.err"

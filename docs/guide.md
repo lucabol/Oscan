@@ -10,7 +10,7 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ### Download Prebuilt Releases (Recommended)
 
-The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Each release includes the Oscan compiler and, on Windows and Linux, a bundled C toolchain so you can start compiling programs immediately.
+The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include the assets for self-contained freestanding native builds and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
 
 **Windows x86_64 (full bundle with toolchain):**
 
@@ -49,7 +49,8 @@ xcode-select --install
 If you prefer to build Oscan yourself, you'll need:
 
 - **Rust toolchain** (to compile the Oscan compiler itself)
-- **C compiler** (GCC, Clang, or MSVC) to compile the generated C code from your Oscan programs
+- **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted native mode,
+  `--extra-c`, and native final linking when packaged direct-link assets are absent
 
 ```bash
 git clone https://github.com/lucabol/Oscan.git
@@ -711,6 +712,11 @@ fn! main() {
 
 Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
 
+The native backend currently supports scalar C ABI signatures (`i32`, `i64`,
+`f64`, `bool`, and `handle`) directly. User-declared externs involving `str`,
+structs, payload enums, or `Result` require an explicit ABI shim; use the C
+portability backend when no shim is available.
+
 The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
 
 ### Linking Extra C Files
@@ -726,7 +732,7 @@ Both flags are repeatable — use one per file or flag.
 
 ### Linking Precompiled Objects and Libraries
 
-Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`) and static libraries (`.a` or `.lib`) without requiring a C compiler. Both flags work with `--backend c` (the default) and `--backend native`:
+Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`) and static libraries (`.a` or `.lib`) without compiling new C source. Both flags work with either backend:
 
 ```
 oscan myapp.osc --extra-obj mylib.o --run
@@ -881,9 +887,18 @@ let x: i32 = 1;
 
 ---
 
-## Native Toolchain Lookup (Windows/Linux)
+## Backend Roles and Toolchain Lookup (Windows/Linux)
 
-For normal host builds on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
+Ordinary executable, object, and `--run` builds implicitly use the **native
+backend** when the host is Windows x86-64 or Linux
+x86-64/AArch64/RISC-V64. Unsupported hosts, including macOS, fall back to the
+**C backend**. C is also selected implicitly by `--emit-c`, `-o file.c`, and
+`--target riscv64|wasi`; it remains the portability/reference path and
+differential oracle. An explicit `--backend c|native` always wins, and
+`--native-target` selects native when no backend is named. Native never
+silently falls back to C code generation.
+
+For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
 
 Lookup order:
 
@@ -901,21 +916,19 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
 
 **Exception — Windows and Linux x86-64 freestanding native builds:** the lookup
-above is for the external/bundled **C compiler**. On Windows x86-64 and Linux
-x86-64, default `oscan --backend native` (freestanding, no `.c` files) skips
-this entirely: `oscan` embeds its own linker plus the minimal support files it
-needs (`ld.lld` + 5 DLLs on Windows; a fully static `x86_64-linux-musl-ld` on
-Linux), extracting them on first use to a local cache
+above is for the external/bundled **C compiler**. Ordinary freestanding builds
+on these hosts implicitly select native and skip it entirely; explicit
+`--backend native` behaves the same way. `oscan` embeds its own linker plus the
+minimal support files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
+`x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete; rebuilt automatically). Linux AArch64/RISC-V64 **native
-backend** builds (the `--backend native` path), hosted `--libc` mode, and
-explicit `--extra-c` sources still go through the C-compiler lookup above, even
-on Windows and Linux x86-64. Note: the AArch64/RISC-V64 limitation applies only
-to the **native backend** (Cranelift AOT) — the **C backend** (default,
-transpiles to C) already supports these architectures via
-`aarch64-linux-gnu-gcc`/`--target riscv64`. See
-`docs/design/native-link-embedding.md` for the full design.
+Linux — safe to delete; rebuilt automatically). Linux AArch64/RISC-V64 native
+cross-links use target-matched linker/runtime sidecars rather than a C compiler;
+the standard x86-64 release embeds only its own linker. Hosted `--libc` mode
+and explicit `--extra-c` sources still use the C-compiler lookup above. The C
+backend also supports ARM64/RISC-V64 through the corresponding C cross
+toolchains. See `docs/design/native-link-embedding.md` for the full design.
 
 ---
 

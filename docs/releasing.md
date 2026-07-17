@@ -318,7 +318,7 @@ as a standing regression gate for this split.
 
 ## Embedded native-link assets for self-contained Windows native builds
 
-On Windows x86-64, default `oscan --backend native` (freestanding) builds no
+On Windows x86-64, selecting `oscan --backend native` (freestanding) builds no
 longer need an external C compiler or linker: `oscan.exe` embeds a linker
 (`ld.lld`) plus the minimal MinGW support files it needs, and extracts them to
 a local cache at first use (see
@@ -394,10 +394,11 @@ embedded path has coverage without every `cargo build` needing staged assets.
 
 ## Embedded native-link assets for self-contained Linux native builds
 
-On Linux x86-64, default `oscan --backend native` (freestanding) builds
-similarly no longer need an external C compiler or linker: `oscan` embeds a
-linker (a fully static `x86_64-linux-musl-ld` binary from the pinned
-musl-cross toolchain) and extracts it to a local cache at first use (see
+On Linux x86-64, ordinary freestanding builds implicitly select native and no
+longer need an external C compiler or linker; explicit `--backend native`
+behaves the same way. `oscan` embeds a linker (a fully static
+`x86_64-linux-musl-ld` binary from the pinned musl-cross toolchain) and
+extracts it to a local cache at first use (see
 `docs/design/native-link-embedding.md` §10 for the Linux-specific details).
 The payload size contrast is notable: **Linux embeds exactly 1 file (~2.78 MB)**
 vs Windows' 13 files (~85.4 MB) — the Linux linker is a fully static binary

@@ -12,10 +12,9 @@
 //! `*-gnu` target triple (see `target.rs`) for the same reason. This is
 //! why [`link_executable`] returns a clear error instead of attempting a
 //! link when only `cl.exe` is available — not a silent fallback, a
-//! reported tooling gap (MSVC-only Windows support is tracked as a
-//! `native-completeness` follow-up). This is the legacy [`link::CompilerDriver`](plan::LinkerFlavor::CompilerDriver)
-//! flavor's story; see "Direct linker & embedding" below for the Windows
-//! freestanding default this module now prefers instead.
+//! reported tooling gap. This is the legacy
+//! [`plan::LinkerFlavor::CompilerDriver`] flavor's story; see "Direct linker
+//! & embedding" below for the freestanding direct-link paths.
 //!
 //! # Explicit runtime modes
 //!
@@ -26,8 +25,8 @@
 //! [`archive::find_or_build_runtime_archive`] never substitutes one mode
 //! for the other: an unsupported `--native-target` or a missing toolchain
 //! is a reported error (see
-//! `packaging/toolchains/runtime-archive-contract.json`'s freestanding
-//! `supported_targets`, currently `windows-x86_64`/`linux-x86_64`).
+//! `packaging/toolchains/runtime-archive-contract.json`'s mode-specific
+//! `supported_targets`).
 //! Freestanding linking additionally needs, beyond `-lkernel32`/`-lm`
 //! (hardcoded per-target/mode in `build_compiler_driver_plan`, deliberately
 //! *not* read from the archive manifest's `link_flags` — see
@@ -138,29 +137,28 @@
 //! omit a symbol a program actually needs, including one reached only
 //! indirectly through another runtime function.
 //!
-//! # Direct linker & embedding (Windows x86-64 freestanding)
+//! # Direct linker & embedding (freestanding native targets)
 //!
-//! Implements `docs/design/native-link-embedding.md`. On Windows x86-64,
-//! freestanding, with no explicit user `.c` files and no
-//! `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` override, and when
-//! this `oscan` binary embeds its own linker/import-libraries/compiler-
-//! builtins (`native_assets::EMBEDDED_ASSETS_PRESENT`), [`link_executable`]
-//! selects [`plan::LinkerFlavor::MingwDirect`]: a direct `ld.lld`
-//! invocation (`-m i386pep`, GNU/MinGW flavor, *not* `lld-link`) against
-//! assets extracted from this binary into a verified, content-addressed
-//! cache (see `native_assets`), reproducing the proven 6,656-byte
-//! `hello.osc` output with **no** `clang`/`gcc`/`cc`/`cl` and no
-//! externally installed linker involved at all. The shim
-//! (`runtime/osc_native_shim.c`) is precompiled into the runtime archive
-//! itself for this path (`archive::ShimSource::ArchiveMember`) — see
-//! `archive`'s "shim-presence policy" docs.
+//! Implements `docs/design/native-link-embedding.md`. In freestanding mode,
+//! with no explicit user `.c` files, [`link_executable`] selects a direct
+//! linker when the target has matching packaged assets:
 //!
-//! Every other combination — hosted mode, non-Windows targets, explicit
-//! `.c` files, or a dev build with no embedded assets — keeps the legacy
-//! [`plan::LinkerFlavor::CompilerDriver`] flavor described above. This is
-//! a deliberate, honest scope: only Windows x86-64 freestanding claims to
-//! be toolchain-free (design §1.1's "honesty rule"); the other paths are
-//! unchanged and still require an external C toolchain.
+//! * Windows x86-64 uses [`plan::LinkerFlavor::MingwDirect`] with `ld.lld`
+//!   plus embedded import libraries and compiler-builtins.
+//! * Linux x86-64 uses [`plan::LinkerFlavor::ElfDirect`] with the embedded
+//!   static musl GNU linker.
+//! * Linux AArch64/RISC-V64 use [`plan::LinkerFlavor::ElfDirect`] with a
+//!   target-matched sidecar linker and runtime archive.
+//!
+//! The native shim (`runtime/osc_native_shim.c`) is precompiled into each
+//! runtime archive (`archive::ShimSource::ArchiveMember`), so these direct
+//! paths need no C frontend during downstream compilation.
+//!
+//! Hosted mode, explicit `.c` files, and development builds without matching
+//! direct-link assets keep the diagnosed [`plan::LinkerFlavor::CompilerDriver`]
+//! path. A standard release embeds only its own host linker; cross-target
+//! direct linking therefore requires the documented sidecar assets rather
+//! than silently falling back to a C compiler.
 //!
 //! [`driver::resolve_linker_selection`] implements the exact
 //! `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` migration/selection

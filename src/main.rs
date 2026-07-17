@@ -262,9 +262,12 @@ fn print_usage(to_stderr: bool) {
     print_line(
         "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib>] [-o output] <file.osc>",
     );
+    print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
     print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
-    print_line("  --backend c|native  Code generation backend (default: c)");
+    print_line("  --backend c|native  Backend (default: native on supported hosts; c otherwise)");
+    print_line("    c       Portability/reference, C source, macOS, and WASI backend");
+    print_line("    native  Direct object code for supported Windows and Linux hosts/targets");
     print_line(&format!(
         "  --native-target <tag>  Native backend target: {} (default: host)",
         backend::NativeTarget::accepted_values()
@@ -295,6 +298,24 @@ enum Backend {
     Native,
 }
 
+fn resolve_backend(
+    explicit_backend: Option<Backend>,
+    c_source_output: bool,
+    c_cross_target: bool,
+    native_target_requested: bool,
+    native_host_supported: bool,
+) -> Backend {
+    explicit_backend.unwrap_or_else(|| {
+        if c_source_output || c_cross_target {
+            Backend::C
+        } else if native_target_requested || native_host_supported {
+            Backend::Native
+        } else {
+            Backend::C
+        }
+    })
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -308,7 +329,7 @@ fn main() {
     let mut show_warnings = false;
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
-    let mut backend_kind = Backend::C;
+    let mut explicit_backend = None;
     let mut native_target_arg: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut extra_c_files: Vec<String> = Vec::new();
@@ -355,14 +376,14 @@ fn main() {
                     eprintln!("error: --backend requires an argument (c, native)");
                     process::exit(1);
                 });
-                backend_kind = match val.as_str() {
+                explicit_backend = Some(match val.as_str() {
                     "c" => Backend::C,
                     "native" => Backend::Native,
                     other => {
                         eprintln!("error: unknown backend '{other}' (supported: c, native)");
                         process::exit(1);
                     }
-                };
+                });
             }
             "--native-target" => {
                 i += 1;
@@ -436,6 +457,18 @@ fn main() {
         i += 1;
     }
 
+    let output_ends_in_c = output_path
+        .as_ref()
+        .map(|path| path.ends_with(".c"))
+        .unwrap_or(false);
+    let backend_kind = resolve_backend(
+        explicit_backend,
+        emit_c || output_ends_in_c,
+        target.is_some(),
+        native_target_arg.is_some(),
+        backend::NativeTarget::try_host().is_ok(),
+    );
+
     // Backend-selection validation. `--target` (C-backend cross-compile
     // to riscv64/wasi) and `--native-target` (native-backend target
     // selection) are deliberately separate flags with non-overlapping
@@ -447,7 +480,17 @@ fn main() {
             process::exit(1);
         }
         if emit_c {
-            eprintln!("error: --emit-c is only supported with --backend c (the native backend never produces C source)");
+            eprintln!(
+                "error: --emit-c requires the C portability/reference backend (--backend c); \
+                 the native backend produces object code"
+            );
+            process::exit(1);
+        }
+        if output_ends_in_c {
+            eprintln!(
+                "error: C source output (-o *.c) requires the C portability/reference backend \
+                 (--backend c); the native backend produces object code"
+            );
             process::exit(1);
         }
     } else if native_target_arg.is_some() {
@@ -626,11 +669,6 @@ fn main() {
     //   --emit-c        → output C code (to stdout or -o file)
     //   -o foo.c        → output C code to foo.c (extension-based detection)
     //   otherwise       → compile to executable
-    let output_ends_in_c = output_path
-        .as_ref()
-        .map(|p| p.ends_with(".c"))
-        .unwrap_or(false);
-
     if run_mode {
         if target.is_some() {
             eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
@@ -2462,6 +2500,32 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[test]
+    fn backend_resolution_covers_implicit_policy_and_explicit_overrides() {
+        assert_eq!(
+            resolve_backend(Some(Backend::C), false, false, false, true),
+            Backend::C
+        );
+        assert_eq!(
+            resolve_backend(Some(Backend::Native), true, true, false, false),
+            Backend::Native
+        );
+        assert_eq!(resolve_backend(None, true, false, false, true), Backend::C);
+        assert_eq!(resolve_backend(None, false, true, false, true), Backend::C);
+        assert_eq!(
+            resolve_backend(None, false, false, true, false),
+            Backend::Native
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, true),
+            Backend::Native
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, false),
+            Backend::C
+        );
     }
 
     #[test]

@@ -34,7 +34,7 @@
 
 ### Getting the Oscan Compiler
 
-Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Each release archive contains the Oscan compiler and, on Windows and Linux, a bundled C toolchain.
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux release archives contain the compiler, direct-link assets for self-contained freestanding native builds, and a bundled C toolchain for explicit C-backend builds, hosted builds, and C inputs.
 
 #### Windows x86_64
 
@@ -152,6 +152,7 @@ oscan <file.osc>              # Compile to executable
 oscan <file.osc> --run        # Compile and run immediately
 oscan <file.osc> -o <file.c>  # Emit C code only (`.c` extension)
 oscan <file.osc> --emit-c     # Emit C code to stdout
+oscan <file.osc> --backend native --run  # Emit direct native object code
 oscan <file.osc> --target wasi    # Cross-compile to WebAssembly
 ```
 
@@ -1925,9 +1926,9 @@ oscan [OPTIONS] <file.osc>
 |-----------------|-------------|
 | `-o <path>`     | Output path. Defaults to executable. Use `.c` extension to emit C source only. |
 | `--run`         | Compile and execute immediately. |
-| `--emit-c`      | Emit generated C code to stdout. |
+| `--emit-c`      | Emit C-backend source to stdout. |
 | `--libc`        | Use hosted libc mode instead of freestanding mode. Enables access to standard C library functions. |
-| `--backend <name>` | Code generator: `c` (default, transpiles to C99) or `native` (Cranelift AOT compilation). |
+| `--backend <name>` | Explicitly select `c` (portability/reference/source backend) or `native` (direct Cranelift AOT object code). Without this option, ordinary builds use native on supported Windows/Linux hosts and C elsewhere. |
 | `--native-target <tag>` | Native object target for `--backend native`. Supported: `linux-x86_64` (default on Linux x86_64), `windows-x86_64` (default on Windows), `linux-aarch64`, `linux-riscv64`. |
 | `--target <arch>` | Cross-compile for target architecture (C backend only). Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
 | `--extra-c <file>` | Extra C source file to compile and link (repeatable). Requires C compiler. |
@@ -1936,6 +1937,14 @@ oscan [OPTIONS] <file.osc>
 | `--extra-cflags <flag>` | Extra flag passed to the C compiler (repeatable). |
 | `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
 | `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |
+
+Without `--backend`, ordinary executable, object, and `--run` builds select
+native on Windows x86-64 and Linux x86-64/AArch64/RISC-V64; unsupported hosts
+select C. `--emit-c`, `-o file.c`, and `--target riscv64|wasi` select C, while
+`--native-target` selects native. An explicit backend always overrides
+implicit selection, and incompatible explicit combinations are errors. The C
+backend remains the macOS, WASI, source-emission, and differential-reference
+path. The native backend never silently falls back to C code generation.
 
 ### Host Toolchain Resolution (Windows/Linux)
 
@@ -1958,7 +1967,7 @@ A Windows/Linux Oscan distribution that includes a bundled `toolchain/` director
 
 **Exception — Windows and Linux x86-64 freestanding native builds:** the
 resolution order above governs the external/bundled **C compiler** path. On
-Windows x86-64 and Linux x86-64, default `oscan --backend native`
+Windows x86-64 and Linux x86-64, selecting `oscan --backend native`
 (freestanding, no explicit `.c` files) bypasses it entirely: `oscan` embeds its
 own linker plus the minimal support files it needs — on Windows, `ld.lld` plus
 5 MinGW runtime DLLs and import libraries; on Linux, a fully static

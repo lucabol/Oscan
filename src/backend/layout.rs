@@ -23,9 +23,8 @@
 //!   (returned, stored in a struct field, pushed into an array), and only
 //!   the arena gives that lifetime. This trades a small amount of
 //!   performance (every aggregate temporary is a real allocation) for a
-//!   dramatically simpler and more obviously-correct first implementation;
-//!   see the `native-completeness` follow-up for potential stack-slot
-//!   escape analysis.
+//!   dramatically simpler and more obviously-correct implementation.
+//!   Stack-slot escape analysis remains a possible future optimization.
 
 use std::collections::HashMap;
 

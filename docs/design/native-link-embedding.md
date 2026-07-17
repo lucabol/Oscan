@@ -1,16 +1,23 @@
 # Native Link Embedding — Design Document
 
-**Status:** APPROVED FOR IMPLEMENTATION (design pass, Ripley, 2026-07-14)
+**Status:** IMPLEMENTED (PR #25, 2026-07-17)
 **Implements:** approved research report
 `research/how-do-we-remove-the-dependency-on-the-c.md`
 **Owners of implementation:** Bishop (Rust / toolchain integration), Hicks
 (release engineering / Python / CI). Vasquez validates; Newt documents.
 
 This document is the single, file-level contract for removing the
-C-compiler/linker dependency from default `oscan --backend native`
-(freestanding) builds on **Windows x86-64**. It is written so Bishop and Hicks
+C-compiler/linker dependency when `oscan --backend native` selects a
+packaged freestanding direct-link path. It was written so Bishop and Hicks
 can implement in parallel with **zero file overlap**, and so "did you follow the
 design" is mechanically checkable at review.
+
+Sections 11-14 record the implemented Linux and foreign-input follow-up and
+supersede the original deferral table in §1.2. The C code generator remains
+the portability/reference/source backend; this design removes the downstream
+C-toolchain dependency only from the documented freestanding native paths.
+Supported native hosts now select those paths implicitly for ordinary builds;
+explicit `--backend native` remains available as an override.
 
 ---
 
@@ -47,19 +54,20 @@ design" is mechanically checkable at review.
 - A **cross-platform-shaped** asset/cache/plan abstraction (so Linux is a later
   data/parameter change, not a rewrite).
 
-### 1.2 Explicitly deferred (must NOT be claimed as done by docs/CLI)
+### 1.2 Original deferrals (superseded by §14 where noted)
 
 | Deferred item | Interim behavior |
 |---|---|
-| Linux AArch64 / RISC-V64 **direct/cross** link | Object-only via Cranelift cross-codegen; final link errors (`link_executable`'s `target.is_host()` gate) exactly as today — no runtime archive exists for these targets in `runtime-archive-contract.json`'s `freestanding`/`freestanding_core` `supported_targets` (only `linux-x86_64`/`windows-x86_64`), and no pinned musl cross-toolchain manifest exists under `packaging/toolchains/`. Implementing this is a comparable-sized follow-up (2 more pinned toolchains, cross-compiled BearSSL, runtime archives per arch, QEMU validation, and removing/extending the single-host-target `link_executable` gate) — explicitly out of scope for this pass. |
+| Linux AArch64 / RISC-V64 **direct/cross** link | **Implemented by the follow-up in §11-14.** Cross-linker/runtime sidecars and blocking QEMU CI now cover both targets. |
 | macOS native target | No `NativeTarget` variant exists; out of scope entirely. |
 | Hosted `--libc` mode direct-link | Keeps the diagnosed external C-toolchain driver path. |
 | Explicit user-supplied `.c` files | Activates the external C-toolchain path, clearly diagnosed. |
 | Embedding the full compiler-driver toolchain | Never embedded. Only the Windows ≈85.4 MB / 13-file + Linux ≈2.78 MB / 1-file minimal linker asset sets are embedded. |
 
-**Honesty rule (requirement #6):** any doc/CLI text must say "Windows and Linux
-x86-64 freestanding native builds are self-contained" and must **not** imply
-AArch64, RISC-V64, macOS, hosted, or `.c`-input builds are toolchain-free.
+**Honesty rule (requirement #6):** docs/CLI may call Windows and Linux x86-64
+freestanding native builds self-contained. AArch64/RISC-V64 require matching
+cross-linker/runtime sidecars. macOS has no native target, while hosted and
+`.c`-input builds still require a C toolchain.
 
 ---
 
@@ -1549,10 +1557,10 @@ in the help output.
 
 | Check | Status |
 |---|---|
-| `--backend c` runs in CI (all hosts) | ✅ Already covered by the main `cargo test` job (examples + tests run with C backend by default). |
+| `--backend c` runs in CI (all hosts) | ✅ Covered explicitly by the main integration harness, where C remains the portability/reference oracle. |
 | `--backend native` runs in CI (Windows x86-64) | ✅ Covered by `native-link-embedding-smoke` (Windows job). |
 | `--backend native` runs in CI (Linux x86-64) | ✅ Covered by `native-link-embedding-smoke-linux`. |
-| `--backend native` cross-codegen (aarch64/riscv64 object emission) | ⚠️ Not explicitly covered. Add a CI step that confirms `oscan hello.osc --backend native --native-target linux-aarch64 -o hello.o` produces a valid ELF relocatable (and similarly for riscv64). This is cheap and can go in the existing Linux test job. |
+| `--backend native` cross-codegen (aarch64/riscv64 object emission) | ✅ Covered by the target-specific Linux jobs described in §13.1. |
 
 ### 13.3 QEMU invocation pattern
 

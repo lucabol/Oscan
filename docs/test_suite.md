@@ -1,9 +1,11 @@
 # Oscan Test Suite
 
 ## Summary
-- **Total Tests**: 85
-- **Positive Tests**: 65 (compile and run successfully)
-- **Negative Tests**: 20 (correctly rejected by compiler)
+- **Integration Tests**: 134
+- **Positive Tests**: 99 (compile and run successfully)
+- **Negative Tests**: 35 (correctly rejected by compiler)
+- **Backend Policy**: supported hosts default to native; C remains the
+  portability/reference oracle and native is differentially checked against it
 
 ## Positive Tests
 
@@ -131,19 +133,19 @@ wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && tests/build/ffi"
 
 ## Test Results (Current)
 
-All 85 tests pass:
-- 53 unit tests pass (src/lib.rs)
-- 65 positive integration tests pass (tests/positive/*.osc)
-- 20 negative integration tests pass (tests/negative/*.osc)
+The current integration corpus contains:
+- 99 positive integration tests (tests/positive/*.osc)
+- 35 negative integration tests (tests/negative/*.osc)
+- C-vs-native differential execution on supported Windows/Linux targets
 
 **Full test listing:**
 ```bash
-# Positive tests: 65 files in tests/positive/
+# Positive tests: 99 files in tests/positive/
 ls tests/positive/*.osc
 
-# Negative tests: 20 files in tests/negative/
+# Negative tests: 35 files in tests/negative/
 ls tests/negative/*.osc
 ```
 
 ---
-*Last updated: Phase 6 (C-FFI Implementation)*
+*Last updated: Native backend role and differential-testing policy*

@@ -2,12 +2,11 @@
 //!
 //! Isolates every "which triple / which ISA / which linker family" decision
 //! behind one small enum so the rest of the backend never has to reason
-//! about `target_lexicon::Triple` directly. Only [`NativeTarget::WindowsX64`]
-//! is validated end-to-end (object emission + linking + running) today; the
-//! Linux variants produce verified relocatable objects via Cranelift's
-//! cross-codegen support but report a clear error at link time when this
-//! host has no matching cross linker/runtime archive available (see
-//! `super::link`). That is a tooling gap, not a code-generation one.
+//! about `target_lexicon::Triple` directly. All four variants are validated
+//! end-to-end in CI (object emission, linking, and execution). Windows and
+//! Linux x86-64 release builds can embed their host linker; Linux AArch64
+//! and RISC-V64 cross-link through a matching sidecar linker/runtime archive
+//! selected by `super::link`.
 
 use std::sync::Arc;
 
@@ -27,7 +26,7 @@ pub enum NativeTarget {
 impl NativeTarget {
     /// Parse a `--native-target` value. Accepts the same tags used by the
     /// runtime-archive contract (`packaging/toolchains/runtime-archive-contract.json`)
-    /// for the x86-64 targets, plus two Linux cross-codegen-only targets.
+    /// for the x86-64 targets, plus the two Linux cross-link targets.
     /// Returns `None` both for a tag this backend has never heard of *and*
     /// for `"host"` on a machine [`NativeTarget::try_host`] cannot
     /// identify — callers that need to tell those two cases apart (e.g.
@@ -278,12 +277,11 @@ mod tests {
         );
     }
 
-    /// macOS has no `NativeTarget` variant at all today (see module docs:
-    /// only Windows x86-64 is validated end-to-end, and the Linux variants
-    /// are cross-codegen-only) — on *either* Apple Silicon or Intel Macs,
-    /// host auto-detection must fail with a clear, actionable error, never
-    /// silently pick some other target (this backend previously defaulted
-    /// unconditionally to Windows x86-64/COFF for exactly this case).
+    /// macOS has no `NativeTarget` variant. On either Apple Silicon or Intel
+    /// Macs, host auto-detection must fail with a clear, actionable error,
+    /// never silently pick some other target (this backend previously
+    /// defaulted unconditionally to Windows x86-64/COFF for exactly this
+    /// case).
     #[test]
     fn detect_reports_a_clean_error_for_macos_x86_64() {
         let err = NativeTarget::detect("macos", "x86_64").expect_err("macOS is not supported");

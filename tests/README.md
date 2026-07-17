@@ -107,8 +107,9 @@ resulting fixture files. Both outputs are also checked against
 - Pass `-UnstableStderrTests name1,name2` only for tests whose stderr is
   intentionally platform- or backend-dependent.
 
-Negative tests are compiled once without a backend selector: they exercise the
-shared frontend and are not duplicated per backend.
+Negative tests fail in the shared frontend. The standalone runner exercises C
+explicitly and also checks the selected candidate backend during differential
+runs.
 
 The focused hosted-mode regression verifies that plain `--backend native`
 remains libc-free, while explicit `--libc --backend native` differentially
