@@ -11,6 +11,23 @@ env:
 
 jobs:
   # ─────────────────────────────────────────────
+  # Release and toolchain regression tests (Python only)
+  # ─────────────────────────────────────────────
+  release-tooling-tests:
+    name: Python release/toolchain regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
+      - name: Run release/toolchain regression tests
+        run: python -m unittest discover -s scripts -p "test_*.py"
+
+  # ─────────────────────────────────────────────
   # Verify generated docs are up to date
   # ─────────────────────────────────────────────
   docs:
@@ -116,7 +133,15 @@ jobs:
             fi
 
             # Run and compare
-            actual=$("./tests/build/${name}" 2>&1) || true
+            if actual=$("./tests/build/${name}" 2>&1); then
+              actual_exit=0
+            else
+              actual_exit=$?
+            fi
+            expected_exit=0
+            if [ -f "tests/expected_exit/${name}.expected" ]; then
+              expected_exit=$(cat "tests/expected_exit/${name}.expected")
+            fi
             expected_content=$(cat "$expected")
             fallback_content=""
             if [ -n "$fallback" ]; then
@@ -126,17 +151,25 @@ jobs:
             # Linux x86-64 freestanding normally exercises the real runtime
             # implementation. Also accept the exact reduced-capability output
             # for environment-dependent tests such as canvas and TLS.
-            if [ "$actual" = "$expected_content" ] ||
-               { [ -n "$fallback" ] && [ "$actual" = "$fallback_content" ]; }; then
+            if { [ "$actual" = "$expected_content" ] ||
+                 { [ -n "$fallback" ] && [ "$actual" = "$fallback_content" ]; }; } &&
+               [ "$actual_exit" = "$expected_exit" ]; then
               echo "PASS: $name"
               PASS=$((PASS + 1))
             else
-              echo "FAIL: $name — output mismatch"
-              echo "  Expected: $(head -3 <<< "$expected_content")"
-              if [ -n "$fallback" ]; then
-                echo "  Or:       $(head -3 <<< "$fallback_content")"
+              echo "FAIL: $name"
+              if [ "$actual_exit" != "$expected_exit" ]; then
+                echo "  Exit: expected $expected_exit, got $actual_exit"
               fi
-              echo "  Actual:   $(head -3 <<< "$actual")"
+              if [ "$actual" != "$expected_content" ] &&
+                 { [ -z "$fallback" ] || [ "$actual" != "$fallback_content" ]; }; then
+                echo "  Output mismatch"
+                echo "  Expected: $(head -3 <<< "$expected_content")"
+                if [ -n "$fallback" ]; then
+                  echo "  Or:       $(head -3 <<< "$fallback_content")"
+                fi
+                echo "  Actual:   $(head -3 <<< "$actual")"
+              fi
               FAIL=$((FAIL + 1))
             fi
           done
@@ -321,16 +354,29 @@ jobs:
 
             # Run and compare
             $actual = & ".\tests\build\$name.exe" 2>&1 | Out-String
+            $actualExit = $LASTEXITCODE
             $actual = $actual.TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
             $expected = (Get-Content $expectedFile -Raw).TrimEnd("`r`n").TrimEnd("`n").Replace("`r`n", "`n")
+            $expectedExitFile = "tests\expected_exit\$name.expected"
+            $expectedExit = if (Test-Path $expectedExitFile) {
+              [int](Get-Content $expectedExitFile -Raw).Trim()
+            } else {
+              0
+            }
 
-            if ($actual -eq $expected) {
+            if (($actual -eq $expected) -and ($actualExit -eq $expectedExit)) {
               Write-Host "PASS: $name"
               $Pass++
             } else {
-              Write-Host "FAIL: $name - output mismatch"
-              Write-Host "  Expected: $($expected.Split("`n")[0..2] -join ' | ')"
-              Write-Host "  Actual:   $($actual.Split("`n")[0..2] -join ' | ')"
+              Write-Host "FAIL: $name"
+              if ($actualExit -ne $expectedExit) {
+                Write-Host "  Exit: expected $expectedExit, got $actualExit"
+              }
+              if ($actual -ne $expected) {
+                Write-Host "  Output mismatch"
+                Write-Host "  Expected: $($expected.Split("`n")[0..2] -join ' | ')"
+                Write-Host "  Actual:   $($actual.Split("`n")[0..2] -join ' | ')"
+              }
               $Fail++
             }
           }
@@ -584,6 +630,10 @@ jobs:
         env:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
+
+      - name: Implicit default backend uses embedded native linker
+        shell: pwsh
+        run: ./tests/default_backend_native.tests.ps1 -Oscan ./target/release/oscan
 
       - name: Native hello smoke test (compiler/linker blocked on PATH)
         shell: bash
@@ -1065,16 +1115,31 @@ jobs:
             fi
 
             # Run and compare
-            actual=$("./tests/build/${name}" 2>&1) || true
+            if actual=$("./tests/build/${name}" 2>&1); then
+              actual_exit=0
+            else
+              actual_exit=$?
+            fi
+            expected_exit=0
+            if [ -f "tests/expected_exit/${name}.expected" ]; then
+              expected_exit=$(cat "tests/expected_exit/${name}.expected")
+            fi
             expected_content=$(cat "$expected")
 
-            if [ "$actual" = "$expected_content" ]; then
+            if [ "$actual" = "$expected_content" ] &&
+               [ "$actual_exit" = "$expected_exit" ]; then
               echo "PASS: $name"
               PASS=$((PASS + 1))
             else
-              echo "FAIL: $name — output mismatch"
-              echo "  Expected: $(head -3 <<< "$expected_content")"
-              echo "  Actual:   $(head -3 <<< "$actual")"
+              echo "FAIL: $name"
+              if [ "$actual_exit" != "$expected_exit" ]; then
+                echo "  Exit: expected $expected_exit, got $actual_exit"
+              fi
+              if [ "$actual" != "$expected_content" ]; then
+                echo "  Output mismatch"
+                echo "  Expected: $(head -3 <<< "$expected_content")"
+                echo "  Actual:   $(head -3 <<< "$actual")"
+              fi
               FAIL=$((FAIL + 1))
             fi
           done
@@ -1187,15 +1252,30 @@ jobs:
               $CC -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             fi
 
-            actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1) || true
+            if actual=$(qemu-aarch64 "./tests/build/${name}" 2>&1); then
+              actual_exit=0
+            else
+              actual_exit=$?
+            fi
+            expected_exit=0
+            if [ -f "tests/expected_exit/${name}.expected" ]; then
+              expected_exit=$(cat "tests/expected_exit/${name}.expected")
+            fi
             expected_content=$(cat "$expected")
-            if [ "$actual" = "$expected_content" ]; then
+            if [ "$actual" = "$expected_content" ] &&
+               [ "$actual_exit" = "$expected_exit" ]; then
               echo "PASS: $name (ARM64)"
               PASS=$((PASS + 1))
             else
-              echo "FAIL: $name — output mismatch (ARM64)"
-              echo "  Expected: $(head -3 <<< "$expected_content")"
-              echo "  Actual:   $(head -3 <<< "$actual")"
+              echo "FAIL: $name (ARM64)"
+              if [ "$actual_exit" != "$expected_exit" ]; then
+                echo "  Exit: expected $expected_exit, got $actual_exit"
+              fi
+              if [ "$actual" != "$expected_content" ]; then
+                echo "  Output mismatch"
+                echo "  Expected: $(head -3 <<< "$expected_content")"
+                echo "  Actual:   $(head -3 <<< "$actual")"
+              fi
               FAIL=$((FAIL + 1))
             fi
           done
@@ -1292,15 +1372,30 @@ jobs:
               $CC -std=gnu11 -ffreestanding -nostdlib -static -Oz -fno-builtin -fno-asynchronous-unwind-tables -fomit-frame-pointer -ffunction-sections -fdata-sections -Wl,--gc-sections,--build-id=none -s "tests/build/${name}.c" -Iruntime -Ideps/laststanding -o "tests/build/${name}" 2>/dev/null || { echo "FAIL: $name — cross-compile"; FAIL=$((FAIL+1)); continue; }
             fi
 
-            actual=$(qemu-riscv64 "./tests/build/${name}" 2>&1) || true
+            if actual=$(qemu-riscv64 "./tests/build/${name}" 2>&1); then
+              actual_exit=0
+            else
+              actual_exit=$?
+            fi
+            expected_exit=0
+            if [ -f "tests/expected_exit/${name}.expected" ]; then
+              expected_exit=$(cat "tests/expected_exit/${name}.expected")
+            fi
             expected_content=$(cat "$expected")
-            if [ "$actual" = "$expected_content" ]; then
+            if [ "$actual" = "$expected_content" ] &&
+               [ "$actual_exit" = "$expected_exit" ]; then
               echo "PASS: $name (RISC-V64)"
               PASS=$((PASS + 1))
             else
-              echo "FAIL: $name — output mismatch (RISC-V64)"
-              echo "  Expected: $(head -3 <<< "$expected_content")"
-              echo "  Actual:   $(head -3 <<< "$actual")"
+              echo "FAIL: $name (RISC-V64)"
+              if [ "$actual_exit" != "$expected_exit" ]; then
+                echo "  Exit: expected $expected_exit, got $actual_exit"
+              fi
+              if [ "$actual" != "$expected_content" ]; then
+                echo "  Output mismatch"
+                echo "  Expected: $(head -3 <<< "$expected_content")"
+                echo "  Actual:   $(head -3 <<< "$actual")"
+              fi
               FAIL=$((FAIL + 1))
             fi
           done

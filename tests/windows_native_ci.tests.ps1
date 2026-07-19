@@ -19,6 +19,8 @@ function Invoke-NativeValidation {
     $env:OSCAN_RUNTIME_ARCHIVE_DIR = $runtimeArchives
     $env:OSCAN_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $ToolchainDir).Path
 
+    & (Join-Path $ScriptDir "default_backend_native.tests.ps1") -Oscan $compiler
+
     & (Join-Path $ScriptDir "native_link_isolation.tests.ps1") `
         -Oscan $compiler `
         -ToolchainDir $ToolchainDir
