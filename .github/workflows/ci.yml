@@ -100,14 +100,14 @@ jobs:
 
             # FFI tests need libc
             if echo "$name" | grep -q '^ffi'; then
-              if ! "$oscan" --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+              if ! "$oscan" --backend c --libc "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
                 echo "FAIL: $name — compile error (libc)"
                 cat "tests/build/${name}.err"
                 FAIL=$((FAIL + 1))
                 continue
               fi
             else
-              if ! "$oscan" "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
+              if ! "$oscan" --backend c "$osc_file" -o "tests/build/${name}" 2>"tests/build/${name}.err"; then
                 echo "FAIL: $name — compile error (freestanding)"
                 cat "tests/build/${name}.err"
                 FAIL=$((FAIL + 1))
@@ -202,7 +202,7 @@ jobs:
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
 
-            if "$oscan" "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
+            if "$oscan" --backend c "$osc_file" -o "tests/build/${name}.c" 2>/dev/null; then
               echo "FAIL: $name — should have been rejected"
               FAIL=$((FAIL + 1))
             else
@@ -227,7 +227,7 @@ jobs:
           for osc_file in examples/*.osc; do
             name=$(basename "$osc_file" .osc)
             TOTAL=$((TOTAL + 1))
-            if ! "$oscan" "$osc_file" -o "tests/build/ex_${name}" 2>"tests/build/ex_${name}.err"; then
+            if ! "$oscan" --backend c "$osc_file" -o "tests/build/ex_${name}" 2>"tests/build/ex_${name}.err"; then
               echo "FAIL: $name — compile error"
               cat "tests/build/ex_${name}.err"
               FAIL=$((FAIL + 1))
@@ -306,9 +306,9 @@ jobs:
 
             # FFI tests need libc
             if ($name -match '^ffi') {
-              & $oscan --libc $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
+              & $oscan --backend c --libc $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
             } else {
-              & $oscan $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
+              & $oscan --backend c $bcFile.FullName -o "tests\build\$name.exe" 2>"tests\build\$name.err"
             }
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - compile error"
@@ -387,7 +387,7 @@ jobs:
             $name = $bcFile.BaseName
             $Total++
 
-            & $oscan $bcFile.FullName -o "tests\build\$name.c" 2>$null
+            & $oscan --backend c $bcFile.FullName -o "tests\build\$name.c" 2>$null
             if ($LASTEXITCODE -eq 0) {
               Write-Host "FAIL: $name - should have been rejected"
               $Fail++
@@ -418,7 +418,7 @@ jobs:
             $name = $bcFile.BaseName
             $Total++
 
-            & $oscan $bcFile.FullName -o "tests\build\ex_$name.exe" 2>"tests\build\ex_$name.err"
+            & $oscan --backend c $bcFile.FullName -o "tests\build\ex_$name.exe" 2>"tests\build\ex_$name.err"
             if ($LASTEXITCODE -ne 0) {
               Write-Host "FAIL: $name - compile error"
               if (Test-Path "tests\build\ex_$name.err") {

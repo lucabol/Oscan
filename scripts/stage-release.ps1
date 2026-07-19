@@ -42,7 +42,7 @@ if (-not $OutputDir) {
     $OutputDir = Get-DefaultOutputDir -RepoRoot $RepoRoot
 }
 if (-not $ContractPath) {
-    $ContractPath = Join-Path $RepoRoot "packaging\toolchains\release-contract.json"
+    $ContractPath = Join-Path $RepoRoot "packaging/toolchains/release-contract.json"
 }
 
 $tool = Join-Path $PSScriptRoot "release_tools.py"
