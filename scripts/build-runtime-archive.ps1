@@ -18,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if (-not $ContractPath) {
-    $ContractPath = Join-Path $RepoRoot "packaging\toolchains\runtime-archive-contract.json"
+    $ContractPath = Join-Path $RepoRoot "packaging/toolchains/runtime-archive-contract.json"
 }
 
 $tool = Join-Path $PSScriptRoot "release_tools.py"

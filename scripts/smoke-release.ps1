@@ -15,7 +15,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $ArchivePath = (Resolve-Path $ArchivePath).Path
 if (-not $ContractPath) {
-    $ContractPath = Join-Path $RepoRoot "packaging\toolchains\release-contract.json"
+    $ContractPath = Join-Path $RepoRoot "packaging/toolchains/release-contract.json"
 }
 
 $platform = $Target.Split("-", 2)[0]
@@ -115,7 +115,7 @@ function Get-DefaultScratchDir {
         } else {
             Join-Path $RepoRoot "target"
         }
-        return Join-Path $baseDir "oscan-release-smoke\$Platform"
+        return Join-Path (Join-Path $baseDir "oscan-release-smoke") $Platform
     }
 
     return Join-Path (Join-Path (Join-Path $RepoRoot "target") "release-smoke") $Platform
@@ -176,7 +176,7 @@ if ($nativeRuntimeModes.Count -gt 0) {
             throw "Installed bundle is missing native runtime source '$sourceName'"
         }
     }
-    $RuntimeArchiveDir = Join-Path $InstallDir "build\runtime-archives\$Target"
+    $RuntimeArchiveDir = Join-Path $InstallDir "build/runtime-archives/$Target"
     foreach ($mode in $nativeRuntimeModes) {
         foreach ($suffix in @(".a", ".json")) {
             $runtimeAsset = Join-Path $RuntimeArchiveDir "libosc_runtime_$mode$suffix"
@@ -198,7 +198,10 @@ fn! main() {
 
 Push-Location $ScratchDir
 try {
-    $compileArgs = @()
+    # Keep the package/toolchain smoke independent of the supported-host
+    # default backend: native final links must run below under a standard-user
+    # token when the Windows runner is elevated.
+    $compileArgs = @("--backend", "c")
     if ($requiresHostCompiler) {
         $compileArgs += "--libc"
     }
@@ -229,7 +232,47 @@ if ($Actual -ne "Hello, Release!") {
     throw "Unexpected smoke test output: '$Actual'"
 }
 
-if ($nativeRuntimeModes.Count -gt 0) {
+if ($nativeRuntimeModes.Count -gt 0 -and $platform -eq "windows") {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    $isWindowsAdministrator = $principal.IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator
+    )
+} else {
+    $isWindowsAdministrator = $false
+}
+
+if ($isWindowsAdministrator) {
+    # Native asset extraction intentionally rejects elevated final links.
+    # Exercise the installed package with a real disposable standard-user
+    # token rather than weakening the product's TOCTOU defense for CI.
+    $nativeScript = Join-Path $PSScriptRoot "smoke-release-windows-native.ps1"
+    $childScript = Join-Path $ScratchDir "smoke-release-windows-native.standard-user.ps1"
+    Copy-Item -LiteralPath $nativeScript -Destination $childScript -Force
+    $nativeArguments = @(
+        "-OscanCommand", $OscanCommand,
+        "-ScratchDir", $ScratchDir,
+        "-RuntimeArchiveDir", $RuntimeArchiveDir,
+        "-NativeSmokeMode", $nativeSmokeMode
+    )
+    if ($expectedNativeLinkSource) {
+        $nativeArguments += @("-ExpectedNativeLinkSource", $expectedNativeLinkSource)
+    }
+    $standardUserLogDir = Join-Path $ScratchDir "standard-user-logs"
+    New-Item -ItemType Directory -Path $standardUserLogDir -Force | Out-Null
+    . (Join-Path $PSScriptRoot "windows-standard-user.ps1")
+    Invoke-WindowsStandardUserPowerShell `
+        -ScriptPath $childScript `
+        -ArgumentList $nativeArguments `
+        -WorkingDirectory $ScratchDir `
+        -StateBaseDir $ScratchDir `
+        -WritablePaths @($ScratchDir) `
+        -LogDirectory $standardUserLogDir `
+        -LogPrefix "release-native" `
+        -TimeoutSeconds 600
+}
+
+if ($nativeRuntimeModes.Count -gt 0 -and -not $isWindowsAdministrator) {
     $NativeOutput = Join-Path $ScratchDir ("hello-native" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
     $NativeLog = Join-Path $ScratchDir "native.stderr.txt"
     $TlsLinkLog = $null

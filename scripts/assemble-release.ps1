@@ -52,7 +52,7 @@ if (-not $OutputDir) {
     $OutputDir = Get-DefaultOutputDir -RepoRoot $RepoRoot
 }
 if (-not $ContractPath) {
-    $ContractPath = Join-Path $RepoRoot "packaging\toolchains\release-contract.json"
+    $ContractPath = Join-Path $RepoRoot "packaging/toolchains/release-contract.json"
 }
 
 $contract = Get-Content $ContractPath -Raw | ConvertFrom-Json -AsHashtable
@@ -80,7 +80,7 @@ if ($PrebuiltRuntimeArchiveDir) {
     # working correctly as native_runtime_modes grows (e.g. the
     # "freestanding_core" sibling archive) without needing a fixed count.
     $archiveMode = if ($nativeModes.Count -gt 1) { "all" } else { [string]$nativeModes[0] }
-    $runtimeArchiveDir = Join-Path $OutputDir "runtime-archives\$Target"
+    $runtimeArchiveDir = Join-Path $OutputDir "runtime-archives/$Target"
     $archiveArgs = @{
         Target = $Target
         Mode = $archiveMode
@@ -92,7 +92,7 @@ if ($PrebuiltRuntimeArchiveDir) {
         $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
         $runtimeToolchain = $manifest["toolchain"]["runtime"]
         if ($runtimeToolchain) {
-            $buildToolchain = Join-Path $OutputDir "runtime-toolchains\$Target"
+            $buildToolchain = Join-Path $OutputDir "runtime-toolchains/$Target"
             $runtimeBuildToolchain = $buildToolchain
             $downloadDir = Join-Path $OutputDir "downloads"
             $null = & (Join-Path $PSScriptRoot "fetch-toolchain.ps1") `
