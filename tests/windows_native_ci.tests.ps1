@@ -61,12 +61,12 @@ try {
     . (Join-Path $RepoRoot "scripts\windows-standard-user.ps1")
     Invoke-WindowsStandardUserPowerShell `
         -ScriptPath $PSCommandPath `
-        -ArgumentList @(
-            "-Oscan", $compiler,
-            "-RuntimeArchiveDir", (Resolve-Path -LiteralPath $RuntimeArchiveDir).Path,
-            "-ToolchainDir", (Resolve-Path -LiteralPath $ToolchainDir).Path,
-            "-StandardUserChild"
-        ) `
+        -Parameters @{
+            Oscan = $compiler
+            RuntimeArchiveDir = (Resolve-Path -LiteralPath $RuntimeArchiveDir).Path
+            ToolchainDir = (Resolve-Path -LiteralPath $ToolchainDir).Path
+            StandardUserChild = $true
+        } `
         -WorkingDirectory $RepoRoot `
         -StateBaseDir $logDir `
         -ReadOnlyPaths @($RepoRoot) `

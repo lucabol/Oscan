@@ -41,6 +41,18 @@ class ReleaseSmokeTests(unittest.TestCase):
             r"-WorkingDirectory\s+\$working",
         )
 
+    def test_standard_user_invocation_preserves_named_parameters(self) -> None:
+        helper = STANDARD_USER_HELPER.read_text(encoding="utf-8")
+        self.assertIn("[hashtable]$Parameters", helper)
+        self.assertIn("parameters = $Parameters", helper)
+        self.assertRegex(
+            helper,
+            r"foreach \(\$property in \$payload\.parameters\.PSObject\.Properties\)"
+            r"(?s:.*?)"
+            r"& \(\[string\]\$payload\.script_path\) @scriptParameters",
+        )
+        self.assertNotIn("@scriptArguments", helper)
+
 
 if __name__ == "__main__":
     unittest.main()

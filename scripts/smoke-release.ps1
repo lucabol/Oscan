@@ -249,21 +249,21 @@ if ($isWindowsAdministrator) {
     $nativeScript = Join-Path $PSScriptRoot "smoke-release-windows-native.ps1"
     $childScript = Join-Path $ScratchDir "smoke-release-windows-native.standard-user.ps1"
     Copy-Item -LiteralPath $nativeScript -Destination $childScript -Force
-    $nativeArguments = @(
-        "-OscanCommand", $OscanCommand,
-        "-ScratchDir", $ScratchDir,
-        "-RuntimeArchiveDir", $RuntimeArchiveDir,
-        "-NativeSmokeMode", $nativeSmokeMode
-    )
+    $nativeParameters = @{
+        OscanCommand = $OscanCommand
+        ScratchDir = $ScratchDir
+        RuntimeArchiveDir = $RuntimeArchiveDir
+        NativeSmokeMode = $nativeSmokeMode
+    }
     if ($expectedNativeLinkSource) {
-        $nativeArguments += @("-ExpectedNativeLinkSource", $expectedNativeLinkSource)
+        $nativeParameters["ExpectedNativeLinkSource"] = $expectedNativeLinkSource
     }
     $standardUserLogDir = Join-Path $ScratchDir "standard-user-logs"
     New-Item -ItemType Directory -Path $standardUserLogDir -Force | Out-Null
     . (Join-Path $PSScriptRoot "windows-standard-user.ps1")
     Invoke-WindowsStandardUserPowerShell `
         -ScriptPath $childScript `
-        -ArgumentList $nativeArguments `
+        -Parameters $nativeParameters `
         -WorkingDirectory $ScratchDir `
         -StateBaseDir $ScratchDir `
         -WritablePaths @($ScratchDir) `
