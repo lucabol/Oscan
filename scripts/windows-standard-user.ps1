@@ -6,7 +6,7 @@ function Invoke-WindowsStandardUserPowerShell {
         [Parameter(Mandatory = $true)]
         [string]$ScriptPath,
 
-        [string[]]$ArgumentList = @(),
+        [hashtable]$Parameters = @{},
 
         [Parameter(Mandatory = $true)]
         [string]$WorkingDirectory,
@@ -128,12 +128,12 @@ function Invoke-WindowsStandardUserPowerShell {
             Grant-AccountAccess -Path $path -Access M
         }
 
-        # Keep argv in JSON so spaces and quotes survive exactly, while the
+        # Keep named parameters in JSON so spaces and quotes survive exactly, while the
         # CreateProcessWithLogonW command line stays below its 1,024-char cap.
         $payloadPath = Join-Path $stateDir "invocation.json"
         @{
             script_path = $script
-            arguments = @($ArgumentList)
+            parameters = $Parameters
             expected_sid = $standardUserSid.Value
         } | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $payloadPath -Encoding UTF8
 
@@ -169,8 +169,11 @@ try {
     if (-not $effectiveTemp.Equals($expectedTemp, [StringComparison]::OrdinalIgnoreCase)) {
         throw "standard-user TEMP override was not applied (expected '$expectedTemp', got '$effectiveTemp')"
     }
-    $scriptArguments = @($payload.arguments)
-    & ([string]$payload.script_path) @scriptArguments
+    $scriptParameters = @{}
+    foreach ($property in $payload.parameters.PSObject.Properties) {
+        $scriptParameters[$property.Name] = $property.Value
+    }
+    & ([string]$payload.script_path) @scriptParameters
     if (-not $?) {
         throw "standard-user PowerShell script reported failure"
     }
