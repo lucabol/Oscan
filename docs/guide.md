@@ -712,10 +712,12 @@ fn! main() {
 
 Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
 
-The native backend currently supports scalar C ABI signatures (`i32`, `i64`,
-`f64`, `bool`, and `handle`) directly. User-declared externs involving `str`,
-structs, payload enums, or `Result` require an explicit ABI shim; use the C
-portability backend when no shim is available.
+The native backend supports scalar/pointer-like C ABI signatures directly and
+automatically generates a per-program C shim when a used user extern has `str`
+parameters or returns `str`. The C-facing ABI remains `osc_str` by value; the
+native object calls the generated shim with pointers/out-pointers so the C
+compiler performs the platform aggregate ABI lowering. Structs, payload enums,
+and `Result` in user extern signatures still require a hand-written ABI shim.
 
 The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
 
@@ -732,11 +734,12 @@ Both flags are repeatable — use one per file or flag.
 
 ### Linking Precompiled Objects and Libraries
 
-Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`) and static libraries (`.a` or `.lib`) without compiling new C source. Both flags work with either backend:
+Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with either backend:
 
 ```
 oscan myapp.osc --extra-obj mylib.o --run
 oscan myapp.osc --extra-obj obj1.o --extra-obj obj2.o --extra-lib mylib.a -o myapp
+oscan myapp.osc --backend native --libc --extra-lib winhttp --extra-lib ws2_32 -o myapp
 oscan myapp.osc --backend native --extra-lib precompiled.a --native-target linux-aarch64 -o myapp
 ```
 

@@ -179,7 +179,7 @@ mod execute;
 
 use std::path::Path;
 
-pub use plan::{LinkPlan, LinkerExecutable, LinkerFlavor, SystemLib};
+pub use plan::{ExtraLib, LinkPlan, LinkerExecutable, LinkerFlavor, SystemLib};
 
 use super::native_assets;
 use super::target::NativeTarget;
@@ -197,6 +197,23 @@ pub struct NativeLinkOptions<'a> {
 
 pub(self) fn is_verbose() -> bool {
     crate::is_verbose()
+}
+
+pub fn is_system_library_name(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes[0] != b'-'
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'_' | b'+' | b'-'))
+}
+
+fn extra_lib_input(value: &str) -> ExtraLib {
+    if is_system_library_name(value) {
+        ExtraLib::SystemName(value.to_string())
+    } else {
+        ExtraLib::Path(absolute_path_from_cwd(Path::new(value)))
+    }
 }
 
 /// Design §1.1/§1.2/§7.1: MingwDirect is only ever eligible for the Windows
@@ -563,7 +580,7 @@ fn build_mingw_plan(
         extra_libs: options
             .extra_libs
             .iter()
-            .map(|path| absolute_path_from_cwd(Path::new(path)))
+            .map(|path| extra_lib_input(path))
             .collect(),
     })
 }
@@ -639,7 +656,7 @@ fn build_elf_plan(
         extra_libs: options
             .extra_libs
             .iter()
-            .map(|path| absolute_path_from_cwd(Path::new(path)))
+            .map(|path| extra_lib_input(path))
             .collect(),
     })
 }
@@ -809,7 +826,7 @@ fn build_compiler_driver_plan(
         extra_libs: options
             .extra_libs
             .iter()
-            .map(|path| absolute_path_from_cwd(Path::new(path)))
+            .map(|path| extra_lib_input(path))
             .collect(),
     })
 }

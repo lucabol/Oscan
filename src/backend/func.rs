@@ -61,7 +61,8 @@ use crate::ir as oir;
 use crate::token::Span;
 use crate::types::BcType;
 
-use super::ctx::BackendContext;
+use super::ctx::{BackendContext, ExternDeclKind};
+use super::extern_shim::{self, NativeExternAbi};
 use super::layout::{
     self, cl_pointer_type, enum_layout, layout_of, result_layout, struct_field_offset, Repr,
 };
@@ -169,13 +170,11 @@ fn oscan_fn_signature(
     sig
 }
 
-/// Build the Cranelift `Signature` for a real C-ABI extern function (no
-/// implicit arena, real return type). Returns `Err` with a clear message
-/// if the signature contains an inline-aggregate type this backend does
-/// not know how to pass across a real C ABI boundary without a
-/// hand-written shim (see `runtime/osc_native_shim.c`); user `extern`
-/// blocks get no such shim today.
-fn extern_fn_signature(
+/// Build the Cranelift `Signature` for a real C-ABI extern function with no
+/// implicit arena and no generated shim. Signatures containing `str` use
+/// `extern_shim_signature` instead so the C compiler, not Cranelift, lowers
+/// the by-value `osc_str` ABI.
+fn direct_extern_fn_signature(
     module: &impl Module,
     program: &oir::Program,
     name: &str,
@@ -188,7 +187,7 @@ fn extern_fn_signature(
         if is_inline_aggregate(ty, program) {
             return Err(unsupported(
                 span,
-                format!("extern function '{name}' parameter of type '{ty}' (str/struct/enum-with-payload/Result must cross a real C ABI boundary through a hand-written shim, which only exists today for the curated set of runtime builtins)"),
+                format!("extern function '{name}' parameter of type '{ty}'"),
             ));
         }
         if let Some(t) = Repr::of(ty, program).cl_type() {
@@ -205,6 +204,31 @@ fn extern_fn_signature(
         sig.returns.push(AbiParam::new(t));
     }
     Ok(sig)
+}
+
+fn extern_shim_signature(
+    module: &impl Module,
+    program: &oir::Program,
+    params: &[(String, BcType)],
+    return_type: &BcType,
+) -> Signature {
+    let mut sig = module.make_signature();
+    if *return_type == BcType::Str {
+        sig.params.push(AbiParam::new(cl_pointer_type()));
+    }
+    for (_, ty) in params {
+        if *ty == BcType::Str {
+            sig.params.push(AbiParam::new(cl_pointer_type()));
+        } else if let Some(t) = Repr::of(ty, program).cl_type() {
+            sig.params.push(AbiParam::new(t));
+        }
+    }
+    if *return_type != BcType::Str {
+        if let Some(t) = Repr::of(return_type, program).cl_type() {
+            sig.returns.push(AbiParam::new(t));
+        }
+    }
+    sig
 }
 
 /// Declare every user function up front (so forward references — calling
@@ -2827,12 +2851,20 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     call_args.extend(arg_vals.iter().filter_map(|v| *v));
                     let call = self.builder.ins().call(func_ref, &call_args);
                     Ok(self.builder.inst_results(call).first().copied())
-                } else if let Some(func_id) = self.resolve_extern(name, span)? {
+                } else if let Some((func_id, kind)) = self.resolve_extern(name, span)? {
                     let func_ref = self
                         .ctx
                         .module
                         .declare_func_in_func(func_id, self.builder.func);
                     let call_args: Vec<Value> = arg_vals.iter().filter_map(|v| *v).collect();
+                    if matches!(kind, ExternDeclKind::NativeShim) && *ty == BcType::Str {
+                        let out_ptr = self.arena_alloc(layout_of(ty, self.program()).size);
+                        let mut shim_args = Vec::with_capacity(call_args.len() + 1);
+                        shim_args.push(out_ptr);
+                        shim_args.extend(call_args);
+                        self.builder.ins().call(func_ref, &shim_args);
+                        return Ok(Some(out_ptr));
+                    }
                     let call = self.builder.ins().call(func_ref, &call_args);
                     Ok(self.builder.inst_results(call).first().copied())
                 } else {
@@ -2869,9 +2901,13 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// `span`, so an unused, ABI-incompatible declaration still never
     /// errors, matching C exactly, and a used one is reported at the
     /// call site that actually needs the unsupported ABI.
-    fn resolve_extern(&mut self, name: &str, span: Span) -> CResult<Option<FuncId>> {
-        if let Some(&func_id) = self.ctx.externs.get(name) {
-            return Ok(Some(func_id));
+    fn resolve_extern(
+        &mut self,
+        name: &str,
+        span: Span,
+    ) -> CResult<Option<(FuncId, ExternDeclKind)>> {
+        if let Some(&(func_id, kind)) = self.ctx.externs.get(name) {
+            return Ok(Some((func_id, kind)));
         }
         let Some(ef) = self
             .program()
@@ -2882,26 +2918,45 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         else {
             return Ok(None);
         };
-        let sig = extern_fn_signature(
-            &self.ctx.module,
-            self.program(),
-            &ef.name,
-            &ef.params,
-            &ef.return_type,
-            span,
-        )?;
+        let abi = extern_shim::classify(self.program(), &ef.name, &ef.params, &ef.return_type)
+            .map_err(|reason| unsupported(span, reason))?;
+        let (symbol, sig, kind) = match abi {
+            NativeExternAbi::Direct => (
+                crate::c_name::mangle_c_name(&ef.name),
+                direct_extern_fn_signature(
+                    &self.ctx.module,
+                    self.program(),
+                    &ef.name,
+                    &ef.params,
+                    &ef.return_type,
+                    span,
+                )?,
+                ExternDeclKind::Direct,
+            ),
+            NativeExternAbi::Shim(shim) => {
+                let symbol = shim.shim_symbol.clone();
+                let sig = extern_shim_signature(
+                    &self.ctx.module,
+                    self.program(),
+                    &ef.params,
+                    &ef.return_type,
+                );
+                self.ctx.add_extern_shim(shim);
+                (symbol, sig, ExternDeclKind::NativeShim)
+            }
+        };
         let func_id = self
             .ctx
             .module
-            .declare_function(&ef.name, Linkage::Import, &sig)
+            .declare_function(&symbol, Linkage::Import, &sig)
             .map_err(|e| {
                 CompileError::new(
                     span,
                     format!("internal error declaring extern '{name}': {e}"),
                 )
             })?;
-        self.ctx.externs.insert(name.to_string(), func_id);
-        Ok(Some(func_id))
+        self.ctx.externs.insert(name.to_string(), (func_id, kind));
+        Ok(Some((func_id, kind)))
     }
 }
 

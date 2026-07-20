@@ -61,6 +61,7 @@ fn help_mentions_extra_lib() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--extra-lib"));
+    assert!(stdout.contains("system library name"));
 }
 
 #[test]
