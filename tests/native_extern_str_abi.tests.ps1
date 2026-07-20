@@ -63,7 +63,9 @@ Set-Content -LiteralPath $bridgeSource -NoNewline -Value @'
 #include <stdint.h>
 
 static osc_str lit(const char *data, int32_t len) {
-    osc_str s = { data, len };
+    osc_str s;
+    s.data = data;
+    s.len = len;
     return s;
 }
 

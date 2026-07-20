@@ -486,7 +486,9 @@ impl CodeGenerator {
                 _ => {
                     // Try compile-time constant evaluation first (C99 requires
                     // static initializers to be constant expressions).
-                    if let Some(const_val) = Self::try_const_eval(&c.value) {
+                    if let Some(const_val) =
+                        Self::try_const_eval(&c.value, program, &mut Vec::new())
+                    {
                         self.line(&format!(
                             "static const {} {} = {};",
                             c_ty, c.name, const_val
@@ -502,16 +504,34 @@ impl CodeGenerator {
     }
 
     /// Attempt to evaluate a constant expression at compile time.
-    fn try_const_eval(expr: &ir::Expr) -> Option<String> {
+    fn try_const_eval(
+        expr: &ir::Expr,
+        program: &ir::Program,
+        stack: &mut Vec<String>,
+    ) -> Option<String> {
         match expr {
             ir::Expr::IntLit(v, _) => Some(format!("{}", v)),
             ir::Expr::FloatLit(v, _) => Some(format!("{:?}", v)),
             ir::Expr::BoolLit(b, _) => Some(if *b { "1".to_string() } else { "0".to_string() }),
+            ir::Expr::Ident {
+                name,
+                kind: ir::IdentKind::Value,
+                ..
+            } => {
+                if stack.iter().any(|n| n == name) {
+                    return None;
+                }
+                let const_def = program.const_defs.iter().find(|c| c.name == *name)?;
+                stack.push(name.clone());
+                let value = Self::try_const_eval(&const_def.value, program, stack);
+                stack.pop();
+                value
+            }
             ir::Expr::BinaryOp {
                 op, left, right, ..
             } => {
-                let l = Self::try_const_eval(left)?;
-                let r = Self::try_const_eval(right)?;
+                let l = Self::try_const_eval(left, program, stack)?;
+                let r = Self::try_const_eval(right, program, stack)?;
                 let lv = l.parse::<i64>().ok()?;
                 let rv = r.parse::<i64>().ok()?;
                 match op {
@@ -528,7 +548,7 @@ impl CodeGenerator {
                 operand,
                 ..
             } => {
-                let v = Self::try_const_eval(operand)?;
+                let v = Self::try_const_eval(operand, program, stack)?;
                 let iv = v.parse::<i64>().ok()?;
                 Some(format!("{}", iv.checked_neg()?))
             }

@@ -323,7 +323,7 @@ fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId)
             );
         }
 
-        let body_val = translator.lower_block(&f.body)?;
+        let body_val = translator.lower_function_body(&f.body)?;
         if !translator.builder.is_unreachable() {
             // An implicit (bare tail-expression) `return` must copy an
             // inline-aggregate result exactly like the explicit
@@ -417,6 +417,23 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         };
         self.pop_scope();
         Ok(result)
+    }
+
+    fn lower_function_body(&mut self, block: &'a oir::Block) -> CResult<Option<Value>> {
+        for stmt in &block.stmts {
+            self.lower_stmt(stmt)?;
+            if self.terminated {
+                break;
+            }
+        }
+        if !self.terminated {
+            match &block.tail_expr {
+                Some(tail) => self.lower_expr(tail),
+                None => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     fn lower_stmt(&mut self, stmt: &'a oir::Stmt) -> CResult<()> {
@@ -1207,68 +1224,118 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// The value of a top-level `let` constant referenced by name (never a
     /// local/param — those are resolved via `self.lookup` first). Mirrors
     /// `src/codegen.rs`'s `emit_top_level_constants`: string constants
-    /// become static data; scalar constants must be foldable to a literal
-    /// at this point (semantic analysis restricts top-level `let` to
-    /// constant-foldable expressions — see `top_level_const.osc`/`global_mut.osc`).
+    /// become static data; scalar constants must be foldable to literals
+    /// and/or other top-level constants at this point (semantic analysis
+    /// restricts top-level `let` to constant-foldable expressions — see
+    /// `top_level_const.osc`/`global_mut.osc`).
     fn top_level_const_ptr(&mut self, name: &str, ty: &BcType) -> CResult<Value> {
+        self.top_level_const_value(name, ty, &mut Vec::new())
+    }
+
+    fn top_level_const_value(
+        &mut self,
+        name: &str,
+        ty: &BcType,
+        stack: &mut Vec<String>,
+    ) -> CResult<Value> {
+        enum FoldedConst {
+            Str(String),
+            F64(f64),
+            I64(i64),
+            Alias(String, BcType),
+            Unsupported(Span),
+        }
+
+        if stack.iter().any(|n| n == name) {
+            return Err(unsupported(
+                Span::new(1, 1),
+                format!("cyclic top-level constant alias involving '{name}'"),
+            ));
+        }
         let const_def = self
             .program()
             .const_defs
             .iter()
             .find(|c| c.name == name)
             .unwrap_or_else(|| panic!("internal error: unknown top-level constant '{name}'"));
-        match &const_def.value {
-            oir::Expr::StringLit(s, _) => Ok(self.string_literal_ptr(s)),
-            oir::Expr::FloatLit(v, _) => Ok(self
+        stack.push(name.to_string());
+        let folded = {
+            match &const_def.value {
+                oir::Expr::StringLit(s, _) => FoldedConst::Str(s.clone()),
+                oir::Expr::FloatLit(v, _) => FoldedConst::F64(*v),
+                oir::Expr::Ident {
+                    name: alias,
+                    kind: oir::IdentKind::Value,
+                    ..
+                } => FoldedConst::Alias(alias.clone(), const_def.ty.clone()),
+                other => match self.const_eval_i64(other, &mut Vec::new()) {
+                    Some(value) => FoldedConst::I64(value),
+                    None => FoldedConst::Unsupported(const_def.span),
+                },
+            }
+        };
+        let result = match folded {
+            FoldedConst::Str(value) => Ok(self.string_literal_ptr(&value)),
+            FoldedConst::F64(value) => Ok(self
                 .builder
                 .ins()
-                .f64const(cranelift_codegen::ir::immediates::Ieee64::with_float(*v))),
-            other => {
-                let folded = const_eval_i64(other).ok_or_else(|| {
-                    unsupported(
-                        const_def.span,
-                        format!("top-level constant '{name}' initializer (only literals and +-*/% of literals fold at this point)"),
-                    )
-                })?;
+                .f64const(cranelift_codegen::ir::immediates::Ieee64::with_float(value))),
+            FoldedConst::I64(value) => {
                 let cl_ty = Repr::of(ty, self.program())
                     .cl_type()
                     .unwrap_or(cranelift_codegen::ir::types::I32);
-                Ok(self.builder.ins().iconst(cl_ty, folded))
+                Ok(self.builder.ins().iconst(cl_ty, value))
             }
-        }
+            FoldedConst::Alias(alias, alias_ty) => self.top_level_const_value(&alias, &alias_ty, stack),
+            FoldedConst::Unsupported(span) => Err(unsupported(
+                span,
+                format!("top-level constant '{name}' initializer (only literals, aliases, and +-*/% of literals/aliases fold at this point)"),
+            )),
+        };
+        stack.pop();
+        result
     }
-}
 
-/// Compile-time constant folding for top-level `let` initializers,
-/// mirroring `src/codegen.rs`'s `try_const_eval` (integer/bool literals
-/// and `+ - * / %` of foldable operands; `str`/`f64` constants are folded
-/// via their own literal cases directly in `top_level_const_ptr`, since
-/// they cannot round-trip through `i64`).
-fn const_eval_i64(expr: &oir::Expr) -> Option<i64> {
-    match expr {
-        oir::Expr::IntLit(v, _) => Some(*v),
-        oir::Expr::BoolLit(b, _) => Some(if *b { 1 } else { 0 }),
-        oir::Expr::FloatLit(v, _) => Some(*v as i64),
-        oir::Expr::BinaryOp {
-            op, left, right, ..
-        } => {
-            let l = const_eval_i64(left)?;
-            let r = const_eval_i64(right)?;
-            match op {
-                BinOp::Add => l.checked_add(r),
-                BinOp::Sub => l.checked_sub(r),
-                BinOp::Mul => l.checked_mul(r),
-                BinOp::Div if r != 0 => Some(l / r),
-                BinOp::Mod if r != 0 => Some(l % r),
-                _ => None,
+    fn const_eval_i64(&self, expr: &oir::Expr, stack: &mut Vec<String>) -> Option<i64> {
+        match expr {
+            oir::Expr::IntLit(v, _) => Some(*v),
+            oir::Expr::BoolLit(b, _) => Some(if *b { 1 } else { 0 }),
+            oir::Expr::FloatLit(v, _) => Some(*v as i64),
+            oir::Expr::Ident {
+                name,
+                kind: oir::IdentKind::Value,
+                ..
+            } => {
+                if stack.iter().any(|n| n == name) {
+                    return None;
+                }
+                let const_def = self.program().const_defs.iter().find(|c| c.name == *name)?;
+                stack.push(name.clone());
+                let value = self.const_eval_i64(&const_def.value, stack);
+                stack.pop();
+                value
             }
+            oir::Expr::BinaryOp {
+                op, left, right, ..
+            } => {
+                let l = self.const_eval_i64(left, stack)?;
+                let r = self.const_eval_i64(right, stack)?;
+                match op {
+                    BinOp::Add => l.checked_add(r),
+                    BinOp::Sub => l.checked_sub(r),
+                    BinOp::Mul => l.checked_mul(r),
+                    BinOp::Div if r != 0 => Some(l / r),
+                    BinOp::Mod if r != 0 => Some(l % r),
+                    _ => None,
+                }
+            }
+            oir::Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand,
+                ..
+            } => self.const_eval_i64(operand, stack)?.checked_neg(),
+            _ => None,
         }
-        oir::Expr::UnaryOp {
-            op: UnaryOp::Neg,
-            operand,
-            ..
-        } => const_eval_i64(operand)?.checked_neg(),
-        _ => None,
     }
 }
 

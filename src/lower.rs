@@ -407,7 +407,10 @@ impl<'a> Lowering<'a> {
                 })
             }
             ast::Stmt::Assign(a) => {
+                let target_ty = self.place_final_type(&a.target);
+                let saved = self.push_expected_type(&target_ty);
                 let value = self.lower_expr(&a.value);
+                self.pop_expected_type(saved);
                 let target = self.lower_place(&a.target);
                 ir::Stmt::Assign(ir::AssignStmt {
                     target,
@@ -528,6 +531,33 @@ impl<'a> Lowering<'a> {
             base_ty,
             span: place.span,
         }
+    }
+
+    fn place_final_type(&self, place: &ast::Place) -> BcType {
+        let mut ty = self.lookup_type(&place.name).unwrap_or(BcType::Unit);
+        for accessor in &place.accessors {
+            match accessor {
+                ast::PlaceAccessor::Field(field) => {
+                    ty = match &ty {
+                        BcType::Struct(name) => self
+                            .info
+                            .structs
+                            .get(name)
+                            .and_then(|s| s.fields.iter().find(|(n, _)| n == field))
+                            .map(|(_, field_ty)| field_ty.clone())
+                            .unwrap_or(BcType::Unit),
+                        _ => BcType::Unit,
+                    };
+                }
+                ast::PlaceAccessor::Index(_) => {
+                    ty = match ty {
+                        BcType::Array(elem) | BcType::FixedArray(elem, _) => *elem,
+                        _ => BcType::Unit,
+                    };
+                }
+            }
+        }
+        ty
     }
 
     // -----------------------------------------------------------------------
@@ -866,7 +896,40 @@ impl<'a> Lowering<'a> {
                 args,
                 span,
             } => {
-                let lowered_args: Vec<ir::Expr> = args.iter().map(|a| self.lower_expr(a)).collect();
+                let payload_types = if enum_name == "Result" {
+                    match self
+                        .expected_result_type
+                        .clone()
+                        .or_else(|| self.current_fn_return_type.clone())
+                    {
+                        Some(BcType::Result(ok, err)) => match variant.as_str() {
+                            "Ok" => vec![*ok],
+                            "Err" => vec![*err],
+                            _ => Vec::new(),
+                        },
+                        _ => Vec::new(),
+                    }
+                } else {
+                    self.info
+                        .enums
+                        .get(enum_name)
+                        .and_then(|info| info.variants.iter().find(|(n, _)| n == variant))
+                        .map(|(_, tys)| tys.clone())
+                        .unwrap_or_default()
+                };
+                let lowered_args: Vec<ir::Expr> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(i, a)| match payload_types.get(i) {
+                        Some(payload_ty) => {
+                            let saved = self.push_expected_type(payload_ty);
+                            let lowered = self.lower_expr(a);
+                            self.pop_expected_type(saved);
+                            lowered
+                        }
+                        None => self.lower_expr(a),
+                    })
+                    .collect();
                 let ty = if enum_name == "Result" {
                     // Mirrors `semantic.rs`'s `infer_result_type`: prefer
                     // the contextual expected `Result<T, E>` type (from an
