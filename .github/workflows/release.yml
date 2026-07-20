@@ -11,9 +11,9 @@ on:
         required: true
         type: string
       publish:
-        description: "Publish a GitHub release after packaging"
+        description: "Publish a GitHub release after packaging (clear for a packaging-only run)"
         required: false
-        default: false
+        default: true
         type: boolean
 
 env:
