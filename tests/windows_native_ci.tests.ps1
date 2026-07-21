@@ -71,16 +71,27 @@ osc_str host_label(osc_str value) {
 }
 '@
 
-    $compileOutput = & $Compiler `
-        --backend native `
-        --native-target host `
-        --libc `
-        --allow-elevated-native-link `
-        --extra-c $bridgeSource `
-        $oscSource `
-        -o $exePath 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0) {
-        throw "trusted elevated native link command shape failed to compile: $compileOutput"
+    $savedRuntimeArchiveDir = $env:OSCAN_RUNTIME_ARCHIVE_DIR
+    $savedToolchainDir = $env:OSCAN_TOOLCHAIN_DIR
+    $env:OSCAN_RUNTIME_ARCHIVE_DIR = (Resolve-Path -LiteralPath $RuntimeArchiveDir).Path
+    $env:OSCAN_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $ToolchainDir).Path
+    $compileArgs = @(
+        "--backend", "native",
+        "--native-target", "host",
+        "--libc",
+        "--allow-elevated-native-link",
+        "--extra-c", $bridgeSource,
+        $oscSource,
+        "-o", $exePath
+    )
+    try {
+        $compileOutput = & $Compiler @compileArgs 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            throw "trusted elevated native link command shape failed to compile with args '$($compileArgs -join ' ')': $compileOutput"
+        }
+    } finally {
+        $env:OSCAN_RUNTIME_ARCHIVE_DIR = $savedRuntimeArchiveDir
+        $env:OSCAN_TOOLCHAIN_DIR = $savedToolchainDir
     }
 
     $runOutput = & $exePath 2>&1 | Out-String
