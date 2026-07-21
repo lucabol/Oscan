@@ -63,13 +63,17 @@
 //! carefully, so "sandbox the elevated process" was pretending to solve a
 //! problem it could not fully solve.
 //!
-//! The product policy is now **fail-closed refusal**: `main.rs`'s
+//! The product policy is now **fail-closed refusal by default**: `main.rs`'s
 //! `run_native_backend` refuses to perform a native final link or `--run`
 //! at all while this process is elevated (see [`NativeLinkOperation`] and
 //! [`check_elevation_policy`]), *before* ever creating a scratch directory
 //! or calling into this module's extraction path. Detection failure
 //! (`is_elevated()` returning `Err`) is treated the same as "elevated" —
-//! fail closed, not fail open. `-o *.o`/`-o *.obj` (object-only output,
+//! fail closed, not fail open. Trusted CI/release builds can explicitly pass
+//! `--allow-elevated-native-link` to acknowledge the risk for trusted inputs;
+//! that opt-in only bypasses the elevated-token refusal and does not relax
+//! any path validation, cache verification, canonicalization, or sandboxing
+//! check. `-o *.o`/`-o *.obj` (object-only output,
 //! [`NativeLinkOperation::ObjectOnly`]) is always allowed regardless of
 //! elevation: it never extracts or executes an embedded asset, and never
 //! writes a final linked executable, so it never touches the native-asset
@@ -156,18 +160,23 @@ pub enum NativeLinkOperation {
 pub fn check_elevation_policy(
     elevation: Result<bool, String>,
     operation: NativeLinkOperation,
+    allow_elevated_native_link: bool,
 ) -> Result<(), String> {
     if operation == NativeLinkOperation::ObjectOnly {
         return Ok(());
     }
     match elevation {
         Ok(false) => Ok(()),
+        Ok(true) if allow_elevated_native_link => Ok(()),
         Ok(true) => Err(
             "refusing to perform a native final link (or --run) while this process is running \
              elevated (Administrator). Windows handle-based TOCTOU races between a path check \
              and a subsequent open/rename cannot be fully closed by re-checking paths alone, so \
              oscan refuses this operation entirely while elevated rather than attempt to sandbox \
-             it. Please re-run this command from a non-elevated terminal."
+             it. Please re-run this command from a non-elevated terminal. Trusted CI/release \
+             builds with trusted inputs may pass --allow-elevated-native-link to bypass only this \
+             elevated-process refusal; path validation, cache verification, canonicalization, and \
+             sandboxing checks still apply."
                 .to_string(),
         ),
         Err(reason) => Err(format!(
@@ -662,14 +671,18 @@ fn write_complete_marker(set_dir: &Path) -> Result<(), String> {
 /// smoke-check (`--version`) against the extracted linker binary and turns
 /// any launch failure into a hard error with a diagnostic distinct from a
 /// hash-mismatch message (see [`smoke_check_linker`]).
-pub fn ensure_extracted() -> Result<ExtractedAssetSet, String> {
+pub fn ensure_extracted(allow_elevated_native_link: bool) -> Result<ExtractedAssetSet, String> {
     if !EMBEDDED_ASSETS_PRESENT || EMBEDDED_ASSETS.is_empty() {
         return Err("this oscan build has no embedded native-link assets".to_string());
     }
     #[cfg(windows)]
-    check_elevation_policy(is_elevated(), NativeLinkOperation::FinalLink)?;
+    check_elevation_policy(
+        is_elevated(),
+        NativeLinkOperation::FinalLink,
+        allow_elevated_native_link,
+    )?;
     #[cfg(unix)]
-    check_elevation_policy(is_setuid_elevated(), NativeLinkOperation::FinalLink)?;
+    check_elevation_policy(is_setuid_elevated(), NativeLinkOperation::FinalLink, false)?;
 
     let cache_root = cache_root()?;
     let set = ensure_extracted_in(EMBEDDED_ASSETS, &cache_root)?;
@@ -1121,25 +1134,32 @@ mod tests {
     /// `main.rs`, not "sandbox it here").
     #[test]
     fn check_elevation_policy_allows_object_only_regardless_of_elevation() {
-        assert!(check_elevation_policy(Ok(true), NativeLinkOperation::ObjectOnly).is_ok());
-        assert!(check_elevation_policy(Ok(false), NativeLinkOperation::ObjectOnly).is_ok());
+        assert!(check_elevation_policy(Ok(true), NativeLinkOperation::ObjectOnly, false).is_ok());
+        assert!(check_elevation_policy(Ok(false), NativeLinkOperation::ObjectOnly, false).is_ok());
         assert!(check_elevation_policy(
             Err("token check failed".to_string()),
-            NativeLinkOperation::ObjectOnly
+            NativeLinkOperation::ObjectOnly,
+            false
         )
         .is_ok());
     }
 
     #[test]
     fn check_elevation_policy_allows_final_link_when_confirmed_not_elevated() {
-        assert!(check_elevation_policy(Ok(false), NativeLinkOperation::FinalLink).is_ok());
+        assert!(check_elevation_policy(Ok(false), NativeLinkOperation::FinalLink, false).is_ok());
     }
 
     #[test]
     fn check_elevation_policy_refuses_final_link_when_elevated() {
-        let err = check_elevation_policy(Ok(true), NativeLinkOperation::FinalLink)
+        let err = check_elevation_policy(Ok(true), NativeLinkOperation::FinalLink, false)
             .expect_err("must refuse a final link while elevated");
         assert!(err.to_lowercase().contains("elevated"));
+        assert!(err.contains("--allow-elevated-native-link"));
+    }
+
+    #[test]
+    fn check_elevation_policy_allows_elevated_final_link_with_explicit_trusted_opt_in() {
+        assert!(check_elevation_policy(Ok(true), NativeLinkOperation::FinalLink, true).is_ok());
     }
 
     #[test]
@@ -1149,6 +1169,7 @@ mod tests {
         let err = check_elevation_policy(
             Err("OpenProcessToken failed".to_string()),
             NativeLinkOperation::FinalLink,
+            true,
         )
         .expect_err("a detection error must refuse FinalLink, not silently allow it");
         assert!(err.contains("OpenProcessToken failed"));

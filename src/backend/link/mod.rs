@@ -189,6 +189,7 @@ use super::RuntimeMode;
 pub struct NativeLinkOptions<'a> {
     pub runtime_mode: RuntimeMode,
     pub show_warnings: bool,
+    pub allow_elevated_native_link: bool,
     pub extra_c_files: &'a [String],
     pub extra_cflags: &'a [String],
     pub extra_objects: &'a [String],
@@ -509,7 +510,7 @@ fn build_mingw_plan(
         }
     }
 
-    let extracted = native_assets::ensure_extracted()
+    let extracted = native_assets::ensure_extracted(options.allow_elevated_native_link)
         .map_err(|reason| driver::no_silent_fallback_error(&reason))?;
 
     let linker = match &mingw_source {
@@ -604,7 +605,7 @@ fn build_elf_plan(
 ) -> Result<LinkPlan, String> {
     let linker = match &elf_source {
         driver::ElfLinkerSource::Embedded => {
-            let extracted = native_assets::ensure_extracted()
+            let extracted = native_assets::ensure_extracted(options.allow_elevated_native_link)
                 .map_err(|reason| driver::no_silent_fallback_error(&reason))?;
             let linker_asset = extracted.linker().ok_or_else(|| {
                 driver::no_silent_fallback_error(&format!(
@@ -943,6 +944,7 @@ mod tests {
         let options = NativeLinkOptions {
             runtime_mode: RuntimeMode::Hosted,
             show_warnings: false,
+            allow_elevated_native_link: false,
             extra_c_files: &[],
             extra_cflags: &[],
             extra_objects: &[],
@@ -1003,6 +1005,7 @@ mod tests {
         let options = NativeLinkOptions {
             runtime_mode: RuntimeMode::Freestanding,
             show_warnings: false,
+            allow_elevated_native_link: false,
             extra_c_files: &[],
             extra_cflags: &[],
             extra_objects: &[],

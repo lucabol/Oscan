@@ -224,6 +224,7 @@ oscan [OPTIONS] <file.osc>
   --backend <name>  Code generator (native on supported hosts; c otherwise)
   --native-target <tag>  Native object target (default: host)
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
+  --allow-elevated-native-link  Trusted CI/release only: allow native final link/--run from an elevated Windows process
   --extra-c <file>  Extra C source file to compile and link (repeatable)
   --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)
   --extra-lib <lib>  Static library path (.a/.lib) or system library name (repeatable)
@@ -281,6 +282,12 @@ This self-contained story is scoped narrowly — it does **not** extend to:
 **Linux AArch64/RISC-V64 native backend support:** `--backend native` can now cross-link for `linux-aarch64` and `linux-riscv64` targets via a cross-linker sidecar mechanism. The standard Linux x86_64 release binary embeds only its own native linker; cross-linking for other targets requires distributing additional linker binaries alongside the release. See `docs/releasing.md` for cross-linker sidecar setup (`OSCAN_NATIVE_LINKER`, `OSCAN_NATIVE_LINKER_FLAVOR=elf`, `OSCAN_RUNTIME_ARCHIVE_DIR`). **Note:** this is separate from the **C backend**'s existing ARM64/RISC-V64 support via `aarch64-linux-gnu-gcc` / `--target riscv64`.
 
 Advanced overrides (rarely needed): `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` select a different linker or force the legacy compiler-driver path (`OSCAN_NATIVE_LINKER_FLAVOR=mingw` for Windows, `=elf` for Linux); `OSCAN_NATIVE_ASSET_CACHE_DIR` relocates the extraction cache. See `oscan --help` and `docs/design/native-link-embedding.md` for details.
+
+On Windows, native final linking and `--run` refuse to run from an elevated
+Administrator process by default. Trusted CI/release jobs that build only
+trusted inputs may pass `--allow-elevated-native-link`; this only bypasses the
+elevated-process refusal and does not disable path validation, cache
+verification, canonicalization, or native-link sandboxing.
 
 **Supported targets:**
 

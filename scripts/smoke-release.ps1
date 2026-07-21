@@ -199,8 +199,8 @@ fn! main() {
 Push-Location $ScratchDir
 try {
     # Keep the package/toolchain smoke independent of the supported-host
-    # default backend: native final links must run below under a standard-user
-    # token when the Windows runner is elevated.
+    # default backend: native final links run below with an explicit trusted
+    # elevated-process opt-in when the Windows release runner is elevated.
     $compileArgs = @("--backend", "c")
     if ($requiresHostCompiler) {
         $compileArgs += "--libc"
@@ -242,37 +242,7 @@ if ($nativeRuntimeModes.Count -gt 0 -and $platform -eq "windows") {
     $isWindowsAdministrator = $false
 }
 
-if ($isWindowsAdministrator) {
-    # Native asset extraction intentionally rejects elevated final links.
-    # Exercise the installed package with a real disposable standard-user
-    # token rather than weakening the product's TOCTOU defense for CI.
-    $nativeScript = Join-Path $PSScriptRoot "smoke-release-windows-native.ps1"
-    $childScript = Join-Path $ScratchDir "smoke-release-windows-native.standard-user.ps1"
-    Copy-Item -LiteralPath $nativeScript -Destination $childScript -Force
-    $nativeParameters = @{
-        OscanCommand = $OscanCommand
-        ScratchDir = $ScratchDir
-        RuntimeArchiveDir = $RuntimeArchiveDir
-        NativeSmokeMode = $nativeSmokeMode
-    }
-    if ($expectedNativeLinkSource) {
-        $nativeParameters["ExpectedNativeLinkSource"] = $expectedNativeLinkSource
-    }
-    $standardUserLogDir = Join-Path $ScratchDir "standard-user-logs"
-    New-Item -ItemType Directory -Path $standardUserLogDir -Force | Out-Null
-    . (Join-Path $PSScriptRoot "windows-standard-user.ps1")
-    Invoke-WindowsStandardUserPowerShell `
-        -ScriptPath $childScript `
-        -Parameters $nativeParameters `
-        -WorkingDirectory $ScratchDir `
-        -StateBaseDir $ScratchDir `
-        -WritablePaths @($ScratchDir) `
-        -LogDirectory $standardUserLogDir `
-        -LogPrefix "release-native" `
-        -TimeoutSeconds 600
-}
-
-if ($nativeRuntimeModes.Count -gt 0 -and -not $isWindowsAdministrator) {
+if ($nativeRuntimeModes.Count -gt 0) {
     $NativeOutput = Join-Path $ScratchDir ("hello-native" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
     $NativeLog = Join-Path $ScratchDir "native.stderr.txt"
     $TlsLinkLog = $null
@@ -282,6 +252,9 @@ if ($nativeRuntimeModes.Count -gt 0 -and -not $isWindowsAdministrator) {
         $nativeArgs = @()
         if ($nativeSmokeMode -eq "hosted") {
             $nativeArgs += "--libc"
+        }
+        if ($isWindowsAdministrator) {
+            $nativeArgs += "--allow-elevated-native-link"
         }
         $nativeArgs += @("--backend", "native", $SampleSource, "-o", $NativeOutput)
         $nativeInvocation = {

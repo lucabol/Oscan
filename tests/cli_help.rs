@@ -24,6 +24,8 @@ fn long_help_flag_prints_usage_and_succeeds() {
     assert!(stdout.contains("--target <arch>"));
     assert!(stdout.contains("--libc"));
     assert!(stdout.contains("including with --backend native"));
+    assert!(stdout.contains("--allow-elevated-native-link"));
+    assert!(stdout.contains("Trusted CI/release only"));
 }
 
 #[test]
@@ -62,6 +64,24 @@ fn help_mentions_extra_lib() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("--extra-lib"));
     assert!(stdout.contains("system library name"));
+}
+
+#[test]
+fn elevated_native_link_opt_in_is_rejected_for_c_backend() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output = Command::new(oscan_binary_path())
+        .args(["--backend", "c", "--allow-elevated-native-link"])
+        .arg(&source)
+        .arg("--emit-c")
+        .output()
+        .expect("failed to run oscan validation");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--allow-elevated-native-link is only meaningful"));
+    assert!(stderr.contains("trusted CI/release inputs"));
 }
 
 #[test]
@@ -137,6 +157,42 @@ fn default_backend_emits_a_native_object_on_supported_hosts() {
     assert!(
         output.status.success(),
         "implicit native backend failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = fs::read(&output_path).expect("native object output should exist");
+    fs::remove_file(&output_path).expect("failed to remove native object output");
+    let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
+    assert_eq!(object.kind(), object::ObjectKind::Relocatable);
+}
+
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    )
+))]
+#[test]
+fn elevated_native_link_opt_in_is_harmless_for_native_object_only_output() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output_path =
+        std::env::temp_dir().join(format!("oscan-allow-elevated-object-{}.obj", process::id()));
+    let output = Command::new(oscan_binary_path())
+        .arg(&source)
+        .args(["--backend", "native", "--allow-elevated-native-link", "-o"])
+        .arg(&output_path)
+        .output()
+        .expect("failed to run native object-only validation");
+
+    assert!(
+        output.status.success(),
+        "native object-only output with opt-in failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     let bytes = fs::read(&output_path).expect("native object output should exist");
