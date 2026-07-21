@@ -32,6 +32,11 @@ function Invoke-NativeValidation {
     if ($LASTEXITCODE -ne 0) {
         throw "C-vs-native differential suite failed with exit code $LASTEXITCODE"
     }
+
+    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler
+    if ($LASTEXITCODE -ne 0) {
+        throw "native extern str ABI suite failed with exit code $LASTEXITCODE"
+    }
 }
 
 Push-Location $RepoRoot

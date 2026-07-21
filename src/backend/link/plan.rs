@@ -95,6 +95,24 @@ pub struct SystemLib {
     pub archive_path: Option<PathBuf>,
 }
 
+/// User-supplied `--extra-lib` input: either an explicit archive/import-library
+/// path or a safe system-library name rendered as `-l<name>` for compiler
+/// drivers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExtraLib {
+    Path(PathBuf),
+    SystemName(String),
+}
+
+impl ExtraLib {
+    fn push_arg(&self, args: &mut Vec<OsString>) {
+        match self {
+            ExtraLib::Path(path) => args.push(path.clone().into_os_string()),
+            ExtraLib::SystemName(name) => args.push(format!("-l{name}").into()),
+        }
+    }
+}
+
 /// Pure, unit-testable description of a final native link. Construction does
 /// no I/O; all paths are already resolved by the caller.
 #[derive(Debug, Clone)]
@@ -171,7 +189,7 @@ pub struct LinkPlan {
     /// before the runtime archive(s), so undefined runtime references from
     /// selected user archive members are resolved by the later runtime
     /// archive scan. Design §12.4.
-    pub extra_libs: Vec<PathBuf>,
+    pub extra_libs: Vec<ExtraLib>,
 }
 
 impl LinkPlan {
@@ -219,7 +237,7 @@ impl LinkPlan {
             args.push(obj.clone().into_os_string());
         }
         for lib in &self.extra_libs {
-            args.push(lib.clone().into_os_string());
+            lib.push_arg(&mut args);
         }
         for archive in &self.archives {
             args.push(archive.clone().into_os_string());
@@ -265,7 +283,7 @@ impl LinkPlan {
             args.push(obj.clone().into_os_string());
         }
         for lib in &self.extra_libs {
-            args.push(lib.clone().into_os_string());
+            lib.push_arg(&mut args);
         }
         for archive in &self.archives {
             args.push(archive.clone().into_os_string());
@@ -344,7 +362,7 @@ impl LinkPlan {
             args.push(src.clone().into_os_string());
         }
         for lib in &self.extra_libs {
-            args.push(lib.clone().into_os_string());
+            lib.push_arg(&mut args);
         }
         for archive in &self.archives {
             args.push(archive.clone().into_os_string());
@@ -781,10 +799,14 @@ mod tests {
 
     #[test]
     fn user_static_libraries_precede_runtime_archives_in_every_linker_flavor() {
-        let user_lib = if cfg!(windows) {
+        let user_lib = ExtraLib::Path(if cfg!(windows) {
             PathBuf::from(r"C:\libs\user.lib")
         } else {
             PathBuf::from("/libs/libuser.a")
+        });
+        let user_lib_rendered = match &user_lib {
+            ExtraLib::Path(path) => path.to_string_lossy().into_owned(),
+            ExtraLib::SystemName(name) => format!("-l{name}"),
         };
 
         let mut plans = vec![
@@ -798,7 +820,7 @@ mod tests {
             let rendered = render_strings(plan);
             let user_index = rendered
                 .iter()
-                .position(|arg| arg == &user_lib.to_string_lossy())
+                .position(|arg| arg == &user_lib_rendered)
                 .expect("user library must be rendered");
             let runtime_index = rendered
                 .iter()
@@ -810,6 +832,30 @@ mod tests {
                 plan.flavor
             );
         }
+    }
+
+    #[test]
+    fn compiler_driver_renders_extra_system_library_names_before_runtime_archive() {
+        let mut plan = compiler_driver_plan(RuntimeMode::Hosted, NativeTarget::WindowsX64);
+        plan.extra_libs = vec![
+            ExtraLib::SystemName("winhttp".to_string()),
+            ExtraLib::SystemName("ws2_32".to_string()),
+        ];
+        let rendered = render_strings(&plan);
+        let winhttp_index = rendered
+            .iter()
+            .position(|arg| arg == "-lwinhttp")
+            .expect("winhttp system library must render as -lwinhttp");
+        let ws2_index = rendered
+            .iter()
+            .position(|arg| arg == "-lws2_32")
+            .expect("ws2_32 system library must render as -lws2_32");
+        let runtime_index = rendered
+            .iter()
+            .position(|arg| arg == "/archives/libosc_runtime_freestanding.a")
+            .expect("runtime archive must be rendered");
+        assert!(winhttp_index < runtime_index);
+        assert!(ws2_index < runtime_index);
     }
 
     #[test]

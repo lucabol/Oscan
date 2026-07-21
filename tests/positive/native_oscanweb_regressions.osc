@@ -1,0 +1,54 @@
+// Test: native backend regressions found by OscanWeb
+// Exercises: defer using locals at implicit function exit, top-level const
+// aliases, and empty array literals in assignment target context.
+
+let BASE_FONT: i32 = 4;
+let BODY_FONT: i32 = BASE_FONT + 1;
+
+struct BoxedArray {
+    items: [i32],
+}
+
+fn! close_id(id: i32) {
+    print("close ");
+    print_i32(id);
+    println("");
+}
+
+fn! use_defer() {
+    let handle: i32 = 7;
+    defer close_id(handle);
+    println("body");
+}
+
+fn! use_array_reassign() {
+    let mut text_buf: [i32] = [];
+    push(text_buf, 65);
+    text_buf = [];
+    push(text_buf, 66);
+    print("buf ");
+    print_i32(len(text_buf));
+    print(" ");
+    print_i32(text_buf[0]);
+    println("");
+}
+
+fn! use_struct_field_reassign() {
+    let mut boxed: BoxedArray = BoxedArray { items: [1, 2] };
+    boxed.items = [];
+    push(boxed.items, 9);
+    print("boxed ");
+    print_i32(len(boxed.items));
+    print(" ");
+    print_i32(boxed.items[0]);
+    println("");
+}
+
+fn! main() {
+    print("font ");
+    print_i32(BODY_FONT);
+    println("");
+    use_array_reassign();
+    use_struct_field_reassign();
+    use_defer();
+}

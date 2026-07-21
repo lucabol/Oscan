@@ -14,8 +14,15 @@ use cranelift_object::ObjectModule;
 
 use crate::ir;
 
+use super::extern_shim::NativeExternShim;
 use super::layout::cl_pointer_type;
 use super::RuntimeMode;
+
+#[derive(Clone, Copy)]
+pub enum ExternDeclKind {
+    Direct,
+    NativeShim,
+}
 
 pub struct BackendContext<'a> {
     pub module: ObjectModule,
@@ -24,9 +31,13 @@ pub struct BackendContext<'a> {
     /// Oscan `fn`/`fn!` name -> declared `FuncId` (the IR's `main` is
     /// declared under the C-backend-compatible symbol `oscan_main`).
     pub functions: HashMap<String, FuncId>,
-    /// User `extern` block function name -> declared `FuncId` (real C ABI,
-    /// no implicit arena parameter).
-    pub externs: HashMap<String, FuncId>,
+    /// User `extern` block function name -> declared `FuncId` plus whether
+    /// the native object imports the real C symbol directly or a generated
+    /// per-program shim.
+    pub externs: HashMap<String, (FuncId, ExternDeclKind)>,
+    /// Per-program generated C shims for used user externs whose signature
+    /// contains `str`.
+    extern_shims: Vec<NativeExternShim>,
     /// Runtime/shim symbol name -> declared `FuncId`, filled in lazily the
     /// first time a given runtime entry point is actually called.
     runtime_funcs: HashMap<&'static str, FuncId>,
@@ -44,6 +55,7 @@ impl<'a> BackendContext<'a> {
             runtime_mode,
             functions: HashMap::new(),
             externs: HashMap::new(),
+            extern_shims: Vec::new(),
             runtime_funcs: HashMap::new(),
             string_literals: HashMap::new(),
             next_anon_data: 0,
@@ -90,6 +102,17 @@ impl<'a> BackendContext<'a> {
             });
         self.runtime_funcs.insert(symbol, id);
         id
+    }
+
+    pub fn add_extern_shim(&mut self, shim: NativeExternShim) {
+        self.extern_shims.push(shim);
+    }
+
+    pub fn generated_extern_shim_source(&self) -> Result<Option<String>, String> {
+        if self.extern_shims.is_empty() {
+            return Ok(None);
+        }
+        super::extern_shim::generate_source(&self.extern_shims, self.program).map(Some)
     }
 
     /// Get-or-create the `DataId` for a (deduplicated) string literal's

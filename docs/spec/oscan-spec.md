@@ -1933,7 +1933,7 @@ oscan [OPTIONS] <file.osc>
 | `--target <arch>` | Cross-compile for target architecture (C backend only). Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
 | `--extra-c <file>` | Extra C source file to compile and link (repeatable). Requires C compiler. |
 | `--extra-obj <file>` | Precompiled object file to link (`.o` or `.obj`, repeatable). Works with both backends. |
-| `--extra-lib <file>` | Precompiled static library to link (`.a` or `.lib`, repeatable). Works with both backends. |
+| `--extra-lib <lib>` | Static library path (`.a` or `.lib`) or compiler-driver system library name to link, repeatable. Works with both backends. |
 | `--extra-cflags <flag>` | Extra flag passed to the C compiler (repeatable). |
 | `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
 | `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |

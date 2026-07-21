@@ -1,5 +1,6 @@
 mod ast;
 mod backend;
+mod c_name;
 mod codegen;
 mod error;
 mod ir;
@@ -33,6 +34,16 @@ fn verbose_command(label: &str, cmd: &Command) {
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
         eprintln!("[verbose] {label}: {prog} {}", args.join(" "));
+    }
+}
+
+fn push_extra_lib_args(command: &mut Command, extra_lib_files: &[String]) {
+    for lib in extra_lib_files {
+        if backend::link::is_system_library_name(lib) {
+            command.arg(format!("-l{lib}"));
+        } else {
+            command.arg(lib);
+        }
     }
 }
 
@@ -260,7 +271,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
     );
     print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
     print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
@@ -275,7 +286,7 @@ fn print_usage(to_stderr: bool) {
     print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
     print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
     print_line("  --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)");
-    print_line("  --extra-lib <file>  Precompiled static library to link (.a/.lib, repeatable)");
+    print_line("  --extra-lib <lib>  Static library path (.a/.lib) or system library name, e.g. winhttp (repeatable)");
     print_line("  OSCAN_CC         Override the detected C compiler command or path");
     print_line(&format!(
         "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
@@ -437,7 +448,7 @@ fn main() {
                 if i < args.len() {
                     extra_lib_files.push(args[i].clone());
                 } else {
-                    eprintln!("--extra-lib requires a static library path (.a/.lib)");
+                    eprintln!("--extra-lib requires a static library path (.a/.lib) or system library name");
                     process::exit(1);
                 }
             }
@@ -802,8 +813,8 @@ fn run_native_backend(
     if is_verbose() {
         eprintln!("[verbose] Native backend target: {native_target}, runtime: {runtime_mode}");
     }
-    let object_bytes = match backend::compile_object(ir_program, native_target, runtime_mode) {
-        Ok(bytes) => bytes,
+    let compile_output = match backend::compile_object(ir_program, native_target, runtime_mode) {
+        Ok(output) => output,
         Err(e) => {
             eprintln!("{}", e.with_file(source_path));
             process::exit(1);
@@ -812,7 +823,7 @@ fn run_native_backend(
     if is_verbose() {
         eprintln!(
             "[verbose] Native object emitted ({} bytes)",
-            object_bytes.len()
+            compile_output.object_bytes.len()
         );
     }
 
@@ -825,6 +836,12 @@ fn run_native_backend(
         .unwrap_or(false);
 
     if output_is_object {
+        if compile_output.generated_extern_shim_c.is_some() {
+            eprintln!(
+                "error: native object-only output cannot include generated C shims for user extern str ABI calls; build an executable so Oscan can compile and link the shim"
+            );
+            process::exit(1);
+        }
         if run_mode {
             eprintln!(
                 "error: --run cannot be combined with an object-file output path (-o *.o/*.obj)"
@@ -832,7 +849,9 @@ fn run_native_backend(
             process::exit(1);
         }
         let out_path = output_path.unwrap();
-        if let Err(e) = backend::link::write_object_file(&object_bytes, Path::new(&out_path)) {
+        if let Err(e) =
+            backend::link::write_object_file(&compile_output.object_bytes, Path::new(&out_path))
+        {
             eprintln!("error: {e}");
             process::exit(1);
         }
@@ -878,15 +897,6 @@ fn run_native_backend(
         }
     }
 
-    let link_options = backend::link::NativeLinkOptions {
-        runtime_mode,
-        show_warnings,
-        extra_c_files: &extra_c_files,
-        extra_cflags: &extra_cflags,
-        extra_objects: &extra_obj_files,
-        extra_libs: &extra_lib_files,
-    };
-
     // Validate --extra-obj files (design §12.2)
     for obj_file in extra_obj_files {
         let path = std::path::Path::new(obj_file);
@@ -903,11 +913,17 @@ fn run_native_backend(
         }
     }
 
-    // Validate --extra-lib files (design §12.2)
+    // Validate --extra-lib files or safe system-library names (design §12.2)
     for lib_file in extra_lib_files {
+        if backend::link::is_system_library_name(lib_file) {
+            continue;
+        }
         let path = std::path::Path::new(lib_file);
         if !path.exists() {
-            eprintln!("error: --extra-lib file does not exist: {}", lib_file);
+            eprintln!(
+                "error: --extra-lib file does not exist (or is not a safe system library name): {}",
+                lib_file
+            );
             process::exit(1);
         }
         let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
@@ -929,13 +945,47 @@ fn run_native_backend(
     let obj_path = temp_dir
         .path()
         .join(format!("program{}", native_target.obj_suffix()));
-    if let Err(e) = backend::link::write_object_file(&object_bytes, &obj_path) {
+    if let Err(e) = backend::link::write_object_file(&compile_output.object_bytes, &obj_path) {
         eprintln!("error: {e}");
         // `process::exit` skips `Drop`, so the `TempDir` guard must be
         // dropped explicitly first to still clean up (Finding 3).
         drop(temp_dir);
         process::exit(1);
     }
+    let generated_shim_path = compile_output
+        .generated_extern_shim_c
+        .as_ref()
+        .map(|source| {
+            let path = temp_dir.path().join("oscan_native_extern_shims.c");
+            fs::write(&path, source).map_err(|e| {
+                format!(
+                    "error writing generated native extern shim '{}': {e}",
+                    path.display()
+                )
+            })?;
+            Ok::<String, String>(path.to_string_lossy().into_owned())
+        })
+        .transpose();
+    let generated_shim_path = match generated_shim_path {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("{e}");
+            drop(temp_dir);
+            process::exit(1);
+        }
+    };
+    let mut native_extra_c_files = extra_c_files.to_vec();
+    if let Some(path) = generated_shim_path {
+        native_extra_c_files.push(path);
+    }
+    let link_options = backend::link::NativeLinkOptions {
+        runtime_mode,
+        show_warnings,
+        extra_c_files: &native_extra_c_files,
+        extra_cflags,
+        extra_objects: extra_obj_files,
+        extra_libs: extra_lib_files,
+    };
 
     if run_mode {
         let exe_path = temp_dir
@@ -2162,11 +2212,9 @@ fn compile_with_gcc_or_clang(
     for flag in extra_cflags {
         command.arg(flag);
     }
-    // Add user-supplied precompiled static libraries (design §12.6)
-    // These go last per spec: after all other inputs
-    for lib in extra_lib_files {
-        command.arg(lib);
-    }
+    // Add user-supplied static libraries/system libs (design §12.6).
+    // These go last per spec: after all other inputs.
+    push_extra_lib_args(&mut command, extra_lib_files);
 
     verbose_command("C compiler", &command);
     let output = command.output();
@@ -2237,10 +2285,8 @@ fn compile_cross_riscv64(
     for flag in extra_cflags {
         command.arg(flag);
     }
-    // Add user-supplied precompiled static libraries (design §12.6)
-    for lib in extra_lib_files {
-        command.arg(lib);
-    }
+    // Add user-supplied static libraries/system libs (design §12.6).
+    push_extra_lib_args(&mut command, extra_lib_files);
 
     verbose_command("RISC-V cross-compile", &command);
     match command.output() {
@@ -2298,10 +2344,8 @@ fn compile_cross_wasi(
     for flag in extra_cflags {
         command.arg(flag);
     }
-    // Add user-supplied precompiled static libraries (design §12.6)
-    for lib in extra_lib_files {
-        command.arg(lib);
-    }
+    // Add user-supplied static libraries/system libs (design §12.6).
+    push_extra_lib_args(&mut command, extra_lib_files);
 
     verbose_command("WASI cross-compile", &command);
     match command.output() {

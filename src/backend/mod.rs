@@ -15,18 +15,20 @@
 //! Implemented: the full language surface exercised by the positive
 //! integration corpus, including checked scalar arithmetic, structured
 //! control flow, `defer`, user/recursive/indirect calls, scalar-signature
-//! `extern` calls, strings/interpolation, arrays, structs, enums,
+//! `extern` calls, user `extern` calls with `str` parameters/returns through
+//! generated C shims, strings/interpolation, arrays, structs, enums,
 //! `Result`/`try`/`match`, maps, sockets/TLS, terminal/environment/process
 //! builtins, graphics, interactive `canvas_*`/`clipboard_*`, and
 //! `img_load`/`svg_load`/`tt_*`. Aggregate-returning runtime calls cross
 //! the ABI through `runtime/osc_native_shim.c`.
 //!
 //! The remaining source-level limitation is user-declared `extern`
-//! functions with an inline-aggregate (`str`, struct, payload enum, or
-//! `Result`) parameter or return type. Those require an explicit C ABI
-//! shim; the native backend reports a compile error and the C portability
-//! backend remains the fallback. Nested enum payload subpatterns are
-//! rejected by the language grammar, so they are not a backend gap.
+//! functions with aggregate types other than `str` (struct, payload enum, or
+//! `Result`) as a parameter or return type. Those require an explicit C ABI
+//! shim; the native backend reports a compile error rather than trying to
+//! classify platform aggregate ABI layouts directly. Nested enum payload
+//! subpatterns are rejected by the language grammar, so they are not a
+//! backend gap.
 //!
 //! # Runtime modes
 //!
@@ -50,6 +52,7 @@
 //! final-link plans.
 
 mod ctx;
+mod extern_shim;
 mod func;
 mod layout;
 pub mod link;
@@ -79,6 +82,11 @@ pub enum RuntimeMode {
     Hosted,
 }
 
+pub struct NativeCompileOutput {
+    pub object_bytes: Vec<u8>,
+    pub generated_extern_shim_c: Option<String>,
+}
+
 impl RuntimeMode {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -102,7 +110,7 @@ pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
     runtime_mode: RuntimeMode,
-) -> Result<Vec<u8>, CompileError> {
+) -> Result<NativeCompileOutput, CompileError> {
     let isa = target::build_isa(target)
         .map_err(|e| CompileError::new(crate::token::Span::new(1, 1), e))?;
     let builder = ObjectBuilder::new(
@@ -122,12 +130,22 @@ pub fn compile_object(
     func::declare_and_translate_all(&mut ctx)?;
     synthesize_main_entry(&mut ctx)?;
 
+    let generated_extern_shim_c = ctx.generated_extern_shim_source().map_err(|e| {
+        CompileError::new(
+            crate::token::Span::new(1, 1),
+            format!("internal error generating native extern shims: {e}"),
+        )
+    })?;
     let product = ctx.module.finish();
-    product.emit().map_err(|e| {
+    let object_bytes = product.emit().map_err(|e| {
         CompileError::new(
             crate::token::Span::new(1, 1),
             format!("internal error emitting object file: {e}"),
         )
+    })?;
+    Ok(NativeCompileOutput {
+        object_bytes,
+        generated_extern_shim_c,
     })
 }
 

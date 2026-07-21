@@ -226,7 +226,7 @@ oscan [OPTIONS] <file.osc>
   --target <arch> Cross-compile for target architecture (riscv64, wasi)
   --extra-c <file>  Extra C source file to compile and link (repeatable)
   --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)
-  --extra-lib <file>  Precompiled static library to link (.a/.lib, repeatable)
+  --extra-lib <lib>  Static library path (.a/.lib) or system library name (repeatable)
   --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)
   --dump-ast      Print AST (debug)
   --dump-tokens   Print tokens (debug)
