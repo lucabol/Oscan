@@ -891,7 +891,7 @@ fn run_native_backend(
         if let Err(reason) = backend::native_assets::check_elevation_policy(
             elevation,
             backend::native_assets::NativeLinkOperation::FinalLink,
-            false,
+            allow_elevated_native_link,
         ) {
             eprintln!("error: {reason}");
             process::exit(1);
@@ -904,7 +904,7 @@ fn run_native_backend(
         if let Err(reason) = backend::native_assets::check_elevation_policy(
             elevation,
             backend::native_assets::NativeLinkOperation::FinalLink,
-            allow_elevated_native_link,
+            false,
         ) {
             eprintln!("error: {reason}");
             process::exit(1);
