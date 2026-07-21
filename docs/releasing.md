@@ -201,6 +201,14 @@ survived packaging and installation, then compile and run the sample with freest
 does not advertise or package the native backend because that backend has no
 Darwin target yet.
 
+GitHub-hosted Windows release runners may run the packaging/smoke process with
+an elevated Administrator token. Normal interactive native final links still
+refuse elevated processes by default; trusted release smoke tests that build
+only repository-controlled inputs must pass `--allow-elevated-native-link` when
+they need native final linking or `--run` under that elevated token. This flag
+does not relax path validation, cache verification, canonicalization, or
+native-link sandboxing.
+
 `scripts/smoke-release.ps1` expects `bundled` compiler-source reporting for
 both the regular `--backend c` compile and the packaged `--backend native`
 compile on every bundle-kind-`full` target (Windows and Linux) — there is no

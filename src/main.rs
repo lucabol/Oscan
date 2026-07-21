@@ -271,7 +271,7 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--allow-elevated-native-link] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
     );
     print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
     print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
@@ -283,6 +283,7 @@ fn print_usage(to_stderr: bool) {
         "  --native-target <tag>  Native backend target: {} (default: host)",
         backend::NativeTarget::accepted_values()
     ));
+    print_line("  --allow-elevated-native-link  Trusted CI/release only: allow native final link/--run from an elevated process; only bypasses the elevated-process refusal, not path/cache/sandbox checks");
     print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
     print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
     print_line("  --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)");
@@ -342,6 +343,7 @@ fn main() {
     let mut target: Option<CrossTarget> = None;
     let mut explicit_backend = None;
     let mut native_target_arg: Option<String> = None;
+    let mut allow_elevated_native_link = false;
     let mut program_args: Vec<String> = Vec::new();
     let mut extra_c_files: Vec<String> = Vec::new();
     let mut extra_cflags: Vec<String> = Vec::new();
@@ -356,6 +358,7 @@ fn main() {
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
             "--libc" => use_libc = true,
+            "--allow-elevated-native-link" => allow_elevated_native_link = true,
             "--warnings" | "-W" => show_warnings = true,
             "--verbose" => verbose = true,
             "--version" | "-V" => {
@@ -507,6 +510,11 @@ fn main() {
     } else if native_target_arg.is_some() {
         eprintln!("error: --native-target requires --backend native");
         process::exit(1);
+    } else if allow_elevated_native_link {
+        eprintln!(
+            "error: --allow-elevated-native-link is only meaningful with --backend native final link/--run for trusted CI/release inputs"
+        );
+        process::exit(1);
     }
     let native_target = if backend_kind == Backend::Native {
         Some(match native_target_arg.as_deref().unwrap_or("host") {
@@ -643,6 +651,7 @@ fn main() {
             output_path,
             run_mode,
             show_warnings,
+            allow_elevated_native_link,
             &program_args,
             &extra_c_files,
             &extra_cflags,
@@ -804,6 +813,7 @@ fn run_native_backend(
     output_path: Option<String>,
     run_mode: bool,
     show_warnings: bool,
+    allow_elevated_native_link: bool,
     program_args: &[String],
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -867,9 +877,11 @@ fn run_native_backend(
     // — Windows handle-based TOCTOU races between a path check and a
     // subsequent open/rename are not fully closed by re-checking paths,
     // however carefully, so this no longer tries to sandbox an elevated
-    // process, it refuses the operation outright. `output_is_object` is
-    // never gated (handled and returned above): that path never extracts
-    // or executes an embedded asset, or writes a final linked executable.
+    // process, it refuses the operation by default; trusted CI/release
+    // invocations can explicitly opt in to bypass only this refusal.
+    // `output_is_object` is never gated (handled and returned above): that
+    // path never extracts or executes an embedded asset, or writes a final
+    // linked executable.
     // Unix gets a separate, unrelated fix instead (explicit scratch-dir
     // permissions, see `harden_native_scratch_dir_unix`) — elevation in the
     // Windows Administrator sense has no Unix equivalent gated here.
@@ -879,6 +891,7 @@ fn run_native_backend(
         if let Err(reason) = backend::native_assets::check_elevation_policy(
             elevation,
             backend::native_assets::NativeLinkOperation::FinalLink,
+            false,
         ) {
             eprintln!("error: {reason}");
             process::exit(1);
@@ -891,6 +904,7 @@ fn run_native_backend(
         if let Err(reason) = backend::native_assets::check_elevation_policy(
             elevation,
             backend::native_assets::NativeLinkOperation::FinalLink,
+            allow_elevated_native_link,
         ) {
             eprintln!("error: {reason}");
             process::exit(1);
@@ -981,6 +995,7 @@ fn run_native_backend(
     let link_options = backend::link::NativeLinkOptions {
         runtime_mode,
         show_warnings,
+        allow_elevated_native_link,
         extra_c_files: &native_extra_c_files,
         extra_cflags,
         extra_objects: extra_obj_files,

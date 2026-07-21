@@ -39,6 +39,59 @@ function Invoke-NativeValidation {
     }
 }
 
+function Invoke-TrustedElevatedNativeLinkShape {
+    param([Parameter(Mandatory = $true)][string]$Compiler)
+
+    $buildRoot = Join-Path $ScriptDir "build\trusted-elevated-native-link"
+    [void](New-Item -ItemType Directory -Path $buildRoot -Force)
+    $oscSource = Join-Path $buildRoot "oscanweb-command-shape.osc"
+    $bridgeSource = Join-Path $buildRoot "oscanweb-command-shape-bridge.c"
+    $exePath = Join-Path $buildRoot "oscanweb-command-shape.exe"
+
+    Set-Content -LiteralPath $oscSource -NoNewline -Value @'
+extern {
+    fn! host_label(value: str) -> str;
+}
+
+fn! main() {
+    println(host_label("trusted"));
+}
+'@
+
+    Set-Content -LiteralPath $bridgeSource -NoNewline -Value @'
+#include "osc_runtime.h"
+
+osc_str host_label(osc_str value) {
+    (void)value;
+    static const char text[] = "trusted elevated native link";
+    osc_str out;
+    out.data = text;
+    out.len = 28;
+    return out;
+}
+'@
+
+    $compileOutput = & $Compiler `
+        --backend native `
+        --native-target host `
+        --libc `
+        --allow-elevated-native-link `
+        --extra-c $bridgeSource `
+        $oscSource `
+        -o $exePath 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "trusted elevated native link command shape failed to compile: $compileOutput"
+    }
+
+    $runOutput = & $exePath 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "trusted elevated native link command shape executable failed: $runOutput"
+    }
+    if ($runOutput.Trim() -ne "trusted elevated native link") {
+        throw "trusted elevated native link command shape output mismatch: '$runOutput'"
+    }
+}
+
 Push-Location $RepoRoot
 try {
     if ($StandardUserChild) {
@@ -52,6 +105,7 @@ try {
     $probeExit = $LASTEXITCODE
 
     if ($probeExit -eq 0) {
+        Invoke-TrustedElevatedNativeLinkShape -Compiler $compiler
         Invoke-NativeValidation
         exit 0
     }
@@ -59,10 +113,13 @@ try {
         throw "native-link preflight failed for a reason other than elevation: $probeOutput"
     }
 
+    Invoke-TrustedElevatedNativeLinkShape -Compiler $compiler
+
     # GitHub-hosted Windows runners execute the runner service with an
-    # elevated token. Product code must continue to reject that token, so run
-    # the real final-link tests under a disposable standard-user token rather
-    # than adding a CI-only bypass to Oscan.
+    # elevated token. Product code must continue to reject that token by
+    # default; the targeted command-shape test above proves the explicit
+    # trusted-input opt-in reaches linking, while the broad differential suite
+    # still runs under a disposable standard-user token.
     $logDir = Join-Path $ScriptDir "build\windows-native-standard-user"
     [void](New-Item -ItemType Directory -Path $logDir -Force)
     . (Join-Path $RepoRoot "scripts\windows-standard-user.ps1")

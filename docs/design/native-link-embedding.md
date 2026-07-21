@@ -873,7 +873,13 @@ CRT/libc, so a hosted link against it would fail with undefined libc symbols.
 
 Windows fails closed on process elevation (Administrator) before any final
 native link (`src/backend/native_assets.rs`'s `check_elevation_policy` /
-`NativeLinkOperation`, wired in `main.rs`'s `run_native_backend`).
+`NativeLinkOperation`, wired in `main.rs`'s `run_native_backend`). The only
+supported bypass is the explicit CLI flag `--allow-elevated-native-link`, for
+trusted CI/release inputs such as GitHub-hosted Windows release runners. It is
+not auto-enabled from `CI`/GitHub Actions environment variables, and it only
+bypasses the elevated-process refusal: path validation, symlink/reparse-point
+checks, cache hashing, canonicalization, and native-link sandboxing still run.
+Elevation-detection failures still fail closed.
 
 Unix has no "Administrator" concept but has an analogous risk: a setuid/setgid
 binary, or any process whose effective UID differs from its real UID, is running
