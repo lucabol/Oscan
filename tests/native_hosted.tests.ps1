@@ -48,9 +48,12 @@ if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
         "default native executable contains a libc/libm dependency"
 }
 
-# Explicit hosted mode must match the C backend for all existing FFI cases.
-# ffi_advanced covers sqrt/pow/fabs/floor/ceil from libm/the platform CRT.
-foreach ($name in @("ffi", "ffi_advanced", "ffi_impure_wrapper")) {
+# Explicit hosted mode must match the C backend for existing FFI cases.
+foreach ($name in @(
+    "ffi",
+    "ffi_advanced",
+    "ffi_impure_wrapper"
+)) {
     $result = Invoke-DifferentialBackendTest `
         -Compiler $compiler `
         -Source (Join-Path $ScriptDir "positive\$name.osc") `
@@ -71,6 +74,31 @@ foreach ($name in @("ffi", "ffi_advanced", "ffi_impure_wrapper")) {
         Assert-NativeHosted ($hostedAscii -match '(?i)msvcrt|ucrt|api-ms-win-crt') `
             "$name did not use the explicitly requested hosted CRT"
     }
+}
+
+# These fixtures intentionally no longer match the C backend's --libc stubs on
+# Windows: native hosted archives should package the real implementations.
+foreach ($name in @(
+    "builtin_img_load",
+    "builtin_svg_load",
+    "builtin_tt_load",
+    "gfx_text_width",
+    "builtin_canvas_clipboard"
+)) {
+    $exe = Join-Path $buildRoot "$name-hosted$(Get-OracleExecutableSuffix)"
+    $compile = Invoke-OracleProcess `
+        -FilePath $compiler `
+        -Arguments @("--libc", "--backend", "native", (Join-Path $ScriptDir "positive\$name.osc"), "-o", $exe) `
+        -WorkingDirectory $RepoRoot
+    Assert-NativeHosted ($compile.ExitCode -eq 0) "$name native hosted compile failed: $($compile.Stderr)"
+    $caseRunRoot = Join-Path $runRoot $name
+    [void](New-Item -ItemType Directory -Path $caseRunRoot -Force)
+    $run = Invoke-OracleProcess -FilePath $exe -WorkingDirectory $caseRunRoot
+    Assert-NativeHosted ($run.ExitCode -eq 0) "$name native hosted run failed: stdout='$($run.Stdout)' stderr='$($run.Stderr)'"
+    Assert-NativeHosted (Test-ExpectedOutputMatch `
+        -ActualRaw $run.Stdout `
+        -PrimaryExpectedFile (Join-Path $ScriptDir "expected\$name.expected")) `
+        "$name native hosted output did not match the real-runtime expected output"
 }
 
 # Object-only output must not discover/build/link either runtime archive.
@@ -154,5 +182,91 @@ Assert-NativeHosted ($extraCompile.ExitCode -eq 0) "native hosted extra-C compil
 $extraRun = Invoke-OracleProcess -FilePath $extraExe -WorkingDirectory $buildRoot
 Assert-NativeHosted ($extraRun.ExitCode -eq 0 -and $extraRun.Stdout -eq "42") `
     "native hosted extra-C output mismatch"
+
+if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    # Windows hosted native GUI programs must use the real canvas runtime, even
+    # when linked as GUI-subsystem executables where stdout/stderr are hidden.
+    $guiOsc = Join-Path $buildRoot "hosted-gui.osc"
+    $guiConsoleExe = Join-Path $buildRoot "hosted-gui-console$(Get-OracleExecutableSuffix)"
+    $guiWindowExe = Join-Path $buildRoot "hosted-gui-window$(Get-OracleExecutableSuffix)"
+    $guiMarker = Join-Path $buildRoot "hosted-gui-marker.txt"
+    Set-Content -LiteralPath $guiOsc -NoNewline -Value @'
+fn! mark(text: str) {
+    let opened: Result<i32, str> = file_open_write("hosted-gui-marker.txt");
+    match opened {
+        Result::Ok(fd) => {
+            write_str(fd, text);
+            file_close(fd);
+        },
+        Result::Err(_) => {},
+    };
+}
+
+fn! run_window() -> i32 {
+    let opened: Result<str, str> = canvas_open(160, 96, "native hosted gui regression");
+    match opened {
+        Result::Ok(_) => {
+            canvas_clear(rgb(8, 12, 24));
+            gfx_fill_rect(12, 12, 48, 28, rgb(0, 180, 80));
+            gfx_rect(10, 10, 52, 32, rgba(255, 255, 255, 255));
+            gfx_draw_text(16, 56, "ok", rgb(255, 255, 255), 0);
+            canvas_flush();
+            if canvas_alive() {
+                print("opened-alive");
+                mark("opened-alive");
+            } else {
+                print("opened-not-alive");
+                mark("opened-not-alive");
+            };
+            canvas_close();
+            0
+        },
+        Result::Err(e) => {
+            println("open failed: {e}");
+            mark("open-failed");
+            1
+        },
+    }
+}
+
+fn! main() -> i32 {
+    mark("entered");
+    let code: i32 = run_window();
+    if code == 0 {
+        mark("closed");
+    };
+    code
+}
+'@
+
+    Remove-Item -LiteralPath $guiConsoleExe,$guiWindowExe,$guiMarker -Force -ErrorAction SilentlyContinue
+    $guiConsoleCompile = Invoke-OracleProcess `
+        -FilePath $compiler `
+        -Arguments @("--libc", "--backend", "native", $guiOsc, "-o", $guiConsoleExe) `
+        -WorkingDirectory $RepoRoot
+    Assert-NativeHosted ($guiConsoleCompile.ExitCode -eq 0) "native hosted GUI console compile failed: $($guiConsoleCompile.Stderr)"
+    $guiConsoleRun = Invoke-OracleProcess -FilePath $guiConsoleExe -WorkingDirectory $buildRoot
+    Assert-NativeHosted ($guiConsoleRun.ExitCode -eq 0) "native hosted GUI console run failed: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
+    Assert-NativeHosted ($guiConsoleRun.Stdout -eq "opened-alive") `
+        "native hosted GUI console did not report a live canvas: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
+    Assert-NativeHosted ((Get-Content -LiteralPath $guiMarker -Raw) -eq "closed") `
+        "native hosted GUI console marker did not prove deterministic close"
+
+    Remove-Item -LiteralPath $guiMarker -Force -ErrorAction SilentlyContinue
+    $guiWindowCompile = Invoke-OracleProcess `
+        -FilePath $compiler `
+        -Arguments @(
+            "--libc", "--backend", "native",
+            "--extra-cflags", "-Wl,--subsystem,windows",
+            "--extra-cflags", "-Wl,--entry,mainCRTStartup",
+            $guiOsc, "-o", $guiWindowExe
+        ) `
+        -WorkingDirectory $RepoRoot
+    Assert-NativeHosted ($guiWindowCompile.ExitCode -eq 0) "native hosted GUI-subsystem compile failed: $($guiWindowCompile.Stderr)"
+    $guiWindowRun = Invoke-OracleProcess -FilePath $guiWindowExe -WorkingDirectory $buildRoot
+    Assert-NativeHosted ($guiWindowRun.ExitCode -eq 0) "native hosted GUI-subsystem run failed with exit $($guiWindowRun.ExitCode)"
+    Assert-NativeHosted ((Get-Content -LiteralPath $guiMarker -Raw) -eq "closed") `
+        "native hosted GUI-subsystem marker did not prove oscan_main opened and closed a live canvas"
+}
 
 Write-Host "native hosted-mode tests passed"

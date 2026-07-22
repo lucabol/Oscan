@@ -49,6 +49,7 @@ fn push_extra_lib_args(command: &mut Command, extra_lib_files: &[String]) {
 
 const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
 const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
+const EMBEDDED_RUNTIME_GRAPHICS_INC: &str = include_str!("../runtime/osc_runtime_graphics.inc");
 const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
 const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
 const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
@@ -1619,6 +1620,7 @@ fn compile_to_executable(
     for (name, content) in [
         ("osc_runtime.h", EMBEDDED_RUNTIME_H),
         ("osc_runtime.c", EMBEDDED_RUNTIME_C),
+        ("osc_runtime_graphics.inc", EMBEDDED_RUNTIME_GRAPHICS_INC),
         ("l_os.h", EMBEDDED_L_OS_H),
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),
@@ -1753,6 +1755,7 @@ fn run_program(
     for (name, content) in [
         ("osc_runtime.h", EMBEDDED_RUNTIME_H),
         ("osc_runtime.c", EMBEDDED_RUNTIME_C),
+        ("osc_runtime_graphics.inc", EMBEDDED_RUNTIME_GRAPHICS_INC),
         ("l_os.h", EMBEDDED_L_OS_H),
         ("l_gfx.h", EMBEDDED_L_GFX_H),
         ("l_img.h", EMBEDDED_L_IMG_H),

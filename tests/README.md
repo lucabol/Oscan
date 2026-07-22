@@ -114,7 +114,9 @@ runs.
 The focused hosted-mode regression verifies that plain `--backend native`
 remains libc-free, while explicit `--libc --backend native` differentially
 runs all FFI fixtures (including libm symbols), preserves object-only output,
-and passes `--extra-c`/`--extra-cflags` through the hosted linker.
+passes `--extra-c`/`--extra-cflags` through the hosted linker, and on Windows
+launches both console- and GUI-subsystem hosted native canvas executables while
+also checking hosted image/SVG/TrueType runtime coverage.
 
 ### Cross-platform runs (WSL Linux x64, WSL native cross-link, ARM64)
 

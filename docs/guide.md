@@ -732,6 +732,21 @@ oscan myapp.osc --extra-c helper.c --extra-c utils.c -o myapp
 
 Both flags are repeatable — use one per file or flag.
 
+### Windows GUI subsystem builds
+
+On Windows, native hosted programs (`--backend native --libc`) package the same
+canvas, image, SVG, and TrueType runtime used by graphical Oscan programs. To
+hide the console for a GUI app, pass the Windows subsystem linker flag through
+the hosted compiler driver:
+
+```sh
+oscan app.osc --backend native --libc --extra-cflags -Wl,--subsystem,windows -o app.exe
+```
+
+Do not override the CRT entry point for normal Oscan programs. The generated
+native object exports `main`, and the MinGW/LLVM-mingw CRT selects the correct
+startup routine for the chosen subsystem.
+
 ### Linking Precompiled Objects and Libraries
 
 Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with either backend:
