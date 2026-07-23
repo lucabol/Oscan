@@ -16,8 +16,8 @@
   },
   "modes": {
     "hosted": {
-      "description": "libc-linked Oscan runtime (osc_runtime_hosted.c compiles osc_runtime.c in its default, non-OSC_FREESTANDING mode; osc_runtime_hosted_gfx.c adds the laststanding graphics/image/SVG/TrueType implementation on Windows so hosted native GUI programs use the same canvas stack as the C backend). Portable to any host with a C toolchain and standard library.",
-      "sources": ["osc_runtime_hosted.c", "osc_runtime_hosted_gfx.c", "osc_native_shim.c"],
+      "description": "libc-linked Oscan runtime (osc_runtime_hosted.c compiles osc_runtime.c in its default, non-OSC_FREESTANDING mode; osc_runtime_hosted_tls.c adds hosted TLS through Schannel on Windows and BearSSL with OS trust anchors on Linux; osc_runtime_hosted_gfx.c adds the laststanding graphics/image/SVG/TrueType implementation on Windows so hosted native GUI programs use the same canvas stack as the C backend). Portable to any host with a C toolchain and standard library.",
+      "sources": ["osc_runtime_hosted.c", "osc_runtime_hosted_tls.c", "osc_runtime_hosted_gfx.c", "osc_native_shim.c"],
       "archive_name": "libosc_runtime_hosted.a",
       "manifest_name": "libosc_runtime_hosted.json",
       "requires_libc": true,
@@ -61,7 +61,8 @@
         "linker_driver_flags": []
       },
       "hosted": {
-        "link_flags": ["-lm"]
+        "link_flags": ["-lm"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
       },
       "freestanding": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
@@ -90,7 +91,8 @@
         "linker_driver_flags": []
       },
       "hosted": {
-        "link_flags": ["-lm"]
+        "link_flags": ["-lm"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
       },
       "freestanding": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
@@ -119,7 +121,8 @@
         "linker_driver_flags": []
       },
       "hosted": {
-        "link_flags": ["-lm"]
+        "link_flags": ["-lm"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
       },
       "freestanding": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],

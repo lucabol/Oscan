@@ -10,4 +10,6 @@
 #define OSC_RUNTIME_EXTERNAL_GRAPHICS
 #endif
 
+#define OSC_RUNTIME_EXTERNAL_TLS
+
 #include "osc_runtime.c"

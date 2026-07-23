@@ -4429,7 +4429,6 @@ int32_t osc_tls_recv_byte(int32_t handle)
 {
     (void)handle; return -1;
 }
-
 void osc_tls_close(int32_t handle) { (void)handle; }
 void osc_tls_cleanup(void) {}
 #endif
@@ -4570,6 +4569,7 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     return result;
 }
 
+#ifndef OSC_RUNTIME_EXTERNAL_TLS
 osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
 {
     (void)host; (void)port;
@@ -4599,6 +4599,7 @@ int32_t osc_tls_recv_byte(int32_t handle)
 
 void osc_tls_close(int32_t handle) { (void)handle; }
 void osc_tls_cleanup(void) {}
+#endif /* OSC_RUNTIME_EXTERNAL_TLS */
 
 #else /* POSIX libc */
 #include <sys/socket.h>
@@ -4733,6 +4734,7 @@ osc_result_i32_str osc_socket_unix_connect(osc_str path)
     result.is_ok = 1; result.value.ok = (int32_t)fd; return result;
 }
 
+#ifndef OSC_RUNTIME_EXTERNAL_TLS
 osc_result_i32_str osc_tls_connect(osc_str host, int32_t port)
 {
     (void)host; (void)port;
@@ -4762,5 +4764,6 @@ int32_t osc_tls_recv_byte(int32_t handle)
 
 void osc_tls_close(int32_t handle) { (void)handle; }
 void osc_tls_cleanup(void) {}
+#endif /* OSC_RUNTIME_EXTERNAL_TLS */
 
 #endif /* OSC_HAS_SOCKETS / _WIN32 / POSIX */

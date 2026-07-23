@@ -20,6 +20,123 @@ function Get-ArtifactAscii {
     )
 }
 
+function New-NativeHostedTlsFixture {
+    param([Parameter(Mandatory = $true)][string]$OutDir)
+
+    $rootKey = [System.Security.Cryptography.RSA]::Create(2048)
+    $leafKey = [System.Security.Cryptography.RSA]::Create(2048)
+    $rootCert = $null
+    $leafCert = $null
+    try {
+        $now = [System.DateTimeOffset]::UtcNow
+        $rootReq = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            "CN=Oscan Native Hosted TLS Test Root",
+            $rootKey,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $rootReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($true, $false, 0, $true))
+        $rootReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyCertSign -bor
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::CrlSign,
+                $true))
+        $rootReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($rootReq.PublicKey, $false))
+        $rootCert = $rootReq.CreateSelfSigned($now.AddMinutes(-5), $now.AddDays(1))
+
+        $leafReq = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            "CN=localhost",
+            $leafKey,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $leafReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
+        $leafReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature -bor
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::KeyEncipherment,
+                $true))
+        $eku = [System.Security.Cryptography.OidCollection]::new()
+        [void]$eku.Add([System.Security.Cryptography.Oid]::new("1.3.6.1.5.5.7.3.1"))
+        $leafReq.CertificateExtensions.Add(
+            [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($eku, $true))
+        $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+        $san.AddDnsName("localhost")
+        $leafReq.CertificateExtensions.Add($san.Build($true))
+        $serial = [byte[]](1, 2, 3, 4, 5, 6, 7, 8)
+        $leafPublic = $leafReq.Create($rootCert, $now.AddMinutes(-5), $now.AddDays(1), $serial)
+        $leafCert = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::CopyWithPrivateKey($leafPublic, $leafKey)
+        $leafPublic.Dispose()
+
+        $password = [System.Guid]::NewGuid().ToString("N")
+        $pfxPath = Join-Path $OutDir "local-tls.pfx"
+        [System.IO.File]::WriteAllBytes($pfxPath, $leafCert.Export(
+            [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+            $password))
+
+        $rootPath = Join-Path $OutDir "local-tls-root.cer"
+        [System.IO.File]::WriteAllBytes($rootPath, $rootCert.Export(
+            [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+
+        return [PSCustomObject]@{
+            RootCert = $rootCert
+            RootThumbprint = $rootCert.Thumbprint
+            PfxPath = $pfxPath
+            PfxPassword = $password
+        }
+    } finally {
+        if ($leafCert) { $leafCert.Dispose() }
+        if ($leafKey) { $leafKey.Dispose() }
+        if ($rootKey) { $rootKey.Dispose() }
+    }
+}
+
+function Get-NativeHostedFreeTcpPort {
+    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+    } finally {
+        $listener.Stop()
+    }
+}
+
+function Add-NativeHostedRoot {
+    param([Parameter(Mandatory = $true)]$Cert)
+
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $store.Add($Cert)
+    } finally {
+        $store.Close()
+    }
+}
+
+function Remove-NativeHostedRoot {
+    param([Parameter(Mandatory = $true)][string]$Thumbprint)
+
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        [System.Security.Cryptography.X509Certificates.StoreName]::Root,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+        $matches = $store.Certificates.Find(
+            [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+            $Thumbprint,
+            $false)
+        foreach ($cert in $matches) {
+            $store.Remove($cert)
+            $cert.Dispose()
+        }
+    } finally {
+        $store.Close()
+    }
+}
+
 $compiler = (Resolve-Path -LiteralPath $Oscan).Path
 $buildRoot = Join-Path $ScriptDir "build\native-hosted-mode"
 $runRoot = Join-Path $buildRoot "runs"
@@ -184,6 +301,144 @@ Assert-NativeHosted ($extraRun.ExitCode -eq 0 -and $extraRun.Stdout -eq "42") `
     "native hosted extra-C output mismatch"
 
 if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+    $tlsDir = Join-Path $buildRoot "tls-local"
+    [void](New-Item -ItemType Directory -Path $tlsDir -Force)
+    $tlsFixture = New-NativeHostedTlsFixture -OutDir $tlsDir
+    $tlsPort = Get-NativeHostedFreeTcpPort
+    $tlsReady = Join-Path $tlsDir "server-ready.txt"
+    $tlsLog = Join-Path $tlsDir "server-log.txt"
+    Remove-Item -LiteralPath $tlsReady,$tlsLog -Force -ErrorAction SilentlyContinue
+    Add-NativeHostedRoot -Cert $tlsFixture.RootCert
+    $tlsJob = Start-Job -ArgumentList @($tlsPort, $tlsFixture.PfxPath, $tlsFixture.PfxPassword, $tlsReady, $tlsLog) -ScriptBlock {
+        param($Port, $PfxPath, $PfxPassword, $ReadyPath, $LogPath)
+        $ErrorActionPreference = "Stop"
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, [int]$Port)
+        $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $PfxPath,
+            $PfxPassword,
+            [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet)
+        try {
+            $listener.Start()
+            Set-Content -LiteralPath $ReadyPath -NoNewline -Value "ready"
+            for ($i = 0; $i -lt 2; $i++) {
+                $client = $listener.AcceptTcpClient()
+                $client.ReceiveTimeout = 5000
+                $client.SendTimeout = 5000
+                $ssl = [System.Net.Security.SslStream]::new($client.GetStream(), $false)
+                try {
+                    $ssl.AuthenticateAsServer($cert, $false, [System.Security.Authentication.SslProtocols]::Tls12, $false)
+                    $buf = [byte[]]::new(4096)
+                    $request = ""
+                    $ascii = [System.Text.Encoding]::ASCII
+                    while ($request -notmatch "`r`n`r`n") {
+                        $n = $ssl.Read($buf, 0, $buf.Length)
+                        if ($n -le 0) { break }
+                        $request += $ascii.GetString($buf, 0, $n)
+                    }
+                    $response = "HTTP/1.0 200 OK`r`nContent-Length: 20`r`nConnection: close`r`n`r`nhello-from-local-tls"
+                    $bytes = $ascii.GetBytes($response)
+                    $ssl.Write($bytes, 0, 17)
+                    $ssl.Write($bytes, 17, 11)
+                    $ssl.Write($bytes, 28, $bytes.Length - 28)
+                    $ssl.Flush()
+                } catch {
+                    Add-Content -LiteralPath $LogPath -Value $_.Exception.Message
+                } finally {
+                    $ssl.Dispose()
+                    $client.Dispose()
+                }
+            }
+        } finally {
+            $cert.Dispose()
+            $listener.Stop()
+        }
+    }
+    try {
+        $deadline = [System.DateTime]::UtcNow.AddSeconds(10)
+        while (-not (Test-Path -LiteralPath $tlsReady)) {
+            Assert-NativeHosted ([System.DateTime]::UtcNow -lt $deadline) "local TLS server did not start"
+            Start-Sleep -Milliseconds 100
+        }
+
+        $tlsOsc = Join-Path $tlsDir "hosted-tls-local.osc"
+        $tlsExe = Join-Path $tlsDir "hosted-tls-local$(Get-OracleExecutableSuffix)"
+        Set-Content -LiteralPath $tlsOsc -NoNewline -Value @"
+fn! fetch_local() -> str {
+    let conn_result: Result<i32, str> = tls_connect("localhost", $tlsPort);
+    let conn: i32 = match conn_result {
+        Result::Ok(fd) => { fd },
+        Result::Err(_) => { return "connect_failed"; 0 },
+    };
+    match tls_send(conn, "GET /") {
+        Result::Ok(_) => {},
+        Result::Err(_) => { tls_close(conn); return "send1_failed"; },
+    };
+    match tls_send(conn, " HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n") {
+        Result::Ok(_) => {},
+        Result::Err(_) => { tls_close(conn); return "send2_failed"; },
+    };
+    let mut response: str = "";
+    let mut done: bool = false;
+    let mut total: i32 = 0;
+    while not done {
+        let chunk: str = tls_recv(conn, 7);
+        let n: i32 = str_len(chunk);
+        if n > 0 {
+            response = str_concat(response, chunk);
+            total += n;
+        } else {
+            done = true;
+        };
+        if total > 4096 { done = true; };
+    };
+    tls_close(conn);
+    if not str_contains(response, "HTTP/1.0 200 OK") { return "bad_status"; };
+    if not str_contains(response, "hello-from-local-tls") { return "bad_body"; };
+    "ok"
+}
+
+fn! reject_wrong_host() -> str {
+    let conn_result: Result<i32, str> = tls_connect("127.0.0.1", $tlsPort);
+    match conn_result {
+        Result::Ok(fd) => {
+            tls_close(fd);
+            "accepted_bad_hostname"
+        },
+        Result::Err(_) => { "rejected" },
+    }
+}
+
+fn! main() -> i32 {
+    let ok: str = fetch_local();
+    let rejected: str = reject_wrong_host();
+    println("local_tls: {ok}");
+    println("hostname_verify: {rejected}");
+    tls_cleanup();
+    if ok == "ok" and rejected == "rejected" {
+        0
+    } else {
+        1
+    }
+}
+"@
+        $tlsCompile = Invoke-OracleProcess `
+            -FilePath $compiler `
+            -Arguments @("--libc", "--backend", "native", $tlsOsc, "-o", $tlsExe) `
+            -WorkingDirectory $RepoRoot
+        Assert-NativeHosted ($tlsCompile.ExitCode -eq 0) "native hosted TLS local compile failed: $($tlsCompile.Stderr)"
+        $tlsRun = Invoke-OracleProcess -FilePath $tlsExe -WorkingDirectory $tlsDir
+        Assert-NativeHosted ($tlsRun.ExitCode -eq 0) "native hosted TLS local run failed: stdout='$($tlsRun.Stdout)' stderr='$($tlsRun.Stderr)' server='$(if (Test-Path $tlsLog) { Get-Content -LiteralPath $tlsLog -Raw })'"
+        Assert-NativeHosted ($tlsRun.Stdout -eq "local_tls: ok`nhostname_verify: rejected") `
+            "native hosted TLS local output mismatch: '$($tlsRun.Stdout)'"
+    } finally {
+        Remove-NativeHostedRoot -Thumbprint $tlsFixture.RootThumbprint
+        if ($tlsFixture.RootCert) { $tlsFixture.RootCert.Dispose() }
+        if ($tlsJob) {
+            Stop-Job -Job $tlsJob -ErrorAction SilentlyContinue
+            Remove-Job -Job $tlsJob -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     # Windows hosted native GUI programs must use the real canvas runtime, even
     # when linked as GUI-subsystem executables where stdout/stderr are hidden.
     $guiOsc = Join-Path $buildRoot "hosted-gui.osc"

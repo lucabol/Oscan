@@ -1,12 +1,12 @@
 // HTTPS GET client — fetch a page over TLS
 //
 // Demonstrates the `tls_*` builtins (tls_connect, tls_send, tls_recv, tls_close,
-// tls_cleanup) for issuing HTTP/1.0 requests over TLS from a freestanding
-// Oscan binary.
+// tls_cleanup) for issuing HTTP/1.0 requests over TLS.
 //
 // Windows: uses SChannel (no external deps).
-// Linux (freestanding, bundled toolchain): uses BearSSL (libbearssl.a).
-// Other platforms / libc mode: tls_connect returns an error.
+// Linux: uses BearSSL (libbearssl.a). Hosted Linux loads system trust anchors
+// from the OS CA bundle, or from OSCAN_TLS_CA_BUNDLE when set.
+// Other platforms: tls_connect returns an error.
 //
 // Usage:
 //   oscan examples/https_get.osc --run -- <host> [path]

@@ -639,7 +639,8 @@ class ReleaseStagingTests(RepositoryScratchTests):
                 "target": "linux-x86_64",
                 "mode": mode,
                 "toolchain": _pinned_linux_runtime_toolchain(),
-                "embedded_bearssl": mode in {"freestanding", "freestanding_core"},
+                "embedded_bearssl": mode
+                in {"freestanding", "freestanding_core", "hosted"},
                 "sha256": rt.compute_digest(archive, "sha256"),
             }
             (runtime_archive_dir / mode_spec["manifest_name"]).write_text(
@@ -871,11 +872,21 @@ class LinuxReleaseBearSslValidationTests(unittest.TestCase):
             Path("fake.json"),
         )
 
-    def test_linux_hosted_release_does_not_require_bearssl(self):
+    def test_linux_hosted_release_rejects_tls_less_archive(self):
+        with self.assertRaises(SystemExit) as ctx:
+            rt.validate_runtime_archive_release_toolchain(
+                self._runtime_contract(),
+                "linux-x86_64",
+                self._manifest("hosted", False),
+                Path("fake.json"),
+            )
+        self.assertIn("does not embed BearSSL", str(ctx.exception))
+
+    def test_linux_hosted_release_accepts_embedded_bearssl(self):
         rt.validate_runtime_archive_release_toolchain(
             self._runtime_contract(),
             "linux-x86_64",
-            self._manifest("hosted", False),
+            self._manifest("hosted", True),
             Path("fake.json"),
         )
 

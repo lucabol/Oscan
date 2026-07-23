@@ -15,9 +15,10 @@
 // Output is deterministic (no timestamps / dynamic content), so it can be
 // compared against tests/expected/tls_fetch.expected.
 //
-// Windows freestanding (SChannel) and Linux freestanding (BearSSL) only.
+// Freestanding TLS uses SChannel on Windows and BearSSL on Linux. C-backend
 // libc mode and non-x64 cross targets intentionally fail tls_connect with
-// "not supported" — the expected_libc variant accepts that.
+// "not supported" — the expected_libc variant accepts that. Native hosted mode
+// has its own OS/BearSSL-backed TLS path and is covered by native_hosted.tests.ps1.
 
 fn! fetch_status(host: str) -> str {
     let conn: Result<i32, str> = tls_connect(host, 443);
