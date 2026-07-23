@@ -134,10 +134,12 @@ convention as the differential oracle above:
   outside the primary Windows freestanding environment: canvas/clipboard
   "alive before open" defaults differ between Windows and POSIX's
   backend-selection logic, `img_load`/`svg_load`/`tt_load` decoding and
-  `tls_connect` are only wired up for `__x86_64__`/`_WIN32` targets (so ARM64
-  falls back to the same "not supported" stub used by hosted/libc mode), and
-  `tls_fetch` needs real outbound network access a sandboxed runner may not
-  have. All three WSL/ARM phases accept either `expected/<name>.expected` or
+  freestanding `tls_connect` are only wired up for `__x86_64__`/`_WIN32`
+  targets (so ARM64 falls back to the same "not supported" stub used by
+  C-backend hosted/libc mode), and `tls_fetch` needs real outbound network
+  access a sandboxed runner may not have. Native hosted TLS is tested separately
+  by `native_hosted.tests.ps1`. All three WSL/ARM phases accept either
+  `expected/<name>.expected` or
   `expected_libc/<name>.expected` (when present) so those constrained
   contexts don't fail, while any *other* divergence (a crash, a wrong error,
   partial output, ...) still fails — see `Test-ExpectedOutputMatch` in

@@ -923,12 +923,12 @@ def validate_runtime_archive_release_toolchain(
 
     if (
         target in ("linux-x86_64", "linux-aarch64", "linux-riscv64")
-        and manifest.get("mode") in {"freestanding", "freestanding_core"}
+        and manifest.get("mode") in {"hosted", "freestanding", "freestanding_core"}
         and manifest.get("embedded_bearssl") is not True
     ):
         fail(
             f"native runtime manifest {manifest_path} does not embed BearSSL; "
-            f"Linux release freestanding archives for {target} must be built with "
+            f"Linux release runtime archives for {target} must be built with "
             f"packaging/prebuilt/{target}/libbearssl.a present"
         )
 
