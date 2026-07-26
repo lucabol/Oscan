@@ -198,8 +198,8 @@ fn! main() {
 
 Push-Location $ScratchDir
 try {
-    # Keep the package/toolchain smoke independent of the supported-host
-    # default backend: native final links run below with an explicit trusted
+    # Keep this C-toolchain smoke independent of the supported-host default:
+    # object-backend final links run below with an explicit trusted
     # elevated-process opt-in when the Windows release runner is elevated.
     $compileArgs = @("--backend", "c")
     if ($requiresHostCompiler) {
@@ -230,6 +230,54 @@ $Actual = & $SampleOutput 2>&1 | Out-String
 $Actual = $Actual.TrimEnd("`r", "`n").Replace("`r`n", "`n")
 if ($Actual -ne "Hello, Release!") {
     throw "Unexpected smoke test output: '$Actual'"
+}
+
+$bundledClang = @(
+    (Join-Path $InstallDir "toolchain\bin\clang.exe"),
+    (Join-Path $InstallDir "toolchain/bin/clang")
+) | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+if ($bundledClang -and $nativeRuntimeModes.Count -gt 0) {
+    $DefaultOutput = Join-Path $ScratchDir ("hello-default" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
+    $DefaultLog = Join-Path $ScratchDir "default.stderr.txt"
+    $defaultArgs = @("--verbose")
+    if ($platform -eq "windows") {
+        $defaultArgs += "--allow-elevated-native-link"
+    }
+    $defaultArgs += @($SampleSource, "-o", $DefaultOutput)
+
+    $savedRuntimeArchiveDir = $env:OSCAN_RUNTIME_ARCHIVE_DIR
+    $savedLlvmClang = $env:OSCAN_LLVM_CLANG
+    $savedLlvmToolchainDir = $env:OSCAN_LLVM_TOOLCHAIN_DIR
+    $savedToolchainDir = $env:OSCAN_TOOLCHAIN_DIR
+    try {
+        $env:OSCAN_RUNTIME_ARCHIVE_DIR = $RuntimeArchiveDir
+        Remove-Item Env:OSCAN_LLVM_CLANG,Env:OSCAN_LLVM_TOOLCHAIN_DIR,Env:OSCAN_TOOLCHAIN_DIR `
+            -ErrorAction SilentlyContinue
+        $defaultInvocation = {
+            & $OscanCommand @defaultArgs 2> $DefaultLog
+            if ($LASTEXITCODE -ne 0) {
+                throw "Packaged implicit LLVM smoke compile failed:`n$((Get-Content $DefaultLog -Raw))"
+            }
+        }
+        Invoke-NoHostCompilerCommand -ScratchDir $ScratchDir -Body $defaultInvocation
+    } finally {
+        $env:OSCAN_RUNTIME_ARCHIVE_DIR = $savedRuntimeArchiveDir
+        $env:OSCAN_LLVM_CLANG = $savedLlvmClang
+        $env:OSCAN_LLVM_TOOLCHAIN_DIR = $savedLlvmToolchainDir
+        $env:OSCAN_TOOLCHAIN_DIR = $savedToolchainDir
+    }
+
+    $defaultText = Get-Content $DefaultLog -Raw
+    if ($defaultText -notmatch '(?m)^\[verbose\] llvm backend target:') {
+        throw "Packaged bundle did not select LLVM as its implicit default.`n$defaultText"
+    }
+    if ($defaultText -notmatch '(?m)^\[verbose\] LLVM toolchain: .+ \(bundled,') {
+        throw "Packaged LLVM smoke did not use the bundled Clang.`n$defaultText"
+    }
+    $defaultActual = (& $DefaultOutput 2>&1 | Out-String).TrimEnd("`r", "`n").Replace("`r`n", "`n")
+    if ($defaultActual -ne "Hello, Release!") {
+        throw "Unexpected packaged LLVM smoke output: '$defaultActual'"
+    }
 }
 
 if ($nativeRuntimeModes.Count -gt 0 -and $platform -eq "windows") {

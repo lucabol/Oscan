@@ -184,6 +184,33 @@ ACTUAL="$("$OUTPUT_EXE")"
     exit 1
 }
 
+if [ -x "$INSTALL_DIR/toolchain/bin/clang" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; then
+    DEFAULT_OUTPUT_EXE="$SCRATCH_DIR/hello-default"
+    DEFAULT_COMPILE_LOG="$SCRATCH_DIR/default.stderr.txt"
+    if ! env -u OSCAN_LLVM_CLANG -u OSCAN_LLVM_TOOLCHAIN_DIR -u OSCAN_TOOLCHAIN_DIR \
+        OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
+        "$OSCAN_COMMAND" --verbose "$SCRATCH_DIR/hello.osc" \
+        -o "$DEFAULT_OUTPUT_EXE" 2>"$DEFAULT_COMPILE_LOG"; then
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    fi
+    grep -q '^\[verbose\] llvm backend target:' "$DEFAULT_COMPILE_LOG" || {
+        echo "packaged bundle did not select LLVM as its implicit default" >&2
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    }
+    grep -q '^\[verbose\] LLVM toolchain: .* (bundled,' "$DEFAULT_COMPILE_LOG" || {
+        echo "packaged LLVM smoke did not use the bundled Clang" >&2
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    }
+    DEFAULT_ACTUAL="$("$DEFAULT_OUTPUT_EXE")"
+    [ "$DEFAULT_ACTUAL" = "Hello, Release!" ] || {
+        echo "unexpected packaged LLVM smoke output: $DEFAULT_ACTUAL" >&2
+        exit 1
+    }
+fi
+
 if [ -n "$NATIVE_RUNTIME_MODES" ]; then
     NATIVE_OUTPUT_EXE="$SCRATCH_DIR/hello-native"
     NATIVE_COMPILE_LOG="$SCRATCH_DIR/native.stderr.txt"

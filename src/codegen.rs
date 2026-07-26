@@ -19,10 +19,27 @@ pub struct CodeGenerator {
     result_types: Vec<(BcType, BcType)>,
     fn_ptr_types: Vec<BcType>,
     freestanding: bool,
+    embed_runtime: bool,
 }
 
 impl CodeGenerator {
     pub fn generate(program: &ir::Program, freestanding: bool) -> String {
+        Self::generate_with_runtime(program, freestanding, true)
+    }
+
+    /// Generate a translation unit that expects the Oscan runtime to be
+    /// supplied by a separate object/archive. This is used by object-code
+    /// backends such as LLVM; the public C backend keeps its standalone
+    /// single-translation-unit output through [`Self::generate`].
+    pub(crate) fn generate_object_source(program: &ir::Program, freestanding: bool) -> String {
+        Self::generate_with_runtime(program, freestanding, false)
+    }
+
+    fn generate_with_runtime(
+        program: &ir::Program,
+        freestanding: bool,
+        embed_runtime: bool,
+    ) -> String {
         let mut cg = Self {
             out: String::new(),
             indent: 0,
@@ -34,6 +51,7 @@ impl CodeGenerator {
             result_types: Vec::new(),
             fn_ptr_types: Vec::new(),
             freestanding,
+            embed_runtime,
         };
 
         // Collect all unique Result types used in the program
@@ -244,7 +262,12 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_includes(&mut self) {
-        if self.freestanding {
+        if !self.embed_runtime {
+            if self.freestanding {
+                self.line("#define OSC_FREESTANDING");
+            }
+            self.line("#include \"osc_runtime.h\"");
+        } else if self.freestanding {
             // Dual-mode header block: freestanding by default, libc if
             // the compiler doesn't define OSC_FREESTANDING (e.g. MSVC fallback)
             self.line("#ifndef OSC_NOFREESTANDING");
@@ -658,9 +681,13 @@ impl CodeGenerator {
         self.line("osc_global_argc = argc;");
         self.line("osc_global_argv = argv;");
         if self.freestanding {
-            self.line("#ifdef OSC_FREESTANDING");
-            self.line("l_getenv_init(argc, argv);");
-            self.line("#endif");
+            if self.embed_runtime {
+                self.line("#ifdef OSC_FREESTANDING");
+                self.line("l_getenv_init(argc, argv);");
+                self.line("#endif");
+            } else {
+                self.line("osc_freestanding_env_init(argc, argv);");
+            }
         }
         self.line("osc_arena* _arena = osc_arena_create(1048576);");
         self.line("osc_global_arena = _arena;");

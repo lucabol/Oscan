@@ -7,8 +7,9 @@
 (release engineering / Python / CI). Vasquez validates; Newt documents.
 
 This document is the single, file-level contract for removing the
-C-compiler/linker dependency when `oscan --backend native` selects a
-packaged freestanding direct-link path. It was written so Bishop and Hicks
+C-compiler/linker dependency from packaged freestanding final links. Both
+`--backend native` (Cranelift) and `--backend llvm` now feed this link layer;
+LLVM still requires Clang to emit its object. It was written so Bishop and Hicks
 can implement in parallel with **zero file overlap**, and so "did you follow the
 design" is mechanically checkable at review.
 
@@ -16,8 +17,9 @@ Sections 11-14 record the implemented Linux and foreign-input follow-up and
 supersede the original deferral table in §1.2. The C code generator remains
 the portability/reference/source backend; this design removes the downstream
 C-toolchain dependency only from the documented freestanding native paths.
-Supported native hosts now select those paths implicitly for ordinary builds;
-explicit `--backend native` remains available as an override.
+Supported object targets use these paths after object emission. Historical
+uses of “native backend” below refer to Cranelift unless the text is describing
+the shared `backend::link` layer; explicit `--backend native` remains available.
 
 ---
 
@@ -257,7 +259,7 @@ Parsing rule: absent/missing → `false` (a legacy pre-schema-2 archive).
 
 ### 3.4 Shim-presence policy (mechanically checkable)
 
-| Situation | Freestanding (default native) | Hosted (`--libc`) |
+| Situation | Freestanding object backend | Hosted (`--libc`) |
 |---|---|---|
 | `contains_native_shim: true` | Link the archive directly; **do not** compile the shim locally; **do not** search for a compiler. | Same: use the embedded member. |
 | `contains_native_shim: false`/absent (legacy archive) | **Hard, actionable error** (no compiler fallback): `error: runtime archive '<path>' predates the precompiled native shim (manifest contains_native_shim is false/absent); rebuild it with 'scripts/build-runtime-archive.ps1 -Mode freestanding' (or fetch a current release). The freestanding native backend no longer compiles osc_native_shim.c locally.` | **Diagnosed local fallback allowed**: emit a one-line warning and fall back to `compile_shim_object` (hosted already requires an external C toolchain per requirement #1). |

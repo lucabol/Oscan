@@ -4,8 +4,9 @@
 - **Integration Tests**: 134
 - **Positive Tests**: 99 (compile and run successfully)
 - **Negative Tests**: 35 (correctly rejected by compiler)
-- **Backend Policy**: supported hosts default to native; C remains the
-  portability/reference oracle and native is differentially checked against it
+- **Backend Policy**: supported hosts prefer LLVM when Clang is available,
+  then Cranelift; C remains the portability/reference oracle and both object
+  backends are differentially checked against it
 
 ## Positive Tests
 
@@ -113,11 +114,32 @@ cargo build --release
 cargo test
 ```
 
-### Run integration tests (requires WSL with gcc):
+### Run the complete Windows/WSL suite:
 ```powershell
-cd tests
-wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && <commands>"
+.\test.ps1
+.\test.ps1 -Backend llvm
+.\test.ps1 -Backend native
 ```
+
+### Run the focused differential corpus:
+```powershell
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+```
+
+### Run LLVM release invariants:
+```powershell
+.\tests\llvm_toolchain_isolation.tests.ps1 `
+  -Oscan .\target\release\oscan.exe `
+  -RuntimeArchiveDir .\build\runtime-archives\windows-x86_64 `
+  -LlvmClang .\build\toolchain-windows-x86_64\bin\clang.exe
+.\scripts\compare-backend-size.ps1
+```
+
+The isolation test empties `PATH`, points `OSCAN_CC` at a missing executable,
+and proves that an explicit LLVM provider plus Oscan's embedded linker can
+compile, link, and run `hello.osc`. The size comparison executes equivalent C,
+Cranelift, and LLVM outputs and fails if LLVM is larger than C.
 
 ### Test individual file:
 ```powershell
@@ -136,7 +158,8 @@ wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && tests/build/ffi"
 The current integration corpus contains:
 - 99 positive integration tests (tests/positive/*.osc)
 - 35 negative integration tests (tests/negative/*.osc)
-- C-vs-native differential execution on supported Windows/Linux targets
+- C-vs-LLVM and C-vs-Cranelift differential execution on supported
+  Windows/Linux targets
 
 **Full test listing:**
 ```bash
@@ -148,4 +171,4 @@ ls tests/negative/*.osc
 ```
 
 ---
-*Last updated: Native backend role and differential-testing policy*
+*Last updated: LLVM default and three-backend differential-testing policy*

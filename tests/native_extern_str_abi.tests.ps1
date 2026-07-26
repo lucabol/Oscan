@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Oscan
+    [string]$Oscan,
+
+    [ValidateSet("native", "llvm")]
+    [string]$Backend = "native"
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,13 +17,13 @@ function Assert-NativeExternStr {
 }
 
 $compiler = (Resolve-Path -LiteralPath $Oscan).Path
-$buildRoot = Join-Path $ScriptDir "build\native-extern-str-abi"
+$buildRoot = Join-Path $ScriptDir "build\$Backend-extern-str-abi"
 [void](New-Item -ItemType Directory -Path $buildRoot -Force)
 
 $oscSource = Join-Path $buildRoot "extern-str.osc"
 $bridgeSource = Join-Path $buildRoot "extern-str-bridge.c"
 $cExe = Join-Path $buildRoot "extern-str-c$(Get-OracleExecutableSuffix)"
-$nativeExe = Join-Path $buildRoot "extern-str-native$(Get-OracleExecutableSuffix)"
+$backendExe = Join-Path $buildRoot "extern-str-$Backend$(Get-OracleExecutableSuffix)"
 
 Set-Content -LiteralPath $oscSource -NoNewline -Value @'
 struct UnusedPayload {
@@ -115,14 +118,14 @@ $cRun = Invoke-OracleProcess -FilePath $cExe -WorkingDirectory $buildRoot
 Assert-NativeExternStr ($cRun.ExitCode -eq 0) "C backend extern-str executable failed: $($cRun.Stderr)"
 Assert-NativeExternStr ($cRun.Stdout -eq $expected) "C backend extern-str output mismatch: '$($cRun.Stdout)'"
 
-$nativeCompile = Invoke-OracleProcess `
+$backendCompile = Invoke-OracleProcess `
     -FilePath $compiler `
-    -Arguments @("--backend", "native", "--extra-c", $bridgeSource, $oscSource, "-o", $nativeExe) `
+    -Arguments @("--backend", $Backend, "--extra-c", $bridgeSource, $oscSource, "-o", $backendExe) `
     -WorkingDirectory $RepoRoot
-Assert-NativeExternStr ($nativeCompile.ExitCode -eq 0) "native extern-str compile failed: $($nativeCompile.Stderr)"
-$nativeRun = Invoke-OracleProcess -FilePath $nativeExe -WorkingDirectory $buildRoot
-Assert-NativeExternStr ($nativeRun.ExitCode -eq 0) "native extern-str executable failed: $($nativeRun.Stderr)"
-Assert-NativeExternStr ($nativeRun.Stdout -eq $expected) "native extern-str output mismatch: '$($nativeRun.Stdout)'"
+Assert-NativeExternStr ($backendCompile.ExitCode -eq 0) "$Backend extern-str compile failed: $($backendCompile.Stderr)"
+$backendRun = Invoke-OracleProcess -FilePath $backendExe -WorkingDirectory $buildRoot
+Assert-NativeExternStr ($backendRun.ExitCode -eq 0) "$Backend extern-str executable failed: $($backendRun.Stderr)"
+Assert-NativeExternStr ($backendRun.Stdout -eq $expected) "$Backend extern-str output mismatch: '$($backendRun.Stdout)'"
 
 $objectCompiler = $env:OSCAN_CC
 if (-not $objectCompiler) {
@@ -137,18 +140,19 @@ if ($objectCompiler) {
         -Arguments @("-std=c99", "-I$($RepoRoot)\runtime", "-c", $bridgeSource, "-o", $bridgeObject) `
         -WorkingDirectory $RepoRoot
     if ($compileObj.ExitCode -eq 0) {
-        $nativeObjExe = Join-Path $buildRoot "extern-str-native-obj$(Get-OracleExecutableSuffix)"
-        $nativeObjCompile = Invoke-OracleProcess `
+        $backendObjExe = Join-Path $buildRoot "extern-str-$Backend-obj$(Get-OracleExecutableSuffix)"
+        $backendObjCompile = Invoke-OracleProcess `
             -FilePath $compiler `
-            -Arguments @("--backend", "native", "--extra-obj", $bridgeObject, $oscSource, "-o", $nativeObjExe) `
+            -Arguments @("--backend", $Backend, "--extra-obj", $bridgeObject, $oscSource, "-o", $backendObjExe) `
             -WorkingDirectory $RepoRoot
-        Assert-NativeExternStr ($nativeObjCompile.ExitCode -eq 0) "native extern-str --extra-obj compile failed: $($nativeObjCompile.Stderr)"
-        $nativeObjRun = Invoke-OracleProcess -FilePath $nativeObjExe -WorkingDirectory $buildRoot
-        Assert-NativeExternStr ($nativeObjRun.ExitCode -eq 0) "native extern-str --extra-obj executable failed: $($nativeObjRun.Stderr)"
-        Assert-NativeExternStr ($nativeObjRun.Stdout -eq $expected) "native extern-str --extra-obj output mismatch: '$($nativeObjRun.Stdout)'"
+        Assert-NativeExternStr ($backendObjCompile.ExitCode -eq 0) "$Backend extern-str --extra-obj compile failed: $($backendObjCompile.Stderr)"
+        $backendObjRun = Invoke-OracleProcess -FilePath $backendObjExe -WorkingDirectory $buildRoot
+        Assert-NativeExternStr ($backendObjRun.ExitCode -eq 0) "$Backend extern-str --extra-obj executable failed: $($backendObjRun.Stderr)"
+        Assert-NativeExternStr ($backendObjRun.Stdout -eq $expected) "$Backend extern-str --extra-obj output mismatch: '$($backendObjRun.Stdout)'"
     }
 }
 
+if ($Backend -eq "native") {
 $badStruct = Join-Path $buildRoot "extern-struct-bad.osc"
 Set-Content -LiteralPath $badStruct -NoNewline -Value @'
 struct Boxed {
@@ -192,5 +196,6 @@ $badResultCompile = Invoke-OracleProcess `
 Assert-NativeExternStr ($badResultCompile.ExitCode -ne 0) "native Result extern unexpectedly compiled"
 Assert-NativeExternStr ($badResultCompile.Stderr -match "Result still requires an explicit C shim") `
     "native Result extern diagnostic was not explicit: $($badResultCompile.Stderr)"
+}
 
-Write-Host "native extern str ABI tests passed"
+Write-Host "$Backend extern str ABI tests passed"

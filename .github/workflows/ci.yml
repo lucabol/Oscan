@@ -547,7 +547,7 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}\packaging\prebuilt\windows-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
-      - name: Native embedded-link and differential validation
+      - name: Native and LLVM embedded-link validation
         shell: pwsh
         run: |
           .\tests\windows_native_ci.tests.ps1 `
@@ -631,9 +631,18 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
-      - name: Implicit default backend uses embedded native linker
+      - name: Implicit LLVM default uses embedded linker
         shell: pwsh
-        run: ./tests/default_backend_native.tests.ps1 -Oscan ./target/release/oscan
+        run: ./tests/default_backend.tests.ps1 -Oscan ./target/release/oscan -ExpectedBackend llvm
+
+      - name: LLVM requires no separate C compiler or linker
+        shell: pwsh
+        run: |
+          $clang = (Get-Command clang -CommandType Application).Source
+          ./tests/llvm_toolchain_isolation.tests.ps1 `
+            -Oscan ./target/release/oscan `
+            -RuntimeArchiveDir ./build/runtime-archives/linux-x86_64 `
+            -LlvmClang $clang
 
       - name: Native hello smoke test (compiler/linker blocked on PATH)
         shell: bash
@@ -711,6 +720,10 @@ jobs:
       - name: Full C vs native backend differential suite
         shell: pwsh
         run: ./tests/run_tests.ps1 -Oscan ../target/release/oscan -Backend native
+
+      - name: Full C vs LLVM backend differential suite
+        shell: pwsh
+        run: ./tests/run_tests.ps1 -Oscan ../target/release/oscan -Backend llvm
 
   # ─────────────────────────────────────────────
   # Native Link Embedding Smoke Test (Linux AArch64 cross)

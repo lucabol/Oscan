@@ -194,12 +194,13 @@ each archive/manifest pair at
 `runtime/osc_native_shim.c` and `runtime/osc_runtime.h` under the bundle's
 `native-runtime/` directory. Keeping that directory separate avoids making the
 C backend mistake a native-only source subset for a complete on-disk C runtime.
-The paths mirror the native backend's executable-relative lookup contract and
-are copied intact by the installers. Release smoke tests assert the assets
-survived packaging and installation, then compile and run the sample with freestanding
-`--backend native` on Linux and Windows. The phase-1 macOS binary-only target
-does not advertise or package the native backend because that backend has no
-Darwin target yet.
+The paths mirror the shared object-backend linker's executable-relative lookup
+contract and are copied intact by the installers. Release smoke tests assert
+the assets survived packaging and installation, then compile and run the
+sample with freestanding `--backend native` on Linux and Windows. When the
+installed bundle contains Clang, the smoke also makes an implicit build and
+asserts that LLVM was selected. The macOS binary-only target remains on C
+because no LLVM/Cranelift Darwin object target exists yet.
 
 GitHub-hosted Windows release runners may run the packaging/smoke process with
 an elevated Administrator token. Normal interactive native final links still
@@ -226,6 +227,37 @@ non-relocatable; investigating that belief while fixing the archive/compiler
 mismatch above found the toolchain itself to be relocatable and fully
 functional (see above), so the override was hiding a real bug rather than
 working around an unfixable one.
+
+### LLVM backend release contract
+
+The LLVM backend does not add an LLVM Cargo dependency. At runtime it needs a
+Clang executable capable of emitting the requested target. The Windows
+`windows-x86_64` full bundle already retains `bin/clang.exe` and its required
+DLLs from the pinned llvm-mingw toolchain; do not add `clang*` or
+`libclang-cpp.dll` to that manifest's prune list. Consequently, ordinary
+Windows full-bundle builds select LLVM by default.
+
+The Linux full bundle currently contains the pinned musl GCC/binutils
+toolchain, not Clang. Linux selects LLVM when a compatible host Clang or
+`OSCAN_LLVM_CLANG`/`OSCAN_LLVM_TOOLCHAIN_DIR` override is available; otherwise
+the documented default falls back to Cranelift. This capability-gated policy is
+intentional and must not be replaced by a silent fallback after an explicit
+`--backend llvm`.
+
+Release/CI gates for LLVM are:
+
+1. `cargo build --release` with no LLVM development libraries installed.
+2. C-vs-LLVM differential runs on Windows and Linux.
+3. A packaged Windows implicit-default compile with host compiler names
+   shadowed on `PATH`, proving sibling-toolchain Clang discovery.
+4. The shared embedded-link smoke, proving the resulting LLVM object uses the
+   existing runtime archive and direct linker.
+5. Explicit C-vs-Cranelift runs, preserving the previous backend as an option.
+
+The packaged llvm-mingw Clang registers x86-64 Windows and AArch64 targets but
+not RISC-V. Do not advertise packaged LLVM RISC-V support until the selected
+release toolchain is changed and the QEMU gate is enabled; Cranelift/C support
+for that target is unaffected.
 
 ### Windows native size-toolchain benchmark
 
@@ -391,8 +423,8 @@ isn't duplicated:
    fetching the toolchain and rebuilding a second time; omitting it preserves
    its previous, fully self-sufficient behavior for any other caller. The
    `toolchain/` sidecar described earlier in this document is still packaged,
-   but is now only needed for hosted/`--extra-c`/legacy native-link fallback —
-   default freestanding native builds on Windows no longer require it.
+   but is now only needed for LLVM emission, hosted/`--extra-c`, and legacy
+   linker-driver fallback; Cranelift freestanding final links do not require it.
 
 CI (`ci.yml`) is unchanged in structure — its Windows job still builds without
 `OSCAN_EMBED_ASSETS_DIR`, exercising the dev/external-toolchain path — plus
@@ -402,9 +434,9 @@ embedded path has coverage without every `cargo build` needing staged assets.
 
 ## Embedded native-link assets for self-contained Linux native builds
 
-On Linux x86-64, ordinary freestanding builds implicitly select native and no
-longer need an external C compiler or linker; explicit `--backend native`
-behaves the same way. `oscan` embeds a linker (a fully static
+On Linux x86-64, freestanding LLVM and Cranelift objects need no external
+compiler driver for their final link; LLVM still needs Clang for object
+emission. `oscan` embeds a linker (a fully static
 `x86_64-linux-musl-ld` binary from the pinned musl-cross toolchain) and
 extracts it to a local cache at first use (see
 `docs/design/native-link-embedding.md` §10 for the Linux-specific details).

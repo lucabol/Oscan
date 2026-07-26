@@ -56,6 +56,7 @@ mod extern_shim;
 mod func;
 mod layout;
 pub mod link;
+pub mod llvm;
 pub mod native_assets;
 pub mod target;
 

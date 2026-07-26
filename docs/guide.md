@@ -10,7 +10,7 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ### Download Prebuilt Releases (Recommended)
 
-The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include the assets for self-contained freestanding native builds and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
+The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include the assets for self-contained freestanding object-backend final links and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs. The Windows full bundle also includes the Clang used by the preferred LLVM backend.
 
 **Windows x86_64 (full bundle with toolchain):**
 
@@ -49,8 +49,9 @@ xcode-select --install
 If you prefer to build Oscan yourself, you'll need:
 
 - **Rust toolchain** (to compile the Oscan compiler itself)
-- **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted native mode,
-  `--extra-c`, and native final linking when packaged direct-link assets are absent
+- **Clang** for the preferred LLVM backend (not needed to build the Rust compiler)
+- **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted object-backend
+  mode, `--extra-c`, and final linking when packaged direct-link assets are absent
 
 ```bash
 git clone https://github.com/lucabol/Oscan.git
@@ -712,12 +713,14 @@ fn! main() {
 
 Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
 
-The native backend supports scalar/pointer-like C ABI signatures directly and
-automatically generates a per-program C shim when a used user extern has `str`
-parameters or returns `str`. The C-facing ABI remains `osc_str` by value; the
-native object calls the generated shim with pointers/out-pointers so the C
-compiler performs the platform aggregate ABI lowering. Structs, payload enums,
-and `Result` in user extern signatures still require a hand-written ABI shim.
+The C and LLVM backends use the C ABI produced by the shared C lowering
+directly. The Cranelift backend (`--backend native`) supports
+scalar/pointer-like signatures directly and automatically generates a
+per-program C shim when a used user extern has `str` parameters or returns
+`str`. The C-facing ABI remains `osc_str` by value; the Cranelift object calls
+the shim with pointers/out-pointers so the C compiler performs the platform
+aggregate ABI lowering. Structs, payload enums, and `Result` in Cranelift user
+extern signatures still require a hand-written ABI shim.
 
 The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
 
@@ -734,22 +737,22 @@ Both flags are repeatable — use one per file or flag.
 
 ### Windows GUI subsystem builds
 
-On Windows, native hosted programs (`--backend native --libc`) package the same
-canvas, image, SVG, and TrueType runtime used by graphical Oscan programs. To
-hide the console for a GUI app, pass the Windows subsystem linker flag through
-the hosted compiler driver:
+On Windows, LLVM/Cranelift hosted programs package the same canvas, image, SVG,
+and TrueType runtime used by graphical Oscan programs. To hide the console for
+a GUI app, pass the Windows subsystem linker flag through the hosted compiler
+driver:
 
 ```sh
-oscan app.osc --backend native --libc --extra-cflags -Wl,--subsystem,windows -o app.exe
+oscan app.osc --backend llvm --libc --extra-cflags -Wl,--subsystem,windows -o app.exe
 ```
 
 Do not override the CRT entry point for normal Oscan programs. The generated
-native object exports `main`, and the MinGW/LLVM-mingw CRT selects the correct
+object exports `main`, and the MinGW/LLVM-mingw CRT selects the correct
 startup routine for the chosen subsystem.
 
 ### Linking Precompiled Objects and Libraries
 
-Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with either backend:
+Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with all three backends:
 
 ```
 oscan myapp.osc --extra-obj mylib.o --run
@@ -907,14 +910,41 @@ let x: i32 = 1;
 
 ## Backend Roles and Toolchain Lookup (Windows/Linux)
 
-Ordinary executable, object, and `--run` builds implicitly use the **native
-backend** when the host is Windows x86-64 or Linux
-x86-64/AArch64/RISC-V64. Unsupported hosts, including macOS, fall back to the
-**C backend**. C is also selected implicitly by `--emit-c`, `-o file.c`, and
-`--target riscv64|wasi`; it remains the portability/reference path and
-differential oracle. An explicit `--backend c|native` always wins, and
-`--native-target` selects native when no backend is named. Native never
-silently falls back to C code generation.
+Ordinary executable, object, and `--run` builds prefer the **LLVM backend**
+when the host has a supported object target and a usable Clang. If LLVM is not
+available, Oscan falls back to the **Cranelift backend** (`--backend native`),
+then to the **C backend**. Explicit `--backend llvm|native|c` always wins, and
+an explicit LLVM failure never falls back.
+
+LLVM currently uses this production pipeline:
+
+```text
+typed Oscan IR -> external-runtime C lowering -> Clang textual LLVM IR
+                -> Clang relocatable object -> shared Oscan link/runtime path
+```
+
+This gives LLVM immediate full-language parity and inspectable `.ll` output,
+but it is not an independent semantic lowering. Use `--emit-llvm-ir` or
+`-o file.ll` to inspect the IR. See
+[the LLVM backend design](design/llvm-backend.md) for the rationale and future
+direct-emitter seam.
+
+C is selected implicitly by `--emit-c`, `-o file.c`, and
+`--target riscv64|wasi`. LLVM IR output selects LLVM. For compatibility, an
+explicit `--native-target` without `--backend` selects Cranelift.
+
+LLVM Clang lookup order:
+
+1. `OSCAN_LLVM_CLANG`
+2. `OSCAN_LLVM_TOOLCHAIN_DIR`
+3. `OSCAN_TOOLCHAIN_DIR` or a discovered bundled `toolchain/`
+4. `clang-22`/`clang` on `PATH`
+5. Visual Studio Clang on Windows
+
+The Windows full bundle includes Clang and therefore defaults to LLVM. The
+Linux full bundle currently ships the pinned musl GCC/linker toolchain; it uses
+LLVM when a compatible host/override Clang exists and otherwise uses Cranelift.
+macOS remains on the C backend because it has no LLVM/Cranelift object target.
 
 For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
 
@@ -933,20 +963,19 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
 
-**Exception — Windows and Linux x86-64 freestanding native builds:** the lookup
-above is for the external/bundled **C compiler**. Ordinary freestanding builds
-on these hosts implicitly select native and skip it entirely; explicit
-`--backend native` behaves the same way. `oscan` embeds its own linker plus the
-minimal support files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
+**Exception — Windows and Linux x86-64 freestanding object-backend final
+links:** the C-compiler lookup above is not needed to link an already emitted
+LLVM or Cranelift object. `oscan` embeds its own linker plus the minimal support
+files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
 `x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete; rebuilt automatically). Linux AArch64/RISC-V64 native
-cross-links use target-matched linker/runtime sidecars rather than a C compiler;
-the standard x86-64 release embeds only its own linker. Hosted `--libc` mode
-and explicit `--extra-c` sources still use the C-compiler lookup above. The C
-backend also supports ARM64/RISC-V64 through the corresponding C cross
-toolchains. See `docs/design/native-link-embedding.md` for the full design.
+Linux — safe to delete; rebuilt automatically). LLVM emission itself still
+requires Clang. Linux AArch64/RISC-V64 Cranelift cross-links use target-matched
+linker/runtime sidecars; LLVM cross-object emission additionally requires the
+selected Clang to register the target. Hosted `--libc` mode and explicit
+`--extra-c` sources still use the C-compiler lookup above. The C backend also
+supports ARM64/RISC-V64 through the corresponding C cross toolchains.
 
 ---
 
