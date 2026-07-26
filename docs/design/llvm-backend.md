@@ -201,8 +201,9 @@ Required gates:
   corpora;
 - focused panic, extern-string ABI, hosted runtime, and object-only tests;
 - Windows and WSL x86-64 cross-link execution;
-- AArch64 object link/execution under QEMU;
-- explicit C and Cranelift regression suites;
+- explicit C and Cranelift regression suites, including the AArch64 Cranelift
+  object link/execution gate under QEMU (LLVM AArch64 emission is a Clang
+  capability and is not gated under QEMU today);
 - packaged implicit-default smoke with host compiler names blocked on `PATH`;
 - LLVM toolchain isolation with an empty `PATH`, an unusable `OSCAN_CC`, an
   absolute LLVM provider, and an embedded direct linker;

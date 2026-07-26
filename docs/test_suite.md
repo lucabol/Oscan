@@ -141,6 +141,22 @@ and proves that an explicit LLVM provider plus Oscan's embedded linker can
 compile, link, and run `hello.osc`. The size comparison executes equivalent C,
 Cranelift, and LLVM outputs and fails if LLVM is larger than C.
 
+### Build every sample with every available backend:
+```powershell
+.\scripts\sample-backend-matrix.ps1
+.\scripts\sample-backend-matrix.ps1 -Oscan .\target\release\oscan.exe -SourceDirectory examples -OutputDirectory tests\build\sample-backend-matrix
+```
+
+This local (not CI-gated) check recursively compiles every `.osc` file under
+`examples/` into a per-backend subdirectory of the output root, which it prints
+as an absolute path and wipes before the run. Backends that cannot produce a
+host executable on this machine are probed once and skipped with a printed
+reason; the remaining ones must compile every sample into a non-empty host
+executable or the script fails. It ends with a deterministic size table (bytes
+per sample per available backend, sorted by sample path).
+`tests\sample_backend_matrix.tests.ps1` exercises that behavior against a fake
+compiler.
+
 ### Test individual file:
 ```powershell
 # Compile Oscan to C

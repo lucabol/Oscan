@@ -964,8 +964,10 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
 
 **Exception — Windows and Linux x86-64 freestanding object-backend final
-links:** the C-compiler lookup above is not needed to link an already emitted
-LLVM or Cranelift object. `oscan` embeds its own linker plus the minimal support
+links:** in a packaged build (release bundles and CI builds that embed the
+direct-link assets), the C-compiler lookup above is not needed to link an
+already emitted LLVM or Cranelift object, and `OSCAN_CC` is not consulted at
+all for such a build. `oscan` embeds its own linker plus the minimal support
 files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
 `x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
@@ -973,8 +975,9 @@ files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
 Linux — safe to delete; rebuilt automatically). LLVM emission itself still
 requires Clang. Linux AArch64/RISC-V64 Cranelift cross-links use target-matched
 linker/runtime sidecars; LLVM cross-object emission additionally requires the
-selected Clang to register the target. Hosted `--libc` mode and explicit
-`--extra-c` sources still use the C-compiler lookup above. The C backend also
+selected Clang to register the target. Hosted `--libc` mode, explicit
+`--extra-c` sources, and plain development builds without the embedded
+direct-link assets still use the C-compiler lookup above. The C backend also
 supports ARM64/RISC-V64 through the corresponding C cross toolchains.
 
 ---

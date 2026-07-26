@@ -253,6 +253,13 @@ Release/CI gates for LLVM are:
 4. The shared embedded-link smoke, proving the resulting LLVM object uses the
    existing runtime archive and direct linker.
 5. Explicit C-vs-Cranelift runs, preserving the previous backend as an option.
+6. The pinned-Windows-toolchain size gate in
+   `scripts/compare-backend-size.ps1` (run from
+   `tests/windows_native_ci.tests.ps1`), which fails when the LLVM `hello.osc`
+   executable is larger than the equivalent C-backend executable.
+7. `tests/llvm_toolchain_isolation.tests.ps1` on Windows and Linux, proving a
+   packaged freestanding LLVM build needs no separate C compiler or linker
+   (empty `PATH`, unusable `OSCAN_CC`, absolute Clang, embedded linker).
 
 The packaged llvm-mingw Clang registers x86-64 Windows and AArch64 targets but
 not RISC-V. Do not advertise packaged LLVM RISC-V support until the selected
@@ -426,11 +433,28 @@ isn't duplicated:
    but is now only needed for LLVM emission, hosted/`--extra-c`, and legacy
    linker-driver fallback; Cranelift freestanding final links do not require it.
 
-CI (`ci.yml`) is unchanged in structure — its Windows job still builds without
-`OSCAN_EMBED_ASSETS_DIR`, exercising the dev/external-toolchain path — plus
-one new optional `native-link-embedding-smoke-windows` job that runs
-`prepare-embed-assets` and does an embedded build+link smoke test, so the
-embedded path has coverage without every `cargo build` needing staged assets.
+CI (`ci.yml`) keeps its main `linux` and `windows` jobs building *without*
+`OSCAN_EMBED_ASSETS_DIR`, so the dev/external-toolchain path stays covered.
+The embedded path is covered by dedicated smoke jobs that stage
+`prepare-embed-assets` and rebuild with `OSCAN_EMBED_ASSETS_DIR` plus
+`OSCAN_REQUIRE_EMBEDDED_ASSETS=1`. These jobs are required, not optional —
+none of them is `continue-on-error`, so a failure blocks merging:
+
+- `native-link-embedding-smoke` (Windows) runs
+  `tests/windows_native_ci.tests.ps1`, which chains the implicit-default check
+  (`default_backend.tests.ps1`, expecting `llvm`),
+  `llvm_toolchain_isolation.tests.ps1`, the `scripts/compare-backend-size.ps1`
+  size gate (LLVM `hello.osc` no larger than the C build), the native-link
+  isolation suite, and the full C-vs-Cranelift and C-vs-LLVM differential
+  suites.
+- `native-link-embedding-smoke-linux` runs the same implicit-LLVM-default and
+  `llvm_toolchain_isolation.tests.ps1` gates, a freestanding hello smoke with
+  `cc`/`gcc`/`clang`/`ld`/musl tool names stubbed out on a restricted `PATH`,
+  and both differential suites. The size gate is Windows-only today, so it is
+  not part of this job.
+- `native-link-embedding-smoke-linux-aarch64` and
+  `native-link-embedding-smoke-linux-riscv64` cover embedded cross-linking and
+  QEMU execution for `--backend native` (Cranelift) objects.
 
 ## Embedded native-link assets for self-contained Linux native builds
 

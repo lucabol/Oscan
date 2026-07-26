@@ -447,13 +447,19 @@ Current `package` job order is **wrong** for embedding (`cargo build` at line
    **fails loudly if assets are missing**.
 6. **Assemble release asset** (`assemble-release.ps1`), packaging without
    requiring a full toolchain sidecar for default freestanding operation. The
-   `toolchain/` sidecar stays **only** for hosted/`--extra-c`/legacy fallback
+   `toolchain/` sidecar stays **only** for LLVM object emission (the Windows
+   bundle's Clang; the Linux sidecar ships GCC, not Clang),
+   hosted/`--extra-c`, and legacy fallback
    (unchanged pruning; a different, coarser concern than the embed set).
 
-CI (`ci.yml`) is unchanged in structure; its Windows job builds without
-`OSCAN_EMBED_ASSETS_DIR` (dev/external path still exercised) — plus one **new**
-optional CI job that runs the prepare tool and does an embedded smoke test, so
-the embedded path has coverage without making every `cargo build` need assets.
+CI (`ci.yml`) keeps its main `linux`/`windows` jobs building without
+`OSCAN_EMBED_ASSETS_DIR` (dev/external path still exercised). The embedded path
+is covered by four **required** smoke jobs — `native-link-embedding-smoke`
+(Windows), `native-link-embedding-smoke-linux`, and the `-linux-aarch64` /
+`-linux-riscv64` cross variants — which run the prepare tool, rebuild with
+`OSCAN_REQUIRE_EMBEDDED_ASSETS=1`, and smoke the embedded link, so the embedded
+path has coverage without making every `cargo build` need assets. None of them
+is `continue-on-error`.
 
 ---
 

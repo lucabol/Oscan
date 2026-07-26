@@ -39,7 +39,7 @@
 - **[26 reserved words.](docs/spec/oscan-spec.md#11-reserved-words-26-total)** Explicit types, no inference, no implicit coercions — minimal surface for LLMs to hallucinate on.
 - **Order-independent definitions.** Use functions, types, and constants before they are declared.
 - **Namespaced imports.** `use "math.osc" as math` — access imported symbols via `math.add(...)` to avoid name collisions in larger programs.
-- **99 positive tests, 35 negative tests, 27 examples.** Tested across LLVM, C, and Cranelift backends on Windows and Linux, with ARM64/RISC-V64/QEMU, macOS, and WASI coverage where supported.
+- **99 positive tests, 35 negative tests, 37 examples.** Tested across LLVM, C, and Cranelift backends on Windows and Linux, with ARM64/RISC-V64/QEMU, macOS, and WASI coverage where supported.
 
 ## For AI Coding Agents
 
@@ -279,7 +279,8 @@ LLVM Clang lookup order is:
 4. `clang-22`/`clang` on `PATH`
 5. Visual Studio Clang on Windows
 
-The Windows full release includes Clang 22, so its effective default is LLVM.
+The Windows full release includes the pinned llvm-mingw Clang 22.1.2, so its
+effective default is LLVM.
 The Linux full release currently ships the pinned musl GCC/linker toolchain;
 it uses LLVM when a compatible host/override Clang is present and otherwise
 falls back to Cranelift. The macOS target remains on C.
@@ -308,9 +309,10 @@ first use to a local cache (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
 Linux). The LLVM stage still requires Clang; the final link does not.
 
-The pinned Windows release configuration also gates output size: the LLVM
-`hello.osc` executable must be no larger than the equivalent C-backend
-executable. `scripts/compare-backend-size.ps1` fails when that invariant is
+The pinned Windows release configuration also gates output size in CI: built
+with the pinned llvm-mingw toolchain, the LLVM `hello.osc` executable must be no
+larger than the equivalent C-backend executable.
+`scripts/compare-backend-size.ps1` fails when that invariant is
 violated.
 
 The embedded payload size differs by platform:
@@ -343,7 +345,7 @@ verification, canonicalization, or native-link sandboxing.
 |--------|----------|---------|-------|
 | x86_64 Linux | LLVM, Cranelift, C | Clang for LLVM; embedded final linker for object backends | LLVM preferred when available; Cranelift fallback |
 | x86_64 Windows | LLVM, Cranelift, C | bundled Clang in full release; embedded final linker | LLVM is the full-bundle default |
-| ARM64 Linux | LLVM, Cranelift, C | target-capable Clang, C cross-compiler, or sidecar linker | LLVM and Cranelift object execution validated via QEMU |
+| ARM64 Linux | LLVM (Clang-dependent), Cranelift, C | target-capable Clang, C cross-compiler, or sidecar linker | Cranelift AArch64 object link/execution gated under QEMU in CI; LLVM AArch64 emission depends on the selected Clang |
 | RISC-V 64 Linux | Cranelift, C; LLVM if Clang supports it | C cross-compiler or sidecar linker | Pinned Windows Clang lacks the RISC-V target |
 | WebAssembly | C backend (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
 | macOS | C backend (libc) | Apple Clang | LLVM/Cranelift object targets not yet available |
@@ -420,13 +422,35 @@ On Windows, you can also run the full validation suite:
 .\tests\run_tests.ps1 -Oscan .\target\debug\oscan.exe   # integration tests
 ```
 
+`scripts/sample-backend-matrix.ps1` (PowerShell, Windows or Linux) is a local
+cross-backend build check over the sample programs:
+
+```bash
+pwsh ./scripts/sample-backend-matrix.ps1
+```
+
+It recursively collects every `.osc` file under
+`examples/` (override with `-SourceDirectory`), probes `llvm`, `native`, and
+`c`, and skips — with a printed reason — any backend that cannot produce a host
+executable on the current machine. Each remaining backend gets its own
+subdirectory under the output root (`tests\build\sample-backend-matrix` by
+default, override with `-OutputDirectory`); the absolute output root is printed
+first and wiped before the run. Nested and case-colliding sample names are
+flattened to unique artifact names. It finishes with a deterministic,
+sorted size table (bytes per sample per backend), and exits non-zero if any
+available backend fails to compile a sample or does not produce a non-empty
+host executable. Pass `-Oscan <path>` to pick a compiler; otherwise
+`target/release` then `target/debug` are used.
+
 The repository currently includes:
 - **99 positive integration tests** — programs that compile and run
 - **35 negative integration tests** — programs that must be rejected
 - Rust unit/integration tests for the compiler, object linker, packaging, and CLI
 
 Windows, Linux, macOS, ARM64 and RISC-V64 (QEMU), and WASI are tested in CI.
-Supported Windows/Linux targets run C-vs-LLVM and C-vs-Cranelift differential validation.
+Windows and Linux x86-64 run the full C-vs-LLVM and C-vs-Cranelift differential
+validation; the ARM64/RISC-V64 QEMU gates currently cover Cranelift objects and
+the C backend's cross-compiled output.
 
 ## Contributing
 

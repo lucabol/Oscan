@@ -135,6 +135,25 @@ explicit absolute LLVM provider plus Oscan's embedded linker can compile, link,
 and run `hello.osc`. `compare-backend-size.ps1` executes equivalent C,
 Cranelift, and LLVM outputs and fails if LLVM is larger than C.
 
+### Sample backend matrix
+
+`scripts/sample-backend-matrix.ps1` is a local (not CI-gated) cross-backend
+build check over the sample programs. It recursively collects every `.osc`
+file under `examples/` (`-SourceDirectory` overrides the root), probes `llvm`,
+`native`, and `c` with a tiny throwaway program, and skips any backend that
+cannot produce a host executable here, printing the probe diagnostic instead of
+failing. Surviving backends each get their own subdirectory under the output
+root (`tests\build\sample-backend-matrix` unless `-OutputDirectory` says
+otherwise); that root is printed as an absolute path and wiped before the run,
+and nested/case-colliding sample names are flattened to unique artifact names.
+The run ends with a deterministic size table sorted by sample path, listing
+bytes per sample per available backend. It exits non-zero when an *available*
+backend fails to compile a sample or does not leave a non-empty host executable
+(MZ on Windows, ELF elsewhere) behind. `sample_backend_matrix.tests.ps1` covers
+this behavior with a fake compiler: skipped backend, stale-output cleanup,
+name flattening, executable-not-source artifacts, and the non-zero exit on a
+sample failure.
+
 ### Cross-platform runs (WSL Linux x64, object-backend cross-link, ARM64)
 
 `test.ps1`'s WSL and ARM64 (QEMU) phases cross-compile and run every positive

@@ -27,7 +27,7 @@ operating system from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases):
 
 - **Windows x86-64 and Linux x86-64:** choose the `full` bundle, which includes
-  a C toolchain.
+  a pinned toolchain (Clang/LLD on Windows, musl GCC/binutils on Linux).
 - **macOS x86-64:** use the macOS archive and install Xcode Command Line Tools
   first with
   `xcode-select --install`.
@@ -437,8 +437,9 @@ The output should be the same:
 2 6 40 sample.txt
 ```
 
-Oscan normally transpiles your program to C and invokes a C toolchain. To keep
-the generated C instead of building an executable:
+Oscan builds an executable directly, using the LLVM backend when a Clang
+executable is available and falling back to the Cranelift or C backend
+otherwise. To keep the generated C instead of building an executable:
 
 ```text
 oscan oscwc.osc -o oscwc.c
