@@ -638,7 +638,7 @@ jobs:
       - name: LLVM requires no separate C compiler or linker
         shell: pwsh
         run: |
-          $clang = (Get-Command clang -CommandType Application).Source
+          $clang = (Get-Command clang -CommandType Application | Select-Object -First 1).Source
           ./tests/llvm_toolchain_isolation.tests.ps1 `
             -Oscan ./target/release/oscan `
             -RuntimeArchiveDir ./build/runtime-archives/linux-x86_64 `
