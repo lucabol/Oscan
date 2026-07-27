@@ -423,12 +423,25 @@ fn c_and_native_backends_are_unaffected_by_the_llvm_migration() {
     assert!(c_source.contains("int main("), "{c_source}");
     assert!(c_source.contains("oscan_main"), "{c_source}");
 
-    // ...and `--backend native` still emits a Cranelift object.
+    // ...and `--backend native` still emits a Cranelift object. Use an
+    // explicit Linux object target so this remains valid on macOS, where
+    // native host auto-detection is intentionally unsupported.
+    let native_target = match std::env::consts::ARCH {
+        "aarch64" => "linux-aarch64",
+        "riscv64" => "linux-riscv64",
+        _ => "linux-x86_64",
+    };
     let dir = scratch_dir("native-object");
-    let output_path = dir.join("program.obj");
+    let output_path = dir.join("program.o");
     let native_output = Command::new(oscan_binary_path())
         .arg(example("hello.osc"))
-        .args(["--backend", "native", "-o"])
+        .args([
+            "--backend",
+            "native",
+            "--native-target",
+            native_target,
+            "-o",
+        ])
         .arg(&output_path)
         .output()
         .expect("failed to run native backend");
