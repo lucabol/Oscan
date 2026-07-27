@@ -27,14 +27,6 @@ impl CodeGenerator {
         Self::generate_with_runtime(program, freestanding, true)
     }
 
-    /// Generate a translation unit that expects the Oscan runtime to be
-    /// supplied by a separate object/archive. This is used by object-code
-    /// backends such as LLVM; the public C backend keeps its standalone
-    /// single-translation-unit output through [`Self::generate`].
-    pub(crate) fn generate_object_source(program: &ir::Program, freestanding: bool) -> String {
-        Self::generate_with_runtime(program, freestanding, false)
-    }
-
     fn generate_with_runtime(
         program: &ir::Program,
         freestanding: bool,

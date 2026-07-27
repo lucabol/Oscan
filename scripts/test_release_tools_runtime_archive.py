@@ -640,7 +640,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
                 "mode": mode,
                 "toolchain": _pinned_linux_runtime_toolchain(),
                 "embedded_bearssl": mode
-                in {"freestanding", "freestanding_core", "hosted"},
+                in {"freestanding", "freestanding_gfx", "freestanding_core", "hosted"},
                 "sha256": rt.compute_digest(archive, "sha256"),
             }
             (runtime_archive_dir / mode_spec["manifest_name"]).write_text(
@@ -868,7 +868,7 @@ class LinuxReleaseBearSslValidationTests(unittest.TestCase):
         rt.validate_runtime_archive_release_toolchain(
             self._runtime_contract(),
             "linux-x86_64",
-            self._manifest("freestanding_core", True),
+            self._manifest("freestanding_gfx", True),
             Path("fake.json"),
         )
 

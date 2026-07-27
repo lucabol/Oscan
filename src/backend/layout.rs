@@ -1,5 +1,5 @@
-//! Memory layout and value-representation rules shared by every part of
-//! the Cranelift backend.
+//! Memory layout and value-representation rules shared by every object
+//! backend (Cranelift and direct LLVM alike).
 //!
 //! Two orthogonal questions are answered here:
 //!
@@ -11,28 +11,28 @@
 //!   alignment, total size rounded up to the maximum member alignment) —
 //!   deliberately, since it must agree byte-for-byte with the real C
 //!   compiler that built the runtime archive for every type that crosses
-//!   the shim boundary (`super::runtime_abi`), and reusing the same
-//!   algorithm for user structs/enums keeps one mental model everywhere.
-//! * [`Repr::of`] — "what Cranelift SSA shape does a value of this type
-//!   have?" Every `BcType` is either a direct scalar (`I32`/`I64`/`F64`/
-//!   `I8` for `bool`, or `I32` for a payload-less enum) or a single
-//!   pointer-sized value (everything else). Pointer-repr aggregates
-//!   (`str`, payload-bearing enums, structs, `Result`) always point at
-//!   arena-allocated memory — never a raw Cranelift stack slot — because
-//!   Oscan values routinely outlive the expression that produced them
-//!   (returned, stored in a struct field, pushed into an array), and only
-//!   the arena gives that lifetime. This trades a small amount of
-//!   performance (every aggregate temporary is a real allocation) for a
-//!   dramatically simpler and more obviously-correct implementation.
-//!   Stack-slot escape analysis remains a possible future optimization.
+//!   the shim boundary, and reusing the same algorithm for user
+//!   structs/enums keeps one mental model everywhere.
+//! * [`Repr::of`] — "what SSA shape does a value of this type have?"
+//!   Every `BcType` is either a direct scalar ([`LType::I32`]/
+//!   [`LType::I64`]/[`LType::F64`]/[`LType::I8`] for `bool`, or `I32` for
+//!   a payload-less enum) or a single pointer-sized value (everything
+//!   else). Pointer-repr aggregates (`str`, payload-bearing enums,
+//!   structs, `Result`) always point at arena-allocated memory — never a
+//!   raw stack slot — because Oscan values routinely outlive the
+//!   expression that produced them (returned, stored in a struct field,
+//!   pushed into an array), and only the arena gives that lifetime. This
+//!   trades a small amount of performance (every aggregate temporary is a
+//!   real allocation) for a dramatically simpler and more
+//!   obviously-correct implementation. Stack-slot escape analysis remains
+//!   a possible future optimization.
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::types;
-use cranelift_codegen::ir::Type;
-
 use crate::ir;
 use crate::types::BcType;
+
+use super::lir::LType;
 
 /// Size/alignment of a value in memory, in bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,19 +70,19 @@ fn round_up(value: u32, align: u32) -> u32 {
     (value + align - 1) / align * align
 }
 
-/// The Cranelift-level pointer size for every target this backend
-/// supports (Windows/Linux x86-64, AArch64, RISC-V64 are all LP64/64-bit
-/// pointer targets); kept as a named constant rather than sprinkling `8`
+/// The pointer size for every target this backend family supports
+/// (Windows/Linux x86-64, AArch64, RISC-V64 are all LP64/64-bit pointer
+/// targets); kept as a named constant rather than sprinkling `8`
 /// everywhere so a 32-bit target would need to change exactly one line.
 pub const POINTER_SIZE: u32 = 8;
 
-/// How a `BcType` flows through Cranelift SSA values.
+/// How a `BcType` flows through LIR SSA values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repr {
-    /// No value at all (a Cranelift call/block with zero results).
+    /// No value at all (a call/block with zero results).
     Unit,
-    /// A single scalar Cranelift value of the given type.
-    Scalar(Type),
+    /// A single scalar value of the given LIR type.
+    Scalar(LType),
     /// A single pointer-sized value. For `Str`/payload-bearing `Enum`/
     /// `Struct`/`Result` this points at an arena-allocated memory block
     /// laid out per [`layout_of`]. For `Array`/`FixedArray`/`Map*` it is
@@ -96,37 +96,30 @@ impl Repr {
     pub fn of(ty: &BcType, program: &ir::Program) -> Repr {
         match ty {
             BcType::Unit => Repr::Unit,
-            BcType::I32 => Repr::Scalar(types::I32),
-            BcType::I64 => Repr::Scalar(types::I64),
-            BcType::F64 => Repr::Scalar(types::F64),
-            BcType::Bool => Repr::Scalar(types::I8),
+            BcType::I32 => Repr::Scalar(LType::I32),
+            BcType::I64 => Repr::Scalar(LType::I64),
+            BcType::F64 => Repr::Scalar(LType::F64),
+            BcType::Bool => Repr::Scalar(LType::I8),
             BcType::Enum(name) => {
                 if enum_has_payload(name, program) {
                     Repr::Pointer
                 } else {
-                    Repr::Scalar(types::I32)
+                    Repr::Scalar(LType::I32)
                 }
             }
             _ => Repr::Pointer,
         }
     }
 
-    /// The Cranelift type of the single value used to represent this repr,
-    /// or `None` for `Unit` (which carries no value at all).
-    pub fn cl_type(&self) -> Option<Type> {
+    /// The LIR type of the single value used to represent this repr, or
+    /// `None` for `Unit` (which carries no value at all).
+    pub fn lir_type(&self) -> Option<LType> {
         match self {
             Repr::Unit => None,
             Repr::Scalar(t) => Some(*t),
-            Repr::Pointer => Some(cl_pointer_type()),
+            Repr::Pointer => Some(LType::Ptr),
         }
     }
-}
-
-/// The Cranelift integer type used for every pointer-repr value. A plain
-/// `I64` (rather than `isa.pointer_type()`) is correct because every
-/// target this backend supports is a 64-bit target (see [`POINTER_SIZE`]).
-pub fn cl_pointer_type() -> Type {
-    types::I64
 }
 
 pub fn enum_has_payload(name: &str, program: &ir::Program) -> bool {
@@ -215,7 +208,7 @@ pub fn struct_field_offset(name: &str, field_name: &str, program: &ir::Program) 
 /// (`{size: 4, align: 4}`, matching C's `typedef int Name;`) even though
 /// [`Repr::of`] represents them as a bare scalar rather than a pointer to
 /// one of these blocks — `layout_of` always answers "how many bytes",
-/// independent of how the value flows through Cranelift SSA.
+/// independent of how the value flows through SSA.
 #[allow(dead_code)]
 pub struct EnumLayout {
     pub has_payload: bool,

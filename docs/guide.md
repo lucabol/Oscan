@@ -10,7 +10,7 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ### Download Prebuilt Releases (Recommended)
 
-The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include the assets for self-contained freestanding object-backend final links and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs. The Windows full bundle also includes the Clang used by the preferred LLVM backend.
+The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include an LLVM 22 provider, self-contained freestanding object-backend link assets, and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
 
 **Windows x86_64 (full bundle with toolchain):**
 
@@ -26,10 +26,13 @@ No separate C compiler installation needed — the bundle includes everything.
 1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
 2. Extract: `tar xf oscan-*.tar.gz`
 3. Move to a stable location (e.g., `~/.local/oscan/` or `/opt/oscan/`)
-4. Add to PATH or run the included `install.sh`
-5. Verify: `oscan --help`
+4. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+5. Add to PATH or run the included `install.sh`
+6. Verify: `oscan --help`
 
-The Linux bundle ships a tested C toolchain that works alongside your system libraries.
+The Linux bundle ships a tested C toolchain and pinned `libLLVM`. The provider
+requires glibc 2.34 or newer plus the listed host runtime libraries, but no
+installed C/Clang/LLVM toolchain.
 
 **macOS:**
 
@@ -49,7 +52,8 @@ xcode-select --install
 If you prefer to build Oscan yourself, you'll need:
 
 - **Rust toolchain** (to compile the Oscan compiler itself)
-- **Clang** for the preferred LLVM backend (not needed to build the Rust compiler)
+- **LLVM 22 shared library** only when running the LLVM backend from a source
+  build; release bundles package it, and no Clang executable or LLVM SDK is used
 - **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted object-backend
   mode, `--extra-c`, and final linking when packaged direct-link assets are absent
 
@@ -713,14 +717,14 @@ fn! main() {
 
 Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
 
-The C and LLVM backends use the C ABI produced by the shared C lowering
-directly. The Cranelift backend (`--backend native`) supports
-scalar/pointer-like signatures directly and automatically generates a
-per-program C shim when a used user extern has `str` parameters or returns
-`str`. The C-facing ABI remains `osc_str` by value; the Cranelift object calls
+The C backend uses the platform C ABI directly. The LLVM and Cranelift object
+backends support scalar/pointer-like signatures directly and automatically
+generate a per-program C shim when a used user extern has `str` parameters or
+returns `str`. The C-facing ABI remains `osc_str` by value; the object calls
 the shim with pointers/out-pointers so the C compiler performs the platform
-aggregate ABI lowering. Structs, payload enums, and `Result` in Cranelift user
-extern signatures still require a hand-written ABI shim.
+aggregate ABI lowering. Consequently, that string-signature case requires a C
+compiler. Structs, payload enums, and `Result` in object-backend user extern
+signatures still require a hand-written ABI shim.
 
 The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
 
@@ -911,40 +915,40 @@ let x: i32 = 1;
 ## Backend Roles and Toolchain Lookup (Windows/Linux)
 
 Ordinary executable, object, and `--run` builds prefer the **LLVM backend**
-when the host has a supported object target and a usable Clang. If LLVM is not
-available, Oscan falls back to the **Cranelift backend** (`--backend native`),
-then to the **C backend**. Explicit `--backend llvm|native|c` always wins, and
-an explicit LLVM failure never falls back.
+when the host has a supported object target and a compatible packaged LLVM
+provider. If LLVM is not available, Oscan falls back to the **Cranelift
+backend** (`--backend native`), then to the **C backend**. Explicit
+`--backend llvm|native|c` always wins, and an explicit LLVM failure never falls
+back.
 
-LLVM currently uses this production pipeline:
+LLVM uses this production pipeline:
 
 ```text
-typed Oscan IR -> external-runtime C lowering -> Clang textual LLVM IR
-                -> Clang relocatable object -> shared Oscan link/runtime path
+typed Oscan IR -> shared backend-neutral LIR -> direct LLVM IR
+                -> in-process LLVM 22 optimization/object emission
+                -> shared Oscan link/runtime path
 ```
 
-This gives LLVM immediate full-language parity and inspectable `.ll` output,
-but it is not an independent semantic lowering. Use `--emit-llvm-ir` or
-`-o file.ll` to inspect the IR. See
-[the LLVM backend design](design/llvm-backend.md) for the rationale and future
-direct-emitter seam.
+This path does not generate C and invokes no Clang, GCC, `llvm-as`, `opt`, or
+`llc`. Use `--emit-llvm-ir` or `-o file.ll` to inspect the verified IR. See
+[the LLVM backend design](design/llvm-backend.md) for the exact architecture
+and no-toolchain boundary.
 
 C is selected implicitly by `--emit-c`, `-o file.c`, and
 `--target riscv64|wasi`. LLVM IR output selects LLVM. For compatibility, an
 explicit `--native-target` without `--backend` selects Cranelift.
 
-LLVM Clang lookup order:
+LLVM provider lookup order:
 
-1. `OSCAN_LLVM_CLANG`
-2. `OSCAN_LLVM_TOOLCHAIN_DIR`
-3. `OSCAN_TOOLCHAIN_DIR` or a discovered bundled `toolchain/`
-4. `clang-22`/`clang` on `PATH`
-5. Visual Studio Clang on Windows
+1. `OSCAN_LLVM_LIB` — absolute shared-library path
+2. `OSCAN_LLVM_DIR` — absolute provider directory
+3. `OSCAN_TOOLCHAIN_DIR` — absolute packaged-toolchain root
+4. executable-relative `toolchain/` and executable directory
 
-The Windows full bundle includes Clang and therefore defaults to LLVM. The
-Linux full bundle currently ships the pinned musl GCC/linker toolchain; it uses
-LLVM when a compatible host/override Clang exists and otherwise uses Cranelift.
-macOS remains on the C backend because it has no LLVM/Cranelift object target.
+Relative overrides, the current directory, `PATH`, and bare loader lookup are
+not accepted. Windows and Linux full bundles include LLVM 22 and therefore
+default to LLVM. macOS remains on the C backend because it has no packaged
+LLVM/Cranelift object target.
 
 For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
 
@@ -972,13 +976,15 @@ files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
 `x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete; rebuilt automatically). LLVM emission itself still
-requires Clang. Linux AArch64/RISC-V64 Cranelift cross-links use target-matched
-linker/runtime sidecars; LLVM cross-object emission additionally requires the
-selected Clang to register the target. Hosted `--libc` mode, explicit
-`--extra-c` sources, and plain development builds without the embedded
-direct-link assets still use the C-compiler lookup above. The C backend also
-supports ARM64/RISC-V64 through the corresponding C cross toolchains.
+Linux — safe to delete; rebuilt automatically). LLVM emission uses packaged
+`libLLVM` in-process. Linux AArch64/RISC-V64 cross-links use target-matched
+linker/runtime sidecars; the Linux LLVM provider exports both targets, while
+the Windows provider exports AArch64 but not RISC-V. Hosted `--libc` mode,
+explicit `--extra-c` sources, generated string-ABI extern shims, and plain
+development builds without embedded direct-link assets still use the
+C-compiler lookup above. Set `OSCAN_NO_TOOLCHAIN=1` to reject every such
+escape hatch. The C backend also supports ARM64/RISC-V64 through the
+corresponding C cross toolchains.
 
 ---
 

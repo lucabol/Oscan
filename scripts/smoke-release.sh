@@ -184,10 +184,26 @@ ACTUAL="$("$OUTPUT_EXE")"
     exit 1
 }
 
-if [ -x "$INSTALL_DIR/toolchain/bin/clang" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; then
+BUNDLED_LLVM=""
+for candidate in \
+    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22.1" \
+    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22.1" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22" \
+    "$INSTALL_DIR/toolchain/bin/libLLVM-22.so" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM-22.so"; do
+    if [ -f "$candidate" ]; then
+        BUNDLED_LLVM="$candidate"
+        break
+    fi
+done
+
+if [ -n "$BUNDLED_LLVM" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; then
     DEFAULT_OUTPUT_EXE="$SCRATCH_DIR/hello-default"
     DEFAULT_COMPILE_LOG="$SCRATCH_DIR/default.stderr.txt"
-    if ! env -u OSCAN_LLVM_CLANG -u OSCAN_LLVM_TOOLCHAIN_DIR -u OSCAN_TOOLCHAIN_DIR \
+    # Unset every override so the packaged bundle has to find its own LLVM
+    # code generator next to the installed executable.
+    if ! env -u OSCAN_LLVM_LIB -u OSCAN_LLVM_DIR -u OSCAN_TOOLCHAIN_DIR \
         OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
         "$OSCAN_COMMAND" --verbose "$SCRATCH_DIR/hello.osc" \
         -o "$DEFAULT_OUTPUT_EXE" 2>"$DEFAULT_COMPILE_LOG"; then
@@ -199,8 +215,9 @@ if [ -x "$INSTALL_DIR/toolchain/bin/clang" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; 
         cat "$DEFAULT_COMPILE_LOG" >&2
         exit 1
     }
-    grep -q '^\[verbose\] LLVM toolchain: .* (bundled,' "$DEFAULT_COMPILE_LOG" || {
-        echo "packaged LLVM smoke did not use the bundled Clang" >&2
+    grep -qE '^\[verbose\] LLVM code generator: .* \(LLVM [0-9]+\.[0-9]+\.[0-9]+, targets: ' \
+        "$DEFAULT_COMPILE_LOG" || {
+        echo "packaged LLVM smoke did not load the bundle's own LLVM code generator" >&2
         cat "$DEFAULT_COMPILE_LOG" >&2
         exit 1
     }

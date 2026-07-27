@@ -25,7 +25,7 @@ function Invoke-NativeValidation {
     & (Join-Path $ScriptDir "llvm_toolchain_isolation.tests.ps1") `
         -Oscan $compiler `
         -RuntimeArchiveDir $runtimeArchives `
-        -LlvmClang (Join-Path $toolchain "bin\clang.exe")
+        -LlvmLibrary (Join-Path $toolchain "bin\libLLVM-22.dll")
 
     & (Join-Path $RepoRoot "scripts\compare-backend-size.ps1") `
         -Oscan $compiler `
@@ -64,6 +64,27 @@ function Invoke-NativeValidation {
         -SkipWSL
     if ($LASTEXITCODE -ne 0) {
         throw "cross-backend panic-message suite failed with exit code $LASTEXITCODE"
+    }
+
+    $savedNoToolchain = $env:OSCAN_NO_TOOLCHAIN
+    try {
+        $env:OSCAN_NO_TOOLCHAIN = "1"
+        & (Join-Path $ScriptDir "backend_parity.ps1") `
+            -Oscan $compiler `
+            -Backend llvm `
+            -FreestandingOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "strict no-toolchain LLVM parity suite failed with exit code $LASTEXITCODE"
+        }
+        & (Join-Path $ScriptDir "backend_parity.ps1") `
+            -Oscan $compiler `
+            -Backend native `
+            -FreestandingOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "strict no-toolchain Cranelift parity suite failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        $env:OSCAN_NO_TOOLCHAIN = $savedNoToolchain
     }
 }
 

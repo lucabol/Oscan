@@ -263,7 +263,7 @@ def resolve_release_target(contract: dict, contract_path: Path, target: str) -> 
     invalid_modes = [
         mode
         for mode in native_runtime_modes
-        if mode not in ("hosted", "freestanding", "freestanding_core")
+        if mode not in ("hosted", "freestanding", "freestanding_gfx", "freestanding_core")
     ]
     if invalid_modes:
         fail(
@@ -603,9 +603,33 @@ def prune_toolchain(root: Path, prune_config: dict) -> None:
     print(f"Pruned toolchain: removed {removed_count} entries", file=sys.stderr)
 
 
-def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
-    manifest = load_manifest(manifest_path)
-    archive = manifest["toolchain"]["archive"]
+def llvm_code_generator_spec(manifest: dict) -> dict | None:
+    """The manifest's declared LLVM code generator, or None when the
+    manifest predates the declaration.
+
+    `--backend llvm` loads this shared library in-process to parse,
+    verify, optimize, and emit object code. It is a *release artifact*,
+    not a host dependency: nothing about the backend consults an
+    installed LLVM SDK, `clang`, `llvm-as`, `opt`, or `llc`.
+    """
+    spec = manifest.get("toolchain", {}).get("llvm_code_generator")
+    if spec is None:
+        return None
+    if not isinstance(spec, dict):
+        fail("toolchain.llvm_code_generator must be an object when present")
+    status = spec.get("status")
+    if status not in ("present", "absent"):
+        fail(
+            "toolchain.llvm_code_generator.status must be 'present' or 'absent', "
+            f"got {status!r}"
+        )
+    if status == "present" and not spec.get("path"):
+        fail("toolchain.llvm_code_generator.status is 'present' but no path is declared")
+    return spec
+
+
+def fetch_declared_archive(archive: dict, download_dir: Path) -> Path:
+    """Download and digest-check one manifest-declared archive."""
     digest = archive.get("digest")
     url = archive["url"]
     file_name = Path(urllib.parse.urlparse(url).path).name
@@ -622,13 +646,91 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
             download_file(url, download_path)
         actual = compute_digest(download_path, algorithm)
         if actual.lower() != expected:
-            fail(
-                f"digest mismatch for {download_path.name}: expected {expected}, got {actual}"
-            )
-    else:
-        # No digest validation — download if not cached
-        if not download_path.exists():
-            download_file(url, download_path)
+            fail(f"digest mismatch for {download_path.name}: expected {expected}, got {actual}")
+    elif not download_path.exists():
+        download_file(url, download_path)
+
+    return download_path
+
+
+def stage_llvm_code_generator(root: Path, manifest: dict, download_dir: Path) -> None:
+    """Overlay a separately pinned LLVM provider into a staged toolchain.
+
+    Windows' llvm-mingw archive already contains libLLVM, so its manifest
+    declares no overlay. Linux keeps the compact musl cross-toolchain archive
+    stable and layers a code-generator-only archive on top: no Clang, SDK,
+    headers, or command-line LLVM tools enter the release bundle.
+    """
+    spec = llvm_code_generator_spec(manifest)
+    if spec is None or spec.get("status") != "present":
+        return
+    archive = spec.get("archive")
+    if archive is None:
+        return
+    files = spec.get("files")
+    if not isinstance(files, list) or not files:
+        fail(
+            "a present LLVM code generator with a separate archive must declare a non-empty "
+            "toolchain.llvm_code_generator.files list"
+        )
+
+    archive_path = fetch_declared_archive(archive, download_dir)
+    staged_provider = download_dir / f".llvm-provider-{manifest.get('target', 'unknown')}"
+    try:
+        strip_components = int(spec.get("extract", {}).get("strip_components", 0))
+        extract_archive(archive_path, archive["type"], staged_provider, strip_components)
+        for file_spec in files:
+            if not isinstance(file_spec, dict) or "source" not in file_spec or "path" not in file_spec:
+                fail("each LLVM provider file must declare 'source' and 'path'")
+            source = staged_provider / safe_relative_path(file_spec["source"])
+            destination = root / safe_relative_path(file_spec["path"])
+            if not source.is_file():
+                fail(
+                    f"LLVM provider archive '{archive_path.name}' is missing declared file "
+                    f"'{file_spec['source']}'"
+                )
+            copy_path(source, destination)
+    finally:
+        remove_path(staged_provider)
+
+
+def verify_llvm_code_generator(root: Path, manifest: dict) -> Path | None:
+    """Fail if the manifest promises a packaged LLVM code generator that
+    the staged toolchain does not actually contain.
+
+    Pruning is glob-driven, so this is the mechanical guard against a
+    future prune rule silently deleting the one artifact that makes
+    `--backend llvm` work at all. Returns the verified path, or None when
+    the manifest declares no code generator (that target simply has no
+    LLVM backend, which is a supported configuration).
+    """
+    spec = llvm_code_generator_spec(manifest)
+    if spec is None or spec.get("status") != "present":
+        return None
+    relative = safe_relative_path(spec["path"])
+    candidate = root / relative
+    if not candidate.is_file():
+        fail(
+            f"toolchain manifest declares an LLVM code generator at '{spec['path']}', but "
+            f"'{candidate}' does not exist after staging/pruning. --backend llvm loads this "
+            "library in-process and cannot fall back to a compiler; add a keep_glob for it or "
+            "set toolchain.llvm_code_generator.status to 'absent'."
+        )
+    size = candidate.stat().st_size
+    if size == 0:
+        fail(f"staged LLVM code generator '{candidate}' is empty")
+    print(
+        f"Verified LLVM code generator: {relative.as_posix()} ({size} bytes, "
+        f"LLVM {spec.get('required_major', '?')} C API)",
+        file=sys.stderr,
+    )
+    return candidate
+
+
+def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
+    manifest = load_manifest(manifest_path)
+    archive = manifest["toolchain"]["archive"]
+    download_path = fetch_declared_archive(archive, download_dir)
 
     strip_components = int(manifest["toolchain"].get("extract", {}).get("strip_components", 0))
     extract_archive(download_path, archive["type"], destination, strip_components)
@@ -647,8 +749,15 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
     if prune_config:
         prune_toolchain(destination, prune_config)
 
+    stage_llvm_code_generator(destination, manifest, download_dir)
+
     for wrapper in manifest["stage"].get("wrappers", []):
         create_wrapper(destination, wrapper)
+
+    # Pruning happens above, so this is the last chance to notice that a
+    # glob removed the packaged LLVM code generator `--backend llvm`
+    # depends on.
+    verify_llvm_code_generator(destination, manifest)
 
     return manifest, destination
 
@@ -666,7 +775,23 @@ def write_install_readme(
         extra = "This bundle keeps oscan.exe next to toolchain/ so bundled compiler discovery works after installation."
     elif platform == "linux":
         install_hint = "Run install.sh from this directory, or keep this directory on PATH."
-        extra = "This full bundle keeps oscan next to toolchain/ so bundled compiler discovery works after installation."
+        manifest = load_manifest(
+            REPO_ROOT / "packaging" / "toolchains" / target_spec["toolchain_manifest"]
+        )
+        llvm_spec = llvm_code_generator_spec(manifest) or {}
+        packages = llvm_spec.get("debian_packages", [])
+        dependency_note = ""
+        if packages:
+            dependency_note = (
+                " The packaged LLVM provider uses standard host shared libraries. "
+                "On Debian/Ubuntu install them with: sudo apt-get install "
+                + " ".join(packages)
+                + "."
+            )
+        extra = (
+            "This full bundle keeps oscan next to toolchain/ so bundled compiler discovery "
+            f"works after installation.{dependency_note}"
+        )
     else:
         install_hint = "Run install.sh from this directory, or copy oscan somewhere on PATH."
         extra = (
@@ -923,7 +1048,8 @@ def validate_runtime_archive_release_toolchain(
 
     if (
         target in ("linux-x86_64", "linux-aarch64", "linux-riscv64")
-        and manifest.get("mode") in {"hosted", "freestanding", "freestanding_core"}
+        and manifest.get("mode")
+        in {"hosted", "freestanding", "freestanding_gfx", "freestanding_core"}
         and manifest.get("embedded_bearssl") is not True
     ):
         fail(
@@ -1120,6 +1246,20 @@ def fetch_toolchain_command(args: argparse.Namespace) -> int:
         Path(args.destination).resolve(),
     )
     print(str(destination))
+    return 0
+
+
+def verify_llvm_code_generator_command(args: argparse.Namespace) -> int:
+    manifest = load_manifest(Path(args.manifest).resolve())
+    verified = verify_llvm_code_generator(Path(args.toolchain_dir).resolve(), manifest)
+    if verified is None:
+        print(
+            "this target's toolchain manifest declares no packaged LLVM code generator "
+            "(--backend llvm is unavailable for it; --backend native/c are unaffected)",
+            file=sys.stderr,
+        )
+    else:
+        print(str(verified))
     return 0
 
 
@@ -2443,6 +2583,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     stage.set_defaults(func=stage_release)
 
+    verify_llvm = subparsers.add_parser(
+        "verify-llvm-code-generator",
+        help="assert a staged toolchain contains the LLVM code generator its manifest declares",
+    )
+    verify_llvm.add_argument("--manifest", required=True)
+    verify_llvm.add_argument("--toolchain-dir", required=True)
+    verify_llvm.set_defaults(func=verify_llvm_code_generator_command)
+
     checksums = subparsers.add_parser("write-checksums")
     checksums.add_argument("--output", required=True)
     checksums.add_argument("files", nargs="+")
@@ -2453,7 +2601,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     runtime_archive = subparsers.add_parser("build-runtime-archive")
     runtime_archive.add_argument("--target", default=None, help="e.g. linux-x86_64, windows-x86_64; defaults to the host platform")
-    runtime_archive.add_argument("--mode", choices=["hosted", "freestanding", "freestanding_core", "all"], default="all")
+    runtime_archive.add_argument(
+        "--mode",
+        choices=[
+            "hosted",
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core",
+            "all",
+        ],
+        default="all",
+    )
     runtime_archive.add_argument("--cc", default=None, help="C compiler to use (defaults to $OSCAN_ARCHIVE_CC, else an auto-detected host/cross compiler on PATH for --target)")
     runtime_archive.add_argument("--ar", default=None, help="archiver to use (defaults to $OSCAN_ARCHIVE_AR, else one auto-detected from --cc)")
     runtime_archive.add_argument(

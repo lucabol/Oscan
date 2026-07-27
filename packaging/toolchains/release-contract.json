@@ -16,6 +16,44 @@
       "osc_runtime.h"
     ]
   },
+  "llvm_code_generator": {
+    "role": "Oscan's own LLVM code generator for --backend llvm, loaded in-process. No clang/llvm-as/opt/llc subprocess and no installed LLVM SDK is ever used.",
+    "required_major": 22,
+    "declared_by": "the per-target toolchain manifest's toolchain.llvm_code_generator block",
+    "position": "archive-root/toolchain",
+    "search_roots": [
+      "$OSCAN_LLVM_LIB (full path to the library)",
+      "$OSCAN_LLVM_DIR",
+      "$OSCAN_TOOLCHAIN_DIR",
+      "<exe-dir>/toolchain",
+      "<exe-dir>"
+    ],
+    "search_subdirectories": [
+      "<root>/<platform>/bin",
+      "<root>/<platform>/lib",
+      "<root>/bin",
+      "<root>/lib",
+      "<root>"
+    ],
+    "search_names": {
+      "windows": [
+        "libLLVM-22.dll",
+        "LLVM-C.dll",
+        "libLLVM.dll"
+      ],
+      "linux": [
+        "libLLVM.so.22.1",
+        "libLLVM.so.22",
+        "libLLVM-22.so",
+        "libLLVM.so"
+      ]
+    },
+    "never_searched": [
+      "the current working directory",
+      "PATH"
+    ],
+    "target_support": "gated on the initializers the packaged library actually exports (X86/AArch64/RISCV); a target the library cannot emit for is refused by name, never silently mis-emitted"
+  },
   "lookup_contract": {
     "windows": {
       "search_roots": [
@@ -58,6 +96,7 @@
       "native_runtime_modes": [
         "hosted",
         "freestanding",
+        "freestanding_gfx",
         "freestanding_core"
       ],
       "native_smoke_mode": "freestanding"
@@ -72,6 +111,7 @@
       "native_runtime_modes": [
         "hosted",
         "freestanding",
+        "freestanding_gfx",
         "freestanding_core"
       ],
       "native_smoke_mode": "freestanding"

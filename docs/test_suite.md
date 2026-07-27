@@ -4,7 +4,7 @@
 - **Integration Tests**: 134
 - **Positive Tests**: 99 (compile and run successfully)
 - **Negative Tests**: 35 (correctly rejected by compiler)
-- **Backend Policy**: supported hosts prefer LLVM when Clang is available,
+- **Backend Policy**: supported hosts prefer LLVM when a compatible packaged provider is available,
   then Cranelift; C remains the portability/reference oracle and both object
   backends are differentially checked against it
 
@@ -127,12 +127,22 @@ cargo test
 .\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
 ```
 
+### Run the toolchain-light positive corpus:
+```powershell
+.\tests\backend_parity.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
+$env:OSCAN_NO_TOOLCHAIN = "1"
+.\tests\backend_parity.ps1 -Oscan .\target\release\oscan.exe -Backend llvm -FreestandingOnly
+```
+
+The second form skips hosted FFI cases and proves the complete freestanding
+positive corpus cannot escape to a C compiler.
+
 ### Run LLVM release invariants:
 ```powershell
 .\tests\llvm_toolchain_isolation.tests.ps1 `
   -Oscan .\target\release\oscan.exe `
   -RuntimeArchiveDir .\build\runtime-archives\windows-x86_64 `
-  -LlvmClang .\build\toolchain-windows-x86_64\bin\clang.exe
+  -LlvmLibrary .\build\toolchain-windows-x86_64\bin\libLLVM-22.dll
 .\scripts\compare-backend-size.ps1
 ```
 
@@ -153,7 +163,8 @@ as an absolute path and wipes before the run. Backends that cannot produce a
 host executable on this machine are probed once and skipped with a printed
 reason; the remaining ones must compile every sample into a non-empty host
 executable or the script fails. It ends with a deterministic size table (bytes
-per sample per available backend, sorted by sample path).
+per sample per available backend, sorted by sample path), aggregate backend
+totals, and the aggregate LLVM-versus-C byte and percentage difference.
 `tests\sample_backend_matrix.tests.ps1` exercises that behavior against a fake
 compiler.
 

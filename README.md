@@ -25,7 +25,7 @@
 
 ## Language Highlights
 
-- **Three deliberate backend roles.** LLVM is preferred for ordinary supported-host builds when Clang is available; Cranelift remains the direct object-code option, and C remains the portability/reference/source-emission path.
+- **Three deliberate backend roles.** LLVM is preferred when Oscan's packaged LLVM provider is available; Cranelift remains the direct object-code option, and C remains the portability/reference/source-emission path.
 - **Runs without a C library.** LLVM, Cranelift, and C support freestanding direct-syscall builds on their validated targets. (A `--libc` mode is available for hosted builds when you want it.)
 - **[Safe by design.](docs/safety.md)** No buffer overflows, no use-after-free, no null pointers, no integer overflow UB — [11 of 11 major bug categories](docs/safety.md) eliminated.
 - **Built-in graphics.** Canvas, drawing primitives, and input handling — write games and visualizations with zero external dependencies.
@@ -103,6 +103,7 @@ Both options include a bundled C toolchain, so you do **not** need Visual Studio
 
 ```bash
 set -eu
+sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g
 ASSET=$(curl -fsSL https://api.github.com/repos/lucabol/Oscan/releases/latest \
   | grep -o '"browser_download_url": *"[^"]*linux-x86_64-full.tar.xz"' \
   | head -1 | cut -d'"' -f4)
@@ -122,10 +123,14 @@ tar -xJf "$TMPDIR/oscan.tar.xz" -C "$TMPDIR"
 
 1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.xz`
 2. Extract: `tar xf oscan-*.tar.xz`
-3. Run `./install.sh` (or manually add the extracted directory to your PATH)
-4. Verify: `oscan --help`
+3. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+4. Run `./install.sh` (or manually add the extracted directory to your PATH)
+5. Verify: `oscan --help`
 
-The Linux release includes a bundled C toolchain for the tested distribution(s).
+The Linux release includes a bundled C toolchain and pinned `libLLVM`. The
+provider requires glibc 2.34 or newer plus the listed host runtime libraries,
+but no installed C/Clang/LLVM toolchain. The generated `README-install.txt`
+records the same prerequisite.
 
 **macOS (Intel x86_64 or Apple Silicon arm64):**
 
@@ -146,7 +151,8 @@ xcode-select --install
 
 **Requirements:**
 - Rust toolchain (for building the compiler)
-- Clang for the preferred LLVM backend (not a Cargo build dependency)
+- LLVM 22 shared library only when running the LLVM backend from a source build;
+  release bundles package it, and no Clang executable or LLVM SDK is used
 - C compiler (GCC, Clang, or MSVC) for the C backend, hosted object-backend
   builds, `--extra-c`, and local final links without packaged direct-link assets
 
@@ -159,13 +165,13 @@ cargo build --release
 ```
 
 The binary is `target/release/oscan` (or `oscan.exe` on Windows). Building
-Oscan itself does not require LLVM libraries: the LLVM backend discovers an
-external Clang only when it is selected. A plain local build also omits the
-packaged direct-link assets described below, so LLVM/Cranelift final linking
-uses an external C-toolchain driver when those assets are unavailable.
-With packaged direct-link assets, an ordinary freestanding LLVM build does not
-consult `OSCAN_CC` or discover a separate C compiler/linker: it uses the
-selected LLVM Clang for IR/object emission and Oscan's embedded direct linker.
+Oscan itself needs only Rust: there is no LLVM Cargo/build dependency. To run
+the LLVM backend from an ordinary source build, point `OSCAN_LLVM_LIB` at an
+absolute LLVM 22 shared library path (or use `OSCAN_LLVM_DIR`). A plain local
+build also omits packaged direct-link assets, so executable final linking may
+use an external C-toolchain driver. Release builds package both the LLVM
+provider and direct linker; their ordinary freestanding LLVM path generates no
+C and invokes no C/Clang/LLVM tool executable.
 
 <details>
 <summary><strong>Why bundles include <code>toolchain/</code> on Windows and Linux</strong></summary>
@@ -185,6 +191,7 @@ oscan-vX.Y.Z-windows-x86_64-full/
   oscan.exe
   toolchain/
     bin/
+      libLLVM-22.dll
       clang.exe
       ...
   install.ps1
@@ -247,11 +254,10 @@ oscan [OPTIONS] <file.osc>
 
 **Backend roles:**
 
-- **`llvm` (preferred default):** lowers Oscan's typed IR through the mature C
-  lowering, asks Clang for textual LLVM IR and an optimized relocatable object,
-  then reuses Oscan's existing runtime/archive/link pipeline. This provides
-  immediate full-language parity and inspectable `.ll`, but is deliberately
-  not an independent semantic lowering.
+- **`llvm` (preferred default):** lowers typed Oscan IR through the same
+  backend-neutral LIR used by Cranelift, emits LLVM IR directly, and asks the
+  packaged LLVM 22 library in-process to parse, verify, optimize, and emit a
+  relocatable object. No generated C or code-generation subprocess is involved.
 - **`native` / `cranelift`:** direct Cranelift object-code backend for Windows
   x86-64 and Linux x86-64/AArch64/RISC-V64. It remains available explicitly
   and is the capability fallback when LLVM is unavailable.
@@ -261,29 +267,26 @@ oscan [OPTIONS] <file.osc>
 
 An explicit `--backend llvm|native|c` always wins, and an explicit LLVM failure
 never falls back. Without a selector, supported Windows/Linux hosts choose LLVM
-when a compatible Clang is available, then Cranelift, then C. For compatibility,
+when a compatible packaged provider is available, then Cranelift, then C. For compatibility,
 an explicit `--native-target` without `--backend` selects Cranelift. C source
 and `--target riscv64|wasi` requests select C; LLVM IR requests select LLVM.
 `--libc`, `--extra-c`, and `--extra-cflags` do not force C.
 
 See [the LLVM backend design](docs/design/llvm-backend.md) for the architecture,
-tradeoffs, target triples, and future direct-emitter seam.
+no-toolchain boundary, targets, and tradeoffs.
 
-**Windows/Linux toolchain lookup:**
+**Windows/Linux provider and toolchain lookup:**
 
-LLVM Clang lookup order is:
+LLVM provider lookup order is:
 
-1. `OSCAN_LLVM_CLANG` — exact executable override
-2. `OSCAN_LLVM_TOOLCHAIN_DIR` — LLVM toolchain root override
-3. `OSCAN_TOOLCHAIN_DIR` or a discovered bundled `toolchain/`
-4. `clang-22`/`clang` on `PATH`
-5. Visual Studio Clang on Windows
+1. `OSCAN_LLVM_LIB` — absolute shared-library override
+2. `OSCAN_LLVM_DIR` — absolute provider-directory override
+3. `OSCAN_TOOLCHAIN_DIR` — absolute packaged-toolchain root
+4. executable-relative `toolchain/` and executable directory
 
-The Windows full release includes the pinned llvm-mingw Clang 22.1.2, so its
-effective default is LLVM.
-The Linux full release currently ships the pinned musl GCC/linker toolchain;
-it uses LLVM when a compatible host/override Clang is present and otherwise
-falls back to Cranelift. The macOS target remains on C.
+LLVM is never loaded from the current directory, `PATH`, or the bare platform
+loader search path. Windows and Linux full releases both package the required
+LLVM 22 provider and therefore default to LLVM. The macOS target remains on C.
 
 For builds that need a C compiler, Oscan resolves it in this order:
 
@@ -303,17 +306,19 @@ If your Windows/Linux Oscan distribution includes that bundled `toolchain/` dire
 ### Self-contained object-backend final links (Windows & Linux)
 
 **On Windows x86-64 and Linux x86-64, freestanding LLVM and Cranelift objects
-use the same self-contained final-link path.** `oscan` embeds a linker plus the
-minimal support files it needs — not a full C toolchain — and extracts them on
-first use to a local cache (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
+use the same self-contained final-link path.** LLVM IR and object generation
+also run in-process through packaged `libLLVM`. `oscan` embeds a linker plus the
+minimal support files it needs and extracts them on first use to a local cache
+(`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux). The LLVM stage still requires Clang; the final link does not.
+Linux). No installed C compiler, Clang executable, LLVM SDK, `llc`, `opt`, or
+`llvm-as` is involved.
 
-The pinned Windows release configuration also gates output size in CI: built
-with the pinned llvm-mingw toolchain, the LLVM `hello.osc` executable must be no
-larger than the equivalent C-backend executable.
-`scripts/compare-backend-size.ps1` fails when that invariant is
-violated.
+The pinned Windows release configuration gates `hello.osc` size in CI. The
+current recursive 37-example matrix totals 814,080 bytes for LLVM versus
+875,520 bytes for C, so LLVM is 61,440 bytes (7.02%) smaller in aggregate.
+`scripts/compare-backend-size.ps1` enforces the focused `hello.osc` invariant;
+`scripts/sample-backend-matrix.ps1` reports the complete matrix and totals.
 
 The embedded payload size differs by platform:
 - **Windows:** 13 files (~85.4 MB) — `ld.lld.exe` plus 5 required runtime DLLs (`libLLVM-22.dll`, `libc++.dll`, `libwinpthread-1.dll`, `libunwind.dll`, `libffi-8.dll`), 6 MinGW import libraries, and compiler-builtins.
@@ -323,13 +328,15 @@ This self-contained story is scoped narrowly — it does **not** extend to:
 
 - **Hosted `--libc` mode** on any platform (still uses the external/bundled C-toolchain driver path).
 - **Explicit `--extra-c <file>` sources** (compiling user-supplied C always goes through the external/bundled C-toolchain driver, even on Windows and Linux).
+- **User `extern` signatures containing `str`**, when a generated C ABI shim is
+  required. `OSCAN_NO_TOOLCHAIN=1` rejects that path rather than silently
+  invoking a compiler.
 
 **Linux AArch64/RISC-V64 object-backend support:** Cranelift can cross-link
-both targets through target-matched linker/runtime sidecars. LLVM can emit
-AArch64 objects when the selected Clang registers that target; RISC-V LLVM
-emission is likewise toolchain-dependent (the pinned Windows llvm-mingw Clang
-does not register RISC-V). The C backend's existing ARM64/RISC-V paths remain
-separate.
+both targets through target-matched linker/runtime sidecars. LLVM uses the same
+link path when its packaged provider exposes the target: the Linux provider
+includes AArch64 and RISC-V, while the Windows provider includes AArch64 but
+not RISC-V. The C backend's existing ARM64/RISC-V paths remain separate.
 
 Advanced overrides (rarely needed): `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` select a different linker or force the legacy compiler-driver path (`OSCAN_NATIVE_LINKER_FLAVOR=mingw` for Windows, `=elf` for Linux); `OSCAN_NATIVE_ASSET_CACHE_DIR` relocates the extraction cache. See `oscan --help` and `docs/design/native-link-embedding.md` for details.
 
@@ -343,10 +350,10 @@ verification, canonicalization, or native-link sandboxing.
 
 | Target | Backends | Tooling | Notes |
 |--------|----------|---------|-------|
-| x86_64 Linux | LLVM, Cranelift, C | Clang for LLVM; embedded final linker for object backends | LLVM preferred when available; Cranelift fallback |
-| x86_64 Windows | LLVM, Cranelift, C | bundled Clang in full release; embedded final linker | LLVM is the full-bundle default |
-| ARM64 Linux | LLVM (Clang-dependent), Cranelift, C | target-capable Clang, C cross-compiler, or sidecar linker | Cranelift AArch64 object link/execution gated under QEMU in CI; LLVM AArch64 emission depends on the selected Clang |
-| RISC-V 64 Linux | Cranelift, C; LLVM if Clang supports it | C cross-compiler or sidecar linker | Pinned Windows Clang lacks the RISC-V target |
+| x86_64 Linux | LLVM, Cranelift, C | packaged LLVM provider and embedded final linker | LLVM is the full-bundle default |
+| x86_64 Windows | LLVM, Cranelift, C | packaged LLVM provider and embedded final linker | LLVM is the full-bundle default |
+| ARM64 Linux | LLVM, Cranelift, C | target-capable provider, C cross-compiler, or sidecar linker | Object link/execution is QEMU-gated in CI |
+| RISC-V 64 Linux | LLVM, Cranelift, C | Linux LLVM provider, C cross-compiler, or sidecar linker | Windows LLVM provider lacks RISC-V |
 | WebAssembly | C backend (WASI) | `--target wasi` | Runs in wasmtime/wasmer |
 | macOS | C backend (libc) | Apple Clang | LLVM/Cranelift object targets not yet available |
 
@@ -449,8 +456,8 @@ The repository currently includes:
 
 Windows, Linux, macOS, ARM64 and RISC-V64 (QEMU), and WASI are tested in CI.
 Windows and Linux x86-64 run the full C-vs-LLVM and C-vs-Cranelift differential
-validation; the ARM64/RISC-V64 QEMU gates currently cover Cranelift objects and
-the C backend's cross-compiled output.
+validation; ARM64/RISC-V64 gates link and QEMU-run both object backends,
+including arithmetic/float ABI coverage for LLVM.
 
 ## Contributing
 

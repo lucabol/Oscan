@@ -1,10 +1,19 @@
-//! Translates one `ir::FnDef` body into a Cranelift `Function`.
+//! Translates one `ir::FnDef` body into `super::lir` instructions.
+//!
+//! This is *the* shared semantic lowering: every object backend
+//! (`--backend native`'s Cranelift and `--backend llvm`'s direct LLVM
+//! emitter) runs this exact code against its own [`LirBuilder`], so the
+//! implicit arena ABI, aggregate representation, copy-on-bind value
+//! semantics, checked arithmetic, `defer`/`try`/`match`/loop lowering,
+//! and runtime-builtin call sequences physically cannot diverge between
+//! backends. A backend can only differ in how it encodes primitives like
+//! "load 4 bytes at `ptr + 12`".
 //!
 //! # Value representation (see `layout.rs` for the full rationale)
 //!
-//! Every Oscan value flowing through this translator is `Option<Value>`:
-//! `None` means `Unit` (no value at all — Cranelift calls/blocks with zero
-//! results); `Some(v)` is the type's single Cranelift SSA value, per
+//! Every Oscan value flowing through this translator is `Option<LValue>`:
+//! `None` means `Unit` (no value at all — calls/blocks with zero
+//! results); `Some(v)` is the type's single SSA value, per
 //! [`Repr::of`]: a direct scalar for `i32`/`i64`/`f64`/`bool`/payload-less
 //! enums, or a pointer for everything else. Pointers come in two flavours
 //! that matter when reading/writing through them:
@@ -18,7 +27,7 @@
 //!   the pointer *is* the value (an `osc_array*` etc.); accessing a field
 //!   of this type is a real load/store of the 8-byte pointer.
 //!
-//! Inline-aggregate pointers always address arena memory (a Cranelift
+//! Inline-aggregate pointers always address arena memory (a function-local
 //! stack slot would dangle the moment the owning function returns), so
 //! every aggregate-producing expression (`StructLit`, `EnumConstructor`,
 //! `Result::Ok`/`Err`, string/array-of-aggregate reads that must copy out,
@@ -47,14 +56,6 @@
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
-use cranelift_codegen::ir::{
-    AbiParam, Function, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind,
-    UserFuncName, Value,
-};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::{FuncId, Linkage, Module};
-
 use crate::ast::{BinOp, UnaryOp};
 use crate::error::CompileError;
 use crate::ir as oir;
@@ -63,12 +64,14 @@ use crate::types::BcType;
 
 use super::ctx::{BackendContext, ExternDeclKind};
 use super::extern_shim::{self, NativeExternAbi};
-use super::layout::{
-    self, cl_pointer_type, enum_layout, layout_of, result_layout, struct_field_offset, Repr,
+use super::layout::{self, enum_layout, layout_of, result_layout, struct_field_offset, Repr};
+use super::lir::{
+    FloatCmp, IntCmp, LBlock, LFunc, LLinkage, LSig, LType, LValue, LVar, LirBuilder, LirError,
+    LirModule,
 };
 
 type CResult<T> = Result<T, CompileError>;
-type CBlock = cranelift_codegen::ir::Block;
+type CBlock = LBlock;
 
 fn unsupported(span: Span, what: impl std::fmt::Display) -> CompileError {
     CompileError::new(
@@ -79,25 +82,10 @@ fn unsupported(span: Span, what: impl std::fmt::Display) -> CompileError {
     )
 }
 
-/// Build the `&[BlockArg]` a `jump`/`brif` call needs from our
-/// `Option<Value>` convention (`None`/`Unit` contributes no block args).
-fn block_args(value: Option<Value>) -> Vec<cranelift_codegen::ir::BlockArg> {
-    value
-        .into_iter()
-        .map(cranelift_codegen::ir::BlockArg::Value)
-        .collect()
-}
-
-/// The flags used for every plain scalar/pointer load and store this
-/// backend emits. Not `trusted()`: Oscan values can indeed be read at
-/// attacker/user-influenced offsets (e.g. array/string indexing), which
-/// osc_array/osc_str bounds-check at the *runtime call* level (see
-/// `osc_array_get`/`osc_str_check_index`) before a raw pointer ever
-/// reaches one of these loads/stores, but a plain `MemFlagsData::new()`
-/// (no `notrap`/`aligned` assumptions) is the conservative, always-correct
-/// choice for a first implementation.
-pub(super) fn mem_flags() -> MemFlagsData {
-    MemFlagsData::new()
+/// Build the `&[LValue]` a `jump`/`brif` call needs from our
+/// `Option<LValue>` convention (`None`/`Unit` contributes no block args).
+fn block_args(value: Option<LValue>) -> Vec<LValue> {
+    value.into_iter().collect()
 }
 
 /// Whether `ty` is an inline aggregate (embedded-by-value pointee) as
@@ -110,10 +98,10 @@ fn is_inline_aggregate(ty: &BcType, program: &oir::Program) -> bool {
     }
 }
 
-/// A single Oscan-level binding: its Cranelift `Variable` and static type.
+/// A single Oscan-level binding: its LIR variable and static type.
 #[derive(Clone)]
 struct Binding {
-    var: Variable,
+    var: LVar,
     ty: BcType,
 }
 
@@ -124,7 +112,7 @@ struct LoopTargets {
 
 pub struct FuncTranslator<'a, 'b> {
     ctx: &'a mut BackendContext<'b>,
-    builder: FunctionBuilder<'a>,
+    b: &'a mut dyn LirBuilder,
     scopes: Vec<HashMap<String, Binding>>,
     loops: Vec<LoopTargets>,
     /// Deferred expressions for the *current* function, innermost-last;
@@ -133,10 +121,10 @@ pub struct FuncTranslator<'a, 'b> {
     /// `deferred_exprs` handling exactly.
     defers: Vec<&'a oir::Expr>,
     fn_return_ty: BcType,
-    arena_value: Value,
-    /// Whether the current Cranelift block already ends in a terminator
+    arena_value: LValue,
+    /// Whether the current block already ends in a terminator
     /// (`jump`/`brif`/`return`). Tracked ourselves rather than via
-    /// `FunctionBuilder::is_unreachable` — that method answers a
+    /// [`LirBuilder::is_unreachable`] — that method answers a
     /// different question ("does this block have zero predecessors and
     /// is it sealed", i.e. genuinely dead code), not "did I already emit
     /// a terminator into the block I'm currently appending to" (which is
@@ -148,41 +136,37 @@ pub struct FuncTranslator<'a, 'b> {
     terminated: bool,
 }
 
-/// Build the Cranelift `Signature` for a user-defined (non-extern) Oscan
+/// Build the LIR signature for a user-defined (non-extern) Oscan
 /// function: an implicit leading `osc_arena*` parameter, then each
 /// declared parameter, then zero or one return value per [`Repr::of`].
 fn oscan_fn_signature(
-    module: &impl Module,
     program: &oir::Program,
     params: &[(String, BcType)],
     return_type: &BcType,
-) -> Signature {
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(cl_pointer_type()));
+) -> LSig {
+    let mut sig = LSig::default();
+    sig.push_param(LType::Ptr);
     for (_, ty) in params {
-        if let Some(t) = Repr::of(ty, program).cl_type() {
-            sig.params.push(AbiParam::new(t));
+        if let Some(t) = Repr::of(ty, program).lir_type() {
+            sig.push_param(t);
         }
     }
-    if let Some(t) = Repr::of(return_type, program).cl_type() {
-        sig.returns.push(AbiParam::new(t));
-    }
+    sig.ret = Repr::of(return_type, program).lir_type();
     sig
 }
 
-/// Build the Cranelift `Signature` for a real C-ABI extern function with no
+/// Build the LIR signature for a real C-ABI extern function with no
 /// implicit arena and no generated shim. Signatures containing `str` use
-/// `extern_shim_signature` instead so the C compiler, not Cranelift, lowers
-/// the by-value `osc_str` ABI.
+/// `extern_shim_signature` instead so the C compiler, not this backend,
+/// lowers the by-value `osc_str` ABI.
 fn direct_extern_fn_signature(
-    module: &impl Module,
     program: &oir::Program,
     name: &str,
     params: &[(String, BcType)],
     return_type: &BcType,
     span: Span,
-) -> CResult<Signature> {
-    let mut sig = module.make_signature();
+) -> CResult<LSig> {
+    let mut sig = LSig::default();
     for (_, ty) in params {
         if is_inline_aggregate(ty, program) {
             return Err(unsupported(
@@ -190,8 +174,8 @@ fn direct_extern_fn_signature(
                 format!("extern function '{name}' parameter of type '{ty}'"),
             ));
         }
-        if let Some(t) = Repr::of(ty, program).cl_type() {
-            sig.params.push(AbiParam::new(t));
+        if let Some(t) = Repr::of(ty, program).lir_type() {
+            sig.push_param(t);
         }
     }
     if is_inline_aggregate(return_type, program) {
@@ -200,33 +184,28 @@ fn direct_extern_fn_signature(
             format!("extern function '{name}' return type '{return_type}'"),
         ));
     }
-    if let Some(t) = Repr::of(return_type, program).cl_type() {
-        sig.returns.push(AbiParam::new(t));
-    }
+    sig.ret = Repr::of(return_type, program).lir_type();
     Ok(sig)
 }
 
 fn extern_shim_signature(
-    module: &impl Module,
     program: &oir::Program,
     params: &[(String, BcType)],
     return_type: &BcType,
-) -> Signature {
-    let mut sig = module.make_signature();
+) -> LSig {
+    let mut sig = LSig::default();
     if *return_type == BcType::Str {
-        sig.params.push(AbiParam::new(cl_pointer_type()));
+        sig.push_param(LType::Ptr);
     }
     for (_, ty) in params {
         if *ty == BcType::Str {
-            sig.params.push(AbiParam::new(cl_pointer_type()));
-        } else if let Some(t) = Repr::of(ty, program).cl_type() {
-            sig.params.push(AbiParam::new(t));
+            sig.push_param(LType::Ptr);
+        } else if let Some(t) = Repr::of(ty, program).lir_type() {
+            sig.push_param(t);
         }
     }
     if *return_type != BcType::Str {
-        if let Some(t) = Repr::of(return_type, program).cl_type() {
-            sig.returns.push(AbiParam::new(t));
-        }
+        sig.ret = Repr::of(return_type, program).lir_type();
     }
     sig
 }
@@ -240,13 +219,12 @@ fn extern_shim_signature(
 /// `extern` block functions are deliberately *not* declared here — see
 /// `FuncTranslator::resolve_extern`'s docs for why they're resolved
 /// lazily, on first actual call, instead.
-pub fn declare_and_translate_all(ctx: &mut BackendContext) -> CResult<()> {
+pub fn declare_and_translate_all(ctx: &mut BackendContext, lir: &mut dyn LirModule) -> CResult<()> {
     for f in &ctx.program.fn_defs {
-        let sig = oscan_fn_signature(&ctx.module, ctx.program, &f.params, &f.return_type);
+        let sig = oscan_fn_signature(ctx.program, &f.params, &f.return_type);
         let symbol = BackendContext::user_fn_symbol(&f.name);
-        let id = ctx
-            .module
-            .declare_function(&symbol, Linkage::Export, &sig)
+        let id = lir
+            .declare_function(&symbol, &sig, LLinkage::Export)
             .map_err(|e| {
                 CompileError::new(
                     f.span,
@@ -256,31 +234,29 @@ pub fn declare_and_translate_all(ctx: &mut BackendContext) -> CResult<()> {
         ctx.functions.insert(f.name.clone(), id);
     }
 
-    for f in &ctx.program.fn_defs {
+    let program = ctx.program;
+    for f in &program.fn_defs {
         let func_id = ctx.functions[&f.name];
-        translate_function(ctx, f, func_id)?;
+        translate_function(ctx, lir, f, func_id)?;
     }
     Ok(())
 }
 
-fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId) -> CResult<()> {
-    let sig = oscan_fn_signature(&ctx.module, ctx.program, &f.params, &f.return_type);
+fn translate_function(
+    ctx: &mut BackendContext,
+    lir: &mut dyn LirModule,
+    f: &oir::FnDef,
+    func_id: LFunc,
+) -> CResult<()> {
+    let sig = oscan_fn_signature(ctx.program, &f.params, &f.return_type);
     let symbol = BackendContext::user_fn_symbol(&f.name);
-    let mut func = Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), sig);
-    let mut fb_ctx = FunctionBuilderContext::new();
 
-    {
-        let mut builder = FunctionBuilder::new(&mut func, &mut fb_ctx);
-        let entry = builder.create_block();
-        builder.append_block_params_for_function_params(entry);
-        builder.switch_to_block(entry);
-        builder.seal_block(entry);
-
-        let arena_value = builder.block_params(entry)[0];
+    lir.define_function(func_id, &sig, &mut |b, params| {
+        let arena_value = params[0];
 
         let mut translator = FuncTranslator {
             ctx,
-            builder,
+            b,
             scopes: vec![HashMap::new()],
             loops: Vec::new(),
             defers: Vec::new(),
@@ -289,14 +265,14 @@ fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId)
             terminated: false,
         };
 
-        // Bind parameters: block param index 0 is `_arena`, then one
-        // Cranelift block param per declared parameter that isn't Unit.
-        let mut next_block_param = 1;
+        // Bind parameters: entry parameter index 0 is `_arena`, then one
+        // entry parameter per declared parameter that isn't Unit.
+        let mut next_param = 1;
         for (name, ty) in &f.params {
             let repr = Repr::of(ty, translator.ctx.program);
-            let var = translator.fresh_var(repr.cl_type());
-            if let Some(_t) = repr.cl_type() {
-                let bp = translator.builder.block_params(entry)[next_block_param];
+            let var = translator.fresh_var(repr.lir_type());
+            if repr.lir_type().is_some() {
+                let bp = params[next_param];
                 // A by-value inline-aggregate parameter is, at the ABI
                 // level, just the caller's own pointer (see module docs):
                 // materialize an owned copy here, exactly like a real C
@@ -311,8 +287,8 @@ fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId)
                 } else {
                     bp
                 };
-                translator.builder.def_var(var, value);
-                next_block_param += 1;
+                translator.b.def_var(var, value);
+                next_param += 1;
             }
             translator.scopes.last_mut().unwrap().insert(
                 name.clone(),
@@ -324,7 +300,7 @@ fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId)
         }
 
         let body_val = translator.lower_function_body(&f.body)?;
-        if !translator.builder.is_unreachable() {
+        if !translator.b.is_unreachable() {
             // An implicit (bare tail-expression) `return` must copy an
             // inline-aggregate result exactly like the explicit
             // `return expr;` case does (see `Stmt::Return` below) —
@@ -339,39 +315,32 @@ fn translate_function(ctx: &mut BackendContext, f: &oir::FnDef, func_id: FuncId)
             };
             translator.emit_return(body_val)?;
         }
-
-        translator.builder.finalize();
-    }
-
-    let mut ctx_obj = ctx.module.make_context();
-    ctx_obj.func = func;
-    ctx.module
-        .define_function(func_id, &mut ctx_obj)
-        .map_err(|e| {
-            CompileError::new(
-                f.span,
-                format!("internal error compiling function '{symbol}': {e}"),
-            )
-        })?;
-    Ok(())
+        Ok(())
+    })
+    .map_err(|e| match e {
+        LirError::Body(err) => err,
+        LirError::Backend(message) => CompileError::new(
+            f.span,
+            format!("internal error compiling function '{symbol}': {message}"),
+        ),
+    })
 }
 
 impl<'a, 'b> FuncTranslator<'a, 'b> {
-    fn fresh_var(&mut self, ty: Option<cranelift_codegen::ir::Type>) -> Variable {
-        // Every Variable needs *some* declared type even when it will
+    fn fresh_var(&mut self, ty: Option<LType>) -> LVar {
+        // Every variable needs *some* declared type even when it will
         // never be def_var'd/use_var'd (Unit bindings): use I8 as an
-        // unobserved placeholder (see module docs on `Option<Value>`).
-        self.builder
-            .declare_var(ty.unwrap_or(cranelift_codegen::ir::types::I8))
+        // unobserved placeholder (see module docs on `Option<LValue>`).
+        self.b.declare_var(ty.unwrap_or(LType::I8))
     }
 
     /// `switch_to_block` wrapper that also resets `self.terminated` — see
     /// that field's doc comment for why this (not
-    /// `FunctionBuilder::is_unreachable`) is what tracks whether a
+    /// [`LirBuilder::is_unreachable`]) is what tracks whether a
     /// fallthrough jump is still needed after lowering a nested
     /// block/expression.
     fn goto(&mut self, block: CBlock) {
-        self.builder.switch_to_block(block);
+        self.b.switch_to_block(block);
         self.terminated = false;
     }
 
@@ -399,7 +368,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     // Blocks / statements
     // -----------------------------------------------------------------
 
-    fn lower_block(&mut self, block: &'a oir::Block) -> CResult<Option<Value>> {
+    fn lower_block(&mut self, block: &'a oir::Block) -> CResult<Option<LValue>> {
         self.push_scope();
         for stmt in &block.stmts {
             self.lower_stmt(stmt)?;
@@ -419,7 +388,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         Ok(result)
     }
 
-    fn lower_function_body(&mut self, block: &'a oir::Block) -> CResult<Option<Value>> {
+    fn lower_function_body(&mut self, block: &'a oir::Block) -> CResult<Option<LValue>> {
         for stmt in &block.stmts {
             self.lower_stmt(stmt)?;
             if self.terminated {
@@ -442,9 +411,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 let raw = self.lower_expr(&ls.value)?;
                 let value = self.bind_value(&ls.ty, raw, &ls.value)?;
                 let repr = Repr::of(&ls.ty, self.program());
-                let var = self.fresh_var(repr.cl_type());
+                let var = self.fresh_var(repr.lir_type());
                 if let Some(v) = value {
-                    self.builder.def_var(var, v);
+                    self.b.def_var(var, v);
                 }
                 self.scopes.last_mut().unwrap().insert(
                     ls.name.clone(),
@@ -463,7 +432,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     });
                     let value = self.bind_value(&binding.ty, raw, &a.value)?;
                     if let Some(v) = value {
-                        self.builder.def_var(binding.var, v);
+                        self.b.def_var(binding.var, v);
                     }
                 } else {
                     self.store_place(&a.target, raw, &a.value)?;
@@ -479,7 +448,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 if ca.target.accessors.is_empty() {
                     let binding = self.lookup(&ca.target.name).unwrap();
                     if let Some(v) = combined {
-                        self.builder.def_var(binding.var, v);
+                        self.b.def_var(binding.var, v);
                     }
                 } else {
                     self.store_place_value(&ca.target, combined)?;
@@ -513,7 +482,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     .last()
                     .map(|l| l.break_block)
                     .ok_or_else(|| unsupported(*span, "'break' outside of a loop"))?;
-                self.builder.ins().jump(target, &[]);
+                self.b.jump(target, &[]);
                 self.terminated = true;
                 Ok(())
             }
@@ -523,7 +492,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     .last()
                     .map(|l| l.continue_block)
                     .ok_or_else(|| unsupported(*span, "'continue' outside of a loop"))?;
-                self.builder.ins().jump(target, &[]);
+                self.b.jump(target, &[]);
                 self.terminated = true;
                 Ok(())
             }
@@ -532,16 +501,16 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 
     /// Emit every deferred expression (LIFO) and a `return`, exactly like
     /// `src/codegen.rs`'s `emit_deferred_before_return`.
-    fn emit_return(&mut self, value: Option<Value>) -> CResult<()> {
+    fn emit_return(&mut self, value: Option<LValue>) -> CResult<()> {
         for expr in self.defers.clone().into_iter().rev() {
             self.lower_expr(expr)?;
         }
         match value {
             Some(v) => {
-                self.builder.ins().return_(&[v]);
+                self.b.ret(Some(v));
             }
             None => {
-                self.builder.ins().return_(&[]);
+                self.b.ret(None);
             }
         }
         self.terminated = true;
@@ -560,9 +529,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     fn bind_value(
         &mut self,
         ty: &BcType,
-        value: Option<Value>,
+        value: Option<LValue>,
         source: &oir::Expr,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let Some(v) = value else { return Ok(None) };
         if !is_inline_aggregate(ty, self.program()) {
             return Ok(Some(v));
@@ -576,7 +545,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         Ok(Some(self.materialize_owned(ty, v)))
     }
 
-    fn materialize_owned(&mut self, ty: &BcType, src_ptr: Value) -> Value {
+    fn materialize_owned(&mut self, ty: &BcType, src_ptr: LValue) -> LValue {
         let layout = layout_of(ty, self.program());
         let dest_ptr = self.arena_alloc(layout.size);
         self.copy_bytes(dest_ptr, 0, src_ptr, 0, layout.size, layout.align);
@@ -588,14 +557,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     // -----------------------------------------------------------------
 
     fn lower_while(&mut self, w: &'a oir::WhileStmt) -> CResult<()> {
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let exit = self.builder.create_block();
+        let header = self.b.create_block();
+        let body = self.b.create_block();
+        let exit = self.b.create_block();
 
-        self.builder.ins().jump(header, &[]);
+        self.b.jump(header, &[]);
         self.goto(header);
         let cond = self.lower_expr(&w.condition)?.expect("bool condition");
-        self.builder.ins().brif(cond, body, &[], exit, &[]);
+        self.b.brif(cond, body, &[], exit, &[]);
 
         self.goto(body);
         self.loops.push(LoopTargets {
@@ -605,13 +574,13 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         self.lower_block(&w.body)?;
         self.loops.pop();
         if !self.terminated {
-            self.builder.ins().jump(header, &[]);
+            self.b.jump(header, &[]);
         }
-        self.builder.seal_block(header);
-        self.builder.seal_block(body);
+        self.b.seal_block(header);
+        self.b.seal_block(body);
 
         self.goto(exit);
-        self.builder.seal_block(exit);
+        self.b.seal_block(exit);
         Ok(())
     }
 
@@ -619,19 +588,19 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         let start = self.lower_expr(&f.start)?.expect("i32 start");
         let end = self.lower_expr(&f.end)?.expect("i32 end");
 
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let incr = self.builder.create_block();
-        let exit = self.builder.create_block();
+        let header = self.b.create_block();
+        let body = self.b.create_block();
+        let incr = self.b.create_block();
+        let exit = self.b.create_block();
 
-        let ivar = self.fresh_var(Some(cranelift_codegen::ir::types::I32));
-        self.builder.def_var(ivar, start);
-        self.builder.ins().jump(header, &[]);
+        let ivar = self.fresh_var(Some(LType::I32));
+        self.b.def_var(ivar, start);
+        self.b.jump(header, &[]);
 
         self.goto(header);
-        let i = self.builder.use_var(ivar);
-        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, i, end);
-        self.builder.ins().brif(cond, body, &[], exit, &[]);
+        let i = self.b.use_var(ivar);
+        let cond = self.b.icmp(IntCmp::Slt, i, end);
+        self.b.brif(cond, body, &[], exit, &[]);
 
         self.goto(body);
         self.push_scope();
@@ -650,24 +619,21 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         self.loops.pop();
         self.pop_scope();
         if !self.terminated {
-            self.builder.ins().jump(incr, &[]);
+            self.b.jump(incr, &[]);
         }
 
         self.goto(incr);
-        let i2 = self.builder.use_var(ivar);
-        let one = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, 1);
-        let next = self.builder.ins().iadd(i2, one);
-        self.builder.def_var(ivar, next);
-        self.builder.ins().jump(header, &[]);
-        self.builder.seal_block(header);
-        self.builder.seal_block(body);
-        self.builder.seal_block(incr);
+        let i2 = self.b.use_var(ivar);
+        let one = self.b.iconst(LType::I32, 1);
+        let next = self.b.iadd(i2, one);
+        self.b.def_var(ivar, next);
+        self.b.jump(header, &[]);
+        self.b.seal_block(header);
+        self.b.seal_block(body);
+        self.b.seal_block(incr);
 
         self.goto(exit);
-        self.builder.seal_block(exit);
+        self.b.seal_block(exit);
         Ok(())
     }
 
@@ -685,23 +651,20 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         let arr_ptr = self.lower_expr(&fi.iterable)?.expect("array pointer");
         let len = self.array_len(arr_ptr);
 
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let incr = self.builder.create_block();
-        let exit = self.builder.create_block();
+        let header = self.b.create_block();
+        let body = self.b.create_block();
+        let incr = self.b.create_block();
+        let exit = self.b.create_block();
 
-        let ivar = self.fresh_var(Some(cranelift_codegen::ir::types::I32));
-        let zero = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, 0);
-        self.builder.def_var(ivar, zero);
-        self.builder.ins().jump(header, &[]);
+        let ivar = self.fresh_var(Some(LType::I32));
+        let zero = self.b.iconst(LType::I32, 0);
+        self.b.def_var(ivar, zero);
+        self.b.jump(header, &[]);
 
         self.goto(header);
-        let i = self.builder.use_var(ivar);
-        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
-        self.builder.ins().brif(cond, body, &[], exit, &[]);
+        let i = self.b.use_var(ivar);
+        let cond = self.b.icmp(IntCmp::Slt, i, len);
+        self.b.brif(cond, body, &[], exit, &[]);
 
         self.goto(body);
         let elem_val = self.array_read(arr_ptr, i, &elem_ty);
@@ -728,9 +691,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             other => other,
         };
         self.push_scope();
-        let evar = self.fresh_var(Repr::of(&elem_ty, self.program()).cl_type());
+        let evar = self.fresh_var(Repr::of(&elem_ty, self.program()).lir_type());
         if let Some(v) = elem_val {
-            self.builder.def_var(evar, v);
+            self.b.def_var(evar, v);
         }
         self.scopes.last_mut().unwrap().insert(
             fi.var.clone(),
@@ -747,24 +710,21 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         self.loops.pop();
         self.pop_scope();
         if !self.terminated {
-            self.builder.ins().jump(incr, &[]);
+            self.b.jump(incr, &[]);
         }
 
         self.goto(incr);
-        let i2 = self.builder.use_var(ivar);
-        let one = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, 1);
-        let next = self.builder.ins().iadd(i2, one);
-        self.builder.def_var(ivar, next);
-        self.builder.ins().jump(header, &[]);
-        self.builder.seal_block(header);
-        self.builder.seal_block(body);
-        self.builder.seal_block(incr);
+        let i2 = self.b.use_var(ivar);
+        let one = self.b.iconst(LType::I32, 1);
+        let next = self.b.iadd(i2, one);
+        self.b.def_var(ivar, next);
+        self.b.jump(header, &[]);
+        self.b.seal_block(header);
+        self.b.seal_block(body);
+        self.b.seal_block(incr);
 
         self.goto(exit);
-        self.builder.seal_block(exit);
+        self.b.seal_block(exit);
         Ok(())
     }
 
@@ -772,7 +732,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// loop bodies, whose loop-variable binding must stay in scope
     /// alongside the block's own locals in one frame that the loop
     /// construct itself pushes/pops).
-    fn lower_block_no_scope(&mut self, block: &'a oir::Block) -> CResult<Option<Value>> {
+    fn lower_block_no_scope(&mut self, block: &'a oir::Block) -> CResult<Option<LValue>> {
         for stmt in &block.stmts {
             self.lower_stmt(stmt)?;
             if self.terminated {
@@ -788,18 +748,11 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 
 /// Core scalar/control-flow/call expression lowering.
 impl<'a, 'b> FuncTranslator<'a, 'b> {
-    fn lower_expr(&mut self, expr: &'a oir::Expr) -> CResult<Option<Value>> {
-        use cranelift_codegen::ir::types;
+    fn lower_expr(&mut self, expr: &'a oir::Expr) -> CResult<Option<LValue>> {
         match expr {
-            oir::Expr::IntLit(v, _) => Ok(Some(self.builder.ins().iconst(types::I32, *v))),
-            oir::Expr::FloatLit(v, _) => {
-                Ok(Some(self.builder.ins().f64const(
-                    cranelift_codegen::ir::immediates::Ieee64::with_float(*v),
-                )))
-            }
-            oir::Expr::BoolLit(b, _) => Ok(Some(
-                self.builder.ins().iconst(types::I8, if *b { 1 } else { 0 }),
-            )),
+            oir::Expr::IntLit(v, _) => Ok(Some(self.b.iconst(LType::I32, *v))),
+            oir::Expr::FloatLit(v, _) => Ok(Some(self.b.f64const(*v))),
+            oir::Expr::BoolLit(b, _) => Ok(Some(self.b.iconst(LType::I8, if *b { 1 } else { 0 }))),
             oir::Expr::StringLit(s, _) => Ok(Some(self.string_literal_ptr(s))),
             oir::Expr::InterpolatedString { parts, span } => {
                 self.lower_interpolated_string(parts, *span)
@@ -833,19 +786,19 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     .lower_expr(operand)?
                     .expect("unary operand has a value");
                 match op {
-                    UnaryOp::Not => Ok(Some(self.builder.ins().bxor_imm(v, 1))),
+                    UnaryOp::Not => Ok(Some(self.b.bxor_imm(v, 1))),
                     UnaryOp::Neg => match ty {
                         BcType::I32 => Ok(Some(self.call_runtime_scalar(
                             "osc_neg_i32",
                             &[v],
-                            types::I32,
+                            LType::I32,
                         ))),
                         BcType::I64 => Ok(Some(self.call_runtime_scalar(
                             "osc_neg_i64",
                             &[v],
-                            types::I64,
+                            LType::I64,
                         ))),
-                        BcType::F64 => Ok(Some(self.builder.ins().fneg(v))),
+                        BcType::F64 => Ok(Some(self.b.fneg(v))),
                         other => Err(unsupported(
                             operand.span(),
                             format!("unary '-' on type '{other}'"),
@@ -920,26 +873,20 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         kind: oir::IdentKind,
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         match kind {
             oir::IdentKind::FnRef => {
                 let func_id = *self.ctx.functions.get(name).ok_or_else(|| {
                     unsupported(span, format!("reference to function '{name}' as a value"))
                 })?;
-                let func_ref = self
-                    .ctx
-                    .module
-                    .declare_func_in_func(func_id, self.builder.func);
-                Ok(Some(
-                    self.builder.ins().func_addr(cl_pointer_type(), func_ref),
-                ))
+                Ok(Some(self.b.func_addr(func_id)))
             }
             oir::IdentKind::Value => {
                 if matches!(ty, BcType::Unit) {
                     return Ok(None);
                 }
                 if let Some(binding) = self.lookup(name) {
-                    return Ok(Some(self.builder.use_var(binding.var)));
+                    return Ok(Some(self.b.use_var(binding.var)));
                 }
                 // Top-level constant (not a local/param): materialize it as
                 // module data, matching `src/codegen.rs`'s
@@ -952,30 +899,29 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 
     fn lower_cast(
         &mut self,
-        v: Value,
+        v: LValue,
         from: &BcType,
         to: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
-        use cranelift_codegen::ir::types;
+    ) -> CResult<Option<LValue>> {
         let out = match (from, to) {
             (BcType::I32, BcType::I64) => {
-                self.call_runtime_scalar("osc_i32_to_i64", &[v], types::I64)
+                self.call_runtime_scalar("osc_i32_to_i64", &[v], LType::I64)
             }
             (BcType::I64, BcType::I32) => {
-                self.call_runtime_scalar("osc_i64_to_i32", &[v], types::I32)
+                self.call_runtime_scalar("osc_i64_to_i32", &[v], LType::I32)
             }
             (BcType::I32, BcType::F64) => {
-                self.call_runtime_scalar("osc_i32_to_f64", &[v], types::F64)
+                self.call_runtime_scalar("osc_i32_to_f64", &[v], LType::F64)
             }
             (BcType::I64, BcType::F64) => {
-                self.call_runtime_scalar("osc_i64_to_f64", &[v], types::F64)
+                self.call_runtime_scalar("osc_i64_to_f64", &[v], LType::F64)
             }
             (BcType::F64, BcType::I32) => {
-                self.call_runtime_scalar("osc_f64_to_i32", &[v], types::I32)
+                self.call_runtime_scalar("osc_f64_to_i32", &[v], LType::I32)
             }
             (BcType::F64, BcType::I64) => {
-                self.call_runtime_scalar("osc_f64_to_i64", &[v], types::I64)
+                self.call_runtime_scalar("osc_f64_to_i64", &[v], LType::I64)
             }
             (BcType::Handle, BcType::I64) | (BcType::I64, BcType::Handle) => v,
             (a, b) if a == b => v,
@@ -988,46 +934,33 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// single scalar/pointer return, declaring it on first use. This is
     /// the direct (no-shim) path used for arithmetic/math/cast/etc. helpers
     /// whose C signature never involves an aggregate-by-value type.
-    fn call_runtime_scalar(
-        &mut self,
-        symbol: &'static str,
-        args: &[Value],
-        ret: cranelift_codegen::ir::Type,
-    ) -> Value {
-        let arg_types: Vec<_> = args
-            .iter()
-            .map(|v| self.builder.func.dfg.value_type(*v))
-            .collect();
-        let func_id = self.ctx.runtime_func(symbol, |sig| {
-            for t in &arg_types {
-                sig.params.push(AbiParam::new(*t));
-            }
-            sig.returns.push(AbiParam::new(ret));
-        });
-        let func_ref = self
-            .ctx
-            .module
-            .declare_func_in_func(func_id, self.builder.func);
-        let call = self.builder.ins().call(func_ref, args);
-        self.builder.inst_results(call)[0]
+    ///
+    /// The signature is derived from the *first* call site's argument
+    /// types and then cached by symbol: signatures for a fixed runtime
+    /// symbol never vary between call sites (every builtin's argument
+    /// types are fixed by the lowering table below), so no consistency
+    /// check is needed beyond that name-based cache.
+    fn runtime_func(&mut self, symbol: &str, params: Vec<LType>, ret: Option<LType>) -> LFunc {
+        self.b
+            .declare_function(symbol, &LSig::new(params, ret), LLinkage::Import)
+            .unwrap_or_else(|e| {
+                panic!("internal error: failed to declare runtime function '{symbol}': {e}")
+            })
+    }
+
+    fn call_runtime_scalar(&mut self, symbol: &'static str, args: &[LValue], ret: LType) -> LValue {
+        let arg_types: Vec<LType> = args.iter().map(|v| self.b.value_type(*v)).collect();
+        let func = self.runtime_func(symbol, arg_types, Some(ret));
+        self.b
+            .call(func, args)
+            .expect("value-returning runtime call produces a value")
     }
 
     /// Like `call_runtime_scalar`, but for a `void`-returning runtime call.
-    fn call_runtime_void(&mut self, symbol: &'static str, args: &[Value]) {
-        let arg_types: Vec<_> = args
-            .iter()
-            .map(|v| self.builder.func.dfg.value_type(*v))
-            .collect();
-        let func_id = self.ctx.runtime_func(symbol, |sig| {
-            for t in &arg_types {
-                sig.params.push(AbiParam::new(*t));
-            }
-        });
-        let func_ref = self
-            .ctx
-            .module
-            .declare_func_in_func(func_id, self.builder.func);
-        self.builder.ins().call(func_ref, args);
+    fn call_runtime_void(&mut self, symbol: &'static str, args: &[LValue]) {
+        let arg_types: Vec<LType> = args.iter().map(|v| self.b.value_type(*v)).collect();
+        let func = self.runtime_func(symbol, arg_types, None);
+        self.b.call(func, args);
     }
 
     fn lower_if(
@@ -1036,59 +969,59 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         then_block: &'a oir::Block,
         else_branch: Option<&'a oir::Expr>,
         ty: &BcType,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let cond = self
             .lower_expr(condition)?
             .expect("if condition has a value");
-        let then_blk = self.builder.create_block();
-        let merge_blk = self.builder.create_block();
-        let repr_ty = Repr::of(ty, self.program()).cl_type();
+        let then_blk = self.b.create_block();
+        let merge_blk = self.b.create_block();
+        let repr_ty = Repr::of(ty, self.program()).lir_type();
         if let Some(t) = repr_ty {
-            self.builder.append_block_param(merge_blk, t);
+            self.b.append_block_param(merge_blk, t);
         }
 
         match else_branch {
             Some(else_expr) => {
-                let else_blk = self.builder.create_block();
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                let else_blk = self.b.create_block();
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
 
                 self.goto(then_blk);
-                self.builder.seal_block(then_blk);
+                self.b.seal_block(then_blk);
                 let then_val = self.lower_block(then_block)?;
                 if !self.terminated {
                     let args = block_args(then_val);
-                    self.builder.ins().jump(merge_blk, &args);
+                    self.b.jump(merge_blk, &args);
                 }
 
                 self.goto(else_blk);
-                self.builder.seal_block(else_blk);
+                self.b.seal_block(else_blk);
                 let else_val = self.lower_expr(else_expr)?;
                 if !self.terminated {
                     let args = block_args(else_val);
-                    self.builder.ins().jump(merge_blk, &args);
+                    self.b.jump(merge_blk, &args);
                 }
             }
             None => {
-                self.builder.ins().brif(cond, then_blk, &[], merge_blk, &[]);
+                self.b.brif(cond, then_blk, &[], merge_blk, &[]);
                 self.goto(then_blk);
-                self.builder.seal_block(then_blk);
+                self.b.seal_block(then_blk);
                 self.lower_block(then_block)?;
                 if !self.terminated {
-                    self.builder.ins().jump(merge_blk, &[]);
+                    self.b.jump(merge_blk, &[]);
                 }
             }
         }
 
-        self.builder.seal_block(merge_blk);
+        self.b.seal_block(merge_blk);
         self.goto(merge_blk);
         if repr_ty.is_some() {
-            Ok(Some(self.builder.block_params(merge_blk)[0]))
+            Ok(Some(self.b.block_param(merge_blk, 0)))
         } else {
             Ok(None)
         }
     }
 
-    fn lower_arena(&mut self, body: &'a oir::Block) -> CResult<Option<Value>> {
+    fn lower_arena(&mut self, body: &'a oir::Block) -> CResult<Option<LValue>> {
         // A nested arena scope: `osc_arena_create`/`osc_arena_destroy`
         // bracket the body, and the body's `_arena` shadows the enclosing
         // one for any calls it makes. Matches `src/codegen.rs`'s
@@ -1096,11 +1029,8 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         // result must already be safe to read after the arena is
         // destroyed (checked by semantic analysis, not re-verified here).
         let parent_arena = self.arena_value;
-        let zero = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I64, 0);
-        let new_arena = self.call_runtime_scalar("osc_arena_create", &[zero], cl_pointer_type());
+        let zero = self.b.iconst(LType::I64, 0);
+        let new_arena = self.call_runtime_scalar("osc_arena_create", &[zero], LType::Ptr);
         self.arena_value = new_arena;
         let result = self.lower_block(body)?;
         self.call_runtime_void("osc_arena_destroy", &[new_arena]);
@@ -1111,25 +1041,24 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 
 /// Arena allocation, byte copies, and string/global-constant addressing.
 impl<'a, 'b> FuncTranslator<'a, 'b> {
-    fn arena_alloc(&mut self, size: u32) -> Value {
-        let size_val = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I64, size as i64);
-        self.call_runtime_scalar(
-            "osc_arena_alloc",
-            &[self.arena_value, size_val],
-            cl_pointer_type(),
-        )
+    fn arena_alloc(&mut self, size: u32) -> LValue {
+        let size_val = self.b.iconst(LType::I64, size as i64);
+        self.call_runtime_scalar("osc_arena_alloc", &[self.arena_value, size_val], LType::Ptr)
     }
 
     /// Copy `size` bytes from `src+src_off` to `dest+dest_off`. Used for
     /// every inline-aggregate value/field/element copy (see module docs).
+    ///
+    /// The actual byte movement is delegated to
+    /// [`LirBuilder::mem_copy`], which every backend must implement with
+    /// real load/store instructions (never a libc `memcpy`/`memmove`
+    /// symbol the freestanding runtime cannot resolve) and safely for
+    /// overlapping ranges.
     fn copy_bytes(
         &mut self,
-        dest: Value,
+        dest: LValue,
         dest_off: i32,
-        src: Value,
+        src: LValue,
         src_off: i32,
         size: u32,
         align: u32,
@@ -1140,85 +1069,29 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         let dest_addr = if dest_off == 0 {
             dest
         } else {
-            self.builder.ins().iadd_imm(dest, dest_off as i64)
+            self.b.iadd_imm(dest, dest_off as i64)
         };
         let src_addr = if src_off == 0 {
             src
         } else {
-            self.builder.ins().iadd_imm(src, src_off as i64)
+            self.b.iadd_imm(src, src_off as i64)
         };
-        let config = self.ctx.module.target_config();
-        let align_u8 = align.min(8) as u8;
-
-        // `FunctionBuilder::emit_small_memory_copy` only *conditionally*
-        // inlines: past cranelift-frontend's own threshold (more than 4
-        // aligned load/store pairs — e.g. any size over 32 bytes, but
-        // also any *smaller* size whose largest power-of-two divisor is
-        // itself small, like this backend's 40-byte two-`str`-field
-        // struct, whose largest power-of-two divisor is 8 and so needs
-        // 5 pairs), it instead lowers to a call to the libc
-        // `memcpy`/`memmove` symbol. The freestanding runtime never
-        // exports a linkable symbol for either (only a `static inline`
-        // equivalent private to its own translation unit — see
-        // `deps/laststanding/l_os.h`), so a freestanding link would fail
-        // with "undefined reference to `memcpy`" the moment *any*
-        // inline-aggregate copy (parameter, tail return, match binding,
-        // struct/enum/`Result` construction, ...) needed to move that
-        // many bytes. Splitting the copy into a greedy sequence of
-        // power-of-two chunks no larger than 32 bytes sidesteps this
-        // entirely: each chunk is, by construction, at or under
-        // cranelift-frontend's own inlining threshold, so every call
-        // here always emits real load/store instructions and never a
-        // libcall, regardless of the aggregate's total size.
-        let mut offset: u32 = 0;
-        while offset < size {
-            let remaining = size - offset;
-            let mut chunk: u32 = 32;
-            while chunk > remaining {
-                chunk /= 2;
-            }
-            let d = if offset == 0 {
-                dest_addr
-            } else {
-                self.builder.ins().iadd_imm(dest_addr, offset as i64)
-            };
-            let s = if offset == 0 {
-                src_addr
-            } else {
-                self.builder.ins().iadd_imm(src_addr, offset as i64)
-            };
-            let chunk_align = align_u8.min(chunk as u8).max(1);
-            self.builder.emit_small_memory_copy(
-                config,
-                d,
-                s,
-                chunk as u64,
-                chunk_align,
-                chunk_align,
-                true,
-                mem_flags(),
-            );
-            offset += chunk;
-        }
+        self.b.mem_copy(dest_addr, src_addr, size, align);
     }
 
-    fn load_scalar(&mut self, ty: cranelift_codegen::ir::Type, addr: Value, offset: i32) -> Value {
-        self.builder.ins().load(ty, mem_flags(), addr, offset)
+    fn load_scalar(&mut self, ty: LType, addr: LValue, offset: i32) -> LValue {
+        self.b.load(ty, addr, offset)
     }
 
-    fn store_scalar(&mut self, value: Value, addr: Value, offset: i32) {
-        self.builder.ins().store(mem_flags(), value, addr, offset);
+    fn store_scalar(&mut self, value: LValue, addr: LValue, offset: i32) {
+        self.b.store(value, addr, offset);
     }
 
     /// The pointer-repr value of a string literal: the address of its
     /// (deduplicated) 16-byte `{ptr, len}` header data object.
-    fn string_literal_ptr(&mut self, s: &str) -> Value {
-        let data_id = self.ctx.string_literal_data(s);
-        let gv = self
-            .ctx
-            .module
-            .declare_data_in_func(data_id, self.builder.func);
-        self.builder.ins().global_value(cl_pointer_type(), gv)
+    fn string_literal_ptr(&mut self, s: &str) -> LValue {
+        let data_id = self.b.string_literal_data(s);
+        self.b.global_addr(data_id)
     }
 
     /// The value of a top-level `let` constant referenced by name (never a
@@ -1228,7 +1101,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// and/or other top-level constants at this point (semantic analysis
     /// restricts top-level `let` to constant-foldable expressions — see
     /// `top_level_const.osc`/`global_mut.osc`).
-    fn top_level_const_ptr(&mut self, name: &str, ty: &BcType) -> CResult<Value> {
+    fn top_level_const_ptr(&mut self, name: &str, ty: &BcType) -> CResult<LValue> {
         self.top_level_const_value(name, ty, &mut Vec::new())
     }
 
@@ -1237,7 +1110,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         name: &str,
         ty: &BcType,
         stack: &mut Vec<String>,
-    ) -> CResult<Value> {
+    ) -> CResult<LValue> {
         enum FoldedConst {
             Str(String),
             F64(f64),
@@ -1276,15 +1149,12 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         };
         let result = match folded {
             FoldedConst::Str(value) => Ok(self.string_literal_ptr(&value)),
-            FoldedConst::F64(value) => Ok(self
-                .builder
-                .ins()
-                .f64const(cranelift_codegen::ir::immediates::Ieee64::with_float(value))),
+            FoldedConst::F64(value) => Ok(self.b.f64const(value)),
             FoldedConst::I64(value) => {
                 let cl_ty = Repr::of(ty, self.program())
-                    .cl_type()
-                    .unwrap_or(cranelift_codegen::ir::types::I32);
-                Ok(self.builder.ins().iconst(cl_ty, value))
+                    .lir_type()
+                    .unwrap_or(LType::I32);
+                Ok(self.b.iconst(cl_ty, value))
             }
             FoldedConst::Alias(alias, alias_ty) => self.top_level_const_value(&alias, &alias_ty, stack),
             FoldedConst::Unsupported(span) => Err(unsupported(
@@ -1345,7 +1215,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// for scalars and opaque pointers, or pure address arithmetic (no
     /// load at all) for inline aggregates, whose bytes live embedded in
     /// place — see module docs.
-    fn read_at(&mut self, base: Value, offset: u32, ty: &BcType) -> Option<Value> {
+    fn read_at(&mut self, base: LValue, offset: u32, ty: &BcType) -> Option<LValue> {
         match Repr::of(ty, self.program()) {
             Repr::Unit => None,
             Repr::Scalar(t) => Some(self.load_scalar(t, base, offset as i32)),
@@ -1354,10 +1224,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     Some(if offset == 0 {
                         base
                     } else {
-                        self.builder.ins().iadd_imm(base, offset as i64)
+                        self.b.iadd_imm(base, offset as i64)
                     })
                 } else {
-                    Some(self.load_scalar(cl_pointer_type(), base, offset as i32))
+                    Some(self.load_scalar(LType::Ptr, base, offset as i32))
                 }
             }
         }
@@ -1368,7 +1238,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// for inline aggregates (never just storing the pointer — the bytes
     /// must end up embedded at `base + offset`, matching C struct-field
     /// assignment semantics exactly).
-    fn write_at(&mut self, base: Value, offset: u32, ty: &BcType, value: Option<Value>) {
+    fn write_at(&mut self, base: LValue, offset: u32, ty: &BcType, value: Option<LValue>) {
         match Repr::of(ty, self.program()) {
             Repr::Unit => {}
             Repr::Scalar(_) => self.store_scalar(
@@ -1413,24 +1283,26 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         }
     }
 
-    fn array_len(&mut self, arr_ptr: Value) -> Value {
-        self.call_runtime_scalar(
-            "osc_array_len",
-            &[arr_ptr],
-            cranelift_codegen::ir::types::I32,
-        )
+    fn array_len(&mut self, arr_ptr: LValue) -> LValue {
+        self.call_runtime_scalar("osc_array_len", &[arr_ptr], LType::I32)
     }
 
-    fn array_elem_ptr(&mut self, arr_ptr: Value, idx: Value) -> Value {
-        self.call_runtime_scalar("osc_array_get", &[arr_ptr, idx], cl_pointer_type())
+    fn array_elem_ptr(&mut self, arr_ptr: LValue, idx: LValue) -> LValue {
+        self.call_runtime_scalar("osc_array_get", &[arr_ptr, idx], LType::Ptr)
     }
 
-    fn array_read(&mut self, arr_ptr: Value, idx: Value, elem_ty: &BcType) -> Option<Value> {
+    fn array_read(&mut self, arr_ptr: LValue, idx: LValue, elem_ty: &BcType) -> Option<LValue> {
         let elem_ptr = self.array_elem_ptr(arr_ptr, idx);
         self.read_at(elem_ptr, 0, elem_ty)
     }
 
-    fn array_write(&mut self, arr_ptr: Value, idx: Value, elem_ty: &BcType, value: Option<Value>) {
+    fn array_write(
+        &mut self,
+        arr_ptr: LValue,
+        idx: LValue,
+        elem_ty: &BcType,
+        value: Option<LValue>,
+    ) {
         let elem_ptr = self.array_elem_ptr(arr_ptr, idx);
         self.write_at(elem_ptr, 0, elem_ty, value);
     }
@@ -1441,7 +1313,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         field: &str,
         field_ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let obj_ty = obj.ty();
         let obj_ptr = self.lower_expr(obj)?.expect("struct value is a pointer");
         let (offset, _) = self.struct_field_offset_of(&obj_ty, field, span)?;
@@ -1454,7 +1326,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         index: &'a oir::Expr,
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let arr_ty = arr.ty();
         if arr_ty == BcType::Str {
             // `s[i]` yields the i-th UTF-8 byte as an i32, bounds-checked
@@ -1462,23 +1334,13 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             // matching `src/codegen.rs`'s `Expr::Index` on `Str` exactly.
             let s_ptr = self.lower_expr(arr)?.expect("str value is a pointer");
             let idx_val = self.lower_expr(index)?.expect("index has a value");
-            let data_ptr = self.load_scalar(cl_pointer_type(), s_ptr, 0);
-            let checked = self.call_runtime_scalar(
-                "osc_str_check_index_shim",
-                &[s_ptr, idx_val],
-                cranelift_codegen::ir::types::I32,
-            );
-            let checked64 = self
-                .builder
-                .ins()
-                .uextend(cranelift_codegen::ir::types::I64, checked);
-            let byte_ptr = self.builder.ins().iadd(data_ptr, checked64);
-            let byte = self.load_scalar(cranelift_codegen::ir::types::I8, byte_ptr, 0);
-            return Ok(Some(
-                self.builder
-                    .ins()
-                    .uextend(cranelift_codegen::ir::types::I32, byte),
-            ));
+            let data_ptr = self.load_scalar(LType::Ptr, s_ptr, 0);
+            let checked =
+                self.call_runtime_scalar("osc_str_check_index_shim", &[s_ptr, idx_val], LType::I32);
+            let checked64 = self.b.uextend(LType::I64, checked);
+            let byte_ptr = self.b.iadd(data_ptr, checked64);
+            let byte = self.load_scalar(LType::I8, byte_ptr, 0);
+            return Ok(Some(self.b.uextend(LType::I32, byte)));
         }
         let arr_ptr = self.lower_expr(arr)?.expect("array value is a pointer");
         let idx_val = self.lower_expr(index)?.expect("index has a value");
@@ -1492,20 +1354,16 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// (already such an address), or a fresh stack slot holding the
     /// scalar/opaque-pointer value otherwise. Used by `push`/array-literal
     /// construction, which hand a source address to `osc_array_push`.
-    fn value_source_addr(&mut self, ty: &BcType, value: Option<Value>) -> Value {
+    fn value_source_addr(&mut self, ty: &BcType, value: Option<LValue>) -> LValue {
         match Repr::of(ty, self.program()) {
             Repr::Unit => self.arena_alloc(0),
             Repr::Pointer if is_inline_aggregate(ty, self.program()) => {
                 value.expect("aggregate has a pointer value")
             }
             _ => {
-                let size = layout_of(ty, self.program()).size.max(1);
-                let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    size,
-                    0,
-                ));
-                let addr = self.builder.ins().stack_addr(cl_pointer_type(), slot, 0);
+                let layout = layout_of(ty, self.program());
+                let size = layout.size.max(1);
+                let addr = self.b.stack_slot_addr(size, layout.align.max(1));
                 if let Some(v) = value {
                     self.store_scalar(v, addr, 0);
                 }
@@ -1519,20 +1377,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         elements: &'a [oir::Expr],
         elem_ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let elem_size = layout_of(elem_ty, self.program()).size;
-        let size_val = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, elem_size as i64);
-        let cap_val = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, elements.len() as i64);
+        let size_val = self.b.iconst(LType::I32, elem_size as i64);
+        let cap_val = self.b.iconst(LType::I32, elements.len() as i64);
         let arr_ptr = self.call_runtime_scalar(
             "osc_array_new",
             &[self.arena_value, size_val, cap_val],
-            cl_pointer_type(),
+            LType::Ptr,
         );
         for el in elements {
             let raw = self.lower_expr(el)?;
@@ -1607,7 +1459,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     fn store_place(
         &mut self,
         place: &'a oir::Place,
-        raw_value: Option<Value>,
+        raw_value: Option<LValue>,
         value_expr: &'a oir::Expr,
     ) -> CResult<()> {
         let final_ty = self.place_final_type(place)?;
@@ -1615,11 +1467,11 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         self.store_place_value(place, value)
     }
 
-    fn store_place_value(&mut self, place: &'a oir::Place, value: Option<Value>) -> CResult<()> {
+    fn store_place_value(&mut self, place: &'a oir::Place, value: Option<LValue>) -> CResult<()> {
         let binding = self
             .lookup(&place.name)
             .unwrap_or_else(|| panic!("internal error: unknown place root '{}'", place.name));
-        let mut addr = self.builder.use_var(binding.var);
+        let mut addr = self.b.use_var(binding.var);
         let mut ty = binding.ty;
         let n = place.accessors.len();
         for (i, acc) in place.accessors.iter().enumerate() {
@@ -1782,49 +1634,45 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         op: BinOp,
         left: &'a oir::Expr,
         right: &'a oir::Expr,
-    ) -> CResult<Option<Value>> {
-        use cranelift_codegen::ir::types;
+    ) -> CResult<Option<LValue>> {
         let lv = self.lower_expr(left)?.expect("bool operand has a value");
-        let rhs_blk = self.builder.create_block();
-        let merge_blk = self.builder.create_block();
-        self.builder.append_block_param(merge_blk, types::I8);
+        let rhs_blk = self.b.create_block();
+        let merge_blk = self.b.create_block();
+        self.b.append_block_param(merge_blk, LType::I8);
 
         match op {
             BinOp::And => {
-                self.builder
-                    .ins()
+                self.b
                     .brif(lv, rhs_blk, &[], merge_blk, &block_args(Some(lv)));
             }
             BinOp::Or => {
-                self.builder
-                    .ins()
+                self.b
                     .brif(lv, merge_blk, &block_args(Some(lv)), rhs_blk, &[]);
             }
             _ => unreachable!("lower_short_circuit only handles And/Or"),
         }
-        self.builder.seal_block(rhs_blk);
+        self.b.seal_block(rhs_blk);
 
         self.goto(rhs_blk);
         let rv = self.lower_expr(right)?.expect("bool operand has a value");
         if !self.terminated {
             let args = block_args(Some(rv));
-            self.builder.ins().jump(merge_blk, &args);
+            self.b.jump(merge_blk, &args);
         }
 
-        self.builder.seal_block(merge_blk);
+        self.b.seal_block(merge_blk);
         self.goto(merge_blk);
-        Ok(Some(self.builder.block_params(merge_blk)[0]))
+        Ok(Some(self.b.block_param(merge_blk, 0)))
     }
 
     fn lower_binop(
         &mut self,
         op: BinOp,
-        lv: Option<Value>,
-        rv: Option<Value>,
+        lv: Option<LValue>,
+        rv: Option<LValue>,
         operand_ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
-        use cranelift_codegen::ir::types;
+    ) -> CResult<Option<LValue>> {
         let l = lv.expect("binop operand has a value");
         let r = rv.expect("binop operand has a value");
         match op {
@@ -1838,7 +1686,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                         BinOp::Mod => "osc_mod_i32",
                         _ => unreachable!(),
                     };
-                    Ok(Some(self.call_runtime_scalar(sym, &[l, r], types::I32)))
+                    Ok(Some(self.call_runtime_scalar(sym, &[l, r], LType::I32)))
                 }
                 BcType::I64 => {
                     let sym = match op {
@@ -1849,14 +1697,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                         BinOp::Mod => "osc_mod_i64",
                         _ => unreachable!(),
                     };
-                    Ok(Some(self.call_runtime_scalar(sym, &[l, r], types::I64)))
+                    Ok(Some(self.call_runtime_scalar(sym, &[l, r], LType::I64)))
                 }
                 BcType::F64 => Ok(Some(match op {
-                    BinOp::Add => self.builder.ins().fadd(l, r),
-                    BinOp::Sub => self.builder.ins().fsub(l, r),
-                    BinOp::Mul => self.builder.ins().fmul(l, r),
-                    BinOp::Div => self.builder.ins().fdiv(l, r),
-                    BinOp::Mod => self.call_runtime_scalar("osc_math_fmod", &[l, r], types::F64),
+                    BinOp::Add => self.b.fadd(l, r),
+                    BinOp::Sub => self.b.fsub(l, r),
+                    BinOp::Mul => self.b.fmul(l, r),
+                    BinOp::Div => self.b.fdiv(l, r),
+                    BinOp::Mod => self.call_runtime_scalar("osc_math_fmod", &[l, r], LType::F64),
                     _ => unreachable!(),
                 })),
                 BcType::Str if matches!(op, BinOp::Add) => Ok(Some(self.call_shim_out(
@@ -1870,63 +1718,63 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 let (lt, rt) = self.tag_or_scalar_for_eq(operand_ty, l, r);
                 match operand_ty {
                     BcType::Str => {
-                        let eq = self.call_runtime_scalar("osc_str_eq_shim", &[l, r], types::I8);
+                        let eq = self.call_runtime_scalar("osc_str_eq_shim", &[l, r], LType::I8);
                         Ok(Some(if matches!(op, BinOp::Eq) {
                             eq
                         } else {
-                            self.builder.ins().bxor_imm(eq, 1)
+                            self.b.bxor_imm(eq, 1)
                         }))
                     }
                     BcType::F64 => {
                         let cc = if matches!(op, BinOp::Eq) {
-                            FloatCC::Equal
+                            FloatCmp::Eq
                         } else {
-                            FloatCC::NotEqual
+                            FloatCmp::Ne
                         };
-                        Ok(Some(self.builder.ins().fcmp(cc, lt, rt)))
+                        Ok(Some(self.b.fcmp(cc, lt, rt)))
                     }
                     _ => {
                         let cc = if matches!(op, BinOp::Eq) {
-                            IntCC::Equal
+                            IntCmp::Eq
                         } else {
-                            IntCC::NotEqual
+                            IntCmp::Ne
                         };
-                        Ok(Some(self.builder.ins().icmp(cc, lt, rt)))
+                        Ok(Some(self.b.icmp(cc, lt, rt)))
                     }
                 }
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => match operand_ty {
                 BcType::Str => {
-                    let cmp = self.call_runtime_scalar("osc_str_compare_shim", &[l, r], types::I32);
-                    let zero = self.builder.ins().iconst(types::I32, 0);
+                    let cmp = self.call_runtime_scalar("osc_str_compare_shim", &[l, r], LType::I32);
+                    let zero = self.b.iconst(LType::I32, 0);
                     let cc = match op {
-                        BinOp::Lt => IntCC::SignedLessThan,
-                        BinOp::Gt => IntCC::SignedGreaterThan,
-                        BinOp::LtEq => IntCC::SignedLessThanOrEqual,
-                        BinOp::GtEq => IntCC::SignedGreaterThanOrEqual,
+                        BinOp::Lt => IntCmp::Slt,
+                        BinOp::Gt => IntCmp::Sgt,
+                        BinOp::LtEq => IntCmp::Sle,
+                        BinOp::GtEq => IntCmp::Sge,
                         _ => unreachable!(),
                     };
-                    Ok(Some(self.builder.ins().icmp(cc, cmp, zero)))
+                    Ok(Some(self.b.icmp(cc, cmp, zero)))
                 }
                 BcType::F64 => {
                     let cc = match op {
-                        BinOp::Lt => FloatCC::LessThan,
-                        BinOp::Gt => FloatCC::GreaterThan,
-                        BinOp::LtEq => FloatCC::LessThanOrEqual,
-                        BinOp::GtEq => FloatCC::GreaterThanOrEqual,
+                        BinOp::Lt => FloatCmp::Lt,
+                        BinOp::Gt => FloatCmp::Gt,
+                        BinOp::LtEq => FloatCmp::Le,
+                        BinOp::GtEq => FloatCmp::Ge,
                         _ => unreachable!(),
                     };
-                    Ok(Some(self.builder.ins().fcmp(cc, l, r)))
+                    Ok(Some(self.b.fcmp(cc, l, r)))
                 }
                 BcType::I32 | BcType::I64 | BcType::Bool | BcType::Handle => {
                     let cc = match op {
-                        BinOp::Lt => IntCC::SignedLessThan,
-                        BinOp::Gt => IntCC::SignedGreaterThan,
-                        BinOp::LtEq => IntCC::SignedLessThanOrEqual,
-                        BinOp::GtEq => IntCC::SignedGreaterThanOrEqual,
+                        BinOp::Lt => IntCmp::Slt,
+                        BinOp::Gt => IntCmp::Sgt,
+                        BinOp::LtEq => IntCmp::Sle,
+                        BinOp::GtEq => IntCmp::Sge,
                         _ => unreachable!(),
                     };
-                    Ok(Some(self.builder.ins().icmp(cc, l, r)))
+                    Ok(Some(self.b.icmp(cc, l, r)))
                 }
                 other => Err(unsupported(span, format!("'{op:?}' on type '{other}'"))),
             },
@@ -1940,11 +1788,11 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// from the pointer), matching `src/codegen.rs`'s `{}.tag == {}.tag`;
     /// every other type's Cranelift value already *is* the thing to
     /// compare directly.
-    fn tag_or_scalar_for_eq(&mut self, ty: &BcType, l: Value, r: Value) -> (Value, Value) {
+    fn tag_or_scalar_for_eq(&mut self, ty: &BcType, l: LValue, r: LValue) -> (LValue, LValue) {
         if let BcType::Enum(name) = ty {
             if layout::enum_has_payload(name, self.program()) {
-                let lt = self.load_scalar(cranelift_codegen::ir::types::I32, l, 0);
-                let rt = self.load_scalar(cranelift_codegen::ir::types::I32, r, 0);
+                let lt = self.load_scalar(LType::I32, l, 0);
+                let rt = self.load_scalar(LType::I32, r, 0);
                 return (lt, rt);
             }
         }
@@ -1954,7 +1802,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     /// Call a shim whose C signature is `void sym(RetC* out, ...args)`,
     /// allocating `out` in the arena and returning its pointer as the
     /// call's resulting (pointer-repr) value.
-    fn call_shim_out(&mut self, symbol: &'static str, ret_ty: &BcType, args: &[Value]) -> Value {
+    fn call_shim_out(&mut self, symbol: &'static str, ret_ty: &BcType, args: &[LValue]) -> LValue {
         let layout = layout_of(ret_ty, self.program());
         let out_ptr = self.arena_alloc(layout.size);
         let mut all_args = Vec::with_capacity(args.len() + 1);
@@ -1968,8 +1816,8 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         &mut self,
         parts: &'a [oir::InterpolatedStringPart],
         span: Span,
-    ) -> CResult<Option<Value>> {
-        let mut acc: Option<Value> = None;
+    ) -> CResult<Option<LValue>> {
+        let mut acc: Option<LValue> = None;
         for part in parts {
             let piece = match part {
                 oir::InterpolatedStringPart::Text(text) => {
@@ -2031,12 +1879,11 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         args: &'a [oir::Expr],
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
-        use cranelift_codegen::ir::types;
+    ) -> CResult<Option<LValue>> {
         let name: &str = match callee {
             oir::Callee::Named(n) | oir::Callee::Var(n) => n.as_str(),
         };
-        let mut a: Vec<Option<Value>> = Vec::with_capacity(args.len());
+        let mut a: Vec<Option<LValue>> = Vec::with_capacity(args.len());
         for arg in args {
             a.push(self.lower_expr(arg)?);
         }
@@ -2090,7 +1937,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 &result_ty("i32", "str"),
                 &[v!(0)],
             )),
-            "read_byte" => Some(self.call_runtime_scalar("osc_read_byte", &[v!(0)], types::I32)),
+            "read_byte" => Some(self.call_runtime_scalar("osc_read_byte", &[v!(0)], LType::I32)),
             "write_byte" => {
                 self.call_runtime_void("osc_write_byte", &[v!(0), v!(1)]);
                 None
@@ -2110,13 +1957,13 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 &[v!(0), v!(1)],
             )),
             "file_exists" => {
-                Some(self.call_runtime_scalar("osc_file_exists_shim", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_file_exists_shim", &[v!(0)], LType::I8))
             }
             "path_exists" => {
-                Some(self.call_runtime_scalar("osc_path_exists_shim", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_path_exists_shim", &[v!(0)], LType::I8))
             }
             "path_is_dir" => {
-                Some(self.call_runtime_scalar("osc_path_is_dir_shim", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_path_is_dir_shim", &[v!(0)], LType::I8))
             }
             "dir_current" => {
                 Some(self.call_shim_out("osc_dir_current_shim", &BcType::Str, &[arena]))
@@ -2126,18 +1973,18 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 &result_ty("str", "str"),
                 &[arena, v!(0)],
             )),
-            "errno_get" => Some(self.call_runtime_scalar("osc_errno_get", &[], types::I32)),
+            "errno_get" => Some(self.call_runtime_scalar("osc_errno_get", &[], LType::I32)),
             "errno_str" => Some(self.call_shim_out("osc_errno_str_shim", &BcType::Str, &[v!(0)])),
             "sha256" => Some(self.call_shim_out("osc_sha256_shim", &BcType::Str, &[arena, v!(0)])),
-            "arg_count" => Some(self.call_runtime_scalar("osc_arg_count", &[], types::I32)),
+            "arg_count" => Some(self.call_runtime_scalar("osc_arg_count", &[], LType::I32)),
             "arg_get" => {
                 Some(self.call_shim_out("osc_arg_get_shim", &BcType::Str, &[arena, v!(0)]))
             }
 
             // -- Strings ------------------------------------------------
-            "str_len" => Some(self.call_runtime_scalar("osc_str_len_shim", &[v!(0)], types::I32)),
+            "str_len" => Some(self.call_runtime_scalar("osc_str_len_shim", &[v!(0)], LType::I32)),
             "str_eq" => {
-                Some(self.call_runtime_scalar("osc_str_eq_shim", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_str_eq_shim", &[v!(0), v!(1)], LType::I8))
             }
             "str_concat" => Some(self.call_shim_out(
                 "osc_str_concat_shim",
@@ -2148,21 +1995,21 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 Some(self.call_shim_out("osc_str_to_cstr_shim", &BcType::Str, &[arena, v!(0)]))
             }
             "str_compare" => {
-                Some(self.call_runtime_scalar("osc_str_compare_shim", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_str_compare_shim", &[v!(0), v!(1)], LType::I32))
             }
             "str_find" => {
-                Some(self.call_runtime_scalar("osc_str_find_shim", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_str_find_shim", &[v!(0), v!(1)], LType::I32))
             }
             "str_contains" => {
-                Some(self.call_runtime_scalar("osc_str_contains_shim", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_str_contains_shim", &[v!(0), v!(1)], LType::I8))
             }
             "str_starts_with" => Some(self.call_runtime_scalar(
                 "osc_str_starts_with_shim",
                 &[v!(0), v!(1)],
-                types::I8,
+                LType::I8,
             )),
             "str_ends_with" => {
-                Some(self.call_runtime_scalar("osc_str_ends_with_shim", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_str_ends_with_shim", &[v!(0), v!(1)], LType::I8))
             }
             "str_trim" => {
                 Some(self.call_shim_out("osc_str_trim_shim", &BcType::Str, &[arena, v!(0)]))
@@ -2210,7 +2057,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "str_split" => Some(self.call_runtime_scalar(
                 "osc_str_split_shim",
                 &[arena, v!(0), v!(1)],
-                cl_pointer_type(),
+                LType::Ptr,
             )),
             "str_join" => {
                 Some(self.call_shim_out("osc_str_join_shim", &BcType::Str, &[arena, v!(0), v!(1)]))
@@ -2218,11 +2065,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "str_from_chars" => {
                 Some(self.call_shim_out("osc_str_from_chars_shim", &BcType::Str, &[arena, v!(0)]))
             }
-            "str_to_chars" => Some(self.call_runtime_scalar(
-                "osc_str_to_chars_shim",
-                &[arena, v!(0)],
-                cl_pointer_type(),
-            )),
+            "str_to_chars" => {
+                Some(self.call_runtime_scalar("osc_str_to_chars_shim", &[arena, v!(0)], LType::Ptr))
+            }
             "path_join" => {
                 Some(self.call_shim_out("osc_path_join_shim", &BcType::Str, &[arena, v!(0), v!(1)]))
             }
@@ -2236,7 +2081,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 Some(self.call_shim_out("osc_file_delete_shim", &result_ty("str", "str"), &[v!(0)]))
             }
             "file_size" => {
-                Some(self.call_runtime_scalar("osc_file_size_shim", &[v!(0)], types::I64))
+                Some(self.call_runtime_scalar("osc_file_size_shim", &[v!(0)], LType::I64))
             }
             "file_rename" => Some(self.call_shim_out(
                 "osc_file_rename_shim",
@@ -2267,22 +2112,22 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 None
             }
             "time_utc_year" => {
-                Some(self.call_runtime_scalar("osc_time_utc_year", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_year", &[v!(0)], LType::I32))
             }
             "time_utc_month" => {
-                Some(self.call_runtime_scalar("osc_time_utc_month", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_month", &[v!(0)], LType::I32))
             }
             "time_utc_day" => {
-                Some(self.call_runtime_scalar("osc_time_utc_day", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_day", &[v!(0)], LType::I32))
             }
             "time_utc_hour" => {
-                Some(self.call_runtime_scalar("osc_time_utc_hour", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_hour", &[v!(0)], LType::I32))
             }
             "time_utc_min" => {
-                Some(self.call_runtime_scalar("osc_time_utc_min", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_min", &[v!(0)], LType::I32))
             }
             "time_utc_sec" => {
-                Some(self.call_runtime_scalar("osc_time_utc_sec", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_time_utc_sec", &[v!(0)], LType::I32))
             }
             "time_format" => Some(self.call_shim_out(
                 "osc_time_format_shim",
@@ -2290,9 +2135,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 &[arena, v!(0), v!(1)],
             )),
             "glob_match" => {
-                Some(self.call_runtime_scalar("osc_glob_match_shim", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_glob_match_shim", &[v!(0), v!(1)], LType::I8))
             }
-            "is_tty" => Some(self.call_runtime_scalar("osc_is_tty", &[], types::I8)),
+            "is_tty" => Some(self.call_runtime_scalar("osc_is_tty", &[], LType::I8)),
             "env_set" => Some(self.call_shim_out(
                 "osc_env_set_shim",
                 &result_ty("str", "str"),
@@ -2303,85 +2148,85 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             }
 
             // -- Arithmetic / math helpers also callable as functions ---
-            "abs_i32" => Some(self.call_runtime_scalar("osc_abs_i32", &[v!(0)], types::I32)),
-            "abs_i64" => Some(self.call_runtime_scalar("osc_abs_i64", &[v!(0)], types::I64)),
-            "abs_f64" => Some(self.call_runtime_scalar("osc_abs_f64", &[v!(0)], types::F64)),
-            "mod_i32" => Some(self.call_runtime_scalar("osc_mod_i32", &[v!(0), v!(1)], types::I32)),
-            "min_i32" => Some(self.call_runtime_scalar("osc_min_i32", &[v!(0), v!(1)], types::I32)),
-            "max_i32" => Some(self.call_runtime_scalar("osc_max_i32", &[v!(0), v!(1)], types::I32)),
+            "abs_i32" => Some(self.call_runtime_scalar("osc_abs_i32", &[v!(0)], LType::I32)),
+            "abs_i64" => Some(self.call_runtime_scalar("osc_abs_i64", &[v!(0)], LType::I64)),
+            "abs_f64" => Some(self.call_runtime_scalar("osc_abs_f64", &[v!(0)], LType::F64)),
+            "mod_i32" => Some(self.call_runtime_scalar("osc_mod_i32", &[v!(0), v!(1)], LType::I32)),
+            "min_i32" => Some(self.call_runtime_scalar("osc_min_i32", &[v!(0), v!(1)], LType::I32)),
+            "max_i32" => Some(self.call_runtime_scalar("osc_max_i32", &[v!(0), v!(1)], LType::I32)),
             "clamp_i32" => {
-                Some(self.call_runtime_scalar("osc_clamp_i32", &[v!(0), v!(1), v!(2)], types::I32))
+                Some(self.call_runtime_scalar("osc_clamp_i32", &[v!(0), v!(1), v!(2)], LType::I32))
             }
-            "min_i64" => Some(self.call_runtime_scalar("osc_min_i64", &[v!(0), v!(1)], types::I64)),
-            "max_i64" => Some(self.call_runtime_scalar("osc_max_i64", &[v!(0), v!(1)], types::I64)),
+            "min_i64" => Some(self.call_runtime_scalar("osc_min_i64", &[v!(0), v!(1)], LType::I64)),
+            "max_i64" => Some(self.call_runtime_scalar("osc_max_i64", &[v!(0), v!(1)], LType::I64)),
             "clamp_i64" => {
-                Some(self.call_runtime_scalar("osc_clamp_i64", &[v!(0), v!(1), v!(2)], types::I64))
+                Some(self.call_runtime_scalar("osc_clamp_i64", &[v!(0), v!(1), v!(2)], LType::I64))
             }
-            "min_f64" => Some(self.call_runtime_scalar("osc_min_f64", &[v!(0), v!(1)], types::F64)),
-            "max_f64" => Some(self.call_runtime_scalar("osc_max_f64", &[v!(0), v!(1)], types::F64)),
+            "min_f64" => Some(self.call_runtime_scalar("osc_min_f64", &[v!(0), v!(1)], LType::F64)),
+            "max_f64" => Some(self.call_runtime_scalar("osc_max_f64", &[v!(0), v!(1)], LType::F64)),
             "clamp_f64" => {
-                Some(self.call_runtime_scalar("osc_clamp_f64", &[v!(0), v!(1), v!(2)], types::F64))
+                Some(self.call_runtime_scalar("osc_clamp_f64", &[v!(0), v!(1), v!(2)], LType::F64))
             }
-            "math_sin" => Some(self.call_runtime_scalar("osc_math_sin", &[v!(0)], types::F64)),
-            "math_cos" => Some(self.call_runtime_scalar("osc_math_cos", &[v!(0)], types::F64)),
-            "math_sqrt" => Some(self.call_runtime_scalar("osc_math_sqrt", &[v!(0)], types::F64)),
+            "math_sin" => Some(self.call_runtime_scalar("osc_math_sin", &[v!(0)], LType::F64)),
+            "math_cos" => Some(self.call_runtime_scalar("osc_math_cos", &[v!(0)], LType::F64)),
+            "math_sqrt" => Some(self.call_runtime_scalar("osc_math_sqrt", &[v!(0)], LType::F64)),
             "math_pow" => {
-                Some(self.call_runtime_scalar("osc_math_pow", &[v!(0), v!(1)], types::F64))
+                Some(self.call_runtime_scalar("osc_math_pow", &[v!(0), v!(1)], LType::F64))
             }
-            "math_exp" => Some(self.call_runtime_scalar("osc_math_exp", &[v!(0)], types::F64)),
-            "math_log" => Some(self.call_runtime_scalar("osc_math_log", &[v!(0)], types::F64)),
+            "math_exp" => Some(self.call_runtime_scalar("osc_math_exp", &[v!(0)], LType::F64)),
+            "math_log" => Some(self.call_runtime_scalar("osc_math_log", &[v!(0)], LType::F64)),
             "math_atan2" => {
-                Some(self.call_runtime_scalar("osc_math_atan2", &[v!(0), v!(1)], types::F64))
+                Some(self.call_runtime_scalar("osc_math_atan2", &[v!(0), v!(1)], LType::F64))
             }
-            "math_floor" => Some(self.call_runtime_scalar("osc_math_floor", &[v!(0)], types::F64)),
-            "math_ceil" => Some(self.call_runtime_scalar("osc_math_ceil", &[v!(0)], types::F64)),
+            "math_floor" => Some(self.call_runtime_scalar("osc_math_floor", &[v!(0)], LType::F64)),
+            "math_ceil" => Some(self.call_runtime_scalar("osc_math_ceil", &[v!(0)], LType::F64)),
             "math_fmod" => {
-                Some(self.call_runtime_scalar("osc_math_fmod", &[v!(0), v!(1)], types::F64))
+                Some(self.call_runtime_scalar("osc_math_fmod", &[v!(0), v!(1)], LType::F64))
             }
-            "math_abs" => Some(self.call_runtime_scalar("osc_math_abs", &[v!(0)], types::F64)),
-            "math_pi" => Some(self.call_runtime_scalar("osc_math_pi", &[], types::F64)),
-            "math_e" => Some(self.call_runtime_scalar("osc_math_e", &[], types::F64)),
-            "math_ln2" => Some(self.call_runtime_scalar("osc_math_ln2", &[], types::F64)),
-            "math_sqrt2" => Some(self.call_runtime_scalar("osc_math_sqrt2", &[], types::F64)),
+            "math_abs" => Some(self.call_runtime_scalar("osc_math_abs", &[v!(0)], LType::F64)),
+            "math_pi" => Some(self.call_runtime_scalar("osc_math_pi", &[], LType::F64)),
+            "math_e" => Some(self.call_runtime_scalar("osc_math_e", &[], LType::F64)),
+            "math_ln2" => Some(self.call_runtime_scalar("osc_math_ln2", &[], LType::F64)),
+            "math_sqrt2" => Some(self.call_runtime_scalar("osc_math_sqrt2", &[], LType::F64)),
 
             // -- Bitwise (inlined, matching src/codegen.rs's raw C exprs) --
-            "band" => Some(self.builder.ins().band(v!(0), v!(1))),
-            "bor" => Some(self.builder.ins().bor(v!(0), v!(1))),
-            "bxor" => Some(self.builder.ins().bxor(v!(0), v!(1))),
-            "bshl" => Some(self.builder.ins().ishl(v!(0), v!(1))),
-            "bshr" => Some(self.builder.ins().ushr(v!(0), v!(1))),
-            "bnot" => Some(self.builder.ins().bnot(v!(0))),
+            "band" => Some(self.b.band(v!(0), v!(1))),
+            "bor" => Some(self.b.bor(v!(0), v!(1))),
+            "bxor" => Some(self.b.bxor(v!(0), v!(1))),
+            "bshl" => Some(self.b.ishl(v!(0), v!(1))),
+            "bshr" => Some(self.b.ushr(v!(0), v!(1))),
+            "bnot" => Some(self.b.bnot(v!(0))),
 
             // -- Character classification / conversion -------------------
             "char_is_alpha" => {
-                Some(self.call_runtime_scalar("osc_char_is_alpha", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_alpha", &[v!(0)], LType::I8))
             }
             "char_is_digit" => {
-                Some(self.call_runtime_scalar("osc_char_is_digit", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_digit", &[v!(0)], LType::I8))
             }
             "char_is_alnum" => {
-                Some(self.call_runtime_scalar("osc_char_is_alnum", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_alnum", &[v!(0)], LType::I8))
             }
             "char_is_space" => {
-                Some(self.call_runtime_scalar("osc_char_is_space", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_space", &[v!(0)], LType::I8))
             }
             "char_is_upper" => {
-                Some(self.call_runtime_scalar("osc_char_is_upper", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_upper", &[v!(0)], LType::I8))
             }
             "char_is_lower" => {
-                Some(self.call_runtime_scalar("osc_char_is_lower", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_lower", &[v!(0)], LType::I8))
             }
             "char_is_print" => {
-                Some(self.call_runtime_scalar("osc_char_is_print", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_print", &[v!(0)], LType::I8))
             }
             "char_is_xdigit" => {
-                Some(self.call_runtime_scalar("osc_char_is_xdigit", &[v!(0)], types::I8))
+                Some(self.call_runtime_scalar("osc_char_is_xdigit", &[v!(0)], LType::I8))
             }
             "char_to_upper" => {
-                Some(self.call_runtime_scalar("osc_char_to_upper", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_char_to_upper", &[v!(0)], LType::I32))
             }
             "char_to_lower" => {
-                Some(self.call_runtime_scalar("osc_char_to_lower", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_char_to_lower", &[v!(0)], LType::I32))
             }
 
             // -- System ---------------------------------------------------
@@ -2389,8 +2234,8 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.call_runtime_void("osc_rand_seed", &[v!(0)]);
                 None
             }
-            "rand_i32" => Some(self.call_runtime_scalar("osc_rand_i32", &[], types::I32)),
-            "time_now" => Some(self.call_runtime_scalar("osc_time_now", &[], types::I64)),
+            "rand_i32" => Some(self.call_runtime_scalar("osc_rand_i32", &[], LType::I32)),
+            "time_now" => Some(self.call_runtime_scalar("osc_time_now", &[], LType::I64)),
             "sleep_ms" => {
                 self.call_runtime_void("osc_sleep_ms", &[v!(0)]);
                 None
@@ -2410,16 +2255,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             }
             "pop" => {
                 let elem_ty = array_elem_ty_of(&args[0].ty());
-                let ptr = self.call_runtime_scalar("osc_array_pop", &[v!(0)], cl_pointer_type());
+                let ptr = self.call_runtime_scalar("osc_array_pop", &[v!(0)], LType::Ptr);
                 self.read_at(ptr, 0, &elem_ty)
             }
 
             // -- Directory listing, process control, pipes ---------------
-            "dir_list" => Some(self.call_runtime_scalar(
-                "osc_dir_list_shim",
-                &[arena, v!(0)],
-                cl_pointer_type(),
-            )),
+            "dir_list" => {
+                Some(self.call_runtime_scalar("osc_dir_list_shim", &[arena, v!(0)], LType::Ptr))
+            }
             "dir_change" => {
                 Some(self.call_shim_out("osc_dir_change_shim", &result_ty("str", "str"), &[v!(0)]))
             }
@@ -2428,17 +2271,17 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 &result_ty("i32", "str"),
                 &[v!(0)],
             )),
-            "fd_dup" => Some(self.call_runtime_scalar("osc_fd_dup", &[v!(0)], types::I32)),
-            "fd_dup2" => Some(self.call_runtime_scalar("osc_fd_dup2", &[v!(0), v!(1)], types::I32)),
+            "fd_dup" => Some(self.call_runtime_scalar("osc_fd_dup", &[v!(0)], LType::I32)),
+            "fd_dup2" => Some(self.call_runtime_scalar("osc_fd_dup2", &[v!(0), v!(1)], LType::I32)),
             "proc_run" => {
-                Some(self.call_runtime_scalar("osc_proc_run_shim", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_proc_run_shim", &[v!(0), v!(1)], LType::I32))
             }
             "proc_spawn" => {
-                Some(self.call_runtime_scalar("osc_proc_spawn_shim", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_proc_spawn_shim", &[v!(0), v!(1)], LType::I32))
             }
-            "proc_wait" => Some(self.call_runtime_scalar("osc_proc_wait", &[v!(0)], types::I32)),
+            "proc_wait" => Some(self.call_runtime_scalar("osc_proc_wait", &[v!(0)], LType::I32)),
             "pipe_create" => {
-                Some(self.call_runtime_scalar("osc_pipe_create", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_pipe_create", &[arena], LType::Ptr))
             }
             "path_find_exec" => Some(self.call_shim_out(
                 "osc_path_find_exec_shim",
@@ -2447,18 +2290,18 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             )),
 
             // -- Terminal --------------------------------------------------
-            "term_width" => Some(self.call_runtime_scalar("osc_term_width", &[], types::I32)),
-            "term_height" => Some(self.call_runtime_scalar("osc_term_height", &[], types::I32)),
+            "term_width" => Some(self.call_runtime_scalar("osc_term_width", &[], LType::I32)),
+            "term_height" => Some(self.call_runtime_scalar("osc_term_height", &[], LType::I32)),
             "term_raw" => {
                 Some(self.call_shim_out("osc_term_raw_shim", &result_ty("str", "str"), &[]))
             }
             "term_restore" => {
                 Some(self.call_shim_out("osc_term_restore_shim", &result_ty("str", "str"), &[]))
             }
-            "read_nonblock" => Some(self.call_runtime_scalar("osc_read_nonblock", &[], types::I32)),
+            "read_nonblock" => Some(self.call_runtime_scalar("osc_read_nonblock", &[], LType::I32)),
 
             // -- Environment iteration --------------------------------------
-            "env_count" => Some(self.call_runtime_scalar("osc_env_count", &[], types::I32)),
+            "env_count" => Some(self.call_runtime_scalar("osc_env_count", &[], LType::I32)),
             "env_key" => {
                 Some(self.call_shim_out("osc_env_key_shim", &BcType::Str, &[arena, v!(0)]))
             }
@@ -2512,7 +2355,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "socket_sendto" => Some(self.call_runtime_scalar(
                 "osc_socket_sendto_shim",
                 &[v!(0), v!(1), v!(2), v!(3)],
-                types::I32,
+                LType::I32,
             )),
             "socket_recvfrom" => Some(self.call_shim_out(
                 "osc_socket_recvfrom_shim",
@@ -2542,7 +2385,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 Some(self.call_shim_out("osc_tls_recv_shim", &BcType::Str, &[arena, v!(0), v!(1)]))
             }
             "tls_recv_byte" => {
-                Some(self.call_runtime_scalar("osc_tls_recv_byte", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_tls_recv_byte", &[v!(0)], LType::I32))
             }
             "tls_close" => {
                 self.call_runtime_void("osc_tls_close", &[v!(0)]);
@@ -2562,7 +2405,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 None
             }
             "gfx_get_pixel" => {
-                Some(self.call_runtime_scalar("osc_gfx_get_pixel", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_gfx_get_pixel", &[v!(0), v!(1)], LType::I32))
             }
             "gfx_line" => {
                 self.call_runtime_void("osc_gfx_line", &[v!(0), v!(1), v!(2), v!(3), v!(4)]);
@@ -2587,17 +2430,17 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "gfx_draw_text" => Some(self.call_runtime_scalar(
                 "osc_gfx_draw_text_shim",
                 &[v!(0), v!(1), v!(2), v!(3), v!(4)],
-                types::I32,
+                LType::I32,
             )),
             "gfx_draw_text_scaled" => Some(self.call_runtime_scalar(
                 "osc_gfx_draw_text_scaled_shim",
                 &[v!(0), v!(1), v!(2), v!(3), v!(4), v!(5), v!(6)],
-                types::I32,
+                LType::I32,
             )),
             "gfx_text_width" => Some(self.call_runtime_scalar(
                 "osc_gfx_text_width_shim",
                 &[v!(0), v!(1)],
-                types::I32,
+                LType::I32,
             )),
             "gfx_blit" => {
                 self.call_runtime_void("osc_gfx_blit", &[v!(0), v!(1), v!(2), v!(3), v!(4)]);
@@ -2609,15 +2452,15 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             }
 
             // -- Graphics: color -----------------------------------------
-            "rgb" => Some(self.call_runtime_scalar("osc_rgb", &[v!(0), v!(1), v!(2)], types::I32)),
+            "rgb" => Some(self.call_runtime_scalar("osc_rgb", &[v!(0), v!(1), v!(2)], LType::I32)),
             "rgba" => Some(self.call_runtime_scalar(
                 "osc_rgba",
                 &[v!(0), v!(1), v!(2), v!(3)],
-                types::I32,
+                LType::I32,
             )),
 
             // -- HashMap (untyped str->str) --------------------------------
-            "map_new" => Some(self.call_runtime_scalar("osc_map_new", &[arena], cl_pointer_type())),
+            "map_new" => Some(self.call_runtime_scalar("osc_map_new", &[arena], LType::Ptr)),
             "map_set" => {
                 self.call_runtime_void("osc_map_set_shim", &[arena, v!(0), v!(1), v!(2)]);
                 None
@@ -2626,17 +2469,17 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 Some(self.call_shim_out("osc_map_get_shim", &BcType::Str, &[v!(0), v!(1)]))
             }
             "map_has" => {
-                Some(self.call_runtime_scalar("osc_map_has_shim", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_map_has_shim", &[v!(0), v!(1)], LType::I8))
             }
             "map_delete" => {
                 self.call_runtime_void("osc_map_delete_shim", &[v!(0), v!(1)]);
                 None
             }
-            "map_len" => Some(self.call_runtime_scalar("osc_map_len", &[v!(0)], types::I32)),
+            "map_len" => Some(self.call_runtime_scalar("osc_map_len", &[v!(0)], LType::I32)),
 
             // -- Typed HashMap: map_str_i32 ---------------------------------
             "map_str_i32_new" => {
-                Some(self.call_runtime_scalar("osc_map_str_i32_new", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_map_str_i32_new", &[arena], LType::Ptr))
             }
             "map_str_i32_set" => {
                 self.call_runtime_void("osc_map_str_i32_set_shim", &[arena, v!(0), v!(1), v!(2)]);
@@ -2645,24 +2488,24 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "map_str_i32_get" => Some(self.call_runtime_scalar(
                 "osc_map_str_i32_get_shim",
                 &[v!(0), v!(1)],
-                types::I32,
+                LType::I32,
             )),
             "map_str_i32_has" => Some(self.call_runtime_scalar(
                 "osc_map_str_i32_has_shim",
                 &[v!(0), v!(1)],
-                types::I8,
+                LType::I8,
             )),
             "map_str_i32_delete" => {
                 self.call_runtime_void("osc_map_str_i32_delete_shim", &[v!(0), v!(1)]);
                 None
             }
             "map_str_i32_len" => {
-                Some(self.call_runtime_scalar("osc_map_str_i32_len", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_str_i32_len", &[v!(0)], LType::I32))
             }
 
             // -- Typed HashMap: map_str_i64 ---------------------------------
             "map_str_i64_new" => {
-                Some(self.call_runtime_scalar("osc_map_str_i64_new", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_map_str_i64_new", &[arena], LType::Ptr))
             }
             "map_str_i64_set" => {
                 self.call_runtime_void("osc_map_str_i64_set_shim", &[arena, v!(0), v!(1), v!(2)]);
@@ -2671,24 +2514,24 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "map_str_i64_get" => Some(self.call_runtime_scalar(
                 "osc_map_str_i64_get_shim",
                 &[v!(0), v!(1)],
-                types::I64,
+                LType::I64,
             )),
             "map_str_i64_has" => Some(self.call_runtime_scalar(
                 "osc_map_str_i64_has_shim",
                 &[v!(0), v!(1)],
-                types::I8,
+                LType::I8,
             )),
             "map_str_i64_delete" => {
                 self.call_runtime_void("osc_map_str_i64_delete_shim", &[v!(0), v!(1)]);
                 None
             }
             "map_str_i64_len" => {
-                Some(self.call_runtime_scalar("osc_map_str_i64_len", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_str_i64_len", &[v!(0)], LType::I32))
             }
 
             // -- Typed HashMap: map_str_f64 ---------------------------------
             "map_str_f64_new" => {
-                Some(self.call_runtime_scalar("osc_map_str_f64_new", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_map_str_f64_new", &[arena], LType::Ptr))
             }
             "map_str_f64_set" => {
                 self.call_runtime_void("osc_map_str_f64_set_shim", &[arena, v!(0), v!(1), v!(2)]);
@@ -2697,24 +2540,24 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "map_str_f64_get" => Some(self.call_runtime_scalar(
                 "osc_map_str_f64_get_shim",
                 &[v!(0), v!(1)],
-                types::F64,
+                LType::F64,
             )),
             "map_str_f64_has" => Some(self.call_runtime_scalar(
                 "osc_map_str_f64_has_shim",
                 &[v!(0), v!(1)],
-                types::I8,
+                LType::I8,
             )),
             "map_str_f64_delete" => {
                 self.call_runtime_void("osc_map_str_f64_delete_shim", &[v!(0), v!(1)]);
                 None
             }
             "map_str_f64_len" => {
-                Some(self.call_runtime_scalar("osc_map_str_f64_len", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_str_f64_len", &[v!(0)], LType::I32))
             }
 
             // -- Typed HashMap: map_i32_str ---------------------------------
             "map_i32_str_new" => {
-                Some(self.call_runtime_scalar("osc_map_i32_str_new", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_map_i32_str_new", &[arena], LType::Ptr))
             }
             "map_i32_str_set" => {
                 self.call_runtime_void("osc_map_i32_str_set_shim", &[arena, v!(0), v!(1), v!(2)]);
@@ -2724,37 +2567,37 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 Some(self.call_shim_out("osc_map_i32_str_get_shim", &BcType::Str, &[v!(0), v!(1)]))
             }
             "map_i32_str_has" => {
-                Some(self.call_runtime_scalar("osc_map_i32_str_has", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_map_i32_str_has", &[v!(0), v!(1)], LType::I8))
             }
             "map_i32_str_delete" => {
                 self.call_runtime_void("osc_map_i32_str_delete", &[v!(0), v!(1)]);
                 None
             }
             "map_i32_str_len" => {
-                Some(self.call_runtime_scalar("osc_map_i32_str_len", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_i32_str_len", &[v!(0)], LType::I32))
             }
 
             // -- Typed HashMap: map_i32_i32 (never carries an osc_str, so
             // every operation calls the real runtime entry point directly) --
             "map_i32_i32_new" => {
-                Some(self.call_runtime_scalar("osc_map_i32_i32_new", &[arena], cl_pointer_type()))
+                Some(self.call_runtime_scalar("osc_map_i32_i32_new", &[arena], LType::Ptr))
             }
             "map_i32_i32_set" => {
                 self.call_runtime_void("osc_map_i32_i32_set", &[arena, v!(0), v!(1), v!(2)]);
                 None
             }
             "map_i32_i32_get" => {
-                Some(self.call_runtime_scalar("osc_map_i32_i32_get", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_i32_i32_get", &[v!(0), v!(1)], LType::I32))
             }
             "map_i32_i32_has" => {
-                Some(self.call_runtime_scalar("osc_map_i32_i32_has", &[v!(0), v!(1)], types::I8))
+                Some(self.call_runtime_scalar("osc_map_i32_i32_has", &[v!(0), v!(1)], LType::I8))
             }
             "map_i32_i32_delete" => {
                 self.call_runtime_void("osc_map_i32_i32_delete", &[v!(0), v!(1)]);
                 None
             }
             "map_i32_i32_len" => {
-                Some(self.call_runtime_scalar("osc_map_i32_i32_len", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_map_i32_i32_len", &[v!(0)], LType::I32))
             }
 
             // -- Canvas: lifecycle/state/input (plain scalars, called
@@ -2763,7 +2606,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.call_runtime_void("osc_canvas_close", &[]);
                 None
             }
-            "canvas_alive" => Some(self.call_runtime_scalar("osc_canvas_alive", &[], types::I8)),
+            "canvas_alive" => Some(self.call_runtime_scalar("osc_canvas_alive", &[], LType::I8)),
             "canvas_flush" => {
                 self.call_runtime_void("osc_canvas_flush", &[]);
                 None
@@ -2772,23 +2615,23 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.call_runtime_void("osc_canvas_clear", &[v!(0)]);
                 None
             }
-            "canvas_width" => Some(self.call_runtime_scalar("osc_canvas_width", &[], types::I32)),
-            "canvas_height" => Some(self.call_runtime_scalar("osc_canvas_height", &[], types::I32)),
-            "canvas_scale" => Some(self.call_runtime_scalar("osc_canvas_scale", &[], types::I32)),
+            "canvas_width" => Some(self.call_runtime_scalar("osc_canvas_width", &[], LType::I32)),
+            "canvas_height" => Some(self.call_runtime_scalar("osc_canvas_height", &[], LType::I32)),
+            "canvas_scale" => Some(self.call_runtime_scalar("osc_canvas_scale", &[], LType::I32)),
             "canvas_resized" => {
-                Some(self.call_runtime_scalar("osc_canvas_resized", &[], types::I8))
+                Some(self.call_runtime_scalar("osc_canvas_resized", &[], LType::I8))
             }
-            "canvas_key" => Some(self.call_runtime_scalar("osc_canvas_key", &[], types::I32)),
+            "canvas_key" => Some(self.call_runtime_scalar("osc_canvas_key", &[], LType::I32)),
             "canvas_mouse_x" => {
-                Some(self.call_runtime_scalar("osc_canvas_mouse_x", &[], types::I32))
+                Some(self.call_runtime_scalar("osc_canvas_mouse_x", &[], LType::I32))
             }
             "canvas_mouse_y" => {
-                Some(self.call_runtime_scalar("osc_canvas_mouse_y", &[], types::I32))
+                Some(self.call_runtime_scalar("osc_canvas_mouse_y", &[], LType::I32))
             }
             "canvas_mouse_btn" => {
-                Some(self.call_runtime_scalar("osc_canvas_mouse_btn", &[], types::I32))
+                Some(self.call_runtime_scalar("osc_canvas_mouse_btn", &[], LType::I32))
             }
-            "canvas_wheel" => Some(self.call_runtime_scalar("osc_canvas_wheel", &[], types::I32)),
+            "canvas_wheel" => Some(self.call_runtime_scalar("osc_canvas_wheel", &[], LType::I32)),
 
             // -- Canvas: calls that cross an osc_str and/or return a
             // Result ------------------------------------------------------
@@ -2805,7 +2648,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 
             // -- Clipboard --------------------------------------------------
             "clipboard_set" => {
-                Some(self.call_runtime_scalar("osc_clipboard_set_shim", &[v!(0)], types::I32))
+                Some(self.call_runtime_scalar("osc_clipboard_set_shim", &[v!(0)], LType::I32))
             }
             "clipboard_get" => Some(self.call_shim_out(
                 "osc_clipboard_get_shim",
@@ -2835,16 +2678,16 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 None
             }
             "tt_ascent" => {
-                Some(self.call_runtime_scalar("osc_tt_ascent", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_tt_ascent", &[v!(0), v!(1)], LType::I32))
             }
             "tt_descent" => {
-                Some(self.call_runtime_scalar("osc_tt_descent", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_tt_descent", &[v!(0), v!(1)], LType::I32))
             }
             "tt_line_gap" => {
-                Some(self.call_runtime_scalar("osc_tt_line_gap", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_tt_line_gap", &[v!(0), v!(1)], LType::I32))
             }
             "tt_line_height" => {
-                Some(self.call_runtime_scalar("osc_tt_line_height", &[v!(0), v!(1)], types::I32))
+                Some(self.call_runtime_scalar("osc_tt_line_height", &[v!(0), v!(1)], LType::I32))
             }
 
             // -- TrueType: calls that cross an osc_str and/or return a
@@ -2857,12 +2700,12 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "tt_text_width" => Some(self.call_runtime_scalar(
                 "osc_tt_text_width_shim",
                 &[v!(0), v!(1), v!(2)],
-                types::I32,
+                LType::I32,
             )),
             "tt_draw_text" => Some(self.call_runtime_scalar(
                 "osc_tt_draw_text_shim",
                 &[v!(0), v!(1), v!(2), v!(3), v!(4), v!(5)],
-                types::I32,
+                LType::I32,
             )),
 
             _ => return self.lower_user_or_extern_call(callee, name, args, &a, ty, span),
@@ -2874,10 +2717,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         callee: &oir::Callee,
         name: &str,
         args: &[oir::Expr],
-        arg_vals: &[Option<Value>],
+        arg_vals: &[Option<LValue>],
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let _ = ty;
         match callee {
             oir::Callee::Var(_) => {
@@ -2888,52 +2731,35 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     BcType::FnPtr(p, r) => (p.clone(), (**r).clone()),
                     other => panic!("internal error: '{name}' used as a call target has non-fn-ptr type '{other}'"),
                 };
-                let fn_addr = self.builder.use_var(binding.var);
-                let mut sig = self.ctx.module.make_signature();
-                sig.params.push(AbiParam::new(cl_pointer_type()));
+                let fn_addr = self.b.use_var(binding.var);
+                let mut sig = LSig::default();
+                sig.push_param(LType::Ptr);
                 for pty in &param_tys {
-                    if let Some(t) = Repr::of(pty, self.program()).cl_type() {
-                        sig.params.push(AbiParam::new(t));
+                    if let Some(t) = Repr::of(pty, self.program()).lir_type() {
+                        sig.push_param(t);
                     }
                 }
-                if let Some(t) = Repr::of(&ret_ty, self.program()).cl_type() {
-                    sig.returns.push(AbiParam::new(t));
-                }
-                let sig_ref = self.builder.import_signature(sig);
+                sig.ret = Repr::of(&ret_ty, self.program()).lir_type();
                 let mut call_args = vec![self.arena_value];
                 call_args.extend(arg_vals.iter().filter_map(|v| *v));
-                let call = self
-                    .builder
-                    .ins()
-                    .call_indirect(sig_ref, fn_addr, &call_args);
-                Ok(self.builder.inst_results(call).first().copied())
+                Ok(self.b.call_indirect(&sig, fn_addr, &call_args))
             }
             oir::Callee::Named(_) => {
                 if let Some(&func_id) = self.ctx.functions.get(name) {
-                    let func_ref = self
-                        .ctx
-                        .module
-                        .declare_func_in_func(func_id, self.builder.func);
                     let mut call_args = vec![self.arena_value];
                     call_args.extend(arg_vals.iter().filter_map(|v| *v));
-                    let call = self.builder.ins().call(func_ref, &call_args);
-                    Ok(self.builder.inst_results(call).first().copied())
+                    Ok(self.b.call(func_id, &call_args))
                 } else if let Some((func_id, kind)) = self.resolve_extern(name, span)? {
-                    let func_ref = self
-                        .ctx
-                        .module
-                        .declare_func_in_func(func_id, self.builder.func);
-                    let call_args: Vec<Value> = arg_vals.iter().filter_map(|v| *v).collect();
+                    let call_args: Vec<LValue> = arg_vals.iter().filter_map(|v| *v).collect();
                     if matches!(kind, ExternDeclKind::NativeShim) && *ty == BcType::Str {
                         let out_ptr = self.arena_alloc(layout_of(ty, self.program()).size);
                         let mut shim_args = Vec::with_capacity(call_args.len() + 1);
                         shim_args.push(out_ptr);
                         shim_args.extend(call_args);
-                        self.builder.ins().call(func_ref, &shim_args);
+                        self.b.call(func_id, &shim_args);
                         return Ok(Some(out_ptr));
                     }
-                    let call = self.builder.ins().call(func_ref, &call_args);
-                    Ok(self.builder.inst_results(call).first().copied())
+                    Ok(self.b.call(func_id, &call_args))
                 } else {
                     let _ = args;
                     Err(unsupported(
@@ -2945,7 +2771,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         }
     }
 
-    /// Resolve `name` to a declared `extern` function's `FuncId`,
+    /// Resolve `name` to a declared `extern` function's `LFunc`,
     /// declaring it as a Cranelift import *lazily* — the first time it is
     /// actually called — rather than unconditionally for every `extern`
     /// block declaration up front (the old behavior). This matters
@@ -2972,7 +2798,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         &mut self,
         name: &str,
         span: Span,
-    ) -> CResult<Option<(FuncId, ExternDeclKind)>> {
+    ) -> CResult<Option<(LFunc, ExternDeclKind)>> {
         if let Some(&(func_id, kind)) = self.ctx.externs.get(name) {
             return Ok(Some((func_id, kind)));
         }
@@ -2991,7 +2817,6 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             NativeExternAbi::Direct => (
                 crate::c_name::mangle_c_name(&ef.name),
                 direct_extern_fn_signature(
-                    &self.ctx.module,
                     self.program(),
                     &ef.name,
                     &ef.params,
@@ -3002,20 +2827,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             ),
             NativeExternAbi::Shim(shim) => {
                 let symbol = shim.shim_symbol.clone();
-                let sig = extern_shim_signature(
-                    &self.ctx.module,
-                    self.program(),
-                    &ef.params,
-                    &ef.return_type,
-                );
+                let sig = extern_shim_signature(self.program(), &ef.params, &ef.return_type);
                 self.ctx.add_extern_shim(shim);
                 (symbol, sig, ExternDeclKind::NativeShim)
             }
         };
         let func_id = self
-            .ctx
-            .module
-            .declare_function(&symbol, Linkage::Import, &sig)
+            .b
+            .declare_function(&symbol, &sig, LLinkage::Import)
             .map_err(|e| {
                 CompileError::new(
                     span,
@@ -3053,7 +2872,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         &mut self,
         name: &str,
         fields: &'a [oir::FieldInit],
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let layout = layout_of(&BcType::Struct(name.to_string()), self.program());
         let ptr = self.arena_alloc(layout.size);
         for fi in fields {
@@ -3072,26 +2891,19 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         args: &'a [oir::Expr],
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         if enum_name == "Result" {
             return self.lower_result_constructor(variant, args, ty, span);
         }
         if !layout::enum_has_payload(enum_name, self.program()) {
             // Simple int enum: the value *is* the tag.
             let tag = self.enum_variant_tag(enum_name, variant);
-            return Ok(Some(
-                self.builder
-                    .ins()
-                    .iconst(cranelift_codegen::ir::types::I32, tag as i64),
-            ));
+            return Ok(Some(self.b.iconst(LType::I32, tag as i64)));
         }
         let el = enum_layout(enum_name, self.program());
         let ptr = self.arena_alloc(el.total.size);
         let tag = self.enum_variant_tag(enum_name, variant);
-        let tag_val = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I32, tag as i64);
+        let tag_val = self.b.iconst(LType::I32, tag as i64);
         self.store_scalar(tag_val, ptr, 0);
 
         let variant_info = self
@@ -3135,7 +2947,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         args: &'a [oir::Expr],
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let (ok_ty, err_ty) = match ty {
             BcType::Result(o, e) => ((**o).clone(), (**e).clone()),
             other => {
@@ -3149,10 +2961,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         let ptr = self.arena_alloc(rl.total.size);
         match variant {
             "Ok" => {
-                let one = self
-                    .builder
-                    .ins()
-                    .iconst(cranelift_codegen::ir::types::I8, 1);
+                let one = self.b.iconst(LType::I8, 1);
                 self.store_scalar(one, ptr, 0);
                 if ok_ty != BcType::Unit {
                     let raw = self.lower_expr(&args[0])?;
@@ -3161,10 +2970,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 }
             }
             "Err" => {
-                let zero = self
-                    .builder
-                    .ins()
-                    .iconst(cranelift_codegen::ir::types::I8, 0);
+                let zero = self.b.iconst(LType::I8, 0);
                 self.store_scalar(zero, ptr, 0);
                 let raw = self.lower_expr(&args[0])?;
                 let value = self.bind_value(&err_ty, raw, &args[0])?;
@@ -3190,7 +2996,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         call: &'a oir::Expr,
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let call_ty = call.ty();
         let (call_ok_ty, call_err_ty) = match &call_ty {
             BcType::Result(o, e) => ((**o).clone(), (**e).clone()),
@@ -3204,13 +3010,13 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         let call_ptr = self.lower_expr(call)?.expect("Result value is a pointer");
         let call_rl = result_layout(&call_ok_ty, &call_err_ty, self.program());
 
-        let is_ok = self.load_scalar(cranelift_codegen::ir::types::I8, call_ptr, 0);
-        let err_blk = self.builder.create_block();
-        let ok_blk = self.builder.create_block();
-        self.builder.ins().brif(is_ok, ok_blk, &[], err_blk, &[]);
+        let is_ok = self.load_scalar(LType::I8, call_ptr, 0);
+        let err_blk = self.b.create_block();
+        let ok_blk = self.b.create_block();
+        self.b.brif(is_ok, ok_blk, &[], err_blk, &[]);
 
         self.goto(err_blk);
-        self.builder.seal_block(err_blk);
+        self.b.seal_block(err_blk);
         let fn_ret_ty = self.fn_return_ty.clone();
         let (fn_ok_ty, fn_err_ty) = match &fn_ret_ty {
             BcType::Result(o, e) => ((**o).clone(), (**e).clone()),
@@ -3223,10 +3029,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         };
         let fn_rl = result_layout(&fn_ok_ty, &fn_err_ty, self.program());
         let err_ret_ptr = self.arena_alloc(fn_rl.total.size);
-        let zero = self
-            .builder
-            .ins()
-            .iconst(cranelift_codegen::ir::types::I8, 0);
+        let zero = self.b.iconst(LType::I8, 0);
         self.store_scalar(zero, err_ret_ptr, 0);
         let err_layout = layout_of(&call_err_ty, self.program());
         self.copy_bytes(
@@ -3240,7 +3043,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         self.emit_return(Some(err_ret_ptr))?;
 
         self.goto(ok_blk);
-        self.builder.seal_block(ok_blk);
+        self.b.seal_block(ok_blk);
         let _ = ty;
         Ok(self.read_at(call_ptr, call_rl.ok_offset, &call_ok_ty))
     }
@@ -3251,14 +3054,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         arms: &'a [oir::MatchArm],
         ty: &BcType,
         span: Span,
-    ) -> CResult<Option<Value>> {
+    ) -> CResult<Option<LValue>> {
         let scrut_ty = scrutinee.ty();
         let scrut_val = self.lower_expr(scrutinee)?;
 
-        let merge_blk = self.builder.create_block();
-        let repr_ty = Repr::of(ty, self.program()).cl_type();
+        let merge_blk = self.b.create_block();
+        let repr_ty = Repr::of(ty, self.program()).lir_type();
         if let Some(t) = repr_ty {
-            self.builder.append_block_param(merge_blk, t);
+            self.b.append_block_param(merge_blk, t);
         }
 
         let n = arms.len();
@@ -3276,11 +3079,11 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.pop_scope();
                 if !self.terminated {
                     let args = block_args(arm_val);
-                    self.builder.ins().jump(merge_blk, &args);
+                    self.b.jump(merge_blk, &args);
                 }
             } else {
-                let body_blk = self.builder.create_block();
-                let next_blk = self.builder.create_block();
+                let body_blk = self.b.create_block();
+                let next_blk = self.b.create_block();
                 self.lower_pattern_test(
                     &arm.pattern,
                     scrut_val,
@@ -3292,8 +3095,8 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 // Both blocks have exactly one predecessor — the brif
                 // `lower_pattern_test` just emitted in the (now former)
                 // current block — so both can be sealed immediately.
-                self.builder.seal_block(body_blk);
-                self.builder.seal_block(next_blk);
+                self.b.seal_block(body_blk);
+                self.b.seal_block(next_blk);
 
                 self.goto(body_blk);
                 self.push_scope();
@@ -3302,7 +3105,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.pop_scope();
                 if !self.terminated {
                     let args = block_args(arm_val);
-                    self.builder.ins().jump(merge_blk, &args);
+                    self.b.jump(merge_blk, &args);
                 }
 
                 // `next_blk` becomes the current block for testing the
@@ -3312,10 +3115,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             }
         }
 
-        self.builder.seal_block(merge_blk);
+        self.b.seal_block(merge_blk);
         self.goto(merge_blk);
         Ok(if repr_ty.is_some() {
-            Some(self.builder.block_params(merge_blk)[0])
+            Some(self.b.block_param(merge_blk, 0))
         } else {
             None
         })
@@ -3324,69 +3127,65 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     fn lower_pattern_test(
         &mut self,
         pattern: &oir::Pattern,
-        scrut_val: Option<Value>,
+        scrut_val: Option<LValue>,
         scrut_ty: &BcType,
         then_blk: CBlock,
         else_blk: CBlock,
         span: Span,
     ) -> CResult<()> {
-        use cranelift_codegen::ir::types;
         match pattern {
             oir::Pattern::Wildcard(_) | oir::Pattern::Ident(_, _) => {
-                self.builder.ins().jump(then_blk, &[]);
+                self.b.jump(then_blk, &[]);
             }
             oir::Pattern::IntLit(v, _) => {
                 let s = scrut_val.expect("int scrutinee has a value");
-                let c = self.builder.ins().iconst(types::I32, *v);
-                let cond = self.builder.ins().icmp(IntCC::Equal, s, c);
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                let c = self.b.iconst(LType::I32, *v);
+                let cond = self.b.icmp(IntCmp::Eq, s, c);
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
             }
             oir::Pattern::FloatLit(v, _) => {
                 let s = scrut_val.expect("float scrutinee has a value");
-                let c = self
-                    .builder
-                    .ins()
-                    .f64const(cranelift_codegen::ir::immediates::Ieee64::with_float(*v));
-                let cond = self.builder.ins().fcmp(FloatCC::Equal, s, c);
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                let c = self.b.f64const(*v);
+                let cond = self.b.fcmp(FloatCmp::Eq, s, c);
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
             }
             oir::Pattern::BoolLit(v, _) => {
                 let s = scrut_val.expect("bool scrutinee has a value");
-                let c = self.builder.ins().iconst(types::I8, if *v { 1 } else { 0 });
-                let cond = self.builder.ins().icmp(IntCC::Equal, s, c);
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                let c = self.b.iconst(LType::I8, if *v { 1 } else { 0 });
+                let cond = self.b.icmp(IntCmp::Eq, s, c);
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
             }
             oir::Pattern::StringLit(v, _) => {
                 let s = scrut_val.expect("str scrutinee has a value");
                 let c = self.string_literal_ptr(v);
-                let eq = self.call_runtime_scalar("osc_str_eq_shim", &[s, c], types::I8);
-                self.builder.ins().brif(eq, then_blk, &[], else_blk, &[]);
+                let eq = self.call_runtime_scalar("osc_str_eq_shim", &[s, c], LType::I8);
+                self.b.brif(eq, then_blk, &[], else_blk, &[]);
             }
             oir::Pattern::Enum {
                 enum_name, variant, ..
             } if enum_name == "Result" => {
                 let ptr = scrut_val.expect("Result scrutinee has a value");
-                let is_ok = self.load_scalar(types::I8, ptr, 0);
+                let is_ok = self.load_scalar(LType::I8, ptr, 0);
                 let cond = if variant == "Ok" {
                     is_ok
                 } else {
-                    self.builder.ins().bxor_imm(is_ok, 1)
+                    self.b.bxor_imm(is_ok, 1)
                 };
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
             }
             oir::Pattern::Enum {
                 enum_name, variant, ..
             } => {
                 let want = self.enum_variant_tag(enum_name, variant);
-                let want_val = self.builder.ins().iconst(types::I32, want as i64);
+                let want_val = self.b.iconst(LType::I32, want as i64);
                 let tag = if layout::enum_has_payload(enum_name, self.program()) {
                     let ptr = scrut_val.expect("enum scrutinee has a value");
-                    self.load_scalar(types::I32, ptr, 0)
+                    self.load_scalar(LType::I32, ptr, 0)
                 } else {
                     scrut_val.expect("enum scrutinee has a value")
                 };
-                let cond = self.builder.ins().icmp(IntCC::Equal, tag, want_val);
-                self.builder.ins().brif(cond, then_blk, &[], else_blk, &[]);
+                let cond = self.b.icmp(IntCmp::Eq, tag, want_val);
+                self.b.brif(cond, then_blk, &[], else_blk, &[]);
             }
         }
         let _ = (scrut_ty, span);
@@ -3407,7 +3206,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     fn bind_pattern(
         &mut self,
         pattern: &oir::Pattern,
-        scrut_val: Option<Value>,
+        scrut_val: Option<LValue>,
         scrut_ty: &BcType,
     ) -> CResult<()> {
         match pattern {
@@ -3418,14 +3217,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             | oir::Pattern::BoolLit(..) => Ok(()),
             oir::Pattern::Ident(name, _) => {
                 let repr = Repr::of(scrut_ty, self.program());
-                let var = self.fresh_var(repr.cl_type());
+                let var = self.fresh_var(repr.lir_type());
                 if let Some(v) = scrut_val {
                     let v = if is_inline_aggregate(scrut_ty, self.program()) {
                         self.materialize_owned(scrut_ty, v)
                     } else {
                         v
                     };
-                    self.builder.def_var(var, v);
+                    self.b.def_var(var, v);
                 }
                 self.scopes.last_mut().unwrap().insert(
                     name.clone(),
@@ -3462,9 +3261,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                         other => other,
                     };
                     let repr = Repr::of(&payload_ty, self.program());
-                    let var = self.fresh_var(repr.cl_type());
+                    let var = self.fresh_var(repr.lir_type());
                     if let Some(v) = value {
-                        self.builder.def_var(var, v);
+                        self.b.def_var(var, v);
                     }
                     self.scopes.last_mut().unwrap().insert(
                         name.clone(),
@@ -3507,9 +3306,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                             other => other,
                         };
                         let repr = Repr::of(&field_ty, self.program());
-                        let var = self.fresh_var(repr.cl_type());
+                        let var = self.fresh_var(repr.lir_type());
                         if let Some(v) = value {
-                            self.builder.def_var(var, v);
+                            self.b.def_var(var, v);
                         }
                         self.scopes
                             .last_mut()

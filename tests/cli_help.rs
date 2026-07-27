@@ -93,13 +93,22 @@ fn help_describes_backend_roles_and_default() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("default: LLVM when available"));
-    assert!(stdout.contains("LLVM optimization/object code"));
+    assert!(stdout.contains("default: LLVM when its packaged code generator is available"));
+    assert!(
+        stdout.contains("Direct LLVM object code through Oscan's own packaged LLVM code generator")
+    );
+    assert!(stdout.contains("no C, no toolchain"));
     assert!(stdout.contains("Portability/reference"));
     assert!(stdout.contains("Cranelift object code"));
     assert!(stdout.contains("--emit-c"));
     assert!(stdout.contains("--emit-llvm-ir"));
     assert!(stdout.contains("C-backend source"));
+    assert!(stdout.contains("OSCAN_LLVM_LIB"));
+    assert!(stdout.contains("OSCAN_LLVM_DIR"));
+    // The C-mediated path is gone: nothing in the help may suggest the
+    // LLVM backend needs Clang or an installed LLVM toolchain.
+    assert!(!stdout.contains("OSCAN_LLVM_CLANG"));
+    assert!(!stdout.contains("OSCAN_LLVM_TOOLCHAIN_DIR"));
 }
 
 #[test]
@@ -183,7 +192,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let missing_clang = std::env::temp_dir().join(format!("oscan-missing-clang-{}", process::id()));
+    let missing_lib = std::env::temp_dir().join(format!("oscan-missing-llvm-{}", process::id()));
     let output_path =
         std::env::temp_dir().join(format!("oscan-llvm-fallback-{}.obj", process::id()));
     let _ = fs::remove_file(&output_path);
@@ -191,7 +200,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
         .arg(&source)
         .args(["--verbose", "-o"])
         .arg(&output_path)
-        .env("OSCAN_LLVM_CLANG", &missing_clang)
+        .env("OSCAN_LLVM_LIB", &missing_lib)
         .output()
         .expect("failed to run LLVM fallback validation");
 
@@ -224,8 +233,8 @@ fn unavailable_explicit_llvm_never_falls_back() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let missing_clang =
-        std::env::temp_dir().join(format!("oscan-missing-explicit-clang-{}", process::id()));
+    let missing_lib =
+        std::env::temp_dir().join(format!("oscan-missing-explicit-llvm-{}", process::id()));
     let output_path =
         std::env::temp_dir().join(format!("oscan-explicit-llvm-failure-{}.obj", process::id()));
     let _ = fs::remove_file(&output_path);
@@ -233,13 +242,18 @@ fn unavailable_explicit_llvm_never_falls_back() {
         .arg(&source)
         .args(["--backend", "llvm", "-o"])
         .arg(&output_path)
-        .env("OSCAN_LLVM_CLANG", &missing_clang)
+        .env("OSCAN_LLVM_LIB", &missing_lib)
         .output()
         .expect("failed to run explicit LLVM failure validation");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("OSCAN_LLVM_CLANG does not identify a usable Clang executable"));
+    assert!(
+        stderr.contains("packaged LLVM"),
+        "unexpected diagnostic: {stderr}"
+    );
+    assert!(stderr.contains("OSCAN_LLVM_LIB"), "{stderr}");
+    // No silent fallback to Cranelift or C, and no partial output.
     assert!(!stderr.contains("[verbose] native backend target:"));
     assert!(!output_path.exists());
 }
@@ -414,9 +428,24 @@ fn llvm_ir_extension_rejects_run_mode() {
     assert!(!output_path.exists());
 }
 
+/// Whether this machine has Oscan's packaged LLVM code generator
+/// available (either staged next to the test binary or pointed at by
+/// `OSCAN_LLVM_LIB`/`OSCAN_LLVM_DIR`). The direct LLVM tests below are
+/// skipped without it; `unavailable_explicit_llvm_never_falls_back`
+/// covers the missing-provider path itself.
+fn llvm_provider_configured() -> bool {
+    let configured = std::env::var_os("OSCAN_LLVM_LIB").is_some()
+        || std::env::var_os("OSCAN_LLVM_DIR").is_some();
+    assert!(
+        configured || std::env::var_os("OSCAN_LLVM_TEST_REQUIRED").is_none(),
+        "OSCAN_LLVM_TEST_REQUIRED is set, but OSCAN_LLVM_LIB/OSCAN_LLVM_DIR is not configured"
+    );
+    configured
+}
+
 #[test]
-fn configured_llvm_toolchain_becomes_the_implicit_default() {
-    if std::env::var_os("OSCAN_LLVM_CLANG").is_none() {
+fn configured_llvm_provider_becomes_the_implicit_default() {
+    if !llvm_provider_configured() {
         return;
     }
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -438,7 +467,10 @@ fn configured_llvm_toolchain_becomes_the_implicit_default() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("[verbose] llvm backend target:"));
-    assert!(stderr.contains("[verbose] LLVM toolchain:"));
+    assert!(
+        stderr.contains("[verbose] LLVM code generator:"),
+        "{stderr}"
+    );
     let bytes = fs::read(&output_path).expect("LLVM object output should exist");
     fs::remove_file(&output_path).expect("failed to remove LLVM object output");
     let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
@@ -446,8 +478,8 @@ fn configured_llvm_toolchain_becomes_the_implicit_default() {
 }
 
 #[test]
-fn llvm_ir_output_is_deterministic_when_toolchain_is_configured() {
-    if std::env::var_os("OSCAN_LLVM_CLANG").is_none() {
+fn llvm_ir_output_is_deterministic_and_direct() {
+    if !llvm_provider_configured() {
         return;
     }
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -475,13 +507,28 @@ fn llvm_ir_output_is_deterministic_when_toolchain_is_configured() {
     );
     assert_eq!(first.stdout, second.stdout);
     let ir = String::from_utf8_lossy(&first.stdout);
-    assert!(ir.contains("source_filename = \"program.c\""));
     assert!(ir.contains("target triple = "));
+    assert!(ir.contains("target datalayout = "));
+    // The IR is lowered directly from Oscan's own typed IR, never through
+    // a generated C translation unit compiled by Clang.
+    assert!(
+        ir.contains("source_filename = \"oscan_program\""),
+        "unexpected module identity: {ir}"
+    );
+    assert!(!ir.contains("program.c"), "no C source may appear: {ir}");
+    assert!(!ir.contains(".c\""), "no C source may appear: {ir}");
+    assert!(ir.contains("define void @oscan_main("), "{ir}");
+    assert!(ir.contains("define i32 @main("), "{ir}");
+    // Conservative poison policy.
+    assert!(!ir.contains(" nsw "), "no nsw: {ir}");
+    assert!(!ir.contains(" nuw "), "no nuw: {ir}");
+    assert!(!ir.contains("inbounds"), "no inbounds: {ir}");
+    assert!(!ir.contains("llvm.memcpy"), "no memcpy intrinsic: {ir}");
 }
 
 #[test]
-fn llvm_ir_extension_selects_llvm_when_toolchain_is_configured() {
-    if std::env::var_os("OSCAN_LLVM_CLANG").is_none() {
+fn llvm_ir_extension_selects_llvm_when_provider_is_configured() {
+    if !llvm_provider_configured() {
         return;
     }
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -504,4 +551,47 @@ fn llvm_ir_extension_selects_llvm_when_toolchain_is_configured() {
     let ir = fs::read_to_string(&output_path).expect("LLVM IR output should exist");
     fs::remove_file(&output_path).expect("failed to remove LLVM IR output");
     assert!(ir.contains("target triple = "));
+}
+
+/// The LLVM backend must produce its object without writing a single
+/// C/header file anywhere: no `.c`, `.h`, `.i`, `.ll`, `.bc`, or `.s`
+/// artifact may survive an object-only compile, and the scratch
+/// directory the old C-mediated path used must never be created.
+#[test]
+fn llvm_object_emission_leaves_no_c_or_intermediate_artifacts() {
+    if !llvm_provider_configured() {
+        return;
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let work_dir = std::env::temp_dir().join(format!("oscan-llvm-artifacts-{}", process::id()));
+    let _ = fs::remove_dir_all(&work_dir);
+    fs::create_dir_all(&work_dir).expect("failed to create work directory");
+    let output_path = work_dir.join("program.obj");
+
+    let output = Command::new(oscan_binary_path())
+        .arg(&source)
+        .args(["--backend", "llvm", "-o"])
+        .arg(&output_path)
+        .current_dir(&work_dir)
+        .output()
+        .expect("failed to run LLVM object emission");
+    assert!(
+        output.status.success(),
+        "LLVM object emission failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let leftovers: Vec<String> = fs::read_dir(&work_dir)
+        .expect("failed to read work directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "program.obj")
+        .collect();
+    let _ = fs::remove_dir_all(&work_dir);
+    assert!(
+        leftovers.is_empty(),
+        "the direct LLVM backend must not create intermediate files: {leftovers:?}"
+    );
 }

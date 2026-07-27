@@ -15,6 +15,7 @@ use super::capability::FreestandingProfile;
 use super::is_verbose;
 
 const FREESTANDING_ARCHIVE_NAME: &str = "libosc_runtime_freestanding.a";
+const FREESTANDING_GFX_ARCHIVE_NAME: &str = "libosc_runtime_freestanding_gfx.a";
 const FREESTANDING_CORE_ARCHIVE_NAME: &str = "libosc_runtime_freestanding_core.a";
 const HOSTED_ARCHIVE_NAME: &str = "libosc_runtime_hosted.a";
 
@@ -133,6 +134,7 @@ pub(super) fn archive_name(
     match runtime_mode {
         RuntimeMode::Freestanding => match profile {
             FreestandingProfile::Full => FREESTANDING_ARCHIVE_NAME,
+            FreestandingProfile::Graphics => FREESTANDING_GFX_ARCHIVE_NAME,
             FreestandingProfile::Core => FREESTANDING_CORE_ARCHIVE_NAME,
         },
         RuntimeMode::Hosted => HOSTED_ARCHIVE_NAME,
@@ -177,6 +179,16 @@ pub(super) fn find_or_build_runtime_archive(
             return Ok(p);
         }
     }
+
+    // Strict no-toolchain profile: a runtime archive that has to be
+    // *built* here needs a C compiler, which is exactly what the profile
+    // exists to prove is unnecessary. Refuse before any script is
+    // located, so the diagnostic names the profile rather than whatever
+    // the build script happens to be missing.
+    crate::backend::no_toolchain::refuse_if_strict(
+        "auto-building the Oscan runtime archive",
+        "set OSCAN_RUNTIME_ARCHIVE_DIR to a directory containing a prebuilt archive",
+    )?;
 
     let script = match find_release_tools_script()? {
         Some(script) => script,
@@ -434,6 +446,11 @@ pub(super) fn resolve_shim_source(
             archive_path.display()
         )),
         RuntimeMode::Hosted => {
+            crate::backend::no_toolchain::refuse_if_strict(
+                "compiling runtime/osc_native_shim.c locally for this hosted build",
+                "rebuild the runtime archive with a current \
+                 'scripts/build-runtime-archive.ps1|.sh -Mode hosted' so the shim ships inside it",
+            )?;
             eprintln!(
                 "warning: runtime archive '{}' predates the precompiled native shim (manifest \
                  contains_native_shim is false/absent); falling back to compiling \
@@ -458,6 +475,10 @@ mod tests {
             "libosc_runtime_freestanding.a"
         );
         assert_eq!(
+            archive_name(RuntimeMode::Freestanding, FreestandingProfile::Graphics),
+            "libosc_runtime_freestanding_gfx.a"
+        );
+        assert_eq!(
             archive_name(RuntimeMode::Freestanding, FreestandingProfile::Core),
             "libosc_runtime_freestanding_core.a"
         );
@@ -467,6 +488,10 @@ mod tests {
         );
         // Hosted mode ignores the profile entirely — there is only one
         // hosted archive regardless of whether a program uses graphics.
+        assert_eq!(
+            archive_name(RuntimeMode::Hosted, FreestandingProfile::Graphics),
+            "libosc_runtime_hosted.a"
+        );
         assert_eq!(
             archive_name(RuntimeMode::Hosted, FreestandingProfile::Core),
             "libosc_runtime_hosted.a"

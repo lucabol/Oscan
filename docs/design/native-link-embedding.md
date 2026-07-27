@@ -9,9 +9,10 @@
 This document is the single, file-level contract for removing the
 C-compiler/linker dependency from packaged freestanding final links. Both
 `--backend native` (Cranelift) and `--backend llvm` now feed this link layer;
-LLVM still requires Clang to emit its object. It was written so Bishop and Hicks
-can implement in parallel with **zero file overlap**, and so "did you follow the
-design" is mechanically checkable at review.
+LLVM emits IR directly and loads packaged LLVM 22 in-process to emit its
+object. It was written so Bishop and Hicks can implement in parallel with
+**zero file overlap**, and so "did you follow the design" is mechanically
+checkable at review.
 
 Sections 11-14 record the implemented Linux and foreign-input follow-up and
 supersede the original deferral table in §1.2. The C code generator remains
@@ -27,11 +28,11 @@ the shared `backend::link` layer; explicit `--backend native` remains available.
 
 ### 1.1 In scope now
 
-- **Windows x86-64, freestanding** (`--backend native`, no `--libc`): compile +
+- **Windows x86-64, freestanding** (`--backend llvm|native`, no `--libc`): compile +
   link a standalone `.exe` with **no** `clang`/`gcc`/`cc`/`cl` and **no**
   externally installed linker on `PATH`. The shipped `oscan.exe` carries its own
   linker and link inputs.
-- **Linux x86-64, freestanding** (`--backend native`, no `--libc`): compile +
+- **Linux x86-64, freestanding** (`--backend llvm|native`, no `--libc`): compile +
   link a standalone ELF binary with **no** `gcc`/`cc`/`musl-gcc` and **no**
   externally installed linker on `PATH`. The shipped `oscan` binary carries its
   own linker (a single ~2.78 MB static binary). See §10.
@@ -446,11 +447,10 @@ Current `package` job order is **wrong** for embedding (`cargo build` at line
    and `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` — this is the build that embeds and
    **fails loudly if assets are missing**.
 6. **Assemble release asset** (`assemble-release.ps1`), packaging without
-   requiring a full toolchain sidecar for default freestanding operation. The
-   `toolchain/` sidecar stays **only** for LLVM object emission (the Windows
-   bundle's Clang; the Linux sidecar ships GCC, not Clang),
-   hosted/`--extra-c`, and legacy fallback
-   (unchanged pruning; a different, coarser concern than the embed set).
+   requiring a compiler executable for default freestanding operation. The
+   bundle retains an LLVM shared-library provider for in-process LLVM emission
+   and a C toolchain only for explicit C, hosted/`--extra-c`, generated C ABI
+   shims, and legacy fallback.
 
 CI (`ci.yml`) keeps its main `linux`/`windows` jobs building without
 `OSCAN_EMBED_ASSETS_DIR` (dev/external path still exercised). The embedded path
@@ -684,10 +684,11 @@ Zero-file-overlap split, mirroring §8.1/§8.2:
 2. **KERNEL32-only dependency after GC.** With all five optional import libs
    presented to LLD, confirm the final `hello.exe` imports only `KERNEL32.dll`;
    confirm socket/TLS/canvas programs import exactly their expected DLLs.
-3. **No-compiler proof.** Rename/block `cc`/`gcc`/`clang`/`cl` **and** the
-   toolchain dir, confirm the built `oscan.exe` still compiles+runs
-   `examples/hello.osc` native, and that the archive manifest's recorded `cc`
-   absolute path is genuinely unused on the freestanding path.
+3. **No-compiler proof.** Rename/block `cc`/`gcc`/`clang`/`cl`, empty `PATH`,
+   and set an unusable `OSCAN_CC`; confirm the built `oscan.exe` still
+   compiles+runs `examples/hello.osc` with LLVM and Cranelift, and that the
+   archive manifest's recorded `cc` path is genuinely unused. LLVM receives
+   only an absolute packaged `OSCAN_LLVM_LIB`.
 4. **Extraction concurrency/corruption.** N processes racing a cold cache;
    truncated/wrong-hash blobs; a partial (no `.complete`) set dir; path-traversal
    attempt via a crafted `install_subpath`. All must recover or hard-fail, never
@@ -1468,7 +1469,7 @@ anyway, but an early check gives a better diagnostic).
 sites that `extra_c_files`/`extra_cflags` already flow through, as additional
 parameters. The key touchpoints:
 
-1. `run_native_backend()` gains `extra_obj_files: &[String]`,
+1. `run_object_backend()` gains `extra_obj_files: &[String]`,
    `extra_lib_files: &[String]` parameters.
 2. `NativeLinkOptions` (`src/backend/link/mod.rs`) gains:
    ```rust

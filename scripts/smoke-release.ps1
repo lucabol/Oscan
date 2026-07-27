@@ -232,11 +232,14 @@ if ($Actual -ne "Hello, Release!") {
     throw "Unexpected smoke test output: '$Actual'"
 }
 
-$bundledClang = @(
-    (Join-Path $InstallDir "toolchain\bin\clang.exe"),
-    (Join-Path $InstallDir "toolchain/bin/clang")
+$bundledLlvm = @(
+    (Join-Path $InstallDir "toolchain\bin\libLLVM-22.dll"),
+    (Join-Path $InstallDir "toolchain/bin/libLLVM.so.22.1"),
+    (Join-Path $InstallDir "toolchain/bin/libLLVM.so.22"),
+    (Join-Path $InstallDir "toolchain/lib/libLLVM.so.22.1"),
+    (Join-Path $InstallDir "toolchain/lib/libLLVM.so.22")
 ) | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
-if ($bundledClang -and $nativeRuntimeModes.Count -gt 0) {
+if ($bundledLlvm -and $nativeRuntimeModes.Count -gt 0) {
     $DefaultOutput = Join-Path $ScratchDir ("hello-default" + $(if ($platform -eq "windows") { ".exe" } else { "" }))
     $DefaultLog = Join-Path $ScratchDir "default.stderr.txt"
     $defaultArgs = @("--verbose")
@@ -246,12 +249,14 @@ if ($bundledClang -and $nativeRuntimeModes.Count -gt 0) {
     $defaultArgs += @($SampleSource, "-o", $DefaultOutput)
 
     $savedRuntimeArchiveDir = $env:OSCAN_RUNTIME_ARCHIVE_DIR
-    $savedLlvmClang = $env:OSCAN_LLVM_CLANG
-    $savedLlvmToolchainDir = $env:OSCAN_LLVM_TOOLCHAIN_DIR
+    $savedLlvmLib = $env:OSCAN_LLVM_LIB
+    $savedLlvmDir = $env:OSCAN_LLVM_DIR
     $savedToolchainDir = $env:OSCAN_TOOLCHAIN_DIR
     try {
         $env:OSCAN_RUNTIME_ARCHIVE_DIR = $RuntimeArchiveDir
-        Remove-Item Env:OSCAN_LLVM_CLANG,Env:OSCAN_LLVM_TOOLCHAIN_DIR,Env:OSCAN_TOOLCHAIN_DIR `
+        # Unset every override so the packaged bundle has to find its own
+        # LLVM code generator next to the installed executable.
+        Remove-Item Env:OSCAN_LLVM_LIB,Env:OSCAN_LLVM_DIR,Env:OSCAN_TOOLCHAIN_DIR `
             -ErrorAction SilentlyContinue
         $defaultInvocation = {
             & $OscanCommand @defaultArgs 2> $DefaultLog
@@ -262,8 +267,8 @@ if ($bundledClang -and $nativeRuntimeModes.Count -gt 0) {
         Invoke-NoHostCompilerCommand -ScratchDir $ScratchDir -Body $defaultInvocation
     } finally {
         $env:OSCAN_RUNTIME_ARCHIVE_DIR = $savedRuntimeArchiveDir
-        $env:OSCAN_LLVM_CLANG = $savedLlvmClang
-        $env:OSCAN_LLVM_TOOLCHAIN_DIR = $savedLlvmToolchainDir
+        $env:OSCAN_LLVM_LIB = $savedLlvmLib
+        $env:OSCAN_LLVM_DIR = $savedLlvmDir
         $env:OSCAN_TOOLCHAIN_DIR = $savedToolchainDir
     }
 
@@ -271,8 +276,8 @@ if ($bundledClang -and $nativeRuntimeModes.Count -gt 0) {
     if ($defaultText -notmatch '(?m)^\[verbose\] llvm backend target:') {
         throw "Packaged bundle did not select LLVM as its implicit default.`n$defaultText"
     }
-    if ($defaultText -notmatch '(?m)^\[verbose\] LLVM toolchain: .+ \(bundled,') {
-        throw "Packaged LLVM smoke did not use the bundled Clang.`n$defaultText"
+    if ($defaultText -notmatch '(?m)^\[verbose\] LLVM code generator: .+ \(LLVM \d+\.\d+\.\d+, targets: ') {
+        throw "Packaged LLVM smoke did not load the bundle's own LLVM code generator.`n$defaultText"
     }
     $defaultActual = (& $DefaultOutput 2>&1 | Out-String).TrimEnd("`r", "`n").Replace("`r`n", "`n")
     if ($defaultActual -ne "Hello, Release!") {

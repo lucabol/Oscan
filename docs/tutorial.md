@@ -27,7 +27,8 @@ operating system from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases):
 
 - **Windows x86-64 and Linux x86-64:** choose the `full` bundle, which includes
-  a pinned toolchain (Clang/LLD on Windows, musl GCC/binutils on Linux).
+  a packaged LLVM provider, direct-link assets, and a pinned C toolchain for
+  explicit C/hosted builds.
 - **macOS x86-64:** use the macOS archive and install Xcode Command Line Tools
   first with
   `xcode-select --install`.
@@ -437,9 +438,10 @@ The output should be the same:
 2 6 40 sample.txt
 ```
 
-Oscan builds an executable directly, using the LLVM backend when a Clang
-executable is available and falling back to the Cranelift or C backend
-otherwise. To keep the generated C instead of building an executable:
+Oscan builds an executable directly, using the LLVM backend when its packaged
+LLVM 22 provider is available and falling back to the Cranelift or C backend
+otherwise. The packaged freestanding LLVM path generates no C and needs no
+installed C/Clang/LLVM toolchain. To keep generated C instead:
 
 ```text
 oscan oscwc.osc -o oscwc.c

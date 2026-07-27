@@ -547,6 +547,15 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}\packaging\prebuilt\windows-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
+      - name: Direct LLVM integration tests (provider required)
+        run: cargo test --quiet --test llvm_direct_backend --test cli_help
+        env:
+          OSCAN_LLVM_LIB: ${{ github.workspace }}\build\toolchain-windows-x86_64\bin\libLLVM-22.dll
+          OSCAN_LLVM_TEST_REQUIRED: "1"
+          OSCAN_RUNTIME_ARCHIVE_DIR: ${{ github.workspace }}\build\runtime-archives\windows-x86_64
+          OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}\packaging\prebuilt\windows-x86_64
+          OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
+
       - name: Native and LLVM embedded-link validation
         shell: pwsh
         run: |
@@ -569,6 +578,8 @@ jobs:
   native-link-embedding-smoke-linux:
     name: Native link embedding smoke test (Linux)
     runs-on: ubuntu-latest
+    env:
+      OSCAN_LLVM_DIR: ${{ github.workspace }}/build/toolchain-linux-x86_64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -581,6 +592,11 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.x"
+
+      - name: Install packaged LLVM provider runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g
 
       - name: Fetch pinned toolchain
         shell: bash
@@ -631,6 +647,15 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-x86_64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
+      - name: Direct LLVM integration tests (provider required)
+        run: cargo test --quiet --test llvm_direct_backend --test cli_help
+        env:
+          OSCAN_LLVM_LIB: ${{ github.workspace }}/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1
+          OSCAN_LLVM_TEST_REQUIRED: "1"
+          OSCAN_RUNTIME_ARCHIVE_DIR: ${{ github.workspace }}/build/runtime-archives/linux-x86_64
+          OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-x86_64
+          OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
+
       - name: Implicit LLVM default uses embedded linker
         shell: pwsh
         run: ./tests/default_backend.tests.ps1 -Oscan ./target/release/oscan -ExpectedBackend llvm
@@ -638,11 +663,10 @@ jobs:
       - name: LLVM requires no separate C compiler or linker
         shell: pwsh
         run: |
-          $clang = (Get-Command clang -CommandType Application | Select-Object -First 1).Source
           ./tests/llvm_toolchain_isolation.tests.ps1 `
             -Oscan ./target/release/oscan `
             -RuntimeArchiveDir ./build/runtime-archives/linux-x86_64 `
-            -LlvmClang $clang
+            -LlvmLibrary ./build/toolchain-linux-x86_64/lib/libLLVM.so.22.1
 
       - name: Native hello smoke test (compiler/linker blocked on PATH)
         shell: bash
@@ -752,11 +776,11 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install QEMU user-mode emulation
+      - name: Install QEMU and packaged LLVM provider runtime dependencies
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static
+          sudo apt-get install -y qemu-user-static libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g
 
       - name: Fetch pinned aarch64 toolchain
         shell: bash
@@ -764,6 +788,14 @@ jobs:
           ./scripts/fetch-toolchain.sh \
             --manifest packaging/toolchains/linux-aarch64.json \
             --destination build/toolchain-linux-aarch64 \
+            --download-dir "$RUNNER_TEMP/toolchain-downloads"
+
+      - name: Fetch pinned x86_64 host LLVM provider
+        shell: bash
+        run: |
+          ./scripts/fetch-toolchain.sh \
+            --manifest packaging/toolchains/linux-x86_64.json \
+            --destination build/toolchain-linux-x86_64 \
             --download-dir "$RUNNER_TEMP/toolchain-downloads"
 
       - name: Build runtime archives with native shim baked in (aarch64)
@@ -796,7 +828,7 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-aarch64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
-      - name: Cross-codegen object-only emission for aarch64 (--backend native, no link)
+      - name: Cross-codegen object-only emission for aarch64 (Cranelift and LLVM)
         shell: bash
         run: |
           set -euo pipefail
@@ -805,6 +837,11 @@ jobs:
             --backend native \
             --native-target linux-aarch64 \
             -o tests/build/hello_aarch64.o
+          OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
+            ./target/release/oscan tests/positive/arithmetic.osc \
+              --backend llvm \
+              --native-target linux-aarch64 \
+              -o tests/build/arithmetic_aarch64_llvm.o
           if ! readelf -h tests/build/hello_aarch64.o | grep -q 'REL (Relocatable file)'; then
             echo "error: hello_aarch64.o is not a relocatable ELF object"
             exit 1
@@ -813,7 +850,11 @@ jobs:
             echo "error: hello_aarch64.o is not an AArch64 ELF object"
             exit 1
           fi
-          echo "hello_aarch64.o is a valid AArch64 relocatable object"
+          if ! readelf -h tests/build/arithmetic_aarch64_llvm.o | grep -q 'AArch64'; then
+            echo "error: arithmetic_aarch64_llvm.o is not an AArch64 ELF object"
+            exit 1
+          fi
+          echo "Cranelift and LLVM produced valid AArch64 relocatable objects"
 
       - name: Cross-compile hello.osc for aarch64
         shell: bash
@@ -824,25 +865,32 @@ jobs:
             --backend native \
             --native-target linux-aarch64 \
             -o tests/build/hello_aarch64
+          OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
+            ./target/release/oscan tests/positive/arithmetic.osc \
+              --backend llvm \
+              --native-target linux-aarch64 \
+              -o tests/build/arithmetic_aarch64_llvm
 
       - name: Verify static linking (no PT_INTERP, no dynamic section)
         shell: bash
         run: |
           set -euo pipefail
           binary="tests/build/hello_aarch64"
-          if readelf -l "$binary" | grep -i 'interp'; then
-            echo "error: $binary has a PT_INTERP segment (not static)"
-            exit 1
-          fi
-          if readelf -d "$binary" 2>/dev/null | grep -q NEEDED; then
-            echo "error: $binary has NEEDED entries (not static)"
-            exit 1
-          fi
-          if ! readelf -h "$binary" | grep -q 'AArch64'; then
-            echo "error: $binary is not an AArch64 ELF"
-            exit 1
-          fi
-          echo "$binary is statically linked AArch64 ELF (no PT_INTERP, no NEEDED entries)"
+          for binary in tests/build/hello_aarch64 tests/build/arithmetic_aarch64_llvm; do
+            if readelf -l "$binary" | grep -i 'interp'; then
+              echo "error: $binary has a PT_INTERP segment (not static)"
+              exit 1
+            fi
+            if readelf -d "$binary" 2>/dev/null | grep -q NEEDED; then
+              echo "error: $binary has NEEDED entries (not static)"
+              exit 1
+            fi
+            if ! readelf -h "$binary" | grep -q 'AArch64'; then
+              echo "error: $binary is not an AArch64 ELF"
+              exit 1
+            fi
+          done
+          echo "Cranelift and LLVM outputs are statically linked AArch64 ELFs"
 
       - name: QEMU smoke test — execute hello_aarch64
         shell: bash
@@ -852,6 +900,13 @@ jobs:
           echo "Output: $output"
           if [ "$output" != "Hello, Oscan!" ]; then
             echo "error: unexpected output from hello_aarch64"
+            exit 1
+          fi
+          arithmetic_output=$(qemu-aarch64-static ./tests/build/arithmetic_aarch64_llvm)
+          arithmetic_expected=$(cat tests/expected/arithmetic.expected)
+          if [ "$arithmetic_output" != "$arithmetic_expected" ]; then
+            echo "error: LLVM AArch64 arithmetic output mismatch"
+            printf '%s\n' "$arithmetic_output"
             exit 1
           fi
           echo "✓ hello_aarch64 executed correctly via QEMU"
@@ -923,11 +978,11 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install QEMU user-mode emulation
+      - name: Install QEMU and packaged LLVM provider runtime dependencies
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static
+          sudo apt-get install -y qemu-user-static libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g
 
       - name: Fetch pinned riscv64 toolchain
         shell: bash
@@ -935,6 +990,14 @@ jobs:
           ./scripts/fetch-toolchain.sh \
             --manifest packaging/toolchains/linux-riscv64.json \
             --destination build/toolchain-linux-riscv64 \
+            --download-dir "$RUNNER_TEMP/toolchain-downloads"
+
+      - name: Fetch pinned x86_64 host LLVM provider
+        shell: bash
+        run: |
+          ./scripts/fetch-toolchain.sh \
+            --manifest packaging/toolchains/linux-x86_64.json \
+            --destination build/toolchain-linux-x86_64 \
             --download-dir "$RUNNER_TEMP/toolchain-downloads"
 
       - name: Build runtime archives with native shim baked in (riscv64)
@@ -967,7 +1030,7 @@ jobs:
           OSCAN_EMBED_ASSETS_DIR: ${{ github.workspace }}/packaging/prebuilt/linux-riscv64
           OSCAN_REQUIRE_EMBEDDED_ASSETS: "1"
 
-      - name: Cross-codegen object-only emission for riscv64 (--backend native, no link)
+      - name: Cross-codegen object-only emission for riscv64 (Cranelift and LLVM)
         shell: bash
         run: |
           set -euo pipefail
@@ -976,6 +1039,11 @@ jobs:
             --backend native \
             --native-target linux-riscv64 \
             -o tests/build/hello_riscv64.o
+          OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
+            ./target/release/oscan tests/positive/arithmetic.osc \
+              --backend llvm \
+              --native-target linux-riscv64 \
+              -o tests/build/arithmetic_riscv64_llvm.o
           if ! readelf -h tests/build/hello_riscv64.o | grep -q 'REL (Relocatable file)'; then
             echo "error: hello_riscv64.o is not a relocatable ELF object"
             exit 1
@@ -984,7 +1052,16 @@ jobs:
             echo "error: hello_riscv64.o is not a RISC-V ELF object"
             exit 1
           fi
-          echo "hello_riscv64.o is a valid RISC-V relocatable object"
+          if ! readelf -h tests/build/arithmetic_riscv64_llvm.o | grep -q 'RISC-V'; then
+            echo "error: arithmetic_riscv64_llvm.o is not a RISC-V ELF object"
+            exit 1
+          fi
+          if ! readelf -h tests/build/arithmetic_riscv64_llvm.o | grep -q 'RVC, double-float ABI'; then
+            echo "error: LLVM RISC-V object does not match the packaged RV64GC/lp64d runtime ABI"
+            readelf -h tests/build/arithmetic_riscv64_llvm.o
+            exit 1
+          fi
+          echo "Cranelift and LLVM produced valid RISC-V relocatable objects"
 
       - name: Cross-compile hello.osc for riscv64
         shell: bash
@@ -995,25 +1072,36 @@ jobs:
             --backend native \
             --native-target linux-riscv64 \
             -o tests/build/hello_riscv64
+          OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
+            ./target/release/oscan tests/positive/arithmetic.osc \
+              --backend llvm \
+              --native-target linux-riscv64 \
+              -o tests/build/arithmetic_riscv64_llvm
 
       - name: Verify static linking (no PT_INTERP, no dynamic section)
         shell: bash
         run: |
           set -euo pipefail
-          binary="tests/build/hello_riscv64"
-          if readelf -l "$binary" | grep -i 'interp'; then
-            echo "error: $binary has a PT_INTERP segment (not static)"
-            exit 1
-          fi
-          if readelf -d "$binary" 2>/dev/null | grep -q NEEDED; then
-            echo "error: $binary has NEEDED entries (not static)"
-            exit 1
-          fi
-          if ! readelf -h "$binary" | grep -q 'RISC-V'; then
-            echo "error: $binary is not a RISC-V ELF"
-            exit 1
-          fi
-          echo "$binary is statically linked RISC-V ELF (no PT_INTERP, no NEEDED entries)"
+          for binary in tests/build/hello_riscv64 tests/build/arithmetic_riscv64_llvm; do
+            if readelf -l "$binary" | grep -i 'interp'; then
+              echo "error: $binary has a PT_INTERP segment (not static)"
+              exit 1
+            fi
+            if readelf -d "$binary" 2>/dev/null | grep -q NEEDED; then
+              echo "error: $binary has NEEDED entries (not static)"
+              exit 1
+            fi
+            if ! readelf -h "$binary" | grep -q 'RISC-V'; then
+              echo "error: $binary is not a RISC-V ELF"
+              exit 1
+            fi
+            if [ "$binary" = "tests/build/arithmetic_riscv64_llvm" ] && \
+               ! readelf -h "$binary" | grep -q 'RVC, double-float ABI'; then
+              echo "error: $binary does not use the RV64GC/lp64d ABI"
+              exit 1
+            fi
+          done
+          echo "Cranelift and LLVM outputs are statically linked RISC-V ELFs"
 
       - name: QEMU smoke test — execute hello_riscv64
         shell: bash
@@ -1023,6 +1111,13 @@ jobs:
           echo "Output: $output"
           if [ "$output" != "Hello, Oscan!" ]; then
             echo "error: unexpected output from hello_riscv64"
+            exit 1
+          fi
+          arithmetic_output=$(qemu-riscv64-static ./tests/build/arithmetic_riscv64_llvm)
+          arithmetic_expected=$(cat tests/expected/arithmetic.expected)
+          if [ "$arithmetic_output" != "$arithmetic_expected" ]; then
+            echo "error: LLVM RISC-V arithmetic output mismatch"
+            printf '%s\n' "$arithmetic_output"
             exit 1
           fi
           echo "✓ hello_riscv64 executed correctly via QEMU"

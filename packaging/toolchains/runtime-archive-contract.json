@@ -32,8 +32,17 @@
       "supported_targets": ["linux-x86_64", "linux-aarch64", "linux-riscv64", "windows-x86_64"],
       "contains_native_shim": true
     },
+    "freestanding_gfx": {
+      "description": "Size-tuned freestanding sibling containing the core runtime plus l_gfx canvas/window and built-in-font support, but excluding l_img/l_svg/l_tt. Selected for programs whose object references osc_gfx_*/osc_canvas_*/osc_clipboard_* but no osc_img_*/osc_svg_*/osc_tt_* symbol, keeping the advanced decoders' shared constant pools out of ordinary graphics executables.",
+      "sources": ["osc_runtime_freestanding_gfx.c", "osc_native_shim.c"],
+      "archive_name": "libosc_runtime_freestanding_gfx.a",
+      "manifest_name": "libosc_runtime_freestanding_gfx.json",
+      "requires_libc": false,
+      "supported_targets": ["linux-x86_64", "linux-aarch64", "linux-riscv64", "windows-x86_64"],
+      "contains_native_shim": true
+    },
     "freestanding_core": {
-      "description": "Sibling of 'freestanding' without the graphics/image/SVG/TrueType feature libraries (l_gfx.h/l_img.h/l_svg.h/l_tt.h) — same core runtime, sockets, and TLS. src/backend/link.rs links a program against this smaller archive instead of 'freestanding' whenever the program's own object has no undefined osc_gfx_*/osc_canvas_*/osc_clipboard_*/osc_img_*/osc_svg_*/osc_tt_* symbol, since --gc-sections cannot fully strip the graphics feature libraries' shared floating-point constant pool out of the full archive (see osc_runtime_freestanding_core.c's docs). Same ABI/ordering as 'freestanding' otherwise.",
+      "description": "Sibling of 'freestanding' without the graphics/image/SVG/TrueType feature libraries (l_gfx.h/l_img.h/l_svg.h/l_tt.h) — same core runtime, sockets, and TLS. src/backend/link/capability.rs selects this archive when the program's scanned inputs have no undefined osc_gfx_*/osc_canvas_*/osc_clipboard_*/osc_img_*/osc_svg_*/osc_tt_* symbol; graphics-only inputs select freestanding_gfx, while unknown inputs conservatively select full. The split avoids retaining shared floating-point constant pools that --gc-sections cannot remove. Same ABI/ordering as 'freestanding' otherwise.",
       "sources": ["osc_runtime_freestanding_core.c", "osc_native_shim.c"],
       "archive_name": "libosc_runtime_freestanding_core.a",
       "manifest_name": "libosc_runtime_freestanding_core.json",
@@ -68,6 +77,10 @@
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
         "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
       },
+      "freestanding_gfx": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
+      },
       "freestanding_core": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
         "embed_bearssl_from": "packaging/prebuilt/linux-x86_64/libbearssl.a"
@@ -95,6 +108,10 @@
         "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
       },
       "freestanding": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
+      },
+      "freestanding_gfx": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
         "embed_bearssl_from": "packaging/prebuilt/linux-aarch64/libbearssl.a"
       },
@@ -128,6 +145,10 @@
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
         "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
       },
+      "freestanding_gfx": {
+        "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
+        "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
+      },
       "freestanding_core": {
         "link_flags": ["-nostdlib", "-static", "-Wl,--gc-sections,--build-id=none"],
         "embed_bearssl_from": "packaging/prebuilt/linux-riscv64/libbearssl.a"
@@ -156,6 +177,10 @@
       "freestanding": {
         "link_flags": ["-lkernel32"],
         "note": "Windows freestanding TLS uses Schannel (secur32/crypt32) instead of BearSSL, so no embed_bearssl_from entry is needed here. Only -lkernel32 is part of the archive contract. For GNU ld, src/backend/link.rs adds -lws2_32/-luser32/-lgdi32/-lsecur32/-lcrypt32 per program via detect_windows_feature_libs. LLD must see all five while resolving undefined imports in dead runtime sections, then garbage-collects unused import thunks; both paths keep hello_world's final dependency set at KERNEL32.dll only."
+      },
+      "freestanding_gfx": {
+        "link_flags": ["-lkernel32"],
+        "note": "Same link-time contract as 'freestanding'; only the source translation unit differs (l_gfx without l_img/l_svg/l_tt)."
       },
       "freestanding_core": {
         "link_flags": ["-lkernel32"],

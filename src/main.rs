@@ -278,8 +278,8 @@ fn print_usage(to_stderr: bool) {
     print_line("  --emit-llvm-ir   Emit textual LLVM IR to stdout (or use -o file.ll)");
     print_line("  --libc           Use the hosted libc runtime (including with LLVM/Cranelift)");
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
-    print_line("  --backend llvm|c|native  Backend (default: LLVM when available; native/c fallback otherwise)");
-    print_line("    llvm    LLVM optimization/object code through a compatible Clang toolchain");
+    print_line("  --backend llvm|c|native  Backend (default: LLVM when its packaged code generator is available; native/c otherwise)");
+    print_line("    llvm    Direct LLVM object code through Oscan's own packaged LLVM code generator (no C, no toolchain)");
     print_line("    c       Portability/reference, C source, macOS, and WASI backend");
     print_line("    native  Cranelift object code for supported Windows and Linux hosts/targets");
     print_line(&format!(
@@ -305,8 +305,11 @@ fn print_usage(to_stderr: bool) {
     print_line(
         "  OSCAN_NATIVE_ASSET_CACHE_DIR  Override where extracted embedded native-link assets are cached (default: %LOCALAPPDATA%\\oscan\\native-assets\\ on Windows, $XDG_CACHE_HOME/oscan/native-assets on Linux)",
     );
-    print_line("  OSCAN_LLVM_CLANG  Override the Clang executable used by --backend llvm");
-    print_line("  OSCAN_LLVM_TOOLCHAIN_DIR  Override the LLVM toolchain root");
+    print_line("  OSCAN_LLVM_LIB   Full path to Oscan's packaged LLVM code generator shared library (--backend llvm)");
+    print_line("  OSCAN_LLVM_DIR   Directory to search for the packaged LLVM code generator");
+    print_line(
+        "  OSCAN_NO_TOOLCHAIN=1  Strict no-toolchain profile: refuse the C backend, --extra-c/--extra-cflags, runtime-archive/shim auto-build, and compiler-driver linking instead of silently using a host C toolchain",
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -513,13 +516,25 @@ fn main() {
         .map(|path| path.ends_with(".ll"))
         .unwrap_or(false);
     let native_host_supported = backend::NativeTarget::try_host().is_ok();
-    let llvm_toolchain = if explicit_backend.is_none()
+    // Probe Oscan's own packaged LLVM code generator only when the backend
+    // is not already pinned: loading a shared library is cheap but not
+    // free, and an explicit `--backend c`/`--backend native` must never
+    // depend on it being present at all.
+    let llvm_backend = if explicit_backend.is_none()
         && !emit_c
         && !output_ends_in_c
         && target.is_none()
         && native_host_supported
     {
-        backend::llvm::discover_toolchain().ok()
+        backend::llvm::LlvmBackend::load().ok().filter(|llvm| {
+            // Only prefer LLVM by default when it can actually target this
+            // host; a provider that lacks the host back end is not a
+            // usable default (capability gate, not a silent fallback —
+            // `--backend llvm` still reports the precise reason).
+            backend::NativeTarget::try_host()
+                .map(|host| llvm.supports(host))
+                .unwrap_or(false)
+        })
     } else {
         None
     };
@@ -530,7 +545,7 @@ fn main() {
         target.is_some(),
         native_target_arg.is_some(),
         native_host_supported,
-        llvm_toolchain.is_some(),
+        llvm_backend.is_some(),
     );
 
     // Backend-selection validation. `--target` (C-backend cross-compile
@@ -584,6 +599,44 @@ fn main() {
     if (emit_llvm_ir || output_ends_in_ll) && run_mode {
         eprintln!("error: LLVM IR output cannot be combined with --run");
         process::exit(1);
+    }
+    // Strict no-toolchain profile (see `backend::no_toolchain`): every
+    // remaining route to a host C compiler is refused by name rather than
+    // silently taken. The C backend *is* such a route — it emits C that
+    // something has to compile — so selecting it (explicitly, via
+    // `--emit-c`/`-o *.c`, or via `--target`'s cross-compile path) is a
+    // hard error here rather than a quiet fallback.
+    if backend::no_toolchain::is_strict() {
+        if backend_kind == Backend::C {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "the C backend",
+                    "use --backend llvm (Oscan's packaged code generator) or --backend native"
+                )
+            );
+            process::exit(1);
+        }
+        if !extra_c_files.is_empty() {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "--extra-c",
+                    "precompile the C source yourself and pass --extra-obj/--extra-lib instead"
+                )
+            );
+            process::exit(1);
+        }
+        if !extra_cflags.is_empty() {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "--extra-cflags",
+                    "drop the flag (there is no C compilation step to pass it to)"
+                )
+            );
+            process::exit(1);
+        }
     }
     let native_target = if backend_kind != Backend::C {
         Some(match native_target_arg.as_deref().unwrap_or("host") {
@@ -715,7 +768,7 @@ fn main() {
         run_object_backend(
             &ir_program,
             backend_kind,
-            llvm_toolchain.as_ref(),
+            llvm_backend,
             native_target,
             runtime_mode,
             &path,
@@ -879,7 +932,7 @@ fn harden_native_scratch_dir_unix(path: &Path) -> std::io::Result<()> {
 fn run_object_backend(
     ir_program: &ir::Program,
     backend_kind: Backend,
-    llvm_toolchain: Option<&backend::llvm::LlvmToolchain>,
+    llvm_backend: Option<backend::llvm::LlvmBackend>,
     native_target: backend::NativeTarget,
     runtime_mode: backend::RuntimeMode,
     source_path: &str,
@@ -894,6 +947,7 @@ fn run_object_backend(
     extra_obj_files: &[String],
     extra_lib_files: &[String],
 ) {
+    let _ = show_warnings;
     if is_verbose() {
         eprintln!(
             "[verbose] {} backend target: {native_target}, runtime: {runtime_mode}",
@@ -909,17 +963,30 @@ fn run_object_backend(
             }
         },
         Backend::Llvm => {
-            let c_source = codegen::CodeGenerator::generate_object_source(
+            // Load the packaged code generator here when the backend was
+            // selected explicitly (the default-selection probe above only
+            // runs when it isn't). An explicit `--backend llvm` that
+            // cannot find its code generator is a hard error, never a
+            // silent fallback to C or Cranelift.
+            let llvm = match llvm_backend {
+                Some(llvm) => llvm,
+                None => match backend::llvm::LlvmBackend::load() {
+                    Ok(llvm) => llvm,
+                    Err(reason) => {
+                        eprintln!("error: {reason}");
+                        process::exit(1);
+                    }
+                },
+            };
+            if is_verbose() {
+                eprintln!("[verbose] LLVM code generator: {}", llvm.describe());
+            }
+            let llvm_output = match backend::llvm::compile_object(
+                &llvm,
                 ir_program,
-                runtime_mode == backend::RuntimeMode::Freestanding,
-            );
-            let llvm_output = match backend::llvm::compile(
-                &c_source,
                 native_target,
                 runtime_mode,
                 !emit_llvm_ir,
-                show_warnings,
-                llvm_toolchain,
             ) {
                 Ok(output) => output,
                 Err(e) => {
@@ -927,14 +994,6 @@ fn run_object_backend(
                     process::exit(1);
                 }
             };
-            if is_verbose() {
-                eprintln!(
-                    "[verbose] LLVM toolchain: {} ({}, {})",
-                    llvm_output.toolchain.clang.display(),
-                    llvm_output.toolchain.source.as_str(),
-                    llvm_output.toolchain.version
-                );
-            }
             if emit_llvm_ir {
                 if let Some(out_path) = output_path {
                     if let Err(e) = fs::write(&out_path, &llvm_output.ir_text) {
@@ -951,7 +1010,7 @@ fn run_object_backend(
                 object_bytes: llvm_output
                     .object_bytes
                     .expect("LLVM object output was requested"),
-                generated_extern_shim_c: None,
+                generated_extern_shim_c: llvm_output.generated_extern_shim_c,
             }
         }
         Backend::C => unreachable!("C backend does not use object orchestration"),

@@ -270,6 +270,35 @@ foreach ($sample in $samples) {
     Write-Host $row
 }
 
+$totalRow = ("{0,-$sampleWidth}" -f "TOTAL")
+$totals = @{}
+foreach ($backend in $availableBackends) {
+    $backendResults = @(
+        foreach ($sample in $samples) {
+            $results["$($sample.RelativePath)`0$($backend.Name)"]
+        }
+    )
+    if ($backendResults.Status -contains "FAIL") {
+        $totalRow += (" {0,$columnWidth}" -f "FAIL")
+        continue
+    }
+    $total = ($backendResults | Measure-Object -Property Bytes -Sum).Sum
+    $totals[$backend.Name] = [long]$total
+    $totalRow += (" {0,$columnWidth}" -f $total)
+}
+Write-Host ("-" * $header.Length)
+Write-Host $totalRow
+
+if ($totals.ContainsKey("llvm") -and $totals.ContainsKey("c")) {
+    $delta = $totals["llvm"] - $totals["c"]
+    $percent = if ($totals["c"] -eq 0) {
+        0.0
+    } else {
+        100.0 * $delta / $totals["c"]
+    }
+    Write-Host ("LLVM vs C aggregate: {0:+0;-0;0} bytes ({1:+0.00;-0.00;0.00}%)" -f $delta, $percent)
+}
+
 if ($failed) {
     Write-Host "sample-backend-matrix: FAILED"
     exit 1
