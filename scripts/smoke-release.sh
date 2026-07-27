@@ -154,12 +154,12 @@ COMPILE_LOG="$SCRATCH_DIR/compile.stderr.txt"
 OUTPUT_EXE="$SCRATCH_DIR/hello"
 
 if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
-    if ! "$OSCAN_COMMAND" --libc "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
+    if ! "$OSCAN_COMMAND" --backend c --libc "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
         cat "$COMPILE_LOG" >&2
         exit 1
     fi
 else
-    if ! "$OSCAN_COMMAND" "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
+    if ! "$OSCAN_COMMAND" --backend c "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
         cat "$COMPILE_LOG" >&2
         exit 1
     fi
