@@ -27,6 +27,10 @@ jobs:
       - name: Run release/toolchain regression tests
         run: python -m unittest discover -s scripts -p "test_*.py"
 
+      - name: Run sample backend matrix regression tests
+        shell: pwsh
+        run: ./tests/sample_backend_matrix.tests.ps1
+
   # ─────────────────────────────────────────────
   # Backend-specific distribution builds (one Cargo feature each)
   #

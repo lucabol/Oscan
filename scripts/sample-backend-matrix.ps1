@@ -6,9 +6,14 @@
 # The canonical backend names are the ones used here and by every package:
 # llvm, cranelift and c. `native` is only a deprecated CLI alias for
 # cranelift and is never used as a label or an output directory name.
+# Pass one multi-backend compiler with -Oscan, or one release compiler per
+# backend with -LlvmOscan, -CraneliftOscan and -COscan.
 
 param(
     [string]$Oscan = "",
+    [string]$LlvmOscan = "",
+    [string]$CraneliftOscan = "",
+    [string]$COscan = "",
     [string]$SourceDirectory = "examples",
     [string]$OutputDirectory = "tests\build\sample-backend-matrix"
 )
@@ -18,9 +23,18 @@ $Root = Split-Path -Parent $PSScriptRoot
 $IsWindowsHost = $env:OS -eq "Windows_NT"
 $ExecutableSuffix = if ($IsWindowsHost) { ".exe" } else { "" }
 $Backends = @(
-    [PSCustomObject]@{ Name = "llvm"; DisplayName = "LLVM" },
-    [PSCustomObject]@{ Name = "cranelift"; DisplayName = "Cranelift" },
-    [PSCustomObject]@{ Name = "c"; DisplayName = "C" }
+    [PSCustomObject]@{
+        Name = "llvm"; DisplayName = "LLVM"
+        RequestedCompiler = $LlvmOscan; CompilerOption = "-LlvmOscan"
+    },
+    [PSCustomObject]@{
+        Name = "cranelift"; DisplayName = "Cranelift"
+        RequestedCompiler = $CraneliftOscan; CompilerOption = "-CraneliftOscan"
+    },
+    [PSCustomObject]@{
+        Name = "c"; DisplayName = "C"
+        RequestedCompiler = $COscan; CompilerOption = "-COscan"
+    }
 )
 
 function Resolve-FromRoot {
@@ -156,7 +170,21 @@ fn! main() {
     }
 }
 
-$compiler = Resolve-Oscan $Oscan
+$hasBackendCompiler = @($Backends | Where-Object { $_.RequestedCompiler }).Count -gt 0
+$commonCompiler = if ($Oscan -or -not $hasBackendCompiler) {
+    Resolve-Oscan $Oscan
+} else {
+    $null
+}
+foreach ($backend in $Backends) {
+    $compiler = if ($backend.RequestedCompiler) {
+        Resolve-Oscan $backend.RequestedCompiler
+    } else {
+        $commonCompiler
+    }
+    $backend | Add-Member -NotePropertyName Compiler -NotePropertyValue $compiler
+}
+
 $sourceRoot = Resolve-FromRoot $SourceDirectory
 $outputRoot = Resolve-FromRoot $OutputDirectory
 
@@ -194,7 +222,12 @@ try {
     [void](New-Item -ItemType Directory -Path $probeRoot -Force)
 
     foreach ($backend in $Backends) {
-        $probe = Test-BackendAvailable -Compiler $compiler -Backend $backend.Name -ProbeRoot $probeRoot
+        if (-not $backend.Compiler) {
+            Write-Host "SKIP $($backend.DisplayName): no compiler configured (pass $($backend.CompilerOption) or -Oscan)"
+            continue
+        }
+        Write-Host "Compiler $($backend.DisplayName): $($backend.Compiler)"
+        $probe = Test-BackendAvailable -Compiler $backend.Compiler -Backend $backend.Name -ProbeRoot $probeRoot
         if ($probe.Available) {
             $availableBackends.Add($backend)
             Write-Host "Available: $($backend.DisplayName)"
@@ -224,7 +257,7 @@ try {
             Remove-Item -LiteralPath $artifact -Force -ErrorAction SilentlyContinue
 
             $compile = Invoke-OscanCompile `
-                -Compiler $compiler `
+                -Compiler $backend.Compiler `
                 -Backend $backend.Name `
                 -Source $sample.Source.FullName `
                 -Output $artifact

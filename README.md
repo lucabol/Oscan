@@ -460,12 +460,12 @@ executables):
 
 | Backend | `hello.osc` | 37-example total |
 |---|---:|---:|
-| LLVM | 6,144 bytes | 814,080 bytes |
-| Cranelift | 6,656 bytes | 863,232 bytes |
+| LLVM | 5,632 bytes | 811,008 bytes |
+| Cranelift | 6,144 bytes | 861,696 bytes |
 | C | 8,704 bytes | 875,520 bytes |
 
-LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
-(7.02%) smaller than C in aggregate.
+LLVM is 50,688 bytes (5.88%) smaller than Cranelift and 64,512 bytes
+(7.37%) smaller than C in aggregate.
 `scripts/compare-backend-size.ps1` enforces the focused `hello.osc` invariant;
 `scripts/sample-backend-matrix.ps1` reports the complete matrix and totals.
 
@@ -582,8 +582,14 @@ On Windows, you can also run the full validation suite:
 `scripts/sample-backend-matrix.ps1` (PowerShell, Windows or Linux) is a local
 cross-backend build check over the sample programs:
 
-```bash
+```powershell
 pwsh ./scripts/sample-backend-matrix.ps1
+
+# Compare three extracted single-backend release packages:
+pwsh ./scripts/sample-backend-matrix.ps1 `
+  -LlvmOscan C:\oscan-llvm\oscan.exe `
+  -CraneliftOscan C:\oscan-cranelift\oscan.exe `
+  -COscan C:\oscan-c\oscan.exe
 ```
 
 It recursively collects every `.osc` file under
@@ -596,8 +602,11 @@ first and wiped before the run. Nested and case-colliding sample names are
 flattened to unique artifact names. It reports the sample/backend artifact
 count, then finishes with a deterministic, sorted size table (bytes per sample
 per backend), and exits non-zero if any available backend fails to compile a
-sample or does not produce a non-empty host executable. Pass `-Oscan <path>` to pick a compiler; otherwise
-`target/release` then `target/debug` are used.
+sample or does not produce a non-empty host executable. Pass `-Oscan <path>` to
+use one multi-backend compiler. For extracted release packages, pass
+`-LlvmOscan`, `-CraneliftOscan`, and `-COscan`; each backend is then invoked
+through its own compiler. Without any compiler option, `target/release` then
+`target/debug` are used.
 
 The repository currently includes:
 - **99 positive integration tests** — programs that compile and run

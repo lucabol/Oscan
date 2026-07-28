@@ -18,16 +18,21 @@ if ($env:OS -eq "Windows_NT") {
 }
 
 function Write-FakeCompiler {
-    param([Parameter(Mandatory = $true)][string]$Path)
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$AllowedBackend = ""
+    )
 
     if ($env:OS -eq "Windows_NT") {
-        Set-Content -LiteralPath $Path -NoNewline -Value @'
+        $body = @'
 @echo off
 set "backend=%2"
+set "allowed=__ALLOWED_BACKEND__"
 rem The matrix must probe the canonical spelling: `native` is only the
 rem deprecated CLI alias and must never be what the script asks for.
 echo %* | findstr /i /c:"--backend native" >nul && exit /b 23
-echo %* | findstr /i /c:"--backend cranelift" >nul && exit /b 21
+if not "%allowed%"=="" if /i not "%backend%"=="%allowed%" exit /b 24
+if "%allowed%"=="" if /i "%backend%"=="cranelift" exit /b 21
 if not "%OSCAN_MATRIX_FAIL_SAMPLE%"=="" (
   echo %* | findstr /i /c:"%OSCAN_MATRIX_FAIL_SAMPLE%" >nul && exit /b 22
 )
@@ -41,13 +46,18 @@ if "%~1"=="-o" (
 shift
 goto arguments
 '@
+        Set-Content -LiteralPath $Path -NoNewline -Value $body.Replace("__ALLOWED_BACKEND__", $AllowedBackend)
     } else {
-        Set-Content -LiteralPath $Path -NoNewline -Value @'
+        $body = @'
 #!/bin/sh
+allowed="__ALLOWED_BACKEND__"
 if [ "$2" = "native" ]; then
     exit 23
 fi
-if [ "$2" = "cranelift" ]; then
+if [ -n "$allowed" ] && [ "$2" != "$allowed" ]; then
+    exit 24
+fi
+if [ -z "$allowed" ] && [ "$2" = "cranelift" ]; then
     exit 21
 fi
 if [ -n "$OSCAN_MATRIX_FAIL_SAMPLE" ]; then
@@ -63,6 +73,7 @@ while [ "$#" -gt 0 ]; do
 done
 exit 2
 '@
+        Set-Content -LiteralPath $Path -NoNewline -Value $body.Replace("__ALLOWED_BACKEND__", $AllowedBackend)
         & chmod +x $Path
     }
 }
@@ -97,6 +108,33 @@ try {
     Assert-MatrixTest (@($cArtifacts | Where-Object { $_.Extension -in @(".c", ".ll") }).Count -eq 0) "matrix emitted source instead of executables"
     Assert-MatrixTest (-not (Test-Path -LiteralPath (Join-Path $output "cranelift"))) "matrix emitted artifacts for an unavailable backend"
     Assert-MatrixTest (-not (Test-Path -LiteralPath (Join-Path $output "native"))) "matrix must name its output directories after the canonical backends"
+
+    $packageCompilers = @{}
+    foreach ($backend in @("llvm", "cranelift", "c")) {
+        $packageCompiler = Join-Path $TestRoot $(if ($env:OS -eq "Windows_NT") {
+            "fake-$backend.cmd"
+        } else {
+            "fake-$backend.sh"
+        })
+        Write-FakeCompiler -Path $packageCompiler -AllowedBackend $backend
+        $packageCompilers[$backend] = $packageCompiler
+    }
+    $packageOutput = Join-Path $TestRoot "package-output"
+    $packageRun = & pwsh -NoProfile -File $Script `
+        -LlvmOscan $packageCompilers["llvm"] `
+        -CraneliftOscan $packageCompilers["cranelift"] `
+        -COscan $packageCompilers["c"] `
+        -SourceDirectory $sources `
+        -OutputDirectory $packageOutput 2>&1 | Out-String
+    Assert-MatrixTest ($LASTEXITCODE -eq 0) "per-backend package matrix should pass: $packageRun"
+    Assert-MatrixTest ($packageRun -match "Compiled artifacts: 9/9 \(3 samples x 3 backends\)") `
+        "per-backend package matrix did not compile every sample/backend pair"
+    foreach ($backend in @("llvm", "cranelift", "c")) {
+        Assert-MatrixTest ($packageRun -match [regex]::Escape($packageCompilers[$backend])) `
+            "per-backend package matrix did not report the $backend compiler path"
+        Assert-MatrixTest (@(Get-ChildItem -LiteralPath (Join-Path $packageOutput $backend) -File).Count -eq 3) `
+            "per-backend package matrix did not produce three $backend artifacts"
+    }
 
     $env:OSCAN_MATRIX_FAIL_SAMPLE = "nested\z.osc"
     $failedOutput = Join-Path $TestRoot "failed-output"

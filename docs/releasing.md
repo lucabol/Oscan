@@ -493,12 +493,12 @@ backends (111 executables):
 
 | Backend | Aggregate size |
 |---|---:|
-| LLVM | 814,080 bytes |
-| Cranelift | 863,232 bytes |
+| LLVM | 811,008 bytes |
+| Cranelift | 861,696 bytes |
 | C | 875,520 bytes |
 
-LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
-(7.02%) smaller than C.
+LLVM is 50,688 bytes (5.88%) smaller than Cranelift and 64,512 bytes
+(7.37%) smaller than C.
 
 ### Windows native size-toolchain benchmark
 

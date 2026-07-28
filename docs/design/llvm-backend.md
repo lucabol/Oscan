@@ -208,12 +208,12 @@ The pinned Windows release build currently produces:
 
 | Backend | `hello.osc` | 37-example total |
 |---|---:|---:|
-| LLVM | 6,144 bytes | 814,080 bytes |
-| Cranelift | 6,656 bytes | 863,232 bytes |
+| LLVM | 5,632 bytes | 811,008 bytes |
+| Cranelift | 6,144 bytes | 861,696 bytes |
 | C | 8,704 bytes | 875,520 bytes |
 
-LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
-(7.02%) smaller than C in aggregate. The matrix covers 111 executables: every
+LLVM is 50,688 bytes (5.88%) smaller than Cranelift and 64,512 bytes
+(7.37%) smaller than C in aggregate. The matrix covers 111 executables: every
 one of the 37 recursive examples compiled with every backend.
 
 The aggregate result uses `scripts/sample-backend-matrix.ps1`. Size equality is

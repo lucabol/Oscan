@@ -146,13 +146,16 @@ failing. Surviving backends each get their own subdirectory under the output
 root (`tests\build\sample-backend-matrix` unless `-OutputDirectory` says
 otherwise); that root is printed as an absolute path and wiped before the run,
 and nested/case-colliding sample names are flattened to unique artifact names.
+`-Oscan` selects one multi-backend compiler; `-LlvmOscan`,
+`-CraneliftOscan`, and `-COscan` instead map each backend to its extracted
+single-backend release compiler.
 The run ends with a deterministic size table sorted by sample path, listing
 bytes per sample per available backend. It exits non-zero when an *available*
 backend fails to compile a sample or does not leave a non-empty host executable
 (MZ on Windows, ELF elsewhere) behind. `sample_backend_matrix.tests.ps1` covers
-this behavior with a fake compiler: skipped backend, stale-output cleanup,
-name flattening, executable-not-source artifacts, and the non-zero exit on a
-sample failure.
+this behavior with fake compilers: skipped backend, per-package compiler
+mapping, stale-output cleanup, name flattening, executable-not-source artifacts,
+and the non-zero exit on a sample failure.
 
 ### Cross-platform runs (WSL Linux x64, object-backend cross-link, ARM64)
 
