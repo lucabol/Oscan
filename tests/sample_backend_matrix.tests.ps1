@@ -147,3 +147,4 @@ try {
 }
 
 Write-Host "sample backend matrix tests passed"
+exit 0
