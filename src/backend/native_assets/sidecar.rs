@@ -679,10 +679,9 @@ pub fn require_verified_if_inside_from(exe_dir: &Path, path: &Path) -> Result<()
             ));
         }
     }
-    package.verify_entry(entry)?;
-    // Everything this file will implicitly pull in from the same
-    // directory is verified in the same breath (finding: verifying only
-    // the primary library leaves its siblings unchecked).
+    // The runtime closure includes this entry plus everything it may
+    // implicitly pull in from the same directory, so one pass verifies
+    // both the primary library and its siblings.
     package.verify_runtime_closure()
 }
 
@@ -1214,6 +1213,18 @@ mod tests {
         let err = require_verified_if_inside_from(&package.exe_dir, &llvm)
             .expect_err("the provider guard must verify the whole runtime closure");
         assert!(err.contains("libunwind.dll"), "{err}");
+    }
+
+    #[test]
+    fn a_corrupt_provider_dll_fails_the_runtime_closure_check() {
+        let package = Package::valid("windows-x86_64");
+        let llvm = root_for(&package.exe_dir).join("bin/libLLVM-22.dll");
+        fs::write(&llvm, b"swapped provider").unwrap();
+
+        let err = require_verified_if_inside_from(&package.exe_dir, &llvm)
+            .expect_err("the provider guard must verify the primary library");
+        assert!(err.contains("libLLVM-22.dll"), "{err}");
+        assert!(err.contains("SHA-256"), "{err}");
     }
 
     /// A Linux package needs only its linker: no import libraries, no

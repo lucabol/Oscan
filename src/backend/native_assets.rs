@@ -855,9 +855,8 @@ pub fn resolve_link_assets(
             );
         }
         if let Some(linker) = set.linker() {
-            // Re-verify everything the linker will implicitly load from
-            // its own directory immediately before executing it.
-            package.verify_runtime_closure()?;
+            // verify_all() already covered the linker and its complete
+            // runtime closure immediately before this smoke execution.
             smoke_check_linker(&linker.path)?;
         }
         return Ok(set);
