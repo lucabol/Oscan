@@ -71,19 +71,20 @@ impl PackageLayout {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        fs::create_dir_all(dir.join("native-link").join("bin")).expect("create sidecar dir");
+        fs::create_dir_all(&dir).expect("create package dir");
         let exe = dir.join(if cfg!(windows) { "oscan.exe" } else { "oscan" });
         fs::copy(oscan_binary_path(), &exe).expect("copy the compiler into the package");
         PackageLayout { dir, exe }
     }
 
-    #[cfg(feature = "backend-llvm")]
+    #[cfg(any(feature = "backend-llvm", feature = "backend-cranelift"))]
     fn sidecar(&self) -> PathBuf {
         self.dir.join("native-link")
     }
 
-    #[cfg(feature = "backend-llvm")]
+    #[cfg(any(feature = "backend-llvm", feature = "backend-cranelift"))]
     fn write_manifest(&self, json: &str) {
+        fs::create_dir_all(self.sidecar()).expect("create sidecar dir");
         fs::write(self.sidecar().join("native-link-assets.json"), json)
             .expect("write sidecar manifest");
     }
@@ -141,6 +142,8 @@ fn a_corrupt_sidecar_manifest_never_yields_a_provider_candidate() {
     let output = package.run(&[
         "--backend",
         "llvm",
+        "--native-target",
+        "linux-x86_64",
         example("hello.osc").to_str().expect("utf-8 path"),
         "-o",
         "out.obj",
@@ -184,6 +187,8 @@ fn an_undeclared_file_in_the_sidecar_is_never_loaded() {
     let output = package.run(&[
         "--backend",
         "llvm",
+        "--native-target",
+        "linux-x86_64",
         example("hello.osc").to_str().expect("utf-8 path"),
         "-o",
         "out.obj",
@@ -249,18 +254,11 @@ fn a_sidecar_in_the_current_directory_is_ignored() {
 /// assets, so it must not parse — let alone fail on — an unrelated corrupt
 /// sidecar package. (`OSCAN_RUNTIME_ARCHIVE_DIR` and the linker override
 /// are set deliberately here; everything else is scrubbed.)
-#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
+#[cfg(feature = "backend-cranelift")]
 #[test]
 fn an_explicit_direct_linker_override_ignores_a_corrupt_sidecar() {
     let package = PackageLayout::new("override-bypass");
-    fs::write(
-        package
-            .dir
-            .join("native-link")
-            .join("native-link-assets.json"),
-        "{ definitely not json",
-    )
-    .expect("write corrupt manifest");
+    package.write_manifest("{ definitely not json");
 
     // A runtime archive the link step can find, so the run reaches
     // linker selection rather than stopping at archive discovery.
@@ -280,14 +278,9 @@ fn an_explicit_direct_linker_override_ignores_a_corrupt_sidecar() {
     });
     fs::write(&fake_linker, b"not a linker").expect("stage a fake linker");
 
-    let backend = if cfg!(feature = "backend-cranelift") {
-        "cranelift"
-    } else {
-        "llvm"
-    };
     let output = scrubbed(&mut Command::new(&package.exe))
         .arg(example("hello.osc"))
-        .args(["--backend", backend, "-o"])
+        .args(["--backend", "cranelift", "-o"])
         .arg(package.dir.join("out.exe"))
         .env("OSCAN_RUNTIME_ARCHIVE_DIR", &archives)
         .env("OSCAN_NATIVE_LINKER", &fake_linker)

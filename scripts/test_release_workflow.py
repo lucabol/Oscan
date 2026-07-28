@@ -228,6 +228,13 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         upload_index = self.workflow.index("actions/upload-artifact@v4")
         self.assertLess(smoke_index, upload_index)
 
+    def test_successful_package_step_clears_smoke_probe_exit_codes(self) -> None:
+        success_index = self.workflow.index('Write-Host "Packaged and smoked:')
+        reset_index = self.workflow.index("$LASTEXITCODE = 0", success_index)
+        upload_index = self.workflow.index("actions/upload-artifact@v4")
+        self.assertLess(success_index, reset_index)
+        self.assertLess(reset_index, upload_index)
+
     def test_the_package_set_is_checked_against_the_contract(self) -> None:
         for message in (
             "Two $target packages claim the same archive name",

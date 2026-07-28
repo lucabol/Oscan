@@ -324,6 +324,12 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
         # The alias is never used as a package label.
         self.assertNotRegex(self.script, r"-Backend\s+['\"]?native")
 
+    def test_success_clears_expected_negative_probe_exit_codes(self) -> None:
+        self.assertTrue(
+            self.script.rstrip().endswith("$global:LASTEXITCODE = 0"),
+            "a successful smoke must not leak an expected refusal's exit code",
+        )
+
     def test_object_packages_refuse_what_they_do_not_contain(self) -> None:
         for expectation in (
             "the c backend is not included in this compiler build",

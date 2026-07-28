@@ -723,3 +723,4 @@ if ($isObjectPackage) {
 }
 
 Write-Host "Release smoke test passed for $Target/$Backend ($ArchivePath)"
+$global:LASTEXITCODE = 0

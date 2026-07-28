@@ -408,6 +408,7 @@ jobs:
             throw "This job produced packages the release contract does not declare: $($unexpected -join ', ')."
           }
           Write-Host "Packaged and smoked: $($produced -join ', ')"
+          $LASTEXITCODE = 0
 
       # One installer, for the recommended package. The MSI is cut from the
       # staged bundle directory the assemble step above left in place, so it
