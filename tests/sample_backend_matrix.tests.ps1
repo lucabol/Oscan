@@ -136,7 +136,7 @@ try {
             "per-backend package matrix did not produce three $backend artifacts"
     }
 
-    $env:OSCAN_MATRIX_FAIL_SAMPLE = "nested\z.osc"
+    $env:OSCAN_MATRIX_FAIL_SAMPLE = "z.osc"
     $failedOutput = Join-Path $TestRoot "failed-output"
     $failed = & pwsh -NoProfile -File $Script -Oscan $compiler -SourceDirectory $sources -OutputDirectory $failedOutput 2>&1 | Out-String
     Assert-MatrixTest ($LASTEXITCODE -ne 0) "matrix must fail when an available backend cannot compile a sample"
