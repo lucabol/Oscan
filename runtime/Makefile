@@ -5,7 +5,8 @@
 #   test                 — build and run the test suite
 #   archive-hosted            — build a release-quality, per-target hosted (libc) runtime archive
 #   archive-freestanding      — build a release-quality, per-target freestanding (no-libc) runtime archive
-#   archive-freestanding-core — freestanding sibling without gfx/img/svg/tt (see osc_runtime_freestanding_core.c)
+#   archive-freestanding-gfx  — core + gfx, without img/svg/tt
+#   archive-freestanding-core — freestanding sibling without gfx/img/svg/tt
 #   archives                  — all of the above
 #   clean                — remove build artefacts (dev build + archives)
 #
@@ -52,7 +53,7 @@ ARCHIVE_DIR  := ../build/runtime-archives/$(TARGET)
 ARCHIVE_CC_ARG = $(if $(filter command line environment environment%,$(origin CC)),--cc "$(CC)",)
 ARCHIVE_AR_ARG = $(if $(filter command line environment environment%,$(origin AR)),--ar "$(AR)",)
 
-.PHONY: all test clean check-archive-target archive-hosted archive-freestanding archive-freestanding-core archives clean-archives
+.PHONY: all test clean check-archive-target archive-hosted archive-freestanding archive-freestanding-gfx archive-freestanding-core archives clean-archives
 
 all: $(LIB)
 
@@ -81,12 +82,17 @@ archive-freestanding: check-archive-target
 	    --target "$(TARGET)" --mode freestanding --out-dir "build/runtime-archives/$(TARGET)" \
 	    $(ARCHIVE_CC_ARG) $(ARCHIVE_AR_ARG)
 
+archive-freestanding-gfx: check-archive-target
+	cd .. && $(PYTHON) scripts/release_tools.py build-runtime-archive \
+	    --target "$(TARGET)" --mode freestanding_gfx --out-dir "build/runtime-archives/$(TARGET)" \
+	    $(ARCHIVE_CC_ARG) $(ARCHIVE_AR_ARG)
+
 archive-freestanding-core: check-archive-target
 	cd .. && $(PYTHON) scripts/release_tools.py build-runtime-archive \
 	    --target "$(TARGET)" --mode freestanding_core --out-dir "build/runtime-archives/$(TARGET)" \
 	    $(ARCHIVE_CC_ARG) $(ARCHIVE_AR_ARG)
 
-archives: archive-hosted archive-freestanding archive-freestanding-core
+archives: archive-hosted archive-freestanding archive-freestanding-gfx archive-freestanding-core
 
 clean-archives:
 	rm -rf ../build/runtime-archives

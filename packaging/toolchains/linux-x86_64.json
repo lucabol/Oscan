@@ -61,6 +61,67 @@
         "share/gcc-*"
       ],
       "strip_debug": true
+    },
+    "llvm_code_generator": {
+      "status": "present",
+      "path": "lib/libLLVM.so.22.1",
+      "required_major": 22,
+      "version": "22.1.8",
+      "search_names": [
+        "libLLVM.so.22.1",
+        "libLLVM.so.22",
+        "libLLVM-22.so",
+        "libLLVM.so"
+      ],
+      "archive": {
+        "url": "https://github.com/lucabol/Oscan/releases/download/toolchains/llvm-provider-22.1.8-linux-x86_64.tar.xz",
+        "type": "tar.xz",
+        "digest": {
+          "algorithm": "sha256",
+          "value": "3232f0c6b535544911fa4fda71673ab1083d6ebd0e0d7c93f5b45f704df195cd"
+        }
+      },
+      "extract": {
+        "strip_components": 1
+      },
+      "files": [
+        {
+          "source": "lib/libLLVM.so.22.1",
+          "path": "lib/libLLVM.so.22.1"
+        },
+        {
+          "source": "LICENSES/libllvm22-copyright",
+          "path": "licenses/llvm/libllvm22-copyright"
+        },
+        {
+          "source": "provider.json",
+          "path": "licenses/llvm/provider.json"
+        },
+        {
+          "source": "README.txt",
+          "path": "licenses/llvm/README.txt"
+        }
+      ],
+      "runtime_dependencies": [
+        "glibc >= 2.34",
+        "libedit2",
+        "libffi8",
+        "libgcc-s1",
+        "libstdc++6 >= 12",
+        "libxml2",
+        "libz3-4",
+        "libzstd1",
+        "zlib1g"
+      ],
+      "debian_packages": [
+        "libedit2",
+        "libffi8",
+        "libxml2",
+        "libz3-4",
+        "libzstd1",
+        "zlib1g"
+      ],
+      "note": "Oscan loads this pinned libLLVM in-process; the bundle contains no Clang, llvm-as, opt, llc, headers, or LLVM SDK."
     }
   },
   "stage": {

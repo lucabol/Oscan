@@ -139,8 +139,20 @@
         "bin/ld.lld.exe",
         "bin/llvm-ar.exe",
         "bin/llvm-ranlib.exe",
-        "bin/llvm-windres.exe"
+        "bin/llvm-windres.exe",
+        "bin/libLLVM-*.dll"
       ]
+    },
+    "llvm_code_generator": {
+      "status": "present",
+      "path": "bin/libLLVM-22.dll",
+      "required_major": 22,
+      "search_names": [
+        "libLLVM-22.dll",
+        "LLVM-C.dll",
+        "libLLVM.dll"
+      ],
+      "note": "Oscan's --backend llvm loads this library in-process (parse/verify/optimize/emit) and never invokes clang/llvm-as/opt/llc. It is also what bin/ld.lld.exe already links against, so it costs no extra bytes in this bundle."
     }
   },
   "stage": {

@@ -1,7 +1,7 @@
 use crate::ir;
 use crate::types::BcType;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NativeExternShim {
     pub extern_name: String,
     pub real_symbol: String,
@@ -10,6 +10,7 @@ pub struct NativeExternShim {
     pub return_type: BcType,
 }
 
+#[derive(Debug)]
 pub enum NativeExternAbi {
     Direct,
     Shim(NativeExternShim),
@@ -132,6 +133,22 @@ fn native_extern_type_kind(ty: &BcType, program: &ir::Program) -> NativeExternTy
         ),
         BcType::Enum(name) if enum_has_payload(name, program) => NativeExternTypeKind::Unsupported(
             "payload enums still require an explicit C shim; native does not classify aggregate C ABI layouts directly",
+        ),
+        // An Oscan `fn` value is *not* a C callback. Every Oscan function
+        // takes an implicit leading `osc_arena*` (see
+        // `func.rs`'s `oscan_fn_signature` and `codegen.rs`'s
+        // `fn_params_c`), so handing its raw address to C would let the
+        // C side call it with the wrong first argument — silently
+        // shifting every declared parameter by one and reading an
+        // arena pointer out of whatever register happened to hold it.
+        // Making this work needs a real generated trampoline that
+        // supplies the arena; until that exists, an `extern` signature
+        // mentioning a function pointer is rejected rather than
+        // mis-lowered.
+        BcType::FnPtr(_, _) => NativeExternTypeKind::Unsupported(
+            "an Oscan function value carries an implicit leading arena parameter, so it is not a C \
+             callback; passing one across an extern boundary needs an explicit trampoline that \
+             supplies the arena, which this backend does not generate",
         ),
         _ => NativeExternTypeKind::Simple,
     }
@@ -312,4 +329,100 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn empty_program() -> ir::Program {
+        ir::Program {
+            structs: HashMap::new(),
+            enums: HashMap::new(),
+            functions: HashMap::new(),
+            constants: HashMap::new(),
+            struct_defs: Vec::new(),
+            enum_defs: Vec::new(),
+            extern_blocks: Vec::new(),
+            const_defs: Vec::new(),
+            fn_defs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn scalar_externs_use_the_direct_c_abi() {
+        let program = empty_program();
+        let abi = classify(
+            &program,
+            "c_add",
+            &[
+                ("a".to_string(), BcType::I32),
+                ("b".to_string(), BcType::I32),
+            ],
+            &BcType::I32,
+        )
+        .expect("scalar extern should be supported");
+        assert!(matches!(abi, NativeExternAbi::Direct));
+    }
+
+    #[test]
+    fn str_externs_go_through_a_generated_shim() {
+        let program = empty_program();
+        let abi = classify(
+            &program,
+            "c_greet",
+            &[("name".to_string(), BcType::Str)],
+            &BcType::Str,
+        )
+        .expect("str extern should be supported through a shim");
+        match abi {
+            NativeExternAbi::Shim(shim) => {
+                assert_eq!(shim.extern_name, "c_greet");
+                assert!(shim.shim_symbol.starts_with("__oscan_native_extern_shim_"));
+            }
+            NativeExternAbi::Direct => panic!("a str signature must use the generated shim ABI"),
+        }
+    }
+
+    #[test]
+    fn aggregate_externs_stay_rejected() {
+        let program = empty_program();
+        for ty in [
+            BcType::Struct("Point".to_string()),
+            BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str)),
+        ] {
+            let error = classify(
+                &program,
+                "c_take",
+                &[("v".to_string(), ty.clone())],
+                &BcType::Unit,
+            )
+            .expect_err("aggregate extern parameters must be rejected");
+            assert!(error.contains("explicit C shim"), "{error}");
+        }
+    }
+
+    #[test]
+    fn function_pointer_externs_are_rejected_rather_than_treated_as_c_callbacks() {
+        let program = empty_program();
+        let fn_ptr = BcType::FnPtr(vec![BcType::I32], Box::new(BcType::I32));
+
+        let param_error = classify(
+            &program,
+            "c_register_callback",
+            &[("cb".to_string(), fn_ptr.clone())],
+            &BcType::Unit,
+        )
+        .expect_err("a function-pointer parameter must be rejected");
+        assert!(
+            param_error.contains("implicit leading arena parameter"),
+            "{param_error}"
+        );
+        assert!(param_error.contains("trampoline"), "{param_error}");
+
+        let return_error = classify(&program, "c_get_callback", &[], &fn_ptr)
+            .expect_err("a function-pointer return must be rejected");
+        assert!(return_error.contains("not a C callback"), "{return_error}");
+    }
 }

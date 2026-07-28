@@ -17,9 +17,19 @@ function Invoke-NativeValidation {
     $compiler = (Resolve-Path -LiteralPath $Oscan).Path
     $runtimeArchives = (Resolve-Path -LiteralPath $RuntimeArchiveDir).Path
     $env:OSCAN_RUNTIME_ARCHIVE_DIR = $runtimeArchives
-    $env:OSCAN_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $ToolchainDir).Path
+    $toolchain = (Resolve-Path -LiteralPath $ToolchainDir).Path
+    $env:OSCAN_TOOLCHAIN_DIR = $toolchain
 
-    & (Join-Path $ScriptDir "default_backend_native.tests.ps1") -Oscan $compiler
+    & (Join-Path $ScriptDir "default_backend.tests.ps1") -Oscan $compiler -ExpectedBackend llvm
+
+    & (Join-Path $ScriptDir "llvm_toolchain_isolation.tests.ps1") `
+        -Oscan $compiler `
+        -RuntimeArchiveDir $runtimeArchives `
+        -LlvmLibrary (Join-Path $toolchain "bin\libLLVM-22.dll")
+
+    & (Join-Path $RepoRoot "scripts\compare-backend-size.ps1") `
+        -Oscan $compiler `
+        -OutputDirectory (Join-Path $ScriptDir "build\backend-size-ci")
 
     & (Join-Path $ScriptDir "native_link_isolation.tests.ps1") `
         -Oscan $compiler `
@@ -33,9 +43,48 @@ function Invoke-NativeValidation {
         throw "C-vs-native differential suite failed with exit code $LASTEXITCODE"
     }
 
-    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler
+    & (Join-Path $ScriptDir "run_tests.ps1") -Oscan $compiler -Backend llvm
+    if ($LASTEXITCODE -ne 0) {
+        throw "C-vs-LLVM differential suite failed with exit code $LASTEXITCODE"
+    }
+
+    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler -Backend native
     if ($LASTEXITCODE -ne 0) {
         throw "native extern str ABI suite failed with exit code $LASTEXITCODE"
+    }
+
+    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler -Backend llvm
+    if ($LASTEXITCODE -ne 0) {
+        throw "LLVM extern str ABI suite failed with exit code $LASTEXITCODE"
+    }
+
+    & (Join-Path $ScriptDir "panic_message.tests.ps1") `
+        -Oscan $compiler `
+        -Backends @("c", "native", "llvm") `
+        -SkipWSL
+    if ($LASTEXITCODE -ne 0) {
+        throw "cross-backend panic-message suite failed with exit code $LASTEXITCODE"
+    }
+
+    $savedNoToolchain = $env:OSCAN_NO_TOOLCHAIN
+    try {
+        $env:OSCAN_NO_TOOLCHAIN = "1"
+        & (Join-Path $ScriptDir "backend_parity.ps1") `
+            -Oscan $compiler `
+            -Backend llvm `
+            -FreestandingOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "strict no-toolchain LLVM parity suite failed with exit code $LASTEXITCODE"
+        }
+        & (Join-Path $ScriptDir "backend_parity.ps1") `
+            -Oscan $compiler `
+            -Backend native `
+            -FreestandingOnly
+        if ($LASTEXITCODE -ne 0) {
+            throw "strict no-toolchain Cranelift parity suite failed with exit code $LASTEXITCODE"
+        }
+    } finally {
+        $env:OSCAN_NO_TOOLCHAIN = $savedNoToolchain
     }
 }
 

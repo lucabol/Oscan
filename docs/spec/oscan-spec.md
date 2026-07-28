@@ -34,7 +34,7 @@
 
 ### Getting the Oscan Compiler
 
-Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux release archives contain the compiler, direct-link assets for self-contained freestanding native builds, and a bundled C toolchain for explicit C-backend builds, hosted builds, and C inputs.
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux release archives contain the compiler, an LLVM 22 shared-library provider, direct-link assets for self-contained freestanding object-backend builds, and a bundled C toolchain for explicit C-backend builds, hosted builds, and C inputs.
 
 #### Windows x86_64
 
@@ -49,7 +49,7 @@ The full bundle includes a self-contained C toolchain; no additional compiler in
 
 **Components:**
 - `oscan.exe` — the Oscan compiler
-- `toolchain/` — C compiler and related tools (Windows-native, bundled)
+- `toolchain/` — packaged LLVM provider plus the pinned llvm-mingw Clang/LLD C and hosted-link toolchain
 - `install.ps1` — optional installation script
 
 #### Linux x86_64
@@ -59,14 +59,17 @@ The full bundle includes a self-contained C toolchain; no additional compiler in
 1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
 2. Extract: `tar xf oscan-*.tar.gz`
 3. Move to a stable location: `mv oscan-*/ ~/.local/oscan/` or `/opt/oscan/`
-4. Add to PATH: `export PATH=$PATH:~/.local/oscan/`
-5. Verify: `oscan --help`
+4. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+5. Add to PATH: `export PATH=$PATH:~/.local/oscan/`
+6. Verify: `oscan --help`
 
-The full bundle includes a pre-configured C toolchain; no separate compiler installation is required.
+The full bundle includes a pre-configured C toolchain and LLVM provider; no
+separate compiler installation is required. The provider requires glibc 2.34
+or newer plus the listed host runtime libraries.
 
 **Components:**
 - `oscan` — the Oscan compiler
-- `toolchain/` — C compiler and related tools (Linux x86_64, bundled)
+- `toolchain/` — packaged LLVM provider plus the pinned musl GCC/binutils C toolchain
 - `install.sh` — optional installation script
 
 #### macOS
@@ -92,7 +95,9 @@ To build the Oscan compiler from source:
 
 **Requirements:**
 - Rust toolchain (to build the compiler itself)
-- C compiler (GCC, Clang, or MSVC)
+- LLVM 22 shared library only when running the LLVM backend from a source build;
+  releases package it, and no LLVM SDK or Clang executable is used
+- C compiler (GCC, Clang, or MSVC) for the C backend, hosted object-backend builds, `--extra-c`, and final links without packaged direct-link assets
 
 ```bash
 git clone https://github.com/lucabol/Oscan.git
@@ -111,6 +116,7 @@ oscan-vX.Y.Z-windows-x86_64-full/
   oscan.exe
   toolchain/
     bin/
+      libLLVM-22.dll
       clang.exe
       lld.exe
       ...
@@ -126,8 +132,9 @@ oscan-vX.Y.Z-linux-x86_64-full/
   oscan
   toolchain/
     bin/
-      clang
-      lld
+      x86_64-linux-musl-gcc
+      x86_64-linux-musl-ld
+      gcc            # wrapper for x86_64-linux-musl-gcc
       ...
     lib/
       ...
@@ -148,11 +155,13 @@ oscan-vX.Y.Z-linux-x86_64-full/
 Once installed, invoke Oscan like this:
 
 ```bash
-oscan <file.osc>              # Compile to executable
+oscan <file.osc>              # Compile to executable (LLVM when available)
 oscan <file.osc> --run        # Compile and run immediately
 oscan <file.osc> -o <file.c>  # Emit C code only (`.c` extension)
 oscan <file.osc> --emit-c     # Emit C code to stdout
-oscan <file.osc> --backend native --run  # Emit direct native object code
+oscan <file.osc> -o <file.ll> # Emit textual LLVM IR only (`.ll` extension)
+oscan <file.osc> --backend llvm --run    # Require direct in-process LLVM object code; never falls back
+oscan <file.osc> --backend native --run  # Emit direct Cranelift object code
 oscan <file.osc> --target wasi    # Cross-compile to WebAssembly
 ```
 
@@ -1410,7 +1419,7 @@ void      osc_arena_destroy(osc_arena* arena);
 
 - Default initial capacity: 1 MB.
 - Growth strategy: double when full.
-- All generated C code receives the arena as a hidden first parameter to functions that allocate.
+- Backend-generated functions receive the arena as a hidden first parameter when they allocate.
 
 ### 8.6 String Representation
 
@@ -1495,7 +1504,7 @@ The compiler generates `#include` directives based on a pragma or configuration 
 - Additional C headers are specified via a build configuration file (not part of the language syntax).
 - The generated C file is compiled with a standard C compiler toolchain (gcc/clang/MSVC) and linked with the Oscan runtime library and any user-specified C libraries.
 
-**Embedded runtime:** The Oscan compiler binary embeds the runtime files (`osc_runtime.h`, `osc_runtime.c`, and `l_os.h`) directly using Rust's `include_str!()`. This makes the compiler self-contained with respect to runtime files — no need to distribute `runtime/` or `deps/` directories. Native compilation still requires access to a C toolchain; on Windows and Linux that toolchain may be bundled with the Oscan distribution, and otherwise host compiler detection is used (clang preferred, but gcc and MSVC are also supported).
+**Embedded runtime:** The Oscan compiler binary embeds the runtime sources (`osc_runtime.h`, `osc_runtime.c`, and `l_os.h`) for the C backend and packages precompiled runtime archives for object backends. C-backend compilation still requires a C toolchain; on Windows and Linux that toolchain may be bundled, and otherwise host compiler detection is used. The LLVM backend lowers typed Oscan IR directly and loads packaged LLVM 22 in-process; it does not generate C or invoke Clang. Packaged freestanding LLVM/Cranelift builds link with Oscan's embedded linker rather than a C compiler driver.
 
 For development or customization, if a `runtime/` directory exists next to the oscan binary or in the current working directory, it takes precedence over the embedded files.
 
@@ -1924,31 +1933,53 @@ oscan [OPTIONS] <file.osc>
 
 | Option          | Description |
 |-----------------|-------------|
-| `-o <path>`     | Output path. Defaults to executable. Use `.c` extension to emit C source only. |
+| `-o <path>`     | Output path. Defaults to executable. Use `.c` extension to emit C source only, `.ll` to emit textual LLVM IR only. |
 | `--run`         | Compile and execute immediately. |
 | `--emit-c`      | Emit C-backend source to stdout. |
+| `--emit-llvm-ir` | Emit textual LLVM IR to stdout (alias: `--emit-llvm`). Requires the LLVM backend and stops before object emission and linking. |
 | `--libc`        | Use hosted libc mode instead of freestanding mode. Enables access to standard C library functions. |
-| `--backend <name>` | Explicitly select `c` (portability/reference/source backend) or `native` (direct Cranelift AOT object code). Without this option, ordinary builds use native on supported Windows/Linux hosts and C elsewhere. |
-| `--native-target <tag>` | Native object target for `--backend native`. Supported: `linux-x86_64` (default on Linux x86_64), `windows-x86_64` (default on Windows), `linux-aarch64`, `linux-riscv64`. |
+| `--backend <name>` | Explicitly select `llvm` (direct IR plus in-process LLVM object code), `c` (portability/reference/source backend), or `native`/`cranelift` (direct Cranelift AOT object code). Without this option, ordinary builds prefer LLVM on supported Windows/Linux hosts when a compatible provider is available, then Cranelift, then C. |
+| `--native-target <tag>` | Object target for `--backend llvm` and `--backend native`. Supported: `host` (default), `linux-x86_64`, `windows-x86_64`, `linux-aarch64`, `linux-riscv64`. Provider target capabilities are checked before LLVM emission. |
 | `--target <arch>` | Cross-compile for target architecture (C backend only). Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |
 | `--extra-c <file>` | Extra C source file to compile and link (repeatable). Requires C compiler. |
-| `--extra-obj <file>` | Precompiled object file to link (`.o` or `.obj`, repeatable). Works with both backends. |
-| `--extra-lib <lib>` | Static library path (`.a` or `.lib`) or compiler-driver system library name to link, repeatable. Works with both backends. |
+| `--extra-obj <file>` | Precompiled object file to link (`.o` or `.obj`, repeatable). Works with all three backends. |
+| `--extra-lib <lib>` | Static library path (`.a` or `.lib`) or compiler-driver system library name to link, repeatable. Works with all three backends. |
 | `--extra-cflags <flag>` | Extra flag passed to the C compiler (repeatable). |
 | `--dump-ast`    | Print the abstract syntax tree (AST) to stderr. Debug use only. |
 | `--dump-tokens` | Print lexer tokens to stderr. Debug use only. |
 
-Without `--backend`, ordinary executable, object, and `--run` builds select
-native on Windows x86-64 and Linux x86-64/AArch64/RISC-V64; unsupported hosts
-select C. `--emit-c`, `-o file.c`, and `--target riscv64|wasi` select C, while
-`--native-target` selects native. An explicit backend always overrides
-implicit selection, and incompatible explicit combinations are errors. The C
-backend remains the macOS, WASI, source-emission, and differential-reference
-path. The native backend never silently falls back to C code generation.
+Without `--backend`, ordinary executable, object, and `--run` builds select LLVM
+on supported Windows/Linux hosts when a compatible packaged LLVM provider is
+available, Cranelift when it is not, and C on unsupported hosts.
+`--emit-c`, `-o file.c`, and `--target riscv64|wasi` select C; `--emit-llvm-ir`
+and `-o file.ll` select LLVM; for compatibility with the pre-LLVM CLI, an
+explicit `--native-target` without `--backend` selects Cranelift. An explicit
+backend always overrides implicit selection, and incompatible explicit
+combinations are errors. The C backend remains the macOS, WASI,
+source-emission, and differential-reference path. Neither object backend ever
+silently falls back to C code generation, and an explicit `--backend llvm`
+failure (including a missing provider) is reported rather than retried through
+Cranelift or C.
+
+The LLVM backend lowers the same backend-neutral LIR as Cranelift directly to
+typed LLVM IR. Packaged LLVM 22 parses, verifies, optimizes, and emits the
+relocatable object in-process; the object then uses the same
+runtime-archive/link path as Cranelift. See `docs/design/llvm-backend.md`.
 
 ### Host Toolchain Resolution (Windows/Linux)
 
 This behavior applies to Windows and Linux host builds only.
+
+The LLVM backend resolves its exact-major provider separately from the C
+compiler, in this order:
+
+1. `OSCAN_LLVM_LIB` — absolute shared-library path
+2. `OSCAN_LLVM_DIR` — absolute provider directory
+3. `OSCAN_TOOLCHAIN_DIR` — absolute packaged-toolchain root
+4. executable-relative `toolchain/` and executable directory
+
+Relative overrides, the current working directory, `PATH`, and the bare
+platform loader search path are not accepted.
 
 For host-native compilation, Oscan resolves the C compiler/toolchain in the following order:
 
@@ -1965,34 +1996,45 @@ When a bundled toolchain root is used (`OSCAN_TOOLCHAIN_DIR`, sibling `toolchain
 
 A Windows/Linux Oscan distribution that includes a bundled `toolchain/` directory therefore does not always require a separately installed system compiler. This does not replace host compiler fallback; if no override or bundled toolchain is present, normal host compiler detection still applies. Cross-compilation targets still require their own target-specific toolchains.
 
-**Exception — Windows and Linux x86-64 freestanding native builds:** the
-resolution order above governs the external/bundled **C compiler** path. On
-Windows x86-64 and Linux x86-64, selecting `oscan --backend native`
-(freestanding, no explicit `.c` files) bypasses it entirely: `oscan` embeds its
-own linker plus the minimal support files it needs — on Windows, `ld.lld` plus
+**Exception — Windows and Linux x86-64 freestanding object-backend final links:**
+the resolution order above governs the external/bundled **C compiler** path. On
+Windows x86-64 and Linux x86-64, a freestanding `--backend llvm` or
+`--backend native` build with no explicit `.c` files bypasses it entirely for
+linking: `oscan` embeds its own linker plus the minimal support files it needs
+— on Windows, `ld.lld` plus
 5 MinGW runtime DLLs and import libraries; on Linux, a fully static
 `x86_64-linux-musl-ld` from the pinned musl-cross toolchain — and extracts them
 on first use to a content-verified local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete or ignore; rebuilt automatically on next use).
+Linux — safe to delete or ignore; rebuilt automatically on next use). Such a
+packaged LLVM build does not consult `OSCAN_CC` or discover a separate C
+compiler: it loads packaged LLVM in-process for IR optimization/object emission
+and uses the embedded linker for the final link. No code-generation tool
+executable is spawned.
 
-**Linux AArch64 / RISC-V64 native backend support:** `--backend native` now
-supports cross-linking to `linux-aarch64` and `linux-riscv64` via a cross-linker
+**Linux AArch64 / RISC-V64 object-backend support:** `--backend native` supports
+cross-linking to `linux-aarch64` and `linux-riscv64` via a cross-linker
 sidecar mechanism. The standard Linux x86_64 release embeds only its own linker;
 cross-linker binaries for aarch64 and riscv64 must be provided separately
 (typically as part of the release bundle). Set `OSCAN_NATIVE_LINKER` and
-`OSCAN_NATIVE_LINKER_FLAVOR=elf` to enable cross-linking. **Note:** this is
-separate from the **C backend**'s existing ARM64/RISC-V64 support via
-`aarch64-linux-gnu-gcc` / `--target riscv64`.
+`OSCAN_NATIVE_LINKER_FLAVOR=elf` to enable cross-linking. `--backend llvm` uses
+the same link path, but can only emit objects for a target its provider exports.
+The Linux provider includes AArch64 and RISC-V; the Windows provider includes
+AArch64 but not RISC-V. **Note:** this is separate from the **C backend**'s existing
+ARM64/RISC-V64 support via `aarch64-linux-gnu-gcc` / `--target riscv64`.
 
-Hosted `--libc` mode (any platform) and explicit `--extra-c` sources still
-require the external/bundled C toolchain above, even on Windows and Linux x86-64. See
+Hosted `--libc` mode, explicit `--extra-c` sources, and generated string-ABI
+extern shims still require the external/bundled C toolchain, even on Windows
+and Linux x86-64. `OSCAN_NO_TOOLCHAIN=1` rejects these routes. See
 `docs/design/native-link-embedding.md` for the full design and
 `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR` (`=mingw` for Windows, `=elf`
 for Linux)/`OSCAN_NATIVE_ASSET_CACHE_DIR` for advanced overrides.
 
 ### Target Architectures
+
+`--target` (as distinct from `--native-target`) always selects the C backend
+and emits portable C source for the requested platform.
 
 #### RISC-V 64-bit (`riscv64`)
 
@@ -2292,41 +2334,46 @@ Error: division by zero
 
 ### 13.1 Pipeline
 
+```text
+Source (.osc) -> Lexer -> Parser -> Name resolution and type checking
+                                      |
+                                      v
+                              Typed Oscan IR
+                       +--------------+--------------+
+                       |                             |
+                       v                             v
+                  C backend                    Shared typed LIR
+                  C99 source                  /                \
+                       |                     v                  v
+                       v               Direct LLVM IR      Cranelift
+              Bundled/host C compiler       |                object
+                       |                     v                  |
+                       |              Packaged LLVM 22          |
+                       |              in-process object         |
+                       |                     |                  |
+                       +---------------------+------------------+
+                                             |
+                                             v
+                                Runtime archive + linker
+                                             |
+                                             v
+                                         Executable
 ```
-Source Code (.osc)
-    │
-    ▼
-┌──────────┐
-│  Lexer   │  Source → Token stream
-└──────────┘
-    │
-    ▼
-┌──────────┐
-│  Parser  │  Token stream → Untyped AST
-└──────────┘
-    │
-    ▼
-┌───────────────────┐
-│  Name Collection  │  Pass 1: Collect all top-level names (types, functions, constants)
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│  Name Resolution  │  Pass 2: Resolve all references, check anti-shadowing
-│  & Type Checking  │  Annotate AST with types → Typed AST
-└───────────────────┘
-    │
-    ▼
-┌──────────────────┐
-│  C Code Generator │  Typed AST → C source file
-└──────────────────┘
-    │
-    ▼
-┌──────────────────┐
-│  C Compiler      │  C source → executable (gcc/clang)
-│  (external)      │
-└──────────────────┘
-```
+
+After type checking, the selected backend takes over:
+
+- **C** (`--backend c`): the C code generator above, compiled by an external
+  or bundled C toolchain. Also the source-emission, macOS, WASI, and
+  differential-oracle path.
+- **LLVM** (`--backend llvm`): the typed program is lowered through Oscan's
+  shared backend-neutral LIR to typed LLVM IR, then packaged LLVM 22 parses,
+  verifies, optimizes, and emits the relocatable object in-process.
+- **Cranelift** (`--backend native`): the same shared semantic lowering emits
+  a Cranelift object directly.
+
+LLVM and Cranelift objects share the same final-link path (runtime archive
+plus Oscan's embedded linker, or a compiler driver for hosted/`--extra-c`/
+unpackaged builds).
 
 ### 13.2 Lexer
 
@@ -2368,7 +2415,9 @@ Output: A typed AST where every expression node carries its resolved type.
 
 ### 13.6 C Code Generator
 
-Transforms the typed AST into C99 source code:
+Transforms the typed AST into C99 source code for `--backend c`. LLVM and
+Cranelift do not use this generator; they share a separate backend-neutral LIR
+lowering.
 
 1. **Header section:** `#include` directives, type definitions (structs, enums as tagged unions), function prototypes (for order independence).
 
@@ -2411,13 +2460,17 @@ int main(void) {
 ### 13.7 File Extension
 
 - Oscan source files use the `.osc` extension.
-- Generated C files use the `.c` extension with the same base name.
+- Generated C uses `.c`; directly emitted LLVM IR uses `.ll`; relocatable
+  object output uses `.o` or `.obj`.
 
 ### 13.8 Compilation Command
 
 ```bash
-oscan input.osc -o output.c    # Transpile to C
-cc output.c osc_runtime.c -o program  # Compile with C compiler
+oscan input.osc --run                 # Prefer LLVM, then Cranelift, then C
+oscan input.osc --backend llvm --run  # Require direct LLVM
+oscan input.osc --backend native -o output.o
+oscan input.osc -o output.ll          # Emit direct LLVM IR
+oscan input.osc -o output.c           # Emit C99
 ```
 
 ---

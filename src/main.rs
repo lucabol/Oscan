@@ -26,7 +26,7 @@ pub(crate) fn is_verbose() -> bool {
 }
 
 /// Log a Command's full command line when --verbose is active.
-fn verbose_command(label: &str, cmd: &Command) {
+pub(crate) fn verbose_command(label: &str, cmd: &Command) {
     if is_verbose() {
         let prog = cmd.get_program().to_string_lossy();
         let args: Vec<String> = cmd
@@ -272,16 +272,18 @@ fn print_usage(to_stderr: bool) {
         }
     };
     print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--libc] [--backend c|native] [--native-target <tag>] [--target <arch>] [--allow-elevated-native-link] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--emit-llvm-ir] [--libc] [--backend llvm|c|native] [--native-target <tag>] [--target <arch>] [--allow-elevated-native-link] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
     );
     print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
-    print_line("  --libc           Use the hosted libc runtime (including with --backend native)");
+    print_line("  --emit-llvm-ir   Emit textual LLVM IR to stdout (or use -o file.ll)");
+    print_line("  --libc           Use the hosted libc runtime (including with LLVM/Cranelift)");
     print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
-    print_line("  --backend c|native  Backend (default: native on supported hosts; c otherwise)");
+    print_line("  --backend llvm|c|native  Backend (default: LLVM when its packaged code generator is available; native/c otherwise)");
+    print_line("    llvm    Direct LLVM object code through Oscan's own packaged LLVM code generator (no C, no toolchain)");
     print_line("    c       Portability/reference, C source, macOS, and WASI backend");
-    print_line("    native  Direct object code for supported Windows and Linux hosts/targets");
+    print_line("    native  Cranelift object code for supported Windows and Linux hosts/targets");
     print_line(&format!(
-        "  --native-target <tag>  Native backend target: {} (default: host)",
+        "  --native-target <tag>  LLVM/Cranelift object target: {} (default: host; implicitly selects native)",
         backend::NativeTarget::accepted_values()
     ));
     print_line("  --allow-elevated-native-link  Trusted CI/release only: allow native final link/--run from an elevated process; only bypasses the elevated-process refusal, not path/cache/sandbox checks");
@@ -303,25 +305,55 @@ fn print_usage(to_stderr: bool) {
     print_line(
         "  OSCAN_NATIVE_ASSET_CACHE_DIR  Override where extracted embedded native-link assets are cached (default: %LOCALAPPDATA%\\oscan\\native-assets\\ on Windows, $XDG_CACHE_HOME/oscan/native-assets on Linux)",
     );
+    print_line("  OSCAN_LLVM_LIB   Full path to Oscan's packaged LLVM code generator shared library (--backend llvm)");
+    print_line("  OSCAN_LLVM_DIR   Directory to search for the packaged LLVM code generator");
+    print_line(
+        "  OSCAN_NO_TOOLCHAIN=1  Strict no-toolchain profile: refuse the C backend, --extra-c/--extra-cflags, runtime-archive/shim auto-build, and compiler-driver linking instead of silently using a host C toolchain",
+    );
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Backend {
+    Llvm,
     C,
     Native,
+}
+
+impl Backend {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Llvm => "llvm",
+            Self::C => "c",
+            Self::Native => "native",
+        }
+    }
+}
+
+impl std::fmt::Display for Backend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 fn resolve_backend(
     explicit_backend: Option<Backend>,
     c_source_output: bool,
+    llvm_ir_output: bool,
     c_cross_target: bool,
     native_target_requested: bool,
     native_host_supported: bool,
+    llvm_available: bool,
 ) -> Backend {
     explicit_backend.unwrap_or_else(|| {
         if c_source_output || c_cross_target {
             Backend::C
-        } else if native_target_requested || native_host_supported {
+        } else if llvm_ir_output {
+            Backend::Llvm
+        } else if native_target_requested {
+            Backend::Native
+        } else if llvm_available && native_host_supported {
+            Backend::Llvm
+        } else if native_host_supported {
             Backend::Native
         } else {
             Backend::C
@@ -338,6 +370,7 @@ fn main() {
     let mut file_path = None;
     let mut run_mode = false;
     let mut emit_c = false;
+    let mut emit_llvm_ir = false;
     let mut use_libc = false;
     let mut show_warnings = false;
     let mut verbose = false;
@@ -358,6 +391,7 @@ fn main() {
             "--dump-ast" => dump_ast = true,
             "--run" => run_mode = true,
             "--emit-c" => emit_c = true,
+            "--emit-llvm" | "--emit-llvm-ir" => emit_llvm_ir = true,
             "--libc" => use_libc = true,
             "--allow-elevated-native-link" => allow_elevated_native_link = true,
             "--warnings" | "-W" => show_warnings = true,
@@ -388,14 +422,15 @@ fn main() {
             "--backend" => {
                 i += 1;
                 let val = args.get(i).cloned().unwrap_or_else(|| {
-                    eprintln!("error: --backend requires an argument (c, native)");
+                    eprintln!("error: --backend requires an argument (llvm, c, native)");
                     process::exit(1);
                 });
                 explicit_backend = Some(match val.as_str() {
+                    "llvm" => Backend::Llvm,
                     "c" => Backend::C,
-                    "native" => Backend::Native,
+                    "native" | "cranelift" => Backend::Native,
                     other => {
-                        eprintln!("error: unknown backend '{other}' (supported: c, native)");
+                        eprintln!("error: unknown backend '{other}' (supported: llvm, c, native)");
                         process::exit(1);
                     }
                 });
@@ -476,12 +511,41 @@ fn main() {
         .as_ref()
         .map(|path| path.ends_with(".c"))
         .unwrap_or(false);
+    let output_ends_in_ll = output_path
+        .as_ref()
+        .map(|path| path.ends_with(".ll"))
+        .unwrap_or(false);
+    let native_host_supported = backend::NativeTarget::try_host().is_ok();
+    // Probe Oscan's own packaged LLVM code generator only when the backend
+    // is not already pinned: loading a shared library is cheap but not
+    // free, and an explicit `--backend c`/`--backend native` must never
+    // depend on it being present at all.
+    let llvm_backend = if explicit_backend.is_none()
+        && !emit_c
+        && !output_ends_in_c
+        && target.is_none()
+        && native_host_supported
+    {
+        backend::llvm::LlvmBackend::load().ok().filter(|llvm| {
+            // Only prefer LLVM by default when it can actually target this
+            // host; a provider that lacks the host back end is not a
+            // usable default (capability gate, not a silent fallback —
+            // `--backend llvm` still reports the precise reason).
+            backend::NativeTarget::try_host()
+                .map(|host| llvm.supports(host))
+                .unwrap_or(false)
+        })
+    } else {
+        None
+    };
     let backend_kind = resolve_backend(
         explicit_backend,
         emit_c || output_ends_in_c,
+        emit_llvm_ir || output_ends_in_ll,
         target.is_some(),
         native_target_arg.is_some(),
-        backend::NativeTarget::try_host().is_ok(),
+        native_host_supported,
+        llvm_backend.is_some(),
     );
 
     // Backend-selection validation. `--target` (C-backend cross-compile
@@ -489,35 +553,92 @@ fn main() {
     // selection) are deliberately separate flags with non-overlapping
     // meanings — see `print_usage` — so using either with the wrong
     // backend is a user error, not something to silently ignore.
-    if backend_kind == Backend::Native {
+    if backend_kind != Backend::C {
         if target.is_some() {
-            eprintln!("error: --target is only supported with --backend c; use --native-target for the native backend");
+            eprintln!(
+                "error: --target is only supported with --backend c; use --native-target for the {backend_kind} backend"
+            );
             process::exit(1);
         }
         if emit_c {
             eprintln!(
                 "error: --emit-c requires the C portability/reference backend (--backend c); \
-                 the native backend produces object code"
+                 the {backend_kind} backend produces object code"
             );
             process::exit(1);
         }
         if output_ends_in_c {
             eprintln!(
                 "error: C source output (-o *.c) requires the C portability/reference backend \
-                 (--backend c); the native backend produces object code"
+                 (--backend c); the {backend_kind} backend produces object code"
             );
             process::exit(1);
         }
-    } else if native_target_arg.is_some() {
-        eprintln!("error: --native-target requires --backend native");
-        process::exit(1);
-    } else if allow_elevated_native_link {
-        eprintln!(
-            "error: --allow-elevated-native-link is only meaningful with --backend native final link/--run for trusted CI/release inputs"
-        );
+        if backend_kind == Backend::Native && (emit_llvm_ir || output_ends_in_ll) {
+            eprintln!(
+                "error: LLVM IR output requires --backend llvm; the native backend emits Cranelift object code"
+            );
+            process::exit(1);
+        }
+    } else {
+        if native_target_arg.is_some() {
+            eprintln!("error: --native-target requires --backend llvm or --backend native");
+            process::exit(1);
+        }
+        if allow_elevated_native_link {
+            eprintln!(
+                "error: --allow-elevated-native-link is only meaningful with LLVM/Cranelift final link/--run for trusted CI/release inputs"
+            );
+            process::exit(1);
+        }
+        if emit_llvm_ir || output_ends_in_ll {
+            eprintln!("error: LLVM IR output requires --backend llvm");
+            process::exit(1);
+        }
+    }
+    if (emit_llvm_ir || output_ends_in_ll) && run_mode {
+        eprintln!("error: LLVM IR output cannot be combined with --run");
         process::exit(1);
     }
-    let native_target = if backend_kind == Backend::Native {
+    // Strict no-toolchain profile (see `backend::no_toolchain`): every
+    // remaining route to a host C compiler is refused by name rather than
+    // silently taken. The C backend *is* such a route — it emits C that
+    // something has to compile — so selecting it (explicitly, via
+    // `--emit-c`/`-o *.c`, or via `--target`'s cross-compile path) is a
+    // hard error here rather than a quiet fallback.
+    if backend::no_toolchain::is_strict() {
+        if backend_kind == Backend::C {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "the C backend",
+                    "use --backend llvm (Oscan's packaged code generator) or --backend native"
+                )
+            );
+            process::exit(1);
+        }
+        if !extra_c_files.is_empty() {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "--extra-c",
+                    "precompile the C source yourself and pass --extra-obj/--extra-lib instead"
+                )
+            );
+            process::exit(1);
+        }
+        if !extra_cflags.is_empty() {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "--extra-cflags",
+                    "drop the flag (there is no C compilation step to pass it to)"
+                )
+            );
+            process::exit(1);
+        }
+    }
+    let native_target = if backend_kind != Backend::C {
         Some(match native_target_arg.as_deref().unwrap_or("host") {
             // Both "no --native-target given" and an explicit
             // "--native-target host" mean the same thing — auto-detect
@@ -612,7 +733,7 @@ fn main() {
 
     // If just dumping, stop here
     if dump_tokens || dump_ast {
-        if output_path.is_none() && !run_mode && !emit_c {
+        if output_path.is_none() && !run_mode && !emit_c && !emit_llvm_ir {
             return;
         }
     }
@@ -644,13 +765,16 @@ fn main() {
         } else {
             backend::RuntimeMode::Freestanding
         };
-        run_native_backend(
+        run_object_backend(
             &ir_program,
+            backend_kind,
+            llvm_backend,
             native_target,
             runtime_mode,
             &path,
             output_path,
             run_mode,
+            emit_llvm_ir || output_ends_in_ll,
             show_warnings,
             allow_elevated_native_link,
             &program_args,
@@ -764,12 +888,11 @@ fn main() {
     }
 }
 
-/// Drives the Cranelift native backend end to end: object emission,
+/// Drives an object backend end to end: object emission,
 /// with `-o *.o`/`-o *.obj` short-circuiting to just the object file,
 /// otherwise linking into a standalone executable (and, for
-/// `--run`, executing it). Never touches `crate::codegen`/the C backend —
-/// see `src/backend/mod.rs`'s module docs on why that would be a "silent
-/// fallback" this backend deliberately never performs.
+/// `--run`, executing it). Explicit backend selection never falls back to
+/// another backend after compilation starts.
 /// Create a private, unpredictable scratch directory for one `--backend
 /// native` compile invocation (Finding 3 hardening, security review): the
 /// old `env::temp_dir().join(format!("oscan_native_{}", process::id()))`
@@ -806,13 +929,16 @@ fn harden_native_scratch_dir_unix(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
-fn run_native_backend(
+fn run_object_backend(
     ir_program: &ir::Program,
+    backend_kind: Backend,
+    llvm_backend: Option<backend::llvm::LlvmBackend>,
     native_target: backend::NativeTarget,
     runtime_mode: backend::RuntimeMode,
     source_path: &str,
     output_path: Option<String>,
     run_mode: bool,
+    emit_llvm_ir: bool,
     show_warnings: bool,
     allow_elevated_native_link: bool,
     program_args: &[String],
@@ -821,19 +947,78 @@ fn run_native_backend(
     extra_obj_files: &[String],
     extra_lib_files: &[String],
 ) {
+    let _ = show_warnings;
     if is_verbose() {
-        eprintln!("[verbose] Native backend target: {native_target}, runtime: {runtime_mode}");
+        eprintln!(
+            "[verbose] {} backend target: {native_target}, runtime: {runtime_mode}",
+            backend_kind.as_str()
+        );
     }
-    let compile_output = match backend::compile_object(ir_program, native_target, runtime_mode) {
-        Ok(output) => output,
-        Err(e) => {
-            eprintln!("{}", e.with_file(source_path));
-            process::exit(1);
+    let compile_output = match backend_kind {
+        Backend::Native => match backend::compile_object(ir_program, native_target, runtime_mode) {
+            Ok(output) => output,
+            Err(e) => {
+                eprintln!("{}", e.with_file(source_path));
+                process::exit(1);
+            }
+        },
+        Backend::Llvm => {
+            // Load the packaged code generator here when the backend was
+            // selected explicitly (the default-selection probe above only
+            // runs when it isn't). An explicit `--backend llvm` that
+            // cannot find its code generator is a hard error, never a
+            // silent fallback to C or Cranelift.
+            let llvm = match llvm_backend {
+                Some(llvm) => llvm,
+                None => match backend::llvm::LlvmBackend::load() {
+                    Ok(llvm) => llvm,
+                    Err(reason) => {
+                        eprintln!("error: {reason}");
+                        process::exit(1);
+                    }
+                },
+            };
+            if is_verbose() {
+                eprintln!("[verbose] LLVM code generator: {}", llvm.describe());
+            }
+            let llvm_output = match backend::llvm::compile_object(
+                &llvm,
+                ir_program,
+                native_target,
+                runtime_mode,
+                !emit_llvm_ir,
+            ) {
+                Ok(output) => output,
+                Err(e) => {
+                    eprintln!("{}", e.with_file(source_path));
+                    process::exit(1);
+                }
+            };
+            if emit_llvm_ir {
+                if let Some(out_path) = output_path {
+                    if let Err(e) = fs::write(&out_path, &llvm_output.ir_text) {
+                        eprintln!("error writing {out_path}: {e}");
+                        process::exit(1);
+                    }
+                    eprintln!("Wrote {out_path}");
+                } else {
+                    print!("{}", llvm_output.ir_text);
+                }
+                return;
+            }
+            backend::NativeCompileOutput {
+                object_bytes: llvm_output
+                    .object_bytes
+                    .expect("LLVM object output was requested"),
+                generated_extern_shim_c: llvm_output.generated_extern_shim_c,
+            }
         }
+        Backend::C => unreachable!("C backend does not use object orchestration"),
     };
     if is_verbose() {
         eprintln!(
-            "[verbose] Native object emitted ({} bytes)",
+            "[verbose] {} object emitted ({} bytes)",
+            backend_kind.as_str(),
             compile_output.object_bytes.len()
         );
     }
@@ -849,7 +1034,7 @@ fn run_native_backend(
     if output_is_object {
         if compile_output.generated_extern_shim_c.is_some() {
             eprintln!(
-                "error: native object-only output cannot include generated C shims for user extern str ABI calls; build an executable so Oscan can compile and link the shim"
+                "error: object-only output cannot include generated C shims for user extern str ABI calls; build an executable so Oscan can compile and link the shim"
             );
             process::exit(1);
         }
@@ -1283,7 +1468,7 @@ fn compiler_override(value: Option<String>) -> Option<CCompiler> {
 }
 
 /// Try to find Clang bundled with Visual Studio.
-fn find_vs_clang() -> Option<String> {
+pub(crate) fn find_vs_clang() -> Option<String> {
     let vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe";
     if Path::new(vswhere).exists() {
         let output = Command::new(vswhere)
@@ -2567,25 +2752,51 @@ mod tests {
     #[test]
     fn backend_resolution_covers_implicit_policy_and_explicit_overrides() {
         assert_eq!(
-            resolve_backend(Some(Backend::C), false, false, false, true),
+            resolve_backend(Some(Backend::C), false, false, false, false, true, true),
             Backend::C
         );
         assert_eq!(
-            resolve_backend(Some(Backend::Native), true, true, false, false),
-            Backend::Native
-        );
-        assert_eq!(resolve_backend(None, true, false, false, true), Backend::C);
-        assert_eq!(resolve_backend(None, false, true, false, true), Backend::C);
-        assert_eq!(
-            resolve_backend(None, false, false, true, false),
+            resolve_backend(Some(Backend::Native), true, true, true, false, false, true),
             Backend::Native
         );
         assert_eq!(
-            resolve_backend(None, false, false, false, true),
+            resolve_backend(Some(Backend::Llvm), true, false, true, false, false, false),
+            Backend::Llvm
+        );
+        assert_eq!(
+            resolve_backend(None, true, false, false, false, true, true),
+            Backend::C
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, true, false, true, true),
+            Backend::C
+        );
+        assert_eq!(
+            resolve_backend(None, false, true, false, false, true, false),
+            Backend::Llvm
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, true, false, true),
             Backend::Native
         );
         assert_eq!(
-            resolve_backend(None, false, false, false, false),
+            resolve_backend(None, false, false, false, false, true, true),
+            Backend::Llvm
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, false, false, true),
+            Backend::C
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, true, false, false),
+            Backend::Native
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, false, true, false),
+            Backend::Native
+        );
+        assert_eq!(
+            resolve_backend(None, false, false, false, false, false, false),
             Backend::C
         );
     }
@@ -2806,7 +3017,7 @@ mod tests {
         let err = harden_native_scratch_dir_unix(&missing).expect_err(
             "setting permissions on a nonexistent path must fail, not succeed silently",
         );
-        // `create_native_scratch_dir`'s caller (`run_native_backend`)
+        // `create_native_scratch_dir`'s caller (`run_object_backend`)
         // propagates this `io::Error` as a fatal
         // "error creating temp directory: ..." + `process::exit(1)` — this
         // just proves the error itself is produced, not swallowed.

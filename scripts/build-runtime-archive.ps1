@@ -1,7 +1,7 @@
 param(
     [string]$Target,
 
-    [ValidateSet("hosted", "freestanding", "all")]
+    [ValidateSet("hosted", "freestanding", "freestanding_gfx", "freestanding_core", "all")]
     [string]$Mode = "all",
 
     [string]$CC,

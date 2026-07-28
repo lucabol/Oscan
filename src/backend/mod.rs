@@ -56,19 +56,18 @@ mod extern_shim;
 mod func;
 mod layout;
 pub mod link;
+pub mod lir;
+mod lir_cranelift;
+pub mod llvm;
 pub mod native_assets;
+pub mod no_toolchain;
 pub mod target;
-
-use cranelift_codegen::ir::{AbiParam, InstBuilder, UserFuncName};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
-use cranelift_module::{Linkage, Module};
-use cranelift_object::{ObjectBuilder, ObjectModule};
 
 use crate::error::CompileError;
 use crate::ir;
 
 use ctx::BackendContext;
-use layout::cl_pointer_type;
+use lir::{LLinkage, LSig, LType, LirArtifact, LirBuilder, LirError, LirModule};
 pub use target::NativeTarget;
 
 /// Runtime and final-link environment for a native-backend artifact.
@@ -103,49 +102,51 @@ impl std::fmt::Display for RuntimeMode {
 }
 
 /// Compile `program` for `target` into a relocatable object file's raw
-/// bytes. Never falls back to the C backend: any construct this backend
-/// cannot lower is reported here as a [`CompileError`] naming the
-/// unsupported construct and its source location.
+/// bytes using the Cranelift code generator. Never falls back to the C
+/// backend: any construct this backend cannot lower is reported here as a
+/// [`CompileError`] naming the unsupported construct and its source
+/// location.
 pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
     runtime_mode: RuntimeMode,
 ) -> Result<NativeCompileOutput, CompileError> {
-    let isa = target::build_isa(target)
+    let mut lir = lir_cranelift::CraneliftLir::new(target)
         .map_err(|e| CompileError::new(crate::token::Span::new(1, 1), e))?;
-    let builder = ObjectBuilder::new(
-        isa,
-        "oscan_program",
-        cranelift_module::default_libcall_names(),
-    )
-    .map_err(|e| {
-        CompileError::new(
-            crate::token::Span::new(1, 1),
-            format!("internal error configuring object writer: {e}"),
-        )
-    })?;
-    let module = ObjectModule::new(builder);
+    let mut ctx = BackendContext::new(program, runtime_mode);
+    let generated_extern_shim_c = translate_program(&mut ctx, &mut lir)?;
+    let object_bytes = match lir.finish() {
+        Ok(LirArtifact::Object(bytes)) => bytes,
+        Ok(LirArtifact::LlvmIr(_)) => {
+            return Err(CompileError::new(
+                crate::token::Span::new(1, 1),
+                "internal error: Cranelift backend produced LLVM IR".to_string(),
+            ))
+        }
+        Err(e) => return Err(CompileError::new(crate::token::Span::new(1, 1), e)),
+    };
+    Ok(NativeCompileOutput {
+        object_bytes,
+        generated_extern_shim_c,
+    })
+}
 
-    let mut ctx = BackendContext::new(module, program, runtime_mode);
-    func::declare_and_translate_all(&mut ctx)?;
-    synthesize_main_entry(&mut ctx)?;
-
-    let generated_extern_shim_c = ctx.generated_extern_shim_source().map_err(|e| {
+/// Run the shared semantic lowering (`func.rs`) plus the shared entry
+/// wrapper over `lir`, and return any generated C extern shim source.
+///
+/// This is the single point every object backend goes through, so the
+/// Cranelift and direct-LLVM paths cannot diverge on language semantics.
+pub(crate) fn translate_program(
+    ctx: &mut BackendContext,
+    lir: &mut dyn LirModule,
+) -> Result<Option<String>, CompileError> {
+    func::declare_and_translate_all(ctx, lir)?;
+    synthesize_main_entry(ctx, lir)?;
+    ctx.generated_extern_shim_source().map_err(|e| {
         CompileError::new(
             crate::token::Span::new(1, 1),
             format!("internal error generating native extern shims: {e}"),
         )
-    })?;
-    let product = ctx.module.finish();
-    let object_bytes = product.emit().map_err(|e| {
-        CompileError::new(
-            crate::token::Span::new(1, 1),
-            format!("internal error emitting object file: {e}"),
-        )
-    })?;
-    Ok(NativeCompileOutput {
-        object_bytes,
-        generated_extern_shim_c,
     })
 }
 
@@ -154,93 +155,61 @@ pub fn compile_object(
 /// selected mode is freestanding, create the top-level arena, call
 /// `oscan_main`, tear the arena down, and translate a `Result` return into
 /// a process exit code. Mirrors `src/codegen.rs`'s `emit_main_wrapper`.
-fn synthesize_main_entry(ctx: &mut BackendContext) -> Result<(), CompileError> {
-    use cranelift_codegen::ir::types;
+fn synthesize_main_entry(
+    ctx: &mut BackendContext,
+    lir: &mut dyn LirModule,
+) -> Result<(), CompileError> {
+    let span = crate::token::Span::new(1, 1);
+    let internal = |message: String| CompileError::new(span, message);
 
-    let argc_data = ctx
-        .module
-        .declare_data("osc_global_argc", Linkage::Import, true, false)
-        .expect("internal error declaring osc_global_argc");
-    let argv_data = ctx
-        .module
-        .declare_data("osc_global_argv", Linkage::Import, true, false)
-        .expect("internal error declaring osc_global_argv");
-    let arena_data = ctx
-        .module
-        .declare_data("osc_global_arena", Linkage::Import, true, false)
-        .expect("internal error declaring osc_global_arena");
+    let (oscan_main, main_return_ty) = {
+        let f = program_main(ctx.program)?;
+        (ctx.functions["main"], f.return_type.clone())
+    };
+    let runtime_mode = ctx.runtime_mode;
 
-    let mut sig = ctx.module.make_signature();
-    sig.params.push(AbiParam::new(types::I32));
-    sig.params.push(AbiParam::new(cl_pointer_type()));
-    sig.returns.push(AbiParam::new(types::I32));
-    let main_id = ctx
-        .module
-        .declare_function("main", Linkage::Export, &sig)
-        .expect("internal error declaring main");
+    let sig = LSig::new(vec![LType::I32, LType::Ptr], Some(LType::I32));
+    let main_id = lir
+        .declare_function("main", &sig, LLinkage::Export)
+        .map_err(|e| internal(format!("internal error declaring main: {e}")))?;
 
-    let mut func = cranelift_codegen::ir::Function::with_name_signature(
-        UserFuncName::user(0, main_id.as_u32()),
-        sig,
-    );
-    let mut fb_ctx = FunctionBuilderContext::new();
-    {
-        let mut b = FunctionBuilder::new(&mut func, &mut fb_ctx);
-        let entry = b.create_block();
-        b.append_block_params_for_function_params(entry);
-        b.switch_to_block(entry);
-        b.seal_block(entry);
-        let argc = b.block_params(entry)[0];
-        let argv = b.block_params(entry)[1];
+    lir.define_function(main_id, &sig, &mut |b, params| {
+        let argc = params[0];
+        let argv = params[1];
 
-        let argc_gv = ctx.module.declare_data_in_func(argc_data, b.func);
-        let argc_addr = b.ins().global_value(cl_pointer_type(), argc_gv);
-        b.ins().store(func::mem_flags(), argc, argc_addr, 0);
+        let argc_data = b.declare_import_data("osc_global_argc");
+        let argc_addr = b.global_addr(argc_data);
+        b.store(argc, argc_addr, 0);
 
-        let argv_gv = ctx.module.declare_data_in_func(argv_data, b.func);
-        let argv_addr = b.ins().global_value(cl_pointer_type(), argv_gv);
-        b.ins().store(func::mem_flags(), argv, argv_addr, 0);
+        let argv_data = b.declare_import_data("osc_global_argv");
+        let argv_addr = b.global_addr(argv_data);
+        b.store(argv, argv_addr, 0);
 
-        if ctx.runtime_mode == RuntimeMode::Freestanding {
-            // Initialize the freestanding runtime's argv-derived environment
-            // table. Hosted mode uses the process CRT environment directly and
-            // intentionally does not export this freestanding-only wrapper.
-            let env_init_sig_id = {
-                let mut s = ctx.module.make_signature();
-                s.params.push(AbiParam::new(types::I32));
-                s.params.push(AbiParam::new(cl_pointer_type()));
-                ctx.module
-                    .declare_function("osc_freestanding_env_init", Linkage::Import, &s)
-                    .expect("internal error declaring osc_freestanding_env_init")
-            };
-            let env_init_ref = ctx.module.declare_func_in_func(env_init_sig_id, b.func);
-            b.ins().call(env_init_ref, &[argc, argv]);
+        if runtime_mode == RuntimeMode::Freestanding {
+            // Initialize the freestanding runtime's argv-derived
+            // environment table. Hosted mode uses the process CRT
+            // environment directly and intentionally does not export this
+            // freestanding-only wrapper.
+            let env_init = declare_runtime(
+                b,
+                "osc_freestanding_env_init",
+                &[LType::I32, LType::Ptr],
+                None,
+            )?;
+            b.call(env_init, &[argc, argv]);
         }
 
-        let create_sig_id = {
-            let mut s = ctx.module.make_signature();
-            s.params.push(AbiParam::new(types::I64));
-            s.returns.push(AbiParam::new(cl_pointer_type()));
-            ctx.module
-                .declare_function("osc_arena_create", Linkage::Import, &s)
-                .expect("internal error declaring osc_arena_create")
-        };
-        let create_ref = ctx.module.declare_func_in_func(create_sig_id, b.func);
-        let cap = b.ins().iconst(types::I64, 1_048_576);
-        let call = b.ins().call(create_ref, &[cap]);
-        let arena_ptr = b.inst_results(call)[0];
+        let create = declare_runtime(b, "osc_arena_create", &[LType::I64], Some(LType::Ptr))?;
+        let cap = b.iconst(LType::I64, 1_048_576);
+        let arena_ptr = b
+            .call(create, &[cap])
+            .expect("osc_arena_create returns a pointer");
 
-        let arena_gv = ctx.module.declare_data_in_func(arena_data, b.func);
-        let arena_addr = b.ins().global_value(cl_pointer_type(), arena_gv);
-        b.ins().store(func::mem_flags(), arena_ptr, arena_addr, 0);
+        let arena_data = b.declare_import_data("osc_global_arena");
+        let arena_addr = b.global_addr(arena_data);
+        b.store(arena_ptr, arena_addr, 0);
 
-        let (oscan_main_id, main_return_ty) = {
-            let f = program_main(ctx.program)?;
-            (ctx.functions["main"], f.return_type.clone())
-        };
-        let main_ref = ctx.module.declare_func_in_func(oscan_main_id, b.func);
-        let call = b.ins().call(main_ref, &[arena_ptr]);
-        let main_result = b.inst_results(call).first().copied();
+        let main_result = b.call(oscan_main, &[arena_ptr]);
 
         // Exit code: 0 normally, or (for a `Result`-returning `main`) 0 on
         // `Ok`/1 on `Err` — matches `src/codegen.rs`'s `emit_main_wrapper`.
@@ -262,57 +231,57 @@ fn synthesize_main_entry(ctx: &mut BackendContext) -> Result<(), CompileError> {
         let exit_code = match &main_return_ty {
             crate::types::BcType::Result(_, _) => {
                 let ptr = main_result.expect("Result-returning main has a pointer value");
-                let is_ok = b.ins().load(types::I8, func::mem_flags(), ptr, 0);
+                let is_ok = b.load(LType::I8, ptr, 0);
                 let ok_blk = b.create_block();
                 let err_blk = b.create_block();
                 let done_blk = b.create_block();
-                b.append_block_param(done_blk, types::I32);
-                b.ins().brif(is_ok, ok_blk, &[], err_blk, &[]);
+                b.append_block_param(done_blk, LType::I32);
+                b.brif(is_ok, ok_blk, &[], err_blk, &[]);
 
                 b.switch_to_block(ok_blk);
                 b.seal_block(ok_blk);
-                let zero = b.ins().iconst(types::I32, 0);
-                b.ins()
-                    .jump(done_blk, &[cranelift_codegen::ir::BlockArg::Value(zero)]);
+                let zero = b.iconst(LType::I32, 0);
+                b.jump(done_blk, &[zero]);
 
                 b.switch_to_block(err_blk);
                 b.seal_block(err_blk);
-                let one = b.ins().iconst(types::I32, 1);
-                b.ins()
-                    .jump(done_blk, &[cranelift_codegen::ir::BlockArg::Value(one)]);
+                let one = b.iconst(LType::I32, 1);
+                b.jump(done_blk, &[one]);
 
                 b.seal_block(done_blk);
                 b.switch_to_block(done_blk);
-                b.block_params(done_blk)[0]
+                b.block_param(done_blk, 0)
             }
-            _ => b.ins().iconst(types::I32, 0),
+            _ => b.iconst(LType::I32, 0),
         };
 
-        let destroy_sig_id = {
-            let mut s = ctx.module.make_signature();
-            s.params.push(AbiParam::new(cl_pointer_type()));
-            ctx.module
-                .declare_function("osc_arena_destroy", Linkage::Import, &s)
-                .expect("internal error declaring osc_arena_destroy")
-        };
-        let destroy_ref = ctx.module.declare_func_in_func(destroy_sig_id, b.func);
-        b.ins().call(destroy_ref, &[arena_ptr]);
+        let destroy = declare_runtime(b, "osc_arena_destroy", &[LType::Ptr], None)?;
+        b.call(destroy, &[arena_ptr]);
 
-        b.ins().return_(&[exit_code]);
-        b.finalize();
-    }
+        b.ret(Some(exit_code));
+        Ok(())
+    })
+    .map_err(|e| match e {
+        LirError::Body(err) => err,
+        LirError::Backend(message) => {
+            internal(format!("internal error compiling entry point: {message}"))
+        }
+    })
+}
 
-    let mut ctx_obj = ctx.module.make_context();
-    ctx_obj.func = func;
-    ctx.module
-        .define_function(main_id, &mut ctx_obj)
+fn declare_runtime(
+    b: &mut dyn LirBuilder,
+    symbol: &str,
+    params: &[LType],
+    ret: Option<LType>,
+) -> Result<lir::LFunc, CompileError> {
+    b.declare_function(symbol, &LSig::new(params.to_vec(), ret), LLinkage::Import)
         .map_err(|e| {
             CompileError::new(
                 crate::token::Span::new(1, 1),
-                format!("internal error compiling entry point: {e}"),
+                format!("internal error declaring {symbol}: {e}"),
             )
-        })?;
-    Ok(())
+        })
 }
 
 fn program_main(program: &ir::Program) -> Result<&ir::FnDef, CompileError> {

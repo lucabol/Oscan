@@ -337,13 +337,13 @@ pub fn link_executable(
 
     let profile = if options.runtime_mode == RuntimeMode::Freestanding
         && options.extra_c_files.is_empty()
-        && !capability::program_needs_graphics_runtime(object_path)
+        && options.extra_objects.is_empty()
+        && options.extra_libs.is_empty()
     {
-        // No extra (unscannable) user C sources, and the compiled program
-        // itself has no undefined graphics/image/SVG/TrueType symbol: the
-        // smaller core archive is a complete, correct link for it.
-        capability::FreestandingProfile::Core
+        capability::freestanding_profile(object_path)
     } else {
+        // Hosted mode ignores this value. Any unscanned user C/object/library
+        // input conservatively selects the strict freestanding superset.
         capability::FreestandingProfile::Full
     };
     let archive_path =

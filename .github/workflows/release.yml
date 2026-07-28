@@ -113,6 +113,15 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install packaged LLVM provider runtime dependencies (Linux)
+        if: matrix.target == 'linux-x86_64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=$(python3 -c "import json; m=json.load(open('packaging/toolchains/linux-x86_64.json')); print(' '.join(m['toolchain']['llvm_code_generator']['debian_packages']))")
+          sudo apt-get update
+          sudo apt-get install --yes $packages
+
       # --- Embedded native-link assets (Windows and Linux x86-64 for now; see
       # docs/design/native-link-embedding.md §1.1/§5.5/§10/§11). These steps
       # must run BEFORE `cargo build --release` so the linker asset set can be

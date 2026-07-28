@@ -404,10 +404,51 @@ pub(super) fn resolve_linker_selection(
     let native_linker = env_var_nonempty("OSCAN_NATIVE_LINKER");
     let flavor_override = env_var_nonempty("OSCAN_NATIVE_LINKER_FLAVOR");
 
+    let selection = resolve_linker_selection_inner(
+        target,
+        runtime_mode,
+        mingw_eligible,
+        elf_eligible,
+        archive,
+        manifest,
+        embedded_assets_present,
+        native_linker,
+        flavor_override,
+    )?;
+    // Strict no-toolchain profile: the compiler-driver flavor *is* a C
+    // toolchain dependency (it invokes `gcc`/`clang` as the linker), so
+    // it is refused by name rather than silently used.
+    if matches!(selection, LinkerSelection::CompilerDriver(_)) {
+        refuse_compiler_driver_if_strict()?;
+    }
+    Ok(selection)
+}
+
+fn refuse_compiler_driver_if_strict() -> Result<(), String> {
+    crate::backend::no_toolchain::refuse_if_strict(
+        "linking through an external C compiler driver",
+        "use a release build that embeds its own linker, or set OSCAN_NATIVE_LINKER together \
+         with OSCAN_NATIVE_LINKER_FLAVOR=mingw|elf to invoke a direct linker",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_linker_selection_inner(
+    target: NativeTarget,
+    runtime_mode: RuntimeMode,
+    mingw_eligible: bool,
+    elf_eligible: bool,
+    archive: &Path,
+    manifest: Option<&RuntimeArchiveManifest>,
+    embedded_assets_present: bool,
+    native_linker: Option<String>,
+    flavor_override: Option<String>,
+) -> Result<LinkerSelection, String> {
     match (native_linker, flavor_override.as_deref()) {
         // set / unset: legacy compatibility — treated as a compiler driver,
         // plus a one-line migration diagnostic (design §7.2 row 1).
         (Some(cmd), None) => {
+            refuse_compiler_driver_if_strict()?;
             eprintln!(
                 "note: OSCAN_NATIVE_LINKER is being interpreted as a C compiler driver for backward \
                  compatibility; set OSCAN_NATIVE_LINKER_FLAVOR=mingw to invoke a direct ld.lld instead."
@@ -419,11 +460,14 @@ pub(super) fn resolve_linker_selection(
             }))
         }
         // set / compiler-driver: legacy driver, no diagnostic.
-        (Some(cmd), Some("compiler-driver")) => Ok(LinkerSelection::CompilerDriver(LinkerDriver {
-            linker_family: linker_family_for(&cmd, target, manifest),
-            cmd,
-            source: CompilerSource::Override,
-        })),
+        (Some(cmd), Some("compiler-driver")) => {
+            refuse_compiler_driver_if_strict()?;
+            Ok(LinkerSelection::CompilerDriver(LinkerDriver {
+                linker_family: linker_family_for(&cmd, target, manifest),
+                cmd,
+                source: CompilerSource::Override,
+            }))
+        }
         // set / mingw: invoke that binary directly (Windows).
         (Some(cmd), Some("mingw")) => {
             if !embedded_assets_present {
@@ -449,6 +493,7 @@ pub(super) fn resolve_linker_selection(
         // unset / compiler-driver: FLAVOR alone selects compiler-driver for
         // the default-resolved linker.
         (None, Some("compiler-driver")) => {
+            refuse_compiler_driver_if_strict()?;
             find_linker_driver(archive, target, manifest).map(LinkerSelection::CompilerDriver)
         }
         // unset / mingw: FLAVOR alone selects MingwDirect for the
@@ -487,6 +532,7 @@ pub(super) fn resolve_linker_selection(
             } else if elf_eligible && embedded_assets_present {
                 Ok(LinkerSelection::Elf(ElfLinkerSource::Embedded))
             } else {
+                refuse_compiler_driver_if_strict()?;
                 if (mingw_eligible || elf_eligible) && runtime_mode == RuntimeMode::Freestanding {
                     // Design §5.3: the dev-build (no embedded assets) note.
                     eprintln!(
@@ -635,6 +681,37 @@ mod tests {
         assert!(result.is_err(), "FLAVOR=elf + no assets must error");
 
         env::remove_var("OSCAN_NATIVE_LINKER_FLAVOR");
+    }
+
+    #[test]
+    fn strict_profile_refuses_compiler_driver_before_discovery() {
+        let _lock = LINKER_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        env::remove_var("OSCAN_NATIVE_LINKER");
+        env::set_var("OSCAN_NATIVE_LINKER_FLAVOR", "compiler-driver");
+        env::set_var(crate::backend::no_toolchain::ENV_VAR, "1");
+
+        let result = resolve_linker_selection(
+            NativeTarget::WindowsX64,
+            RuntimeMode::Freestanding,
+            false,
+            false,
+            Path::new("dummy.a"),
+            None,
+            false,
+        );
+
+        env::remove_var(crate::backend::no_toolchain::ENV_VAR);
+        env::remove_var("OSCAN_NATIVE_LINKER_FLAVOR");
+
+        let error = match result {
+            Ok(_) => panic!("strict profile must reject compiler-driver linking"),
+            Err(error) => error,
+        };
+        assert!(error.contains("strict no-toolchain profile"), "{error}");
+        assert!(error.contains("external C compiler driver"), "{error}");
     }
 
     #[test]

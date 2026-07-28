@@ -38,7 +38,7 @@ instead needs the Oscan runtime **precompiled** into a static archive it can
 link against object files it emits directly.
 
 `scripts/build-runtime-archive.ps1` / `.sh` build exactly that: per-target
-`.a` archives of the runtime, in three modes:
+`.a` archives of the runtime, in four modes:
 
 - **hosted** — `libosc_runtime_hosted.a`, compiled from `runtime/osc_runtime.c`
   against the platform libc (`requires_libc: true`). For normal (non-freestanding)
@@ -63,6 +63,11 @@ link against object files it emits directly.
   libraries' own floating-point constant pool from the full archive, so
   programs that never touch graphics link against this one instead to avoid
   carrying that dead weight.
+- **freestanding_gfx** — `libosc_runtime_freestanding_gfx.a`, core plus
+  `l_gfx` canvas/clipboard and built-in-font support, but without `l_img`,
+  `l_svg`, or `l_tt`. It is selected for `osc_gfx_*`, `osc_canvas_*`, or
+  `osc_clipboard_*` references unless image/SVG/TrueType symbols require the
+  full archive. Unknown or unscanned inputs conservatively select full.
 
 Usage:
 
@@ -194,12 +199,13 @@ each archive/manifest pair at
 `runtime/osc_native_shim.c` and `runtime/osc_runtime.h` under the bundle's
 `native-runtime/` directory. Keeping that directory separate avoids making the
 C backend mistake a native-only source subset for a complete on-disk C runtime.
-The paths mirror the native backend's executable-relative lookup contract and
-are copied intact by the installers. Release smoke tests assert the assets
-survived packaging and installation, then compile and run the sample with freestanding
-`--backend native` on Linux and Windows. The phase-1 macOS binary-only target
-does not advertise or package the native backend because that backend has no
-Darwin target yet.
+The paths mirror the shared object-backend linker's executable-relative lookup
+contract and are copied intact by the installers. Release smoke tests assert
+the assets survived packaging and installation, then compile and run the
+sample with freestanding LLVM and Cranelift on Linux and Windows. The smoke
+also verifies that the packaged LLVM provider makes the implicit build select
+LLVM. The macOS binary-only target remains on C
+because no LLVM/Cranelift Darwin object target exists yet.
 
 GitHub-hosted Windows release runners may run the packaging/smoke process with
 an elevated Administrator token. Normal interactive native final links still
@@ -226,6 +232,65 @@ non-relocatable; investigating that belief while fixing the archive/compiler
 mismatch above found the toolchain itself to be relocatable and fully
 functional (see above), so the override was hiding a real bug rather than
 working around an unfixable one.
+
+### LLVM backend release contract
+
+The LLVM backend has no LLVM Cargo/build dependency. At run time it dynamically
+loads exact-major LLVM 22 through the C API and performs parse, verify,
+`default<Oz>`, and TargetMachine object emission in-process. It does not
+generate C or invoke Clang, `llvm-as`, `opt`, or `llc`.
+
+Both Windows and Linux full bundles must package a compatible provider:
+
+- Windows: `libLLVM-22.dll` from pinned llvm-mingw 22.1.2; x86 and AArch64
+  target initializers are present, RISC-V is absent.
+- Linux: pinned LLVM 22.1.8 `libLLVM.so`; x86, AArch64, and RISC-V initializers
+  are present. It is the apt.llvm.org Ubuntu 22.04 build and intentionally uses
+  host runtime libraries (`glibc >= 2.34` plus the manifest's
+  `debian_packages`), rather than bundling a second Linux userspace.
+
+Provider lookup is limited to absolute `OSCAN_LLVM_LIB`, absolute
+`OSCAN_LLVM_DIR`, absolute `OSCAN_TOOLCHAIN_DIR`, and executable-relative
+package locations. Do not reintroduce CWD, `PATH`, or bare-loader lookup.
+Implicit selection falls back to Cranelift/C when no compatible provider is
+available; explicit `--backend llvm` remains a hard failure.
+
+Release/CI gates for LLVM are:
+
+1. `cargo build --release` with no LLVM development libraries installed.
+2. C-vs-LLVM differential runs on Windows and Linux.
+3. Packaged Windows and Linux implicit-default compiles proving
+   executable-relative provider discovery.
+4. The shared embedded-link smoke, proving the resulting LLVM object uses the
+   existing runtime archive and direct linker.
+5. Explicit C-vs-Cranelift runs, preserving the previous backend as an option.
+6. The pinned-Windows-toolchain size gate in
+   `scripts/compare-backend-size.ps1` (run from
+   `tests/windows_native_ci.tests.ps1`), which fails when the LLVM `hello.osc`
+   executable is larger than the equivalent C-backend executable.
+7. `tests/llvm_toolchain_isolation.tests.ps1` on Windows and Linux, proving a
+   packaged freestanding LLVM build needs no C/Clang/LLVM tool executable
+   (empty `PATH`, unusable `OSCAN_CC`, absolute LLVM library, strict
+   `OSCAN_NO_TOOLCHAIN=1`, embedded linker).
+8. `scripts/sample-backend-matrix.ps1`, compiling every recursive example with
+   LLVM, Cranelift, and C and reporting per-sample plus aggregate sizes.
+
+The release workflow installs the Linux manifest's `debian_packages` before
+packaged smoke. This is a provider-load gate, not a toolchain dependency:
+normal freestanding LLVM code generation still invokes no compiler or LLVM
+command-line tool. `README-install.txt` records the same end-user packages.
+
+The current pinned Windows matrix compiles all 37 examples with all three
+backends (111 executables):
+
+| Backend | Aggregate size |
+|---|---:|
+| LLVM | 814,080 bytes |
+| Cranelift/native | 863,232 bytes |
+| C | 875,520 bytes |
+
+LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
+(7.02%) smaller than C.
 
 ### Windows native size-toolchain benchmark
 
@@ -324,6 +389,11 @@ chased further here. `scripts/size-matrix.ps1` enforces a ratio threshold
 (1.10 for core, looser for the feature families) instead of exact byte counts
 as a standing regression gate for this split.
 
+The later `freestanding_gfx` profile extends this split for graphics-only
+programs: it includes `l_gfx` but excludes the image, SVG, and TrueType
+translation-unit pools. Selection lives in `src/backend/link/capability.rs`;
+unscanned extra C/object/library inputs still force the full archive.
+
 ## Embedded native-link assets for self-contained Windows native builds
 
 On Windows x86-64, selecting `oscan --backend native` (freestanding) builds no
@@ -391,20 +461,39 @@ isn't duplicated:
    fetching the toolchain and rebuilding a second time; omitting it preserves
    its previous, fully self-sufficient behavior for any other caller. The
    `toolchain/` sidecar described earlier in this document is still packaged,
-   but is now only needed for hosted/`--extra-c`/legacy native-link fallback —
-   default freestanding native builds on Windows no longer require it.
+   but is now needed only for explicit C, hosted/`--extra-c`, generated C ABI
+   shims, and legacy linker-driver fallback. LLVM and Cranelift freestanding
+   final links do not require a compiler executable.
 
-CI (`ci.yml`) is unchanged in structure — its Windows job still builds without
-`OSCAN_EMBED_ASSETS_DIR`, exercising the dev/external-toolchain path — plus
-one new optional `native-link-embedding-smoke-windows` job that runs
-`prepare-embed-assets` and does an embedded build+link smoke test, so the
-embedded path has coverage without every `cargo build` needing staged assets.
+CI (`ci.yml`) keeps its main `linux` and `windows` jobs building *without*
+`OSCAN_EMBED_ASSETS_DIR`, so the dev/external-toolchain path stays covered.
+The embedded path is covered by dedicated smoke jobs that stage
+`prepare-embed-assets` and rebuild with `OSCAN_EMBED_ASSETS_DIR` plus
+`OSCAN_REQUIRE_EMBEDDED_ASSETS=1`. These jobs are required, not optional —
+none of them is `continue-on-error`, so a failure blocks merging:
+
+- `native-link-embedding-smoke` (Windows) runs
+  `tests/windows_native_ci.tests.ps1`, which chains the implicit-default check
+  (`default_backend.tests.ps1`, expecting `llvm`),
+  `llvm_toolchain_isolation.tests.ps1`, the `scripts/compare-backend-size.ps1`
+  size gate (LLVM `hello.osc` no larger than the C build), the native-link
+  isolation suite, and the full C-vs-Cranelift and C-vs-LLVM differential
+  suites.
+- `native-link-embedding-smoke-linux` runs the same implicit-LLVM-default and
+  `llvm_toolchain_isolation.tests.ps1` gates, a freestanding hello smoke with
+  `cc`/`gcc`/`clang`/`ld`/musl tool names stubbed out on a restricted `PATH`,
+  and both differential suites. The size gate is Windows-only today, so it is
+  not part of this job.
+- `native-link-embedding-smoke-linux-aarch64` and
+  `native-link-embedding-smoke-linux-riscv64` cover embedded cross-linking and
+  QEMU execution for both Cranelift and LLVM objects. The RISC-V gate also
+  asserts RVC plus the `lp64d` double-float ABI before execution.
 
 ## Embedded native-link assets for self-contained Linux native builds
 
-On Linux x86-64, ordinary freestanding builds implicitly select native and no
-longer need an external C compiler or linker; explicit `--backend native`
-behaves the same way. `oscan` embeds a linker (a fully static
+On Linux x86-64, freestanding LLVM and Cranelift object generation/final
+linking need no external compiler driver. LLVM object emission loads packaged
+LLVM 22 in-process. `oscan` embeds a linker (a fully static
 `x86_64-linux-musl-ld` binary from the pinned musl-cross toolchain) and
 extracts it to a local cache at first use (see
 `docs/design/native-link-embedding.md` §10 for the Linux-specific details).
@@ -458,12 +547,14 @@ cross-linkers/
   linux-aarch64/
     aarch64-linux-musl-ld
     libosc_runtime_freestanding.a
+    libosc_runtime_freestanding_gfx.a
     libosc_runtime_freestanding_core.a
     libosc_runtime_hosted.a
     (+ matching .json manifests)
   linux-riscv64/
     riscv64-linux-musl-ld
     libosc_runtime_freestanding.a
+    libosc_runtime_freestanding_gfx.a
     libosc_runtime_freestanding_core.a
     libosc_runtime_hosted.a
     (+ matching .json manifests)

@@ -15,7 +15,8 @@ By the end, you will have used:
 - pure `fn` and side-effecting `fn!` functions;
 - structs;
 - exhaustive `match` and `Result` error handling; and
-- standalone executable and generated C output.
+- standalone executables, the preferred LLVM path, and generated C/LLVM IR
+  output.
 
 Every complete program below is runnable. Replace the contents of `oscwc.osc`
 at each checkpoint rather than trying to combine the checkpoints.
@@ -27,7 +28,8 @@ operating system from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases):
 
 - **Windows x86-64 and Linux x86-64:** choose the `full` bundle, which includes
-  a C toolchain.
+  a packaged LLVM provider, direct-link assets, and a pinned C toolchain for
+  explicit C/hosted builds.
 - **macOS x86-64:** use the macOS archive and install Xcode Command Line Tools
   first with
   `xcode-select --install`.
@@ -63,6 +65,10 @@ Compile and run it:
 ```text
 oscan oscwc.osc --run
 ```
+
+The Windows and Linux full bundles use LLVM by default. You can require one of
+the three backends with `--backend llvm`, `--backend native`, or `--backend c`;
+explicit selection never silently changes to another backend.
 
 You should see:
 
@@ -437,8 +443,10 @@ The output should be the same:
 2 6 40 sample.txt
 ```
 
-Oscan normally transpiles your program to C and invokes a C toolchain. To keep
-the generated C instead of building an executable:
+Oscan builds an executable directly, using the LLVM backend when its packaged
+LLVM 22 provider is available and falling back to the Cranelift or C backend
+otherwise. The packaged freestanding LLVM path generates no C and needs no
+installed C/Clang/LLVM toolchain. To keep generated C instead:
 
 ```text
 oscan oscwc.osc -o oscwc.c
@@ -473,7 +481,10 @@ This program counts newline characters, matching the traditional core of
 - Structs group related values.
 - Fallible operations return `Result`, and `match` handles every outcome.
 - `--run` is the fast edit-run loop; omitting it creates an executable.
+- Oscan provides LLVM, Cranelift/native, and C backends; packaged Windows/Linux
+  builds prefer LLVM.
 - A `.c` output path keeps Oscan's generated C.
+- A `.ll` output path keeps the directly emitted LLVM IR.
 
 ## Where to go next
 

@@ -15,10 +15,11 @@
 # line (which must be byte-identical between backends and platforms, since
 # it is the part osc_panic actually formats).
 #
-# Usage: .\panic_message.tests.ps1 -Oscan <oscan-binary> [-SkipWSL]
+# Usage: .\panic_message.tests.ps1 -Oscan <oscan-binary> [-Backends c,native,llvm] [-SkipWSL]
 
 param(
     [Parameter(Mandatory = $true)][string]$Oscan,
+    [ValidateSet("c", "native", "llvm")][string[]]$Backends = @("c", "native"),
     [switch]$SkipWSL
 )
 
@@ -67,45 +68,42 @@ function Assert-PanicTest {
 
 $failures = [System.Collections.Generic.List[string]]::new()
 
-# ── Windows: C backend ──────────────────────────────────────────────
-$cExe = Join-Path $workDir "panic_probe.c.exe"
-Remove-Item -LiteralPath $cExe -Force -ErrorAction SilentlyContinue
-& $oscanPath --backend c $sourcePath -o $cExe 2>$null
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $cExe)) {
-    $failures.Add("C backend failed to compile the panic probe")
-} else {
-    $cRun = Invoke-OracleProcess -FilePath $cExe -WorkingDirectory $workDir
-    if ($cRun.ExitCode -ne 1) { $failures.Add("C backend: expected exit code 1, got $($cRun.ExitCode)") }
-    if ($cRun.Stdout -ne "before panic") { $failures.Add("C backend: expected stdout 'before panic', got '$($cRun.Stdout)'") }
+$runs = @{}
+$suffixes = @{}
+foreach ($backend in $Backends) {
+    $exe = Join-Path $workDir "panic_probe.backend-$backend$(Get-OracleExecutableSuffix)"
+    Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue
+    & $oscanPath --backend $backend $sourcePath -o $exe 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $exe)) {
+        $failures.Add("$backend backend failed to compile the panic probe")
+        continue
+    }
 
-    # ── Windows: native backend ──────────────────────────────────────
-    $nativeExe = Join-Path $workDir "panic_probe.native.exe"
-    Remove-Item -LiteralPath $nativeExe -Force -ErrorAction SilentlyContinue
-    & $oscanPath --backend native $sourcePath -o $nativeExe 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $nativeExe)) {
-        $failures.Add("native backend failed to compile the panic probe")
-    } else {
-        $nativeRun = Invoke-OracleProcess -FilePath $nativeExe -WorkingDirectory $workDir
-        if ($nativeRun.ExitCode -ne 1) { $failures.Add("native backend: expected exit code 1, got $($nativeRun.ExitCode)") }
-        if ($nativeRun.Stdout -ne "before panic") { $failures.Add("native backend: expected stdout 'before panic', got '$($nativeRun.Stdout)'") }
+    $run = Invoke-OracleProcess -FilePath $exe -WorkingDirectory $workDir
+    $runs[$backend] = $run
+    if ($run.ExitCode -ne 1) { $failures.Add("$backend backend: expected exit code 1, got $($run.ExitCode)") }
+    if ($run.Stdout -ne "before panic") { $failures.Add("$backend backend: expected stdout 'before panic', got '$($run.Stdout)'") }
+    try {
+        $stable = Get-PanicStableSuffix $run.Stderr
+        $suffixes[$backend] = $stable
+        if ($stable.Message -ne "i32 division by zero") {
+            $failures.Add("$backend panic message differs from 'i32 division by zero': '$($stable.Message)'")
+        }
+    } catch {
+        $failures.Add("$backend backend: $_")
+    }
+    Write-Host "$backend backend stderr: $($run.Stderr)"
+}
 
-        try {
-            $cSuffix = Get-PanicStableSuffix $cRun.Stderr
-            $nativeSuffix = Get-PanicStableSuffix $nativeRun.Stderr
-            if ($cSuffix.Line -ne $nativeSuffix.Line) {
-                $failures.Add("panic line number differs: c='$($cSuffix.Line)' native='$($nativeSuffix.Line)'")
-            }
-            if ($cSuffix.Message -ne "i32 division by zero" -or $nativeSuffix.Message -ne "i32 division by zero") {
-                $failures.Add("panic message differs from 'i32 division by zero': c='$($cSuffix.Message)' native='$($nativeSuffix.Message)'")
-            }
-        } catch {
-            $failures.Add("$_")
+$cRun = $runs["c"]
+if ($suffixes.ContainsKey("c")) {
+    foreach ($backend in $Backends) {
+        if ($backend -ne "c" -and $suffixes.ContainsKey($backend) -and
+            $suffixes[$backend].Line -ne $suffixes["c"].Line) {
+            $failures.Add("panic line number differs: c='$($suffixes["c"].Line)' $backend='$($suffixes[$backend].Line)'")
         }
     }
 }
-
-Write-Host "Windows: C backend stderr:   $($cRun.Stderr)"
-if ($nativeRun) { Write-Host "Windows: native backend stderr: $($nativeRun.Stderr)" }
 
 # ── WSL: freestanding native cross-link ──────────────────────────────
 if (-not $SkipWSL) {

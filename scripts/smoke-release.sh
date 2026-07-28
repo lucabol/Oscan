@@ -154,12 +154,12 @@ COMPILE_LOG="$SCRATCH_DIR/compile.stderr.txt"
 OUTPUT_EXE="$SCRATCH_DIR/hello"
 
 if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
-    if ! "$OSCAN_COMMAND" --libc "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
+    if ! "$OSCAN_COMMAND" --backend c --libc "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
         cat "$COMPILE_LOG" >&2
         exit 1
     fi
 else
-    if ! "$OSCAN_COMMAND" "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
+    if ! "$OSCAN_COMMAND" --backend c "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
         cat "$COMPILE_LOG" >&2
         exit 1
     fi
@@ -183,6 +183,50 @@ ACTUAL="$("$OUTPUT_EXE")"
     echo "unexpected smoke test output: $ACTUAL" >&2
     exit 1
 }
+
+BUNDLED_LLVM=""
+for candidate in \
+    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22.1" \
+    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22.1" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22" \
+    "$INSTALL_DIR/toolchain/bin/libLLVM-22.so" \
+    "$INSTALL_DIR/toolchain/lib/libLLVM-22.so"; do
+    if [ -f "$candidate" ]; then
+        BUNDLED_LLVM="$candidate"
+        break
+    fi
+done
+
+if [ -n "$BUNDLED_LLVM" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; then
+    DEFAULT_OUTPUT_EXE="$SCRATCH_DIR/hello-default"
+    DEFAULT_COMPILE_LOG="$SCRATCH_DIR/default.stderr.txt"
+    # Unset every override so the packaged bundle has to find its own LLVM
+    # code generator next to the installed executable.
+    if ! env -u OSCAN_LLVM_LIB -u OSCAN_LLVM_DIR -u OSCAN_TOOLCHAIN_DIR \
+        OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
+        "$OSCAN_COMMAND" --verbose "$SCRATCH_DIR/hello.osc" \
+        -o "$DEFAULT_OUTPUT_EXE" 2>"$DEFAULT_COMPILE_LOG"; then
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    fi
+    grep -q '^\[verbose\] llvm backend target:' "$DEFAULT_COMPILE_LOG" || {
+        echo "packaged bundle did not select LLVM as its implicit default" >&2
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    }
+    grep -qE '^\[verbose\] LLVM code generator: .* \(LLVM [0-9]+\.[0-9]+\.[0-9]+, targets: ' \
+        "$DEFAULT_COMPILE_LOG" || {
+        echo "packaged LLVM smoke did not load the bundle's own LLVM code generator" >&2
+        cat "$DEFAULT_COMPILE_LOG" >&2
+        exit 1
+    }
+    DEFAULT_ACTUAL="$("$DEFAULT_OUTPUT_EXE")"
+    [ "$DEFAULT_ACTUAL" = "Hello, Release!" ] || {
+        echo "unexpected packaged LLVM smoke output: $DEFAULT_ACTUAL" >&2
+        exit 1
+    }
+fi
 
 if [ -n "$NATIVE_RUNTIME_MODES" ]; then
     NATIVE_OUTPUT_EXE="$SCRATCH_DIR/hello-native"

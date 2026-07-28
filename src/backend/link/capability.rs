@@ -9,16 +9,16 @@ use std::fs;
 use std::path::Path;
 
 /// Which freestanding runtime archive to link against. Hosted mode only
-/// ever has one archive; freestanding mode has two (see `super::mod`'s
-/// "Freestanding runtime profiles" docs): [`Full`](Self::Full)
-/// (`libosc_runtime_freestanding.a`, everything, including graphics/
-/// image/SVG/TrueType) and [`Core`](Self::Core)
-/// (`libosc_runtime_freestanding_core.a`, the same runtime minus those
-/// feature libraries). [`program_needs_graphics_runtime`] decides between
-/// them per program; hosted mode ignores this entirely.
+/// ever has one archive; freestanding mode has three (see `super::mod`'s
+/// "Freestanding runtime profiles" docs): [`Full`](Self::Full) includes
+/// graphics, image, SVG, and TrueType; [`Graphics`](Self::Graphics) includes
+/// the core plus graphics/canvas support; and [`Core`](Self::Core) omits all
+/// of those feature libraries. [`freestanding_profile`] selects the narrowest
+/// complete profile per program; hosted mode ignores this entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum FreestandingProfile {
     Full,
+    Graphics,
     Core,
 }
 
@@ -30,6 +30,7 @@ impl FreestandingProfile {
     pub(super) fn build_mode_str(self) -> &'static str {
         match self {
             Self::Full => "freestanding",
+            Self::Graphics => "freestanding_gfx",
             Self::Core => "freestanding_core",
         }
     }
@@ -108,57 +109,56 @@ pub(super) fn detect_windows_feature_libs(object_path: &Path) -> Vec<&'static st
     libs
 }
 
-/// Whether a *freestanding* program needs the full
-/// (`libosc_runtime_freestanding.a`) runtime archive rather than the
-/// smaller `libosc_runtime_freestanding_core.a` sibling that omits
-/// graphics/image/SVG/TrueType (see `super::mod`'s "Freestanding runtime
-/// profiles" docs and `runtime/osc_runtime_freestanding_core.c`).
+/// Select the narrowest complete runtime archive for a freestanding program.
 ///
 /// Scans `object_path`'s own undefined symbols (the same technique
 /// [`detect_windows_feature_libs`] uses, and for the same reason: this
 /// must be decided before/independent of `--gc-sections`, which cannot
-/// partially discard the graphics feature libraries' shared constant
-/// pool once *any* part of it is reachable) for the prefixes the
-/// graphics-adjacent runtime surface is exclusively defined under —
-/// `osc_gfx_` (`src/backend/func.rs`'s non-interactive drawing
-/// primitives, e.g. `gfx_pixel`/`gfx_text_width`), `osc_canvas_`/
-/// `osc_clipboard_` (the interactive window/clipboard builtins — not
-/// currently reachable from this backend at all per its "not
-/// implemented" list in `src/backend/mod.rs`, but matched anyway in case
-/// that ever changes), and `osc_img_`/`osc_svg_`/`osc_tt_` (image/SVG/
-/// TrueType decoding — likewise not yet reachable here). `osc_rgb`/
-/// `osc_rgba` are deliberately *not* matched: they are plain integer
-/// packing helpers present identically in both archives (see
-/// `osc_runtime.c`'s `OSC_HAS_GFX` stub branch), so referencing them
-/// alone never requires the full archive.
+/// partially discard feature libraries' shared constant pools):
 ///
-/// Returns `true` (the conservative, always-correct choice — the full
-/// archive is a strict superset of the core one) when `object_path`
-/// cannot be read/parsed, mirroring [`detect_windows_feature_libs`]'s
-/// "degrade to link everything" fallback.
-pub(super) fn program_needs_graphics_runtime(object_path: &Path) -> bool {
-    const GRAPHICS_PREFIXES: [&str; 6] = [
-        "osc_gfx_",
-        "osc_canvas_",
-        "osc_clipboard_",
-        "osc_img_",
-        "osc_svg_",
-        "osc_tt_",
-    ];
+/// - `osc_img_`, `osc_svg_`, or `osc_tt_` requires [`Full`](FreestandingProfile::Full);
+/// - `osc_gfx_`, `osc_canvas_`, or `osc_clipboard_` requires
+///   [`Graphics`](FreestandingProfile::Graphics);
+/// - everything else uses [`Core`](FreestandingProfile::Core).
+///
+/// `osc_rgb`/`osc_rgba` deliberately do not select graphics: they are plain
+/// integer packing helpers present in every profile.
+///
+/// Returns [`Full`](FreestandingProfile::Full), the conservative superset,
+/// when `object_path` cannot be read or parsed.
+pub(super) fn freestanding_profile(object_path: &Path) -> FreestandingProfile {
     let Ok(data) = fs::read(object_path) else {
-        return true;
+        return FreestandingProfile::Full;
     };
     let Ok(file) = object::File::parse(&*data) else {
-        return true;
+        return FreestandingProfile::Full;
     };
-    object::Object::symbols(&file).any(|symbol| {
+    profile_for_undefined_symbols(object::Object::symbols(&file).filter_map(|symbol| {
         object::ObjectSymbol::is_undefined(&symbol)
-            && object::ObjectSymbol::name(&symbol).is_ok_and(|name| {
-                GRAPHICS_PREFIXES
-                    .iter()
-                    .any(|prefix| name.starts_with(prefix))
-            })
-    })
+            .then(|| object::ObjectSymbol::name(&symbol).ok())
+            .flatten()
+    }))
+}
+
+fn profile_for_undefined_symbols<'a>(
+    symbols: impl IntoIterator<Item = &'a str>,
+) -> FreestandingProfile {
+    const FULL_PREFIXES: [&str; 3] = ["osc_img_", "osc_svg_", "osc_tt_"];
+    const GRAPHICS_PREFIXES: [&str; 3] = ["osc_gfx_", "osc_canvas_", "osc_clipboard_"];
+
+    let mut profile = FreestandingProfile::Core;
+    for name in symbols {
+        if FULL_PREFIXES.iter().any(|prefix| name.starts_with(prefix)) {
+            return FreestandingProfile::Full;
+        }
+        if GRAPHICS_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+        {
+            profile = FreestandingProfile::Graphics;
+        }
+    }
+    profile
 }
 
 #[cfg(test)]
@@ -172,17 +172,35 @@ mod tests {
         // scripts/release_tools.py build-runtime-archive.
         assert_eq!(FreestandingProfile::Full.build_mode_str(), "freestanding");
         assert_eq!(
+            FreestandingProfile::Graphics.build_mode_str(),
+            "freestanding_gfx"
+        );
+        assert_eq!(
             FreestandingProfile::Core.build_mode_str(),
             "freestanding_core"
         );
     }
 
     #[test]
-    fn program_needs_graphics_runtime_defaults_true_when_unreadable() {
-        // Conservative fallback: an object that can't be read/parsed must
-        // resolve to the full archive, never the smaller core one.
+    fn freestanding_profile_defaults_to_full_when_unreadable() {
         let missing = Path::new("this/path/does/not/exist.o");
-        assert!(program_needs_graphics_runtime(missing));
+        assert_eq!(freestanding_profile(missing), FreestandingProfile::Full);
+    }
+
+    #[test]
+    fn freestanding_profile_uses_narrowest_complete_archive() {
+        assert_eq!(
+            profile_for_undefined_symbols(["osc_println", "osc_rgb"]),
+            FreestandingProfile::Core
+        );
+        assert_eq!(
+            profile_for_undefined_symbols(["osc_println", "osc_gfx_pixel"]),
+            FreestandingProfile::Graphics
+        );
+        assert_eq!(
+            profile_for_undefined_symbols(["osc_gfx_pixel", "osc_svg_load_shim"]),
+            FreestandingProfile::Full
+        );
     }
 
     #[test]

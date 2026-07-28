@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Oscan
+    [string]$Oscan,
+
+    [ValidateSet("native", "llvm")]
+    [string]$Backend = "native"
 )
 
 $ErrorActionPreference = "Stop"
@@ -138,31 +141,31 @@ function Remove-NativeHostedRoot {
 }
 
 $compiler = (Resolve-Path -LiteralPath $Oscan).Path
-$buildRoot = Join-Path $ScriptDir "build\native-hosted-mode"
+$buildRoot = Join-Path $ScriptDir "build\$Backend-hosted-mode"
 $runRoot = Join-Path $buildRoot "runs"
 [void](New-Item -ItemType Directory -Path $buildRoot -Force)
 
-# Default native mode must remain runnable and free of CRT/libc markers.
+# Default freestanding mode must remain runnable and free of CRT/libc markers.
 $helloSource = Join-Path $ScriptDir "positive\hello_world.osc"
 $helloExe = Join-Path $buildRoot "hello-freestanding$(Get-OracleExecutableSuffix)"
 $freeCompile = Invoke-OracleProcess `
     -FilePath $compiler `
-    -Arguments @("--backend", "native", $helloSource, "-o", $helloExe) `
+    -Arguments @("--backend", $Backend, $helloSource, "-o", $helloExe) `
     -WorkingDirectory $RepoRoot
-Assert-NativeHosted ($freeCompile.ExitCode -eq 0) "default native compile failed: $($freeCompile.Stderr)"
+Assert-NativeHosted ($freeCompile.ExitCode -eq 0) "default $Backend compile failed: $($freeCompile.Stderr)"
 
 $freeRun = Invoke-OracleProcess -FilePath $helloExe -WorkingDirectory $buildRoot
 $helloExpected = Normalize-OracleText (Get-Content (Join-Path $ScriptDir "expected\hello_world.expected") -Raw)
-Assert-NativeHosted ($freeRun.ExitCode -eq 0) "default native executable failed"
-Assert-NativeHosted ($freeRun.Stdout -eq $helloExpected) "default native output mismatch"
+Assert-NativeHosted ($freeRun.ExitCode -eq 0) "default $Backend executable failed"
+Assert-NativeHosted ($freeRun.Stdout -eq $helloExpected) "default $Backend output mismatch"
 
 $freeAscii = Get-ArtifactAscii $helloExe
 if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
     Assert-NativeHosted ($freeAscii -notmatch '(?i)msvcrt|ucrt|vcruntime|api-ms-win-crt') `
-        "default native executable contains a Windows CRT dependency"
+        "default $Backend executable contains a Windows CRT dependency"
 } else {
     Assert-NativeHosted ($freeAscii -notmatch 'libc\.so|libm\.so|__libc_start_main|GLIBC_') `
-        "default native executable contains a libc/libm dependency"
+        "default $Backend executable contains a libc/libm dependency"
 }
 
 # Explicit hosted mode must match the C backend for existing FFI cases.
@@ -175,7 +178,7 @@ foreach ($name in @(
         -Compiler $compiler `
         -Source (Join-Path $ScriptDir "positive\$name.osc") `
         -Name $name `
-        -Backend "native" `
+        -Backend $Backend `
         -BuildRoot $buildRoot `
         -RunRoot (Join-Path $runRoot $name) `
         -ExpectedFile (Join-Path $ScriptDir "expected\$name.expected") `
@@ -194,7 +197,7 @@ foreach ($name in @(
 }
 
 # These fixtures intentionally no longer match the C backend's --libc stubs on
-# Windows: native hosted archives should package the real implementations.
+# Windows hosted archives should package the real implementations.
 foreach ($name in @(
     "builtin_img_load",
     "builtin_svg_load",
@@ -205,17 +208,17 @@ foreach ($name in @(
     $exe = Join-Path $buildRoot "$name-hosted$(Get-OracleExecutableSuffix)"
     $compile = Invoke-OracleProcess `
         -FilePath $compiler `
-        -Arguments @("--libc", "--backend", "native", (Join-Path $ScriptDir "positive\$name.osc"), "-o", $exe) `
+        -Arguments @("--libc", "--backend", $Backend, (Join-Path $ScriptDir "positive\$name.osc"), "-o", $exe) `
         -WorkingDirectory $RepoRoot
-    Assert-NativeHosted ($compile.ExitCode -eq 0) "$name native hosted compile failed: $($compile.Stderr)"
+    Assert-NativeHosted ($compile.ExitCode -eq 0) "$name $Backend hosted compile failed: $($compile.Stderr)"
     $caseRunRoot = Join-Path $runRoot $name
     [void](New-Item -ItemType Directory -Path $caseRunRoot -Force)
     $run = Invoke-OracleProcess -FilePath $exe -WorkingDirectory $caseRunRoot
-    Assert-NativeHosted ($run.ExitCode -eq 0) "$name native hosted run failed: stdout='$($run.Stdout)' stderr='$($run.Stderr)'"
+    Assert-NativeHosted ($run.ExitCode -eq 0) "$name $Backend hosted run failed: stdout='$($run.Stdout)' stderr='$($run.Stderr)'"
     Assert-NativeHosted (Test-ExpectedOutputMatch `
         -ActualRaw $run.Stdout `
         -PrimaryExpectedFile (Join-Path $ScriptDir "expected\$name.expected")) `
-        "$name native hosted output did not match the real-runtime expected output"
+        "$name $Backend hosted output did not match the real-runtime expected output"
 }
 
 # Object-only output must not discover/build/link either runtime archive.
@@ -227,7 +230,7 @@ try {
     $objectCompile = Invoke-OracleProcess `
         -FilePath $compiler `
         -Arguments @(
-            "--libc", "--backend", "native",
+            "--libc", "--backend", $Backend,
             (Join-Path $ScriptDir "positive\ffi.osc"),
             "-o", $hostedObject
         ) `
@@ -247,7 +250,7 @@ try {
     $noFallbackCompile = Invoke-OracleProcess `
         -FilePath $compiler `
         -Arguments @(
-            "--libc", "--backend", "native",
+            "--libc", "--backend", $Backend,
             (Join-Path $ScriptDir "positive\ffi.osc"),
             "-o", $noFallbackExe
         ) `
@@ -261,7 +264,7 @@ Assert-NativeHosted ($noFallbackCompile.Stderr -match 'requested hosted runtime 
 Assert-NativeHosted (-not (Test-Path -LiteralPath $noFallbackExe)) `
     "hosted fallback unexpectedly produced an executable"
 
-# Native hosted linking must pass both extra C sources and repeatable compiler
+# Hosted linking must pass both extra C sources and repeatable compiler
 # flags through the selected GCC/Clang driver.
 $extraOsc = Join-Path $buildRoot "extra-c.osc"
 $extraC = Join-Path $buildRoot "extra-c.c"
@@ -288,17 +291,17 @@ int add_bias(int value) { return value * OSC_TEST_SCALE + OSC_TEST_BIAS; }
 $extraCompile = Invoke-OracleProcess `
     -FilePath $compiler `
     -Arguments @(
-        "--libc", "--backend", "native",
+        "--libc", "--backend", $Backend,
         "--extra-c", $extraC,
         "--extra-cflags", "-DOSC_TEST_BIAS=2",
         "--extra-cflags", "-DOSC_TEST_SCALE=2",
         $extraOsc, "-o", $extraExe
     ) `
     -WorkingDirectory $RepoRoot
-Assert-NativeHosted ($extraCompile.ExitCode -eq 0) "native hosted extra-C compile failed: $($extraCompile.Stderr)"
+Assert-NativeHosted ($extraCompile.ExitCode -eq 0) "$Backend hosted extra-C compile failed: $($extraCompile.Stderr)"
 $extraRun = Invoke-OracleProcess -FilePath $extraExe -WorkingDirectory $buildRoot
 Assert-NativeHosted ($extraRun.ExitCode -eq 0 -and $extraRun.Stdout -eq "42") `
-    "native hosted extra-C output mismatch"
+    "$Backend hosted extra-C output mismatch"
 
 if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
     $tlsDir = Join-Path $buildRoot "tls-local"
@@ -423,13 +426,13 @@ fn! main() -> i32 {
 "@
         $tlsCompile = Invoke-OracleProcess `
             -FilePath $compiler `
-            -Arguments @("--libc", "--backend", "native", $tlsOsc, "-o", $tlsExe) `
+            -Arguments @("--libc", "--backend", $Backend, $tlsOsc, "-o", $tlsExe) `
             -WorkingDirectory $RepoRoot
-        Assert-NativeHosted ($tlsCompile.ExitCode -eq 0) "native hosted TLS local compile failed: $($tlsCompile.Stderr)"
+        Assert-NativeHosted ($tlsCompile.ExitCode -eq 0) "$Backend hosted TLS local compile failed: $($tlsCompile.Stderr)"
         $tlsRun = Invoke-OracleProcess -FilePath $tlsExe -WorkingDirectory $tlsDir
-        Assert-NativeHosted ($tlsRun.ExitCode -eq 0) "native hosted TLS local run failed: stdout='$($tlsRun.Stdout)' stderr='$($tlsRun.Stderr)' server='$(if (Test-Path $tlsLog) { Get-Content -LiteralPath $tlsLog -Raw })'"
+        Assert-NativeHosted ($tlsRun.ExitCode -eq 0) "$Backend hosted TLS local run failed: stdout='$($tlsRun.Stdout)' stderr='$($tlsRun.Stderr)' server='$(if (Test-Path $tlsLog) { Get-Content -LiteralPath $tlsLog -Raw })'"
         Assert-NativeHosted ($tlsRun.Stdout -eq "local_tls: ok`nhostname_verify: rejected") `
-            "native hosted TLS local output mismatch: '$($tlsRun.Stdout)'"
+            "$Backend hosted TLS local output mismatch: '$($tlsRun.Stdout)'"
     } finally {
         Remove-NativeHostedRoot -Thumbprint $tlsFixture.RootThumbprint
         if ($tlsFixture.RootCert) { $tlsFixture.RootCert.Dispose() }
@@ -497,31 +500,31 @@ fn! main() -> i32 {
     Remove-Item -LiteralPath $guiConsoleExe,$guiWindowExe,$guiMarker -Force -ErrorAction SilentlyContinue
     $guiConsoleCompile = Invoke-OracleProcess `
         -FilePath $compiler `
-        -Arguments @("--libc", "--backend", "native", $guiOsc, "-o", $guiConsoleExe) `
+        -Arguments @("--libc", "--backend", $Backend, $guiOsc, "-o", $guiConsoleExe) `
         -WorkingDirectory $RepoRoot
-    Assert-NativeHosted ($guiConsoleCompile.ExitCode -eq 0) "native hosted GUI console compile failed: $($guiConsoleCompile.Stderr)"
+    Assert-NativeHosted ($guiConsoleCompile.ExitCode -eq 0) "$Backend hosted GUI console compile failed: $($guiConsoleCompile.Stderr)"
     $guiConsoleRun = Invoke-OracleProcess -FilePath $guiConsoleExe -WorkingDirectory $buildRoot
-    Assert-NativeHosted ($guiConsoleRun.ExitCode -eq 0) "native hosted GUI console run failed: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
+    Assert-NativeHosted ($guiConsoleRun.ExitCode -eq 0) "$Backend hosted GUI console run failed: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
     Assert-NativeHosted ($guiConsoleRun.Stdout -eq "opened-alive") `
-        "native hosted GUI console did not report a live canvas: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
+        "$Backend hosted GUI console did not report a live canvas: stdout='$($guiConsoleRun.Stdout)' stderr='$($guiConsoleRun.Stderr)'"
     Assert-NativeHosted ((Get-Content -LiteralPath $guiMarker -Raw) -eq "closed") `
-        "native hosted GUI console marker did not prove deterministic close"
+        "$Backend hosted GUI console marker did not prove deterministic close"
 
     Remove-Item -LiteralPath $guiMarker -Force -ErrorAction SilentlyContinue
     $guiWindowCompile = Invoke-OracleProcess `
         -FilePath $compiler `
         -Arguments @(
-            "--libc", "--backend", "native",
+            "--libc", "--backend", $Backend,
             "--extra-cflags", "-Wl,--subsystem,windows",
             "--extra-cflags", "-Wl,--entry,mainCRTStartup",
             $guiOsc, "-o", $guiWindowExe
         ) `
         -WorkingDirectory $RepoRoot
-    Assert-NativeHosted ($guiWindowCompile.ExitCode -eq 0) "native hosted GUI-subsystem compile failed: $($guiWindowCompile.Stderr)"
+    Assert-NativeHosted ($guiWindowCompile.ExitCode -eq 0) "$Backend hosted GUI-subsystem compile failed: $($guiWindowCompile.Stderr)"
     $guiWindowRun = Invoke-OracleProcess -FilePath $guiWindowExe -WorkingDirectory $buildRoot
-    Assert-NativeHosted ($guiWindowRun.ExitCode -eq 0) "native hosted GUI-subsystem run failed with exit $($guiWindowRun.ExitCode)"
+    Assert-NativeHosted ($guiWindowRun.ExitCode -eq 0) "$Backend hosted GUI-subsystem run failed with exit $($guiWindowRun.ExitCode)"
     Assert-NativeHosted ((Get-Content -LiteralPath $guiMarker -Raw) -eq "closed") `
-        "native hosted GUI-subsystem marker did not prove oscan_main opened and closed a live canvas"
+        "$Backend hosted GUI-subsystem marker did not prove oscan_main opened and closed a live canvas"
 }
 
-Write-Host "native hosted-mode tests passed"
+Write-Host "$Backend hosted-mode tests passed"

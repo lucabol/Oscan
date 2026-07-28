@@ -78,20 +78,31 @@ chmod +x run_tests.sh
 
 ### Differential backend oracle
 
-The PowerShell runner can compare any opt-in native backend with the C backend:
+The PowerShell runner compares either object backend with the C oracle:
 
 ```powershell
+.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend llvm
 .\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend native
 # Full repository runner:
+.\test.ps1 -Backend llvm
 .\test.ps1 -Backend native
-# Focused native runtime/link-mode regression:
-.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe
+# Focused runtime/link-mode regressions:
+.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
+.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+# Packaged freestanding LLVM must work without a separate C compiler/linker:
+.\tests\llvm_toolchain_isolation.tests.ps1 `
+  -Oscan .\target\release\oscan.exe `
+  -RuntimeArchiveDir .\build\runtime-archives\windows-x86_64 `
+  -LlvmClang .\build\toolchain-windows-x86_64\bin\clang.exe
+# LLVM output must be no larger than equivalent C output:
+.\scripts\compare-backend-size.ps1
 ```
 
-`c` remains the default, so existing commands are unchanged. Selecting another
-backend requires the compiler to advertise `--backend`; otherwise the runner
-stops with a clear gating message. Use `-BackendOption` if a development
-compiler exposes the selector under another option name.
+The runner defaults to `c` when no `-Backend` is supplied, preserving its
+standalone oracle behavior. Selecting LLVM or Cranelift requires the compiler
+to advertise `--backend`; otherwise the runner stops with a clear gating
+message. Use `-BackendOption` if a development compiler exposes the selector
+under another option name.
 
 For each positive test, the differential run invokes both `--backend c` and
 the selected backend in isolated working directories. It compares compile and
@@ -111,21 +122,46 @@ Negative tests fail in the shared frontend. The standalone runner exercises C
 explicitly and also checks the selected candidate backend during differential
 runs.
 
-The focused hosted-mode regression verifies that plain `--backend native`
-remains libc-free, while explicit `--libc --backend native` differentially
-runs all FFI fixtures (including libm symbols), preserves object-only output,
-passes `--extra-c`/`--extra-cflags` through the hosted linker, and on Windows
-launches both console- and GUI-subsystem hosted native canvas executables while
-also checking hosted image/SVG/TrueType runtime coverage.
+The focused hosted-mode regression accepts `-Backend llvm|native`. It verifies
+that the selected backend remains libc-free by default, while explicit
+`--libc` differentially runs all FFI fixtures (including libm symbols),
+preserves object-only output, passes `--extra-c`/`--extra-cflags` through the
+hosted linker, and on Windows launches both console- and GUI-subsystem canvas
+executables while checking hosted image/SVG/TrueType runtime coverage.
 
-### Cross-platform runs (WSL Linux x64, WSL native cross-link, ARM64)
+`llvm_toolchain_isolation.tests.ps1` clears toolchain/linker overrides, points
+`OSCAN_CC` at a missing executable, empties `PATH`, and then proves that an
+explicit absolute LLVM provider plus Oscan's embedded linker can compile, link,
+and run `hello.osc`. `compare-backend-size.ps1` executes equivalent C,
+Cranelift, and LLVM outputs and fails if LLVM is larger than C.
+
+### Sample backend matrix
+
+`scripts/sample-backend-matrix.ps1` is a local (not CI-gated) cross-backend
+build check over the sample programs. It recursively collects every `.osc`
+file under `examples/` (`-SourceDirectory` overrides the root), probes `llvm`,
+`native`, and `c` with a tiny throwaway program, and skips any backend that
+cannot produce a host executable here, printing the probe diagnostic instead of
+failing. Surviving backends each get their own subdirectory under the output
+root (`tests\build\sample-backend-matrix` unless `-OutputDirectory` says
+otherwise); that root is printed as an absolute path and wiped before the run,
+and nested/case-colliding sample names are flattened to unique artifact names.
+The run ends with a deterministic size table sorted by sample path, listing
+bytes per sample per available backend. It exits non-zero when an *available*
+backend fails to compile a sample or does not leave a non-empty host executable
+(MZ on Windows, ELF elsewhere) behind. `sample_backend_matrix.tests.ps1` covers
+this behavior with a fake compiler: skipped backend, stale-output cleanup,
+name flattening, executable-not-source artifacts, and the non-zero exit on a
+sample failure.
+
+### Cross-platform runs (WSL Linux x64, object-backend cross-link, ARM64)
 
 `test.ps1`'s WSL and ARM64 (QEMU) phases cross-compile and run every positive
 test outside Windows. They honor the same `expected_exit/<name>.expected`
 convention as the differential oracle above:
 
-- The WSL native cross-link phase (`--backend native` cross-emitted to
-  `linux-x86_64`, linked and run under WSL) reads
+- The WSL object-backend cross-link phase (`--backend llvm|native`
+  cross-emitted to `linux-x86_64`, linked and run under WSL) reads
   `expected_exit/<name>.expected` for each attempted test and fails a program
   whose actual exit code doesn't match its declared expectation (default
   zero) — see `Resolve-WslNativeBatchRecords` in `test.ps1` and its focused
@@ -137,7 +173,7 @@ convention as the differential oracle above:
   freestanding `tls_connect` are only wired up for `__x86_64__`/`_WIN32`
   targets (so ARM64 falls back to the same "not supported" stub used by
   C-backend hosted/libc mode), and `tls_fetch` needs real outbound network
-  access a sandboxed runner may not have. Native hosted TLS is tested separately
+  access a sandboxed runner may not have. Hosted TLS is tested separately
   by `native_hosted.tests.ps1`. All three WSL/ARM phases accept either
   `expected/<name>.expected` or
   `expected_libc/<name>.expected` (when present) so those constrained

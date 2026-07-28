@@ -58,7 +58,7 @@ while [ "$#" -gt 0 ]; do
             shift 1
             ;;
         *)
-            echo "usage: $0 [--target <name>] [--mode hosted|freestanding|all] [--cc <cc>] [--ar <ar>] [--target-triple <triple> --sysroot <path>] [--toolchain-manifest <path>] [--out-dir <path>] [--contract <path>] [--keep-objects]" >&2
+            echo "usage: $0 [--target <name>] [--mode hosted|freestanding|freestanding_gfx|freestanding_core|all] [--cc <cc>] [--ar <ar>] [--target-triple <triple> --sysroot <path>] [--toolchain-manifest <path>] [--out-dir <path>] [--contract <path>] [--keep-objects]" >&2
             exit 1
             ;;
     esac

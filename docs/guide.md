@@ -4,13 +4,28 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 **Interested in safety?** See [Safety Guide](safety.md) to learn how Oscan prevents 11 of 11 major bug categories that plague C.
 
+## Compiler Backends
+
+Oscan has three production backends:
+
+| Backend | Purpose | Packaged Windows/Linux behavior |
+|---|---|---|
+| `llvm` | Preferred optimized backend | Direct LLVM IR and in-process object emission; selected by default |
+| `native` / `cranelift` | Fast independent Cranelift backend and fallback | Direct object emission; selected explicitly or when LLVM is unavailable |
+| `c` | Portable C99, readable source output, and correctness oracle | Selected explicitly, for `.c` output, macOS, WASI, and C-only targets |
+
+The packaged freestanding LLVM and Cranelift paths invoke no C compiler.
+Hosted mode, extra C sources, and the C backend use the bundled or host C
+toolchain. See [Backend Roles and Toolchain Lookup](#backend-roles-and-toolchain-lookup-windowslinux)
+for the full selection and fallback rules.
+
 ---
 
 ## Installation
 
 ### Download Prebuilt Releases (Recommended)
 
-The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include the assets for self-contained freestanding native builds and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
+The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include an LLVM 22 provider, self-contained freestanding object-backend link assets, and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
 
 **Windows x86_64 (full bundle with toolchain):**
 
@@ -26,10 +41,13 @@ No separate C compiler installation needed — the bundle includes everything.
 1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
 2. Extract: `tar xf oscan-*.tar.gz`
 3. Move to a stable location (e.g., `~/.local/oscan/` or `/opt/oscan/`)
-4. Add to PATH or run the included `install.sh`
-5. Verify: `oscan --help`
+4. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+5. Add to PATH or run the included `install.sh`
+6. Verify: `oscan --help`
 
-The Linux bundle ships a tested C toolchain that works alongside your system libraries.
+The Linux bundle ships a tested C toolchain and pinned `libLLVM`. The provider
+requires glibc 2.34 or newer plus the listed host runtime libraries, but no
+installed C/Clang/LLVM toolchain.
 
 **macOS:**
 
@@ -49,8 +67,10 @@ xcode-select --install
 If you prefer to build Oscan yourself, you'll need:
 
 - **Rust toolchain** (to compile the Oscan compiler itself)
-- **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted native mode,
-  `--extra-c`, and native final linking when packaged direct-link assets are absent
+- **LLVM 22 shared library** only when running the LLVM backend from a source
+  build; release bundles package it, and no Clang executable or LLVM SDK is used
+- **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted object-backend
+  mode, `--extra-c`, and final linking when packaged direct-link assets are absent
 
 ```bash
 git clone https://github.com/lucabol/Oscan.git
@@ -68,7 +88,10 @@ Release archives on Windows and Linux include a `toolchain/` directory bundled w
 - It is generated during release builds, not during development
 - Committing binary toolchains would bloat the repository and make version control unwieldy
 
-The bundled `toolchain/` directory exists only in release artifacts, where it lives alongside the `oscan` binary in the unpacked archive. When you use the bundled release, the Oscan compiler automatically discovers and uses this sibling `toolchain/` directory for C compilation.
+The bundled `toolchain/` directory exists only in release artifacts, where it
+lives alongside the `oscan` binary in the unpacked archive. Oscan automatically
+discovers its LLVM provider there; it also uses the bundled compiler for
+explicit C, hosted, and extra-C builds.
 
 ### Upgrade and Uninstall (Phase 1)
 
@@ -712,12 +735,14 @@ fn! main() {
 
 Only primitive types (`i32`, `i64`, `f64`, `bool`, `str`, `handle`) are supported in FFI signatures.
 
-The native backend supports scalar/pointer-like C ABI signatures directly and
-automatically generates a per-program C shim when a used user extern has `str`
-parameters or returns `str`. The C-facing ABI remains `osc_str` by value; the
-native object calls the generated shim with pointers/out-pointers so the C
-compiler performs the platform aggregate ABI lowering. Structs, payload enums,
-and `Result` in user extern signatures still require a hand-written ABI shim.
+The C backend uses the platform C ABI directly. The LLVM and Cranelift object
+backends support scalar/pointer-like signatures directly and automatically
+generate a per-program C shim when a used user extern has `str` parameters or
+returns `str`. The C-facing ABI remains `osc_str` by value; the object calls
+the shim with pointers/out-pointers so the C compiler performs the platform
+aggregate ABI lowering. Consequently, that string-signature case requires a C
+compiler. Structs, payload enums, and `Result` in object-backend user extern
+signatures still require a hand-written ABI shim.
 
 The `handle` type maps to C's `uintptr_t` and is ideal for opaque pointers returned by C libraries. It supports equality comparison and casting to/from `i64`, but not arithmetic, arrays, or struct fields.
 
@@ -734,22 +759,22 @@ Both flags are repeatable — use one per file or flag.
 
 ### Windows GUI subsystem builds
 
-On Windows, native hosted programs (`--backend native --libc`) package the same
-canvas, image, SVG, and TrueType runtime used by graphical Oscan programs. To
-hide the console for a GUI app, pass the Windows subsystem linker flag through
-the hosted compiler driver:
+On Windows, LLVM/Cranelift hosted programs package the same canvas, image, SVG,
+and TrueType runtime used by graphical Oscan programs. To hide the console for
+a GUI app, pass the Windows subsystem linker flag through the hosted compiler
+driver:
 
 ```sh
-oscan app.osc --backend native --libc --extra-cflags -Wl,--subsystem,windows -o app.exe
+oscan app.osc --backend llvm --libc --extra-cflags -Wl,--subsystem,windows -o app.exe
 ```
 
 Do not override the CRT entry point for normal Oscan programs. The generated
-native object exports `main`, and the MinGW/LLVM-mingw CRT selects the correct
+object exports `main`, and the MinGW/LLVM-mingw CRT selects the correct
 startup routine for the chosen subsystem.
 
 ### Linking Precompiled Objects and Libraries
 
-Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with either backend:
+Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.obj`), static libraries (`.a` or `.lib`), and compiler-driver system libraries such as `winhttp` or `ws2_32`. Both flags work with all three backends:
 
 ```
 oscan myapp.osc --extra-obj mylib.o --run
@@ -907,14 +932,41 @@ let x: i32 = 1;
 
 ## Backend Roles and Toolchain Lookup (Windows/Linux)
 
-Ordinary executable, object, and `--run` builds implicitly use the **native
-backend** when the host is Windows x86-64 or Linux
-x86-64/AArch64/RISC-V64. Unsupported hosts, including macOS, fall back to the
-**C backend**. C is also selected implicitly by `--emit-c`, `-o file.c`, and
-`--target riscv64|wasi`; it remains the portability/reference path and
-differential oracle. An explicit `--backend c|native` always wins, and
-`--native-target` selects native when no backend is named. Native never
-silently falls back to C code generation.
+Ordinary executable, object, and `--run` builds prefer the **LLVM backend**
+when the host has a supported object target and a compatible packaged LLVM
+provider. If LLVM is not available, Oscan falls back to the **Cranelift
+backend** (`--backend native`), then to the **C backend**. Explicit
+`--backend llvm|native|c` always wins, and an explicit LLVM failure never falls
+back.
+
+LLVM uses this production pipeline:
+
+```text
+typed Oscan IR -> shared backend-neutral LIR -> direct LLVM IR
+                -> in-process LLVM 22 optimization/object emission
+                -> shared Oscan link/runtime path
+```
+
+This path does not generate C and invokes no Clang, GCC, `llvm-as`, `opt`, or
+`llc`. Use `--emit-llvm-ir` or `-o file.ll` to inspect the verified IR. See
+[the LLVM backend design](design/llvm-backend.md) for the exact architecture
+and no-toolchain boundary.
+
+C is selected implicitly by `--emit-c`, `-o file.c`, and
+`--target riscv64|wasi`. LLVM IR output selects LLVM. For compatibility, an
+explicit `--native-target` without `--backend` selects Cranelift.
+
+LLVM provider lookup order:
+
+1. `OSCAN_LLVM_LIB` — absolute shared-library path
+2. `OSCAN_LLVM_DIR` — absolute provider directory
+3. `OSCAN_TOOLCHAIN_DIR` — absolute packaged-toolchain root
+4. executable-relative `toolchain/` and executable directory
+
+Relative overrides, the current directory, `PATH`, and bare loader lookup are
+not accepted. Windows and Linux full bundles include LLVM 22 and therefore
+default to LLVM. macOS remains on the C backend because it has no packaged
+LLVM/Cranelift object target.
 
 For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
 
@@ -933,20 +985,24 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
 
-**Exception — Windows and Linux x86-64 freestanding native builds:** the lookup
-above is for the external/bundled **C compiler**. Ordinary freestanding builds
-on these hosts implicitly select native and skip it entirely; explicit
-`--backend native` behaves the same way. `oscan` embeds its own linker plus the
-minimal support files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
+**Exception — Windows and Linux x86-64 freestanding object-backend final
+links:** in a packaged build (release bundles and CI builds that embed the
+direct-link assets), the C-compiler lookup above is not needed to link an
+already emitted LLVM or Cranelift object, and `OSCAN_CC` is not consulted at
+all for such a build. `oscan` embeds its own linker plus the minimal support
+files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
 `x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete; rebuilt automatically). Linux AArch64/RISC-V64 native
-cross-links use target-matched linker/runtime sidecars rather than a C compiler;
-the standard x86-64 release embeds only its own linker. Hosted `--libc` mode
-and explicit `--extra-c` sources still use the C-compiler lookup above. The C
-backend also supports ARM64/RISC-V64 through the corresponding C cross
-toolchains. See `docs/design/native-link-embedding.md` for the full design.
+Linux — safe to delete; rebuilt automatically). LLVM emission uses packaged
+`libLLVM` in-process. Linux AArch64/RISC-V64 cross-links use target-matched
+linker/runtime sidecars; the Linux LLVM provider exports both targets, while
+the Windows provider exports AArch64 but not RISC-V. Hosted `--libc` mode,
+explicit `--extra-c` sources, generated string-ABI extern shims, and plain
+development builds without embedded direct-link assets still use the
+C-compiler lookup above. Set `OSCAN_NO_TOOLCHAIN=1` to reject every such
+escape hatch. The C backend also supports ARM64/RISC-V64 through the
+corresponding C cross toolchains.
 
 ---
 

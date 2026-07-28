@@ -405,6 +405,9 @@ if ($Backend -ne "c") {
     }
 }
 
+$throttle = [Math]::Max(1, [Environment]::ProcessorCount)
+$projectRoot = (Get-Location).Path
+
 # ══════════════════════════════════════════════════════
 # ── Unit tests ────────────────────────────────────────
 # ══════════════════════════════════════════════════════
@@ -436,14 +439,11 @@ if (-not $SkipIntegration) {
         New-Item -ItemType Directory -Path "tests\build" | Out-Null
     }
 
-    $throttle = [Math]::Max(1, [Environment]::ProcessorCount)
-
     # Positive tests (parallel compile + run)
     $positivePhase = if ($Backend -eq "c") { "Windows x64 (positive)" } else { "Windows x64 (C vs $Backend)" }
     Write-Phase $positivePhase
     if ($VerboseOutput) { Write-Host ""; Write-Host "  ── Positive tests (freestanding) ──" -ForegroundColor Yellow }
     $secPass = 0; $secFail = 0
-    $projectRoot = (Get-Location).Path
     # Skip socket_hostnames on Windows: binding to a hostname triggers the
     # Windows Firewall prompt (interactive popup) which hangs CI. Linux/WSL
     # and ARM still exercise the hostname path.
@@ -790,10 +790,10 @@ if (-not $SkipWSL) {
             Write-PhaseResult "$wvPass verified, $wvFail failed" $color
         }
 
-        # ── WSL native-backend cross-emit + link + run ────────────────
-        # Only meaningful when testing --backend native: cross-emits a
+        # ── WSL object-backend cross-emit + link + run ────────────────
+        # Cross-emits a
         # linux-x86_64 relocatable object from the *Windows* oscan.exe
-        # (Cranelift's cross-codegen support — see src/backend/target.rs),
+        # (Cranelift or LLVM cross-codegen support),
         # then links it under WSL against the linux-x86_64 freestanding
         # runtime by default, or the hosted runtime for the FFI fixtures'
         # explicit --libc objects. Both archives and mode-matched native
@@ -844,12 +844,12 @@ if (-not $SkipWSL) {
                 if (-not (Test-Path $nDir)) { New-Item -ItemType Directory -Path $nDir -Force | Out-Null }
 
                 # Cross-emit every positive test's object on the Windows side
-                # (fast — pure Cranelift codegen, no linker involved yet).
+                # (no linker involved yet).
                 $objResults = foreach ($oscFile in (Get-ChildItem "tests\positive\*.osc")) {
                     $name = $oscFile.BaseName
                     $objArgs = @($oscFile.FullName)
                     if ($name -match '^ffi') { $objArgs += '--libc' }
-                    $objArgs += @('--backend', 'native', '--native-target', 'linux-x86_64', '-o', "$nDir\$name.o")
+                    $objArgs += @('--backend', $Backend, '--native-target', 'linux-x86_64', '-o', "$nDir\$name.o")
                     & $oscan @objArgs 2>"$nDir\$name.objerr"
                     [PSCustomObject]@{ Name = $name; Success = ($LASTEXITCODE -eq 0) }
                 }
@@ -862,7 +862,7 @@ if (-not $SkipWSL) {
                 foreach ($r in $objResults) {
                     $n = $r.Name
                     if (-not $r.Success) {
-                        $nBash += "echo `"FAIL|$n|native object generation error`""
+                        $nBash += "echo `"FAIL|$n|$Backend object generation error`""
                         continue
                     }
                     $obj = "tests/build/wsl-native/$n.o"

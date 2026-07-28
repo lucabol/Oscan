@@ -4,8 +4,9 @@
 - **Integration Tests**: 134
 - **Positive Tests**: 99 (compile and run successfully)
 - **Negative Tests**: 35 (correctly rejected by compiler)
-- **Backend Policy**: supported hosts default to native; C remains the
-  portability/reference oracle and native is differentially checked against it
+- **Backend Policy**: supported hosts prefer LLVM when a compatible packaged provider is available,
+  then Cranelift; C remains the portability/reference oracle and both object
+  backends are differentially checked against it
 
 ## Positive Tests
 
@@ -113,11 +114,72 @@ cargo build --release
 cargo test
 ```
 
-### Run integration tests (requires WSL with gcc):
+### Run the complete Windows/WSL suite:
 ```powershell
-cd tests
-wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && <commands>"
+.\test.ps1
+.\test.ps1 -Backend llvm
+.\test.ps1 -Backend native
 ```
+
+### Run the focused differential corpus:
+```powershell
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+```
+
+### Run the toolchain-light positive corpus:
+```powershell
+.\tests\backend_parity.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
+$env:OSCAN_NO_TOOLCHAIN = "1"
+.\tests\backend_parity.ps1 -Oscan .\target\release\oscan.exe -Backend llvm -FreestandingOnly
+```
+
+The second form skips hosted FFI cases and proves the complete freestanding
+positive corpus cannot escape to a C compiler.
+
+### Run LLVM release invariants:
+```powershell
+.\tests\llvm_toolchain_isolation.tests.ps1 `
+  -Oscan .\target\release\oscan.exe `
+  -RuntimeArchiveDir .\build\runtime-archives\windows-x86_64 `
+  -LlvmLibrary .\build\toolchain-windows-x86_64\bin\libLLVM-22.dll
+.\scripts\compare-backend-size.ps1
+```
+
+The isolation test empties `PATH`, points `OSCAN_CC` at a missing executable,
+and proves that an explicit LLVM provider plus Oscan's embedded linker can
+compile, link, and run `hello.osc`. The size comparison executes equivalent C,
+Cranelift, and LLVM outputs and fails if LLVM is larger than C.
+
+### Build every sample with every available backend:
+```powershell
+.\scripts\sample-backend-matrix.ps1
+.\scripts\sample-backend-matrix.ps1 -Oscan .\target\release\oscan.exe -SourceDirectory examples -OutputDirectory tests\build\sample-backend-matrix
+```
+
+This local (not CI-gated) check recursively compiles every `.osc` file under
+`examples/` into a per-backend subdirectory of the output root, which it prints
+as an absolute path and wipes before the run. Backends that cannot produce a
+host executable on this machine are probed once and skipped with a printed
+reason; the remaining ones must compile every sample into a non-empty host
+executable or the script fails. It ends with a deterministic size table (bytes
+per sample per available backend, sorted by sample path), an explicit
+sample/backend artifact count, aggregate backend totals, and the aggregate
+LLVM-versus-C byte and percentage difference.
+`tests\sample_backend_matrix.tests.ps1` exercises that behavior against a fake
+compiler.
+
+The pinned Windows release-toolchain run on 2026-07-28 compiled all 37 recursive
+examples with LLVM, Cranelift/native, and C: 111 executables with no failures.
+
+| Backend | Aggregate size |
+|---|---:|
+| LLVM | 814,080 bytes |
+| Cranelift/native | 863,232 bytes |
+| C | 875,520 bytes |
+
+LLVM was 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
+(7.02%) smaller than C.
 
 ### Test individual file:
 ```powershell
@@ -136,7 +198,8 @@ wsl bash -c "cd /mnt/c/Users/lucabol/dev/Shaggot/Squad && tests/build/ffi"
 The current integration corpus contains:
 - 99 positive integration tests (tests/positive/*.osc)
 - 35 negative integration tests (tests/negative/*.osc)
-- C-vs-native differential execution on supported Windows/Linux targets
+- C-vs-LLVM and C-vs-Cranelift differential execution on supported
+  Windows/Linux targets
 
 **Full test listing:**
 ```bash
@@ -148,4 +211,4 @@ ls tests/negative/*.osc
 ```
 
 ---
-*Last updated: Native backend role and differential-testing policy*
+*Last updated: LLVM default and three-backend differential-testing policy*
