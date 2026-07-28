@@ -53,7 +53,7 @@ try {
         $outPath = "/tmp/concurrent_hello_$i"
         $scriptBlock = {
             param($OscanPath, $CacheDir, $OutPath, $RepoRoot, $OnWindows)
-            $command = "cd '$RepoRoot' && OSCAN_NATIVE_ASSET_CACHE_DIR='$CacheDir' '$OscanPath' --backend native -o '$OutPath' examples/hello.osc 2>&1"
+            $command = "cd '$RepoRoot' && OSCAN_NATIVE_ASSET_CACHE_DIR='$CacheDir' '$OscanPath' --backend cranelift -o '$OutPath' examples/hello.osc 2>&1"
             if ($OnWindows) {
                 $output = & wsl -d Ubuntu -- bash -lc $command
             } else {

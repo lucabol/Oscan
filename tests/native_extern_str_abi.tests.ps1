@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Oscan,
 
-    [ValidateSet("native", "llvm")]
-    [string]$Backend = "native"
+    [ValidateSet("cranelift", "llvm")]
+    [string]$Backend = "cranelift"
 )
 
 $ErrorActionPreference = "Stop"
@@ -152,7 +152,7 @@ if ($objectCompiler) {
     }
 }
 
-if ($Backend -eq "native") {
+if ($Backend -eq "cranelift") {
 $badStruct = Join-Path $buildRoot "extern-struct-bad.osc"
 Set-Content -LiteralPath $badStruct -NoNewline -Value @'
 struct Boxed {
@@ -169,11 +169,11 @@ fn! main() {
 '@
 $badStructCompile = Invoke-OracleProcess `
     -FilePath $compiler `
-    -Arguments @("--backend", "native", $badStruct, "-o", (Join-Path $buildRoot "bad-struct$(Get-OracleExecutableSuffix)")) `
+    -Arguments @("--backend", "cranelift", $badStruct, "-o", (Join-Path $buildRoot "bad-struct$(Get-OracleExecutableSuffix)")) `
     -WorkingDirectory $RepoRoot
-Assert-NativeExternStr ($badStructCompile.ExitCode -ne 0) "native struct extern unexpectedly compiled"
+Assert-NativeExternStr ($badStructCompile.ExitCode -ne 0) "Cranelift struct extern unexpectedly compiled"
 Assert-NativeExternStr ($badStructCompile.Stderr -match "structs still require an explicit C shim") `
-    "native struct extern diagnostic was not explicit: $($badStructCompile.Stderr)"
+    "Cranelift struct extern diagnostic was not explicit: $($badStructCompile.Stderr)"
 
 $badResult = Join-Path $buildRoot "extern-result-bad.osc"
 Set-Content -LiteralPath $badResult -NoNewline -Value @'
@@ -191,11 +191,11 @@ fn! main() {
 '@
 $badResultCompile = Invoke-OracleProcess `
     -FilePath $compiler `
-    -Arguments @("--backend", "native", $badResult, "-o", (Join-Path $buildRoot "bad-result$(Get-OracleExecutableSuffix)")) `
+    -Arguments @("--backend", "cranelift", $badResult, "-o", (Join-Path $buildRoot "bad-result$(Get-OracleExecutableSuffix)")) `
     -WorkingDirectory $RepoRoot
-Assert-NativeExternStr ($badResultCompile.ExitCode -ne 0) "native Result extern unexpectedly compiled"
+Assert-NativeExternStr ($badResultCompile.ExitCode -ne 0) "Cranelift Result extern unexpectedly compiled"
 Assert-NativeExternStr ($badResultCompile.Stderr -match "Result still requires an explicit C shim") `
-    "native Result extern diagnostic was not explicit: $($badResultCompile.Stderr)"
+    "Cranelift Result extern diagnostic was not explicit: $($badResultCompile.Stderr)"
 }
 
 Write-Host "$Backend extern str ABI tests passed"

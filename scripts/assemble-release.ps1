@@ -3,9 +3,19 @@ param(
     [ValidateSet("windows-x86_64", "linux-x86_64", "macos-x86_64")]
     [string]$Target,
 
+    # Which backend variant to assemble. The canonical names are the only
+    # artifact labels; `native` is a deprecated CLI alias for cranelift and
+    # is never a package name.
+    [Parameter(Mandatory = $true)]
+    [ValidateSet("llvm", "cranelift", "c")]
+    [string]$Backend,
+
     [Parameter(Mandatory = $true)]
     [string]$Version,
 
+    # The feature-gated binary for this variant: built with
+    # --no-default-features --features backend-<Backend> and
+    # OSCAN_DISTRIBUTION_BACKEND=<Backend>.
     [Parameter(Mandatory = $true)]
     [string]$BinaryPath,
 
@@ -13,22 +23,32 @@ param(
 
     [string]$ContractPath,
 
-    # Reuse runtime archives already built earlier in the pipeline (e.g. the
-    # release workflow's "build runtime archives with the shim baked in"
-    # step, run before `cargo build --release` per
-    # docs/design/native-link-embedding.md §5.5) instead of re-fetching the
-    # toolchain and rebuilding them here.
+    # Prepared inputs. CI fetches/caches the pinned source archives, prepares
+    # the native-link asset set, and builds the freestanding runtime archives
+    # once per target, then reuses them for every backend variant of that
+    # target. Staging never downloads.
     [string]$PrebuiltRuntimeArchiveDir,
 
-    # Directory of per-target cross-linker sidecar subdirs (e.g.
-    # build/cross-linker-sidecars, produced by the release workflow's
-    # "Prepare cross-linker sidecars for packaging" step per
-    # docs/design/native-link-embedding.md §11.1/§13.5) to bundle as
-    # cross-linkers/<target>/ inside this archive.
-    [string]$CrossLinkerSidecarDir
+    [string]$NativeLinkDir,
+
+    # Digest-pinned source archives (see 'release_tools.py resolve-archive').
+    [string]$ToolchainArchive,
+
+    [string]$LlvmProviderArchive,
+
+    # Removed: a prepared directory cannot be authenticated.
+    [string]$ToolchainDir,
+
+    [string]$LlvmProviderDir
 )
 
 $ErrorActionPreference = "Stop"
+if ($ToolchainDir) {
+    throw "-ToolchainDir has been removed from release staging: a prepared toolchain directory cannot be checked against the digest the toolchain manifest pins. Pass -ToolchainArchive with the pinned source archive instead."
+}
+if ($LlvmProviderDir) {
+    throw "-LlvmProviderDir has been removed from release staging: its provenance record was self-asserted. Pass -LlvmProviderArchive with the pinned source archive instead."
+}
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 function Get-DefaultOutputDir {
@@ -56,66 +76,46 @@ if (-not $ContractPath) {
 }
 
 $contract = Get-Content $ContractPath -Raw | ConvertFrom-Json -AsHashtable
-$targetSpec = if ($contract["bundled_targets"].ContainsKey($Target)) {
-    $contract["bundled_targets"][$Target]
-} elseif ($contract["binary_only_targets"].ContainsKey($Target)) {
-    $contract["binary_only_targets"][$Target]
-} else {
+if (-not $contract["variants"].ContainsKey($Target)) {
     throw "Release contract does not define target '$Target'."
 }
-$runtimeBuildToolchain = $null
+$targetSpec = $contract["variants"][$Target]
+if (-not $targetSpec["backends"].ContainsKey($Backend)) {
+    $known = ($targetSpec["backends"].Keys | Sort-Object) -join ", "
+    throw "Release contract does not define backend '$Backend' for target '$Target' (known: $known)."
+}
+$variant = $targetSpec["backends"][$Backend]
+$components = @($variant["components"])
+$runtimeProfiles = @($variant["runtime_profiles"])
+
+# Object variants need a prepared native-link asset set: they ship a
+# verified sidecar rather than embedding assets in the binary.
+if ($components -contains "direct_link_sidecar" -and -not $NativeLinkDir) {
+    throw "Backend '$Backend' for '$Target' needs -NativeLinkDir (run prepare-embed-assets for this target first)."
+}
+if ($components -contains "c_toolchain" -and -not $ToolchainArchive) {
+    throw "Backend '$Backend' for '$Target' needs -ToolchainArchive (the pinned C toolchain source archive; resolve it with 'release_tools.py resolve-archive --component toolchain')."
+}
+if ($components -contains "llvm_provider" -and
+    $variant["llvm_provider_source"] -eq "toolchain-manifest" -and
+    -not $LlvmProviderArchive) {
+    throw "Backend '$Backend' for '$Target' needs -LlvmProviderArchive (the pinned LLVM provider source archive; resolve it with 'release_tools.py resolve-archive --component llvm-provider')."
+}
+
 $runtimeArchiveDir = $null
-$nativeModes = @($targetSpec["native_runtime_modes"])
-if ($PrebuiltRuntimeArchiveDir) {
-    # Reuse archives an earlier pipeline step already built (with the native
-    # shim baked in) instead of re-fetching the toolchain and rebuilding here.
+if ($runtimeProfiles.Count -gt 0) {
+    if (-not $PrebuiltRuntimeArchiveDir) {
+        throw "Backend '$Backend' for '$Target' needs -PrebuiltRuntimeArchiveDir containing its freestanding runtime archives ($($runtimeProfiles -join ', '))."
+    }
     if (-not (Test-Path -LiteralPath $PrebuiltRuntimeArchiveDir)) {
         throw "PrebuiltRuntimeArchiveDir '$PrebuiltRuntimeArchiveDir' does not exist."
     }
     $runtimeArchiveDir = $PrebuiltRuntimeArchiveDir
-} elseif ($nativeModes.Count -gt 0) {
-    # "all" builds every mode the runtime-archive contract knows about in one
-    # pass (see release_tools.py's build_runtime_archive); only fall back to
-    # naming a single mode when there is exactly one to build, so this keeps
-    # working correctly as native_runtime_modes grows (e.g. the
-    # "freestanding_core" sibling archive) without needing a fixed count.
-    $archiveMode = if ($nativeModes.Count -gt 1) { "all" } else { [string]$nativeModes[0] }
-    $runtimeArchiveDir = Join-Path $OutputDir "runtime-archives/$Target"
-    $archiveArgs = @{
-        Target = $Target
-        Mode = $archiveMode
-        OutDir = $runtimeArchiveDir
-    }
-
-    if ($targetSpec.ContainsKey("toolchain_manifest")) {
-        $manifestPath = Join-Path (Split-Path -Parent $ContractPath) ([string]$targetSpec["toolchain_manifest"])
-        $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
-        $runtimeToolchain = $manifest["toolchain"]["runtime"]
-        if ($runtimeToolchain) {
-            $buildToolchain = Join-Path $OutputDir "runtime-toolchains/$Target"
-            $runtimeBuildToolchain = $buildToolchain
-            $downloadDir = Join-Path $OutputDir "downloads"
-            $null = & (Join-Path $PSScriptRoot "fetch-toolchain.ps1") `
-                -ManifestPath $manifestPath `
-                -Destination $buildToolchain `
-                -DownloadDir $downloadDir
-            if ($LASTEXITCODE -ne 0) {
-                exit $LASTEXITCODE
-            }
-            $archiveArgs["CC"] = Join-Path $buildToolchain ([string]$runtimeToolchain["compiler"]["path"])
-            $archiveArgs["AR"] = Join-Path $buildToolchain ([string]$runtimeToolchain["archiver"]["path"])
-            $archiveArgs["ToolchainManifest"] = $manifestPath
-        }
-    }
-
-    $null = & (Join-Path $PSScriptRoot "build-runtime-archive.ps1") @archiveArgs
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
 }
 
 $stageArgs = @{
     Target = $Target
+    Backend = $Backend
     Version = $Version
     BinaryPath = $BinaryPath
     OutputDir = $OutputDir
@@ -124,20 +124,18 @@ $stageArgs = @{
 if ($runtimeArchiveDir) {
     $stageArgs["RuntimeArchiveDir"] = $runtimeArchiveDir
 }
-if ($CrossLinkerSidecarDir) {
-    $stageArgs["CrossLinkerSidecarDir"] = $CrossLinkerSidecarDir
+if ($NativeLinkDir) {
+    $stageArgs["NativeLinkDir"] = $NativeLinkDir
 }
+if ($ToolchainArchive) {
+    $stageArgs["ToolchainArchive"] = $ToolchainArchive
+}
+if ($LlvmProviderArchive) {
+    $stageArgs["LlvmProviderArchive"] = $LlvmProviderArchive
+}
+
 $result = & (Join-Path $PSScriptRoot "stage-release.ps1") @stageArgs
-$stageExitCode = $LASTEXITCODE
-if ($runtimeBuildToolchain -and (Test-Path -LiteralPath $runtimeBuildToolchain)) {
-    Remove-Item -LiteralPath $runtimeBuildToolchain -Recurse -Force
-    $runtimeToolchainRoot = Split-Path -Parent $runtimeBuildToolchain
-    if ((Test-Path -LiteralPath $runtimeToolchainRoot) -and
-        -not (Get-ChildItem -LiteralPath $runtimeToolchainRoot -Force)) {
-        Remove-Item -LiteralPath $runtimeToolchainRoot -Force
-    }
-}
-if ($stageExitCode -ne 0) {
-    exit $stageExitCode
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
 }
 Write-Output $result

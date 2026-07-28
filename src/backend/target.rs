@@ -7,14 +7,23 @@
 //! Linux x86-64 release builds can embed their host linker; Linux AArch64
 //! and RISC-V64 cross-link through a matching sidecar linker/runtime archive
 //! selected by `super::link`.
+//!
+//! [`NativeTarget`] itself is shared by every object backend (LLVM and
+//! Cranelift alike) and by the final-link path, so it is always compiled
+//! in. Only [`build_isa`] — and the `cranelift-codegen` types it needs —
+//! is specific to the Cranelift backend.
 
+#[cfg(feature = "backend-cranelift")]
 use std::sync::Arc;
 
+#[cfg(feature = "backend-cranelift")]
 use cranelift_codegen::isa::TargetIsa;
+#[cfg(feature = "backend-cranelift")]
 use cranelift_codegen::settings::{self, Configurable};
+#[cfg(feature = "backend-cranelift")]
 use target_lexicon::Triple;
 
-/// A native compilation target the Cranelift backend knows how to select.
+/// A native compilation target an object backend knows how to select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeTarget {
     WindowsX64,
@@ -74,7 +83,7 @@ impl NativeTarget {
     /// 32-bit x86, or any other OS/architecture pair). Silently guessing
     /// a *different* target in that situation (this backend used to
     /// default to [`NativeTarget::WindowsX64`] unconditionally) would let
-    /// `--backend native` with no explicit `--native-target` emit an
+    /// `--backend cranelift` with no explicit `--native-target` emit an
     /// object file for the wrong machine — a miscompile a user might not
     /// notice until the resulting object fails to link or run — instead
     /// of failing loudly at the point the mismatch is actually known.
@@ -93,7 +102,7 @@ impl NativeTarget {
             ("linux", "aarch64") => Ok(Self::LinuxAarch64),
             ("linux", "riscv64") => Ok(Self::LinuxRiscv64),
             _ => Err(format!(
-                "unsupported host OS/architecture '{os}/{arch}' for the native backend's \
+                "unsupported host OS/architecture '{os}/{arch}' for the LLVM/Cranelift object backends' \
                  default (\"host\") target detection — supported hosts: windows/x86_64, \
                  linux/x86_64, linux/aarch64, linux/riscv64; pass --native-target explicitly \
                  to select one of those targets instead of relying on host auto-detection \
@@ -129,6 +138,7 @@ impl NativeTarget {
     /// the `gnu` environment because the validated linking path in
     /// `super::link` drives GCC/Clang (MinGW-w64 on Windows) as the linker,
     /// not `link.exe`/MSVC.
+    #[cfg(feature = "backend-cranelift")]
     pub fn triple(&self) -> Triple {
         let raw = match self {
             Self::WindowsX64 => "x86_64-pc-windows-gnu",
@@ -196,6 +206,7 @@ fn env_arch() -> &'static str {
 ///   backend's goal, so a future Cranelift upgrade that adds a real
 ///   `SpeedAndSize`-specific size optimization is picked up automatically
 ///   without another change here.
+#[cfg(feature = "backend-cranelift")]
 pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
     let triple = target.triple();
     let mut flag_builder = settings::builder();
@@ -228,14 +239,16 @@ pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cranelift_codegen::settings::OptLevel;
 
     /// Locks in the size-oriented ISA settings `build_isa` configures — a
     /// regression here would silently regress release native-backend
     /// binary size (e.g. reverting to `opt_level = "speed"`, or turning PIC
     /// or stack probes back on) without any compile error to catch it.
+    #[cfg(feature = "backend-cranelift")]
     #[test]
     fn build_isa_uses_size_oriented_release_settings() {
+        use cranelift_codegen::settings::OptLevel;
+
         for target in [
             NativeTarget::WindowsX64,
             NativeTarget::LinuxX64,

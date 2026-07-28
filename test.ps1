@@ -449,7 +449,7 @@ if (-not $SkipIntegration) {
     # and ARM still exercise the hostname path.
     $positiveFiles = Get-ChildItem "tests\positive\*.osc" | Where-Object { $_.BaseName -ne 'socket_hostnames' }
 
-    # --backend native defaults to the freestanding runtime archive, matching
+    # --backend cranelift defaults to the freestanding runtime archive, matching
     # the C backend's freestanding-by-default output. FFI fixtures explicitly
     # pass --libc below, selecting the hosted archive and normal CRT/libm link;
     # neither native mode silently falls back to the other.

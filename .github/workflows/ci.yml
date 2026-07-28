@@ -28,6 +28,58 @@ jobs:
         run: python -m unittest discover -s scripts -p "test_*.py"
 
   # ─────────────────────────────────────────────
+  # Backend-specific distribution builds (one Cargo feature each)
+  #
+  # The published packages are single-backend builds: exactly one backend
+  # feature, stamped with OSCAN_DISTRIBUTION_BACKEND. Those cfg
+  # configurations compile different code from the default all-backends
+  # build, so they are tested here as first-class configurations rather
+  # than only being discovered at release time.
+  # ─────────────────────────────────────────────
+  backend-distributions:
+    name: Linux distribution build (backend-${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [llvm, cranelift, c]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: linux-backend-${{ matrix.backend }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-backend-${{ matrix.backend }}-cargo-
+
+      - name: Unit tests (--no-default-features --features backend-${{ matrix.backend }})
+        env:
+          OSCAN_DISTRIBUTION_BACKEND: ${{ matrix.backend }}
+        run: cargo test --no-default-features --features backend-${{ matrix.backend }}
+
+      - name: The built compiler reports the backend it is a distribution of
+        env:
+          OSCAN_DISTRIBUTION_BACKEND: ${{ matrix.backend }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --no-default-features --features "backend-${{ matrix.backend }}"
+          metadata="$(./target/release/oscan --version)"
+          echo "$metadata"
+          grep -qx "backends: ${{ matrix.backend }}" <<<"$metadata"
+          grep -qx "default-backend: ${{ matrix.backend }}" <<<"$metadata"
+          grep -qx "distribution: ${{ matrix.backend }}" <<<"$metadata"
+
+  # ─────────────────────────────────────────────
   # Verify generated docs are up to date
   # ─────────────────────────────────────────────
   docs:
@@ -696,7 +748,7 @@ jobs:
 
           compile_log="tests/build/embed_hello.compile.log"
           if ! ./target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             -o tests/build/embed_hello >"$compile_log" 2>&1; then
             cat "$compile_log"
             exit 1
@@ -741,9 +793,9 @@ jobs:
           mkdir -p target/release/lib
           cp packaging/prebuilt/linux-x86_64/libbearssl.a target/release/lib/
 
-      - name: Full C vs native backend differential suite
+      - name: Full C vs Cranelift backend differential suite
         shell: pwsh
-        run: ./tests/run_tests.ps1 -Oscan ../target/release/oscan -Backend native
+        run: ./tests/run_tests.ps1 -Oscan ../target/release/oscan -Backend cranelift
 
       - name: Full C vs LLVM backend differential suite
         shell: pwsh
@@ -834,7 +886,7 @@ jobs:
           set -euo pipefail
           mkdir -p tests/build
           ./target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-aarch64 \
             -o tests/build/hello_aarch64.o
           OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
@@ -862,7 +914,7 @@ jobs:
           set -euo pipefail
           mkdir -p tests/build
           ./target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-aarch64 \
             -o tests/build/hello_aarch64
           OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
@@ -934,7 +986,7 @@ jobs:
           OSCAN_NATIVE_LINKER_FLAVOR="elf" \
           OSCAN_RUNTIME_ARCHIVE_DIR="$(pwd)/build/runtime-archives/linux-aarch64" \
           ./build/oscan-plain-target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-aarch64 \
             -o tests/build/hello_aarch64_sidecar
           if readelf -l tests/build/hello_aarch64_sidecar | grep -i 'interp'; then
@@ -1036,7 +1088,7 @@ jobs:
           set -euo pipefail
           mkdir -p tests/build
           ./target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-riscv64 \
             -o tests/build/hello_riscv64.o
           OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
@@ -1069,7 +1121,7 @@ jobs:
           set -euo pipefail
           mkdir -p tests/build
           ./target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-riscv64 \
             -o tests/build/hello_riscv64
           OSCAN_LLVM_LIB="$(pwd)/build/toolchain-linux-x86_64/lib/libLLVM.so.22.1" \
@@ -1136,7 +1188,7 @@ jobs:
           OSCAN_NATIVE_LINKER_FLAVOR="elf" \
           OSCAN_RUNTIME_ARCHIVE_DIR="$(pwd)/build/runtime-archives/linux-riscv64" \
           ./build/oscan-plain-target/release/oscan examples/hello.osc \
-            --backend native \
+            --backend cranelift \
             --native-target linux-riscv64 \
             -o tests/build/hello_riscv64_sidecar
           if readelf -l tests/build/hello_riscv64_sidecar | grep -i 'interp'; then

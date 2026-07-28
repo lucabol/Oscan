@@ -81,7 +81,7 @@ class LlvmCodeGeneratorManifestTests(unittest.TestCase):
 
     def test_release_contract_documents_the_lookup_rules(self) -> None:
         contract = json.loads((TOOLCHAINS / "release-contract.json").read_text(encoding="utf-8"))
-        spec = contract["llvm_code_generator"]
+        spec = contract["components"]["llvm_provider"]
         self.assertEqual(spec["required_major"], 22)
         # A code generator is executed code: it must never be loadable
         # from the working directory or PATH.

@@ -1,14 +1,21 @@
-//! Cranelift AOT native backend.
+//! Object backends and the native link path.
 //!
-//! Consumes the same [`crate::ir::Program`] the C backend
-//! (`crate::codegen`) does, and produces a relocatable object file ready
-//! to link against a static Oscan runtime archive (see `link.rs`). This
-//! module is the *only* place Cranelift/`cranelift-object`/`target-lexicon`
-//! types are visible outside `src/backend/`; `main.rs` only ever calls
-//! [`compile_object`]/`link.rs`'s public entry points, never touches
-//! Cranelift directly, and the C backend (`crate::codegen`) is untouched
-//! by any of this — selecting `--backend native` never runs `crate::codegen`
-//! at all (see module docs on "no silent fallback" in `main.rs`).
+//! Two code generators live under this module and share everything above
+//! the instruction selector: the Cranelift AOT backend (`--backend
+//! cranelift`, compiled in with the `backend-cranelift` feature) and the
+//! direct in-process LLVM backend (`--backend llvm`, `backend-llvm`; see
+//! [`llvm`]). Both consume the same [`crate::ir::Program`] the C backend
+//! (`crate::codegen`) does, and produce a relocatable object file ready to
+//! link against a static Oscan runtime archive (see [`link`]).
+//!
+//! [`lir_cranelift`] is the *only* place Cranelift/`cranelift-object`
+//! types are visible; `main.rs` only ever calls [`compile_object`]/
+//! `link`'s public entry points, never touches Cranelift directly, and the
+//! C backend (`crate::codegen`) is untouched by any of this — selecting
+//! `--backend cranelift` never runs `crate::codegen` at all (see module
+//! docs on "no silent fallback" in `main.rs`). A build without the
+//! `backend-cranelift` feature contains no Cranelift code or dependencies
+//! whatsoever.
 //!
 //! # Coverage
 //!
@@ -25,24 +32,24 @@
 //! The remaining source-level limitation is user-declared `extern`
 //! functions with aggregate types other than `str` (struct, payload enum, or
 //! `Result`) as a parameter or return type. Those require an explicit C ABI
-//! shim; the native backend reports a compile error rather than trying to
+//! shim; the object backends report a compile error rather than trying to
 //! classify platform aggregate ABI layouts directly. Nested enum payload
 //! subpatterns are rejected by the language grammar, so they are not a
 //! backend gap.
 //!
 //! # Runtime modes
 //!
-//! `--backend native` selects [`RuntimeMode::Freestanding`] by default:
+//! An object backend selects [`RuntimeMode::Freestanding`] by default:
 //! no libc/UCRT/glibc dependency, only the small per-target system import
-//! libraries documented by the runtime-archive contract. `--libc
-//! --backend native` explicitly selects [`RuntimeMode::Hosted`] instead,
-//! using the hosted archive plus the toolchain's normal CRT/libm/system
-//! libraries. Neither mode ever falls back to the other.
+//! libraries documented by the runtime-archive contract. `--libc`
+//! explicitly selects [`RuntimeMode::Hosted`] instead, using the hosted
+//! archive plus the toolchain's normal CRT/libm/system libraries. Neither
+//! mode ever falls back to the other.
 //!
 //! In freestanding mode, `osc_runtime.c`'s `osc_tls_connect` is the real
 //! implementation (BearSSL on Linux, Schannel via secur32/crypt32 on
 //! Windows) rather than the hosted stub, so `tls_fetch` behaves identically
-//! under `--backend native` and the freestanding C oracle.
+//! under `--backend cranelift` and the freestanding C oracle.
 //! `synthesize_main_entry` emits the same real `main(argc, argv)` the C
 //! backend's `emit_main_wrapper` does (see `src/codegen.rs`). The hosted
 //! CRT calls it normally; the freestanding archive's `_start`/
@@ -51,23 +58,51 @@
 //! environment access uses libc directly. See `link.rs` for the distinct
 //! final-link plans.
 
+// A build with no object backend (`--no-default-features --features
+// backend-c`) still compiles this tree for the handful of pieces the C
+// path shares with it (e.g. `link::is_system_library_name`); the rest —
+// runtime archives, linker discovery, embedded native-link assets — has
+// no caller in that configuration by construction, not by accident.
+#![cfg_attr(
+    not(any(feature = "backend-cranelift", feature = "backend-llvm")),
+    allow(dead_code)
+)]
+
+// The shared object-backend machinery (semantic lowering onto the
+// backend-independent `lir` interface) exists only when at least one
+// object backend does.
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 mod ctx;
+pub mod distribution_contract;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 mod extern_shim;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 mod func;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 mod layout;
 pub mod link;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 pub mod lir;
+#[cfg(feature = "backend-cranelift")]
 mod lir_cranelift;
+#[cfg(feature = "backend-llvm")]
 pub mod llvm;
 pub mod native_assets;
 pub mod no_toolchain;
+pub mod select;
 pub mod target;
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 use crate::error::CompileError;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 use crate::ir;
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 use ctx::BackendContext;
-use lir::{LLinkage, LSig, LType, LirArtifact, LirBuilder, LirError, LirModule};
+#[cfg(feature = "backend-cranelift")]
+use lir::LirArtifact;
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
+use lir::{LLinkage, LSig, LType, LirBuilder, LirError, LirModule};
 pub use target::NativeTarget;
 
 /// Runtime and final-link environment for a native-backend artifact.
@@ -81,6 +116,7 @@ pub enum RuntimeMode {
     Hosted,
 }
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 pub struct NativeCompileOutput {
     pub object_bytes: Vec<u8>,
     pub generated_extern_shim_c: Option<String>,
@@ -106,6 +142,7 @@ impl std::fmt::Display for RuntimeMode {
 /// backend: any construct this backend cannot lower is reported here as a
 /// [`CompileError`] naming the unsupported construct and its source
 /// location.
+#[cfg(feature = "backend-cranelift")]
 pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
@@ -136,6 +173,7 @@ pub fn compile_object(
 ///
 /// This is the single point every object backend goes through, so the
 /// Cranelift and direct-LLVM paths cannot diverge on language semantics.
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 pub(crate) fn translate_program(
     ctx: &mut BackendContext,
     lir: &mut dyn LirModule,
@@ -155,6 +193,7 @@ pub(crate) fn translate_program(
 /// selected mode is freestanding, create the top-level arena, call
 /// `oscan_main`, tear the arena down, and translate a `Result` return into
 /// a process exit code. Mirrors `src/codegen.rs`'s `emit_main_wrapper`.
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 fn synthesize_main_entry(
     ctx: &mut BackendContext,
     lir: &mut dyn LirModule,
@@ -269,6 +308,7 @@ fn synthesize_main_entry(
     })
 }
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 fn declare_runtime(
     b: &mut dyn LirBuilder,
     symbol: &str,
@@ -284,6 +324,7 @@ fn declare_runtime(
         })
 }
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 fn program_main(program: &ir::Program) -> Result<&ir::FnDef, CompileError> {
     program
         .fn_defs

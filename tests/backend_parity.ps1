@@ -12,7 +12,7 @@
 
 param(
     [Parameter(Mandatory = $true)][string]$Oscan,
-    [Parameter(Mandatory = $true)][ValidateSet('llvm', 'native', 'c')][string]$Backend,
+    [Parameter(Mandatory = $true)][ValidateSet('llvm', 'cranelift', 'c')][string]$Backend,
     [string[]]$Only = @(),
     [switch]$FreestandingOnly,
     [switch]$VerboseOutput

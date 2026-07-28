@@ -46,7 +46,7 @@ try {
         Start-Job -ScriptBlock {
             param($compiler, $source, $exePath, $cacheDir)
             $env:OSCAN_NATIVE_ASSET_CACHE_DIR = $cacheDir
-            $compileOutput = & $compiler --backend native -o $exePath $source 2>&1 | Out-String
+            $compileOutput = & $compiler --backend cranelift -o $exePath $source 2>&1 | Out-String
             $compileExit = $LASTEXITCODE
             $runOutput = $null
             $runExit = $null

@@ -72,7 +72,7 @@
         "libLLVM-22.so",
         "libLLVM.so"
       ],
-      "note": "This musl-cross toolchain ships no LLVM shared library, so --backend llvm is unavailable from this bundle alone; --backend native (Cranelift) and --backend c are unaffected. Staging a libLLVM shared library here (and flipping status to 'present') is what enables the direct LLVM backend for this target."
+      "note": "This musl-cross toolchain ships no LLVM shared library, so --backend llvm is unavailable from this bundle alone; --backend cranelift and --backend c are unaffected. Staging a libLLVM shared library here (and flipping status to 'present') is what enables the direct LLVM backend for this target."
     }
   },
   "stage": {

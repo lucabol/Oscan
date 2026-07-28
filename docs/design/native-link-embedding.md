@@ -8,7 +8,7 @@
 
 This document is the single, file-level contract for removing the
 C-compiler/linker dependency from packaged freestanding final links. Both
-`--backend native` (Cranelift) and `--backend llvm` now feed this link layer;
+`--backend cranelift` and `--backend llvm` now feed this link layer;
 LLVM emits IR directly and loads packaged LLVM 22 in-process to emit its
 object. It was written so Bishop and Hicks can implement in parallel with
 **zero file overlap**, and so "did you follow the design" is mechanically
@@ -18,9 +18,46 @@ Sections 11-14 record the implemented Linux and foreign-input follow-up and
 supersede the original deferral table in §1.2. The C code generator remains
 the portability/reference/source backend; this design removes the downstream
 C-toolchain dependency only from the documented freestanding native paths.
-Supported object targets use these paths after object emission. Historical
-uses of “native backend” below refer to Cranelift unless the text is describing
-the shared `backend::link` layer; explicit `--backend native` remains available.
+Supported object targets use these paths after object emission.
+
+**Naming:** `cranelift` is the canonical backend name (`--backend cranelift`);
+`--backend native` survives only as a deprecated CLI alias. Historical uses of
+“native backend” below refer to Cranelift unless the text is describing the
+shared `backend::link` layer, whose `native_assets`/`NativeTarget`/`OSCAN_NATIVE_*`
+names are deliberately unchanged because they are shared by both object
+backends.
+
+**Packaging note (superseded by release contract schema 2):** where this
+document describes what a *release archive* ships, or describes embedding as
+the only asset source, read [docs/releasing.md](../releasing.md) and
+`src/backend/native_assets/sidecar.rs` instead. Releases now publish one
+single-backend package per (target, backend) pair, and there are two distinct
+asset modes:
+
+* **Sidecar (schema v2 releases, the normal case).** The asset set described
+  below ships beside the executable at
+  `<exe-dir>/native-link/native-link-assets.json` plus its files. The release
+  binary embeds **nothing** — the release workflow clears
+  `OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS` before every build.
+  Every file is SHA-256-verified against that manifest and then **used in
+  place**: verified sidecar files are never copied into the extraction cache,
+  because that copy is exactly the ~90 MB duplication the sidecar removes.
+  The manifest is read only from that one fixed executable-relative path
+  (never CWD, `PATH`, or an ancestor search), and any failure is a hard, named
+  error with no fallback. `<exe-dir>/native-link` is also a packaged LLVM
+  provider search root, because on Windows the single staged
+  `libLLVM-22.dll` is both `ld.lld.exe`'s runtime dependency and the code
+  generator.
+* **Embedded (optional dev/standalone mode).** A build configured with
+  `OSCAN_EMBED_ASSETS_DIR` + `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` carries the same
+  asset set inside the binary and extracts it on first use to the
+  content-verified local cache described below. CI smoke jobs and standalone
+  single-file builds use this; released packages do not.
+
+No package ships `cross-linkers/` for other targets. The compiler-side
+mechanisms described below — extraction/verification hardening, linker
+selection, and the `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR`/
+`OSCAN_RUNTIME_ARCHIVE_DIR` overrides — are otherwise unchanged.
 
 ---
 
@@ -28,11 +65,11 @@ the shared `backend::link` layer; explicit `--backend native` remains available.
 
 ### 1.1 In scope now
 
-- **Windows x86-64, freestanding** (`--backend llvm|native`, no `--libc`): compile +
+- **Windows x86-64, freestanding** (`--backend llvm|cranelift`, no `--libc`): compile +
   link a standalone `.exe` with **no** `clang`/`gcc`/`cc`/`cl` and **no**
   externally installed linker on `PATH`. The shipped `oscan.exe` carries its own
   linker and link inputs.
-- **Linux x86-64, freestanding** (`--backend llvm|native`, no `--libc`): compile +
+- **Linux x86-64, freestanding** (`--backend llvm|cranelift`, no `--libc`): compile +
   link a standalone ELF binary with **no** `gcc`/`cc`/`musl-gcc` and **no**
   externally installed linker on `PATH`. The shipped `oscan` binary carries its
   own linker (a single ~2.78 MB static binary). See §10.
@@ -263,7 +300,7 @@ Parsing rule: absent/missing → `false` (a legacy pre-schema-2 archive).
 | Situation | Freestanding object backend | Hosted (`--libc`) |
 |---|---|---|
 | `contains_native_shim: true` | Link the archive directly; **do not** compile the shim locally; **do not** search for a compiler. | Same: use the embedded member. |
-| `contains_native_shim: false`/absent (legacy archive) | **Hard, actionable error** (no compiler fallback): `error: runtime archive '<path>' predates the precompiled native shim (manifest contains_native_shim is false/absent); rebuild it with 'scripts/build-runtime-archive.ps1 -Mode freestanding' (or fetch a current release). The freestanding native backend no longer compiles osc_native_shim.c locally.` | **Diagnosed local fallback allowed**: emit a one-line warning and fall back to `compile_shim_object` (hosted already requires an external C toolchain per requirement #1). |
+| `contains_native_shim: false`/absent (legacy archive) | **Hard, actionable error** (no compiler fallback): `error: runtime archive '<path>' predates the precompiled native shim (manifest contains_native_shim is false/absent); rebuild it with 'scripts/build-runtime-archive.ps1 -Mode freestanding' (or fetch a current release). The freestanding object backends no longer compile osc_native_shim.c locally.` | **Diagnosed local fallback allowed**: emit a one-line warning and fall back to `compile_shim_object` (hosted already requires an external C toolchain per requirement #1). |
 
 `compile_shim_object` therefore stays in `driver.rs` but is reachable **only**
 from the hosted legacy-archive fallback path.
@@ -975,7 +1012,7 @@ For hosted / `.c` inputs / non-LinuxX64 targets: `CompilerDriver` (unchanged).
 
 This section extends §10's Linux x86-64 ElfDirect design to two additional
 Linux targets: `linux-aarch64` and `linux-riscv64`. After this pass, a Linux
-x86-64 release `oscan` binary can `--backend native --native-target linux-aarch64`
+x86-64 `oscan` binary can `--backend cranelift --native-target linux-aarch64`
 (or `linux-riscv64`) and produce a fully linked, static, freestanding executable
 **without the user installing any cross toolchain**.
 
@@ -1019,6 +1056,16 @@ that the user unpacks into `OSCAN_NATIVE_ASSET_CACHE_DIR`.
    demand warrants it. For now, cross-linking works by pointing
    `OSCAN_NATIVE_LINKER` at the sidecar linker binary and setting
    `OSCAN_NATIVE_LINKER_FLAVOR=elf`, which is already fully wired.
+
+**Superseded by release contract schema 2:** releases no longer ship
+cross-linker sidecars at all. Each package contains only its own target's
+assets, and staging refuses a package containing `cross-linkers/`. Cross-linking
+therefore requires the user to supply both a target-matched linker
+(`OSCAN_NATIVE_LINKER` + `OSCAN_NATIVE_LINKER_FLAVOR=elf`) and that target's
+runtime archives (`OSCAN_RUNTIME_ARCHIVE_DIR`); see
+[docs/releasing.md](../releasing.md) for how to build both. The honesty rule
+below still applies, and current docs accordingly do *not* claim built-in
+cross-linking for aarch64/riscv64.
 
 **Honesty rule (§1.2 update):** docs/CLI must NOT say "no external tooling
 needed for aarch64/riscv64" unless the release archive actually ships those
@@ -1565,17 +1612,17 @@ in the help output.
 | QEMU smoke test step (aarch64) | Added as a step within `native-link-embedding-smoke-linux-aarch64` | After producing the aarch64 ELF: `sudo apt-get install -y qemu-user-static`, then `qemu-aarch64-static ./hello_aarch64`. The binary is statically linked with no interpreter, so `-L` sysroot is unnecessary. | ✅ Feasible. `qemu-user-static` is available as an apt package on `ubuntu-latest`. Statically linked, no-interpreter ELFs require no sysroot. **Decision (coordinator, post-live-validation): required/blocking, not `continue-on-error: true`.** The original draft of this row recommended `continue-on-error: true` as a safety net against IA32-compat/`binfmt_misc` runner drift (see §13.4); the coordinator overrode this after reproducing the full pipeline (toolchain fetch → runtime archive → embed → cross-link → `readelf` → `qemu-aarch64` execution) live end-to-end in a real Linux environment and per the user's explicit instruction that these jobs be required. |
 | QEMU smoke test step (riscv64) | Added as a step within `native-link-embedding-smoke-linux-riscv64` | Same: `qemu-riscv64-static ./hello_riscv64`. | ✅ Feasible. Same `qemu-user-static` package provides `qemu-riscv64-static`. **Same required/blocking decision as aarch64 above.** |
 | `readelf` shape checks (aarch64/riscv64) | Steps within the above jobs | `readelf -h <binary>` to confirm `Machine: AArch64` / `RISC-V`, `readelf -l` for no `PT_INTERP`, `readelf -d` for no `NEEDED`. Must use cross-capable `readelf` — the system `readelf` (GNU binutils) on `ubuntu-latest` handles any ELF architecture. | ✅ Feasible. |
-| Cross-codegen object-only emission (aarch64/riscv64) | Steps within the above jobs | `oscan examples/hello.osc --backend native --native-target linux-{aarch64,riscv64} -o hello.o`, then `readelf -h` confirms `REL (Relocatable file)` + correct machine type. Closes the §13.2 gap noted below. | ✅ Implemented and live-verified. |
+| Cross-codegen object-only emission (aarch64/riscv64) | Steps within the above jobs | `oscan examples/hello.osc --backend cranelift --native-target linux-{aarch64,riscv64} -o hello.o`, then `readelf -h` confirms `REL (Relocatable file)` + correct machine type. Closes the §13.2 gap noted below. | ✅ Implemented and live-verified. |
 | Cross-linker sidecar override smoke (aarch64/riscv64) | Steps within the above jobs | A plain oscan build (no `OSCAN_EMBED_ASSETS_DIR`) cross-links via `OSCAN_NATIVE_LINKER=<fetched toolchain's own ld>` + `OSCAN_NATIVE_LINKER_FLAVOR=elf`, then `readelf`/`qemu-{aarch64,riscv64}` verify the result — reproducing the release bundle's documented "cross-linker sidecar" workflow end-to-end in CI. Added after live-validation surfaced that the override path was silently broken (see §11.4's "Corrected from an earlier draft" note) — this step exists specifically so CI would have caught that regression. | ✅ Implemented and live-verified with the exact CI commands prior to committing them to `ci.yml`. |
 
-### 13.2 Existing jobs — `--backend c` / `--backend native` coverage check
+### 13.2 Existing jobs — `--backend c` / `--backend cranelift` coverage check
 
 | Check | Status |
 |---|---|
 | `--backend c` runs in CI (all hosts) | ✅ Covered explicitly by the main integration harness, where C remains the portability/reference oracle. |
-| `--backend native` runs in CI (Windows x86-64) | ✅ Covered by `native-link-embedding-smoke` (Windows job). |
-| `--backend native` runs in CI (Linux x86-64) | ✅ Covered by `native-link-embedding-smoke-linux`. |
-| `--backend native` cross-codegen (aarch64/riscv64 object emission) | ✅ Covered by the target-specific Linux jobs described in §13.1. |
+| `--backend cranelift` runs in CI (Windows x86-64) | ✅ Covered by `native-link-embedding-smoke` (Windows job). |
+| `--backend cranelift` runs in CI (Linux x86-64) | ✅ Covered by `native-link-embedding-smoke-linux`. |
+| `--backend cranelift` cross-codegen (aarch64/riscv64 object emission) | ✅ Covered by the target-specific Linux jobs described in §13.1. |
 
 ### 13.3 QEMU invocation pattern
 
@@ -1613,6 +1660,13 @@ emulator that runs the foreign-arch binary natively on the x86-64 host kernel.
 
 ### 13.5 Release workflow changes
 
+> **Superseded by release contract schema 2.** The steps below describe the
+> single-full-bundle-per-target workflow this design was written against. The
+> current workflow builds one package per (target, backend) pair, stages the
+> host target's link assets as each object package's verified `native-link/`
+> sidecar, and packages **no** cross-linker sidecars. See
+> [docs/releasing.md](../releasing.md) for the current job order.
+
 In `.github/workflows/release.yml`, the Linux matrix entry must:
 
 1. Fetch all 3 toolchains (x86_64, aarch64, riscv64).
@@ -1636,7 +1690,7 @@ In `.github/workflows/release.yml`, the Linux matrix entry must:
    used for compatibility testing) but the "Prepare cross-linker sidecars for
    packaging" step only copied each target's `ld` binary into
    `build\cross-linker-sidecars\linux-{target}\`, never the matching runtime
-   archive. Since `--backend native` cross-linking needs **both** a linker
+   archive. Since `--backend cranelift` cross-linking needs **both** a linker
    (`OSCAN_NATIVE_LINKER`/`FLAVOR`) **and** a matching-target freestanding
    runtime archive (`OSCAN_RUNTIME_ARCHIVE_DIR`; see `src/backend/link/archive.rs`),
    a real user with only the downloaded release archive had no archive to
@@ -1662,7 +1716,7 @@ In `.github/workflows/release.yml`, the Linux matrix entry must:
 
 | Item | Status after this pass |
 |---|---|
-| Linux AArch64 / RISC-V64 **direct/cross** link | **In scope.** Runtime archives, BearSSL, toolchain manifests, linker embedding, and CI coverage all specified. Single-target-per-build model: the standard linux-x86_64 release binary embeds only its own linker; cross-linker binaries ship as sidecars in the release archive. `OSCAN_NATIVE_LINKER` + `OSCAN_NATIVE_LINKER_FLAVOR=elf` enables cross-linking. |
+| Linux AArch64 / RISC-V64 **direct/cross** link | **In scope.** Runtime archives, BearSSL, toolchain manifests, linker embedding, and CI coverage all specified. Single-target-per-build model: a linux-x86_64 binary carries only its own linker. *Updated under release contract schema 2:* packages no longer ship cross-linker sidecars, so cross-linking needs a user-supplied linker (`OSCAN_NATIVE_LINKER` + `OSCAN_NATIVE_LINKER_FLAVOR=elf`) **and** that target's runtime archives (`OSCAN_RUNTIME_ARCHIVE_DIR`). |
 | `--extra-obj` / `--extra-lib` CLI | **In scope.** Specified in §12. |
 | macOS native target | No `NativeTarget` variant exists; out of scope entirely. |
 | Hosted `--libc` mode direct-link | Keeps the diagnosed external C-toolchain driver path. |

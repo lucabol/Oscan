@@ -2,6 +2,10 @@
 #
 # Compile every .osc example with each backend that can produce a host
 # executable, then show their sizes side by side.
+#
+# The canonical backend names are the ones used here and by every package:
+# llvm, cranelift and c. `native` is only a deprecated CLI alias for
+# cranelift and is never used as a label or an output directory name.
 
 param(
     [string]$Oscan = "",
@@ -15,7 +19,7 @@ $IsWindowsHost = $env:OS -eq "Windows_NT"
 $ExecutableSuffix = if ($IsWindowsHost) { ".exe" } else { "" }
 $Backends = @(
     [PSCustomObject]@{ Name = "llvm"; DisplayName = "LLVM" },
-    [PSCustomObject]@{ Name = "native"; DisplayName = "Cranelift/native" },
+    [PSCustomObject]@{ Name = "cranelift"; DisplayName = "Cranelift" },
     [PSCustomObject]@{ Name = "c"; DisplayName = "C" }
 )
 

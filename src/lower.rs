@@ -1039,7 +1039,7 @@ impl<'a> Lowering<'a> {
             // `lower_expr`'s `ast::Expr::Ident` case's "not found in any
             // scope, not a function name either" fallback and silently
             // became `BcType::Unit` (see that match's final `else` arm),
-            // which the native backend then represents as "no value at
+            // which the object backends then represent as "no value at
             // all" and panics on first use (`Option::expect` on `None`).
             (ast::Pattern::Ident(name, _), _) => {
                 self.scopes

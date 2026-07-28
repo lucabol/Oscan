@@ -3,6 +3,22 @@ name = "oscan"
 version = "0.1.0"
 edition = "2021"
 
+# Backend selection at compile time. The default developer build enables
+# every backend and keeps the existing capability-based default behavior;
+# a backend-specific distribution builds exactly one of them and stamps
+# OSCAN_DISTRIBUTION_BACKEND (see build.rs) so the resulting compiler
+# defaults to it deterministically.
+[features]
+default = ["backend-c", "backend-cranelift", "backend-llvm"]
+backend-c = []
+backend-cranelift = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-module",
+    "dep:cranelift-object",
+]
+backend-llvm = []
+
 [dependencies]
 # Cranelift AOT native backend (src/backend/). Pinned in lockstep (all
 # cranelift-* crates ship from the same wasmtime release train and must
@@ -10,10 +26,16 @@ edition = "2021"
 # (rather than relying on the default `host-arch` feature) so the compiler
 # can always target Windows/Linux x86-64, AArch64, and RISC-V64 regardless
 # of which architecture the oscan compiler itself is built on.
-cranelift-codegen = { version = "0.133.1", features = ["x86", "arm64", "riscv64"] }
-cranelift-frontend = "0.133.1"
-cranelift-module = "0.133.1"
-cranelift-object = "0.133.1"
+# Optional: a build without the `backend-cranelift` feature must not link
+# (or even compile) any Cranelift code at all.
+cranelift-codegen = { version = "0.133.1", features = [
+    "x86",
+    "arm64",
+    "riscv64",
+], optional = true }
+cranelift-frontend = { version = "0.133.1", optional = true }
+cranelift-module = { version = "0.133.1", optional = true }
+cranelift-object = { version = "0.133.1", optional = true }
 object = "0.39.1"
 serde_json = "1.0"
 sha2 = "0.10"

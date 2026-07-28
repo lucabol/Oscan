@@ -132,6 +132,8 @@ use sha2::{Digest, Sha256};
 #[cfg(windows)]
 mod windows_elevation;
 
+pub mod sidecar;
+
 #[cfg(unix)]
 mod unix_elevation;
 
@@ -209,28 +211,54 @@ pub fn is_setuid_elevated() -> Result<bool, String> {
     unix_elevation::is_setuid_elevated()
 }
 
-/// One extracted, verified asset's absolute path plus the identifying
-/// metadata a [`crate::backend::link`] plan needs to place it correctly
-/// (role/lib name).
+/// Where a verified native-link asset set came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetSource {
+    /// Embedded in this compiler binary at build time and extracted into
+    /// the content-addressed cache (design §6).
+    Embedded,
+    /// Staged beside this executable and verified in place (see
+    /// [`sidecar`]).
+    Sidecar,
+}
+
+impl AssetSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded",
+            Self::Sidecar => "sidecar",
+        }
+    }
+}
+
+/// One verified asset's absolute path plus the identifying metadata a
+/// [`crate::backend::link`] plan needs to place it correctly (role/lib
+/// name). Owned strings rather than `&'static str` because the same type
+/// carries both build-time-embedded assets (whose metadata *is* static)
+/// and sidecar assets read from a manifest at run time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractedAsset {
-    pub role: &'static str,
-    pub name: &'static str,
-    pub lib: Option<&'static str>,
+    pub role: String,
+    pub name: String,
+    pub lib: Option<String>,
     pub path: PathBuf,
 }
 
-/// A fully extracted and verified embedded asset set, rooted at one
-/// content-addressed cache directory (design §6.2).
+/// A fully verified asset set: either extracted into one content-addressed
+/// cache directory (design §6.2), or verified in place under the sidecar
+/// root beside this executable.
 #[derive(Debug, Clone)]
 pub struct ExtractedAssetSet {
+    pub source: AssetSource,
     pub dir: PathBuf,
     pub assets: Vec<ExtractedAsset>,
 }
 
 impl ExtractedAssetSet {
     pub fn find(&self, role: &str, lib: Option<&str>) -> Option<&ExtractedAsset> {
-        self.assets.iter().find(|a| a.role == role && a.lib == lib)
+        self.assets
+            .iter()
+            .find(|a| a.role == role && a.lib.as_deref() == lib)
     }
 
     pub fn linker(&self) -> Option<&ExtractedAsset> {
@@ -244,7 +272,7 @@ impl ExtractedAssetSet {
     pub fn import_lib(&self, lib_name: &str) -> Option<&ExtractedAsset> {
         self.assets
             .iter()
-            .find(|a| a.role == "import_lib" && a.lib == Some(lib_name))
+            .find(|a| a.role == "import_lib" && a.lib.as_deref() == Some(lib_name))
     }
 }
 
@@ -774,18 +802,143 @@ fn ensure_extracted_in(
         let dest = validated_dest(&set_dir, asset.install_subpath)?;
         extract_one(asset, &dest)?;
         extracted.push(ExtractedAsset {
-            role: asset.role,
-            name: asset.name,
-            lib: asset.lib,
+            role: asset.role.to_string(),
+            name: asset.name.to_string(),
+            lib: asset.lib.map(str::to_string),
             path: dest,
         });
     }
     write_complete_marker(&set_dir)?;
 
     Ok(ExtractedAssetSet {
+        source: AssetSource::Embedded,
         dir: set_dir,
         assets: extracted,
     })
+}
+
+/// Resolve this build's packaged native-link assets for `target`,
+/// whichever way they are packaged, and verify every file before
+/// returning it.
+///
+/// Precedence is deliberate and has no "try the next one" step:
+///
+/// 1. A **sidecar** package beside the executable
+///    (`<exe-dir>/native-link/native-link-assets.json`, see [`sidecar`]).
+///    Present-but-invalid is a hard error, never a fallback — a corrupt
+///    package must not be papered over by embedded assets or by a host C
+///    toolchain. Its declared target must match the target being linked,
+///    whether that is this host or a cross target.
+/// 2. Otherwise this build's **embedded** assets, extracted into the
+///    content-addressed cache exactly as before.
+///
+/// This is called only from the plan builders that actually *consume*
+/// packaged assets, so a complete explicit direct-linker override never
+/// parses (or trips over) a sidecar it does not use.
+pub fn resolve_link_assets(
+    target: crate::backend::NativeTarget,
+    allow_elevated_native_link: bool,
+) -> Result<ExtractedAssetSet, String> {
+    if let Some(package) = sidecar::load()? {
+        if package.target != target.archive_tag() {
+            return Err(mis_staged_target_error(
+                &package.target,
+                target.archive_tag(),
+            ));
+        }
+        let set = package.verify_all()?;
+        if crate::is_verbose() {
+            eprintln!(
+                "[verbose] native-link assets: {} ({})",
+                set.source.as_str(),
+                set.dir.display()
+            );
+        }
+        if let Some(linker) = set.linker() {
+            // Re-verify everything the linker will implicitly load from
+            // its own directory immediately before executing it.
+            package.verify_runtime_closure()?;
+            smoke_check_linker(&linker.path)?;
+        }
+        return Ok(set);
+    }
+    if !EMBEDDED_ASSETS_PRESENT {
+        if let Some(backend) = crate::backend::select::distribution_backend() {
+            let manifest_path = sidecar::exe_dir()
+                .map(|dir| sidecar::manifest_path_for(&dir).display().to_string())
+                .unwrap_or_else(|_| {
+                    format!(
+                        "<exe-dir>/{}/{}",
+                        sidecar::SIDECAR_DIR_NAME,
+                        sidecar::MANIFEST_FILE_NAME
+                    )
+                });
+            return Err(distribution_missing_assets_error(
+                backend.as_str(),
+                &manifest_path,
+            ));
+        }
+    }
+    let set = ensure_extracted(allow_elevated_native_link)?;
+    if crate::is_verbose() {
+        eprintln!(
+            "[verbose] native-link assets: {} ({})",
+            set.source.as_str(),
+            set.dir.display()
+        );
+    }
+    Ok(set)
+}
+
+/// Whether this build has packaged native-link assets at all — embedded in
+/// the binary, or staged as a sidecar beside it. This is the predicate the
+/// linker-selection policy uses to decide whether a *direct* linker flavor
+/// is available; a sidecar that exists but fails verification still
+/// answers `true` here, so the ensuing failure is the sidecar's own hard
+/// error rather than a silent compiler-driver fallback.
+pub fn packaged_assets_present() -> bool {
+    EMBEDDED_ASSETS_PRESENT || sidecar::is_present()
+}
+
+/// The target tag this build's packaged assets are for (`"windows-x86_64"`,
+/// `"linux-aarch64"`, ...), preferring a sidecar package over embedded
+/// assets. `Ok(None)` when this build has neither. A sidecar that cannot
+/// be read is an error, not a `None`.
+pub fn packaged_target() -> Result<Option<String>, String> {
+    match sidecar::load()? {
+        Some(package) => Ok(Some(package.target)),
+        None => Ok(embedded_target()),
+    }
+}
+
+/// The diagnostic for packaged assets staged for the wrong target. Kept
+/// separate so the wording is unit-testable without staging a package for
+/// another machine.
+fn mis_staged_target_error(package_target: &str, link_target: &str) -> String {
+    format!(
+        "the native-link assets packaged beside this compiler are for target '{package_target}', \
+         but this link targets '{link_target}'; this package is mis-staged or the wrong one was \
+         installed"
+    )
+}
+
+/// The diagnostic for a distribution package that ships no native-link
+/// assets at all.
+fn distribution_missing_assets_error(backend: &str, manifest_path: &str) -> String {
+    format!(
+        "this {backend} distribution has no native-link assets: neither embedded in the compiler \
+         nor staged at '{manifest_path}'. The package is incomplete or corrupt; reinstall it"
+    )
+}
+
+/// The toolchain version behind this build's packaged assets, preferring a
+/// sidecar package. Used for the runtime-archive cross-check (design
+/// §4.3).
+pub fn packaged_toolchain_version() -> Result<Option<String>, String> {
+    match sidecar::load()? {
+        Some(package) => Ok(package.toolchain_version),
+        None => Ok(embedded_toolchain_version()),
+    }
 }
 
 /// Parses `EMBEDDED_ASSET_MANIFEST_JSON`'s `toolchain.version` (design
@@ -820,6 +973,38 @@ fn toolchain_version_from_manifest(manifest_json: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Packaged assets staged for another target are refused by name,
+    /// whether the link is a cross-link or a host link — the sidecar's
+    /// declared target is checked wherever those assets are consumed.
+    #[test]
+    fn mis_staged_packaged_assets_are_named_precisely() {
+        let message = mis_staged_target_error("linux-aarch64", "windows-x86_64");
+        assert!(
+            message.contains("are for target 'linux-aarch64'"),
+            "{message}"
+        );
+        assert!(
+            message.contains("this link targets 'windows-x86_64'"),
+            "{message}"
+        );
+        assert!(message.contains("mis-staged"), "{message}");
+    }
+
+    /// A distribution that ships neither embedded nor sidecar assets is a
+    /// corrupt package, and says so instead of looking for a C toolchain.
+    #[test]
+    fn a_distribution_without_native_link_assets_reports_package_corruption() {
+        let message =
+            distribution_missing_assets_error("cranelift", "/opt/oscan/native-link/x.json");
+        assert!(message.contains("this cranelift distribution"), "{message}");
+        assert!(
+            message.contains("/opt/oscan/native-link/x.json"),
+            "{message}"
+        );
+        assert!(message.contains("incomplete or corrupt"), "{message}");
+        assert!(!message.contains("compiler driver"), "{message}");
+    }
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

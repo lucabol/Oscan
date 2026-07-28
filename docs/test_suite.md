@@ -4,9 +4,11 @@
 - **Integration Tests**: 134
 - **Positive Tests**: 99 (compile and run successfully)
 - **Negative Tests**: 35 (correctly rejected by compiler)
-- **Backend Policy**: supported hosts prefer LLVM when a compatible packaged provider is available,
-  then Cranelift; C remains the portability/reference oracle and both object
-  backends are differentially checked against it
+- **Backend Policy**: released packages contain exactly one backend and default to it;
+  a multi-backend development build prefers LLVM when a compatible packaged
+  provider is available, then Cranelift. C remains the portability/reference
+  oracle and both object backends are differentially checked against it
+  (`--backend native` is only a deprecated alias for `cranelift`)
 
 ## Positive Tests
 
@@ -118,13 +120,13 @@ cargo test
 ```powershell
 .\test.ps1
 .\test.ps1 -Backend llvm
-.\test.ps1 -Backend native
+.\test.ps1 -Backend cranelift
 ```
 
 ### Run the focused differential corpus:
 ```powershell
 .\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
-.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend cranelift
 ```
 
 ### Run the toolchain-light positive corpus:
@@ -170,12 +172,12 @@ LLVM-versus-C byte and percentage difference.
 compiler.
 
 The pinned Windows release-toolchain run on 2026-07-28 compiled all 37 recursive
-examples with LLVM, Cranelift/native, and C: 111 executables with no failures.
+examples with LLVM, Cranelift, and C: 111 executables with no failures.
 
 | Backend | Aggregate size |
 |---|---:|
 | LLVM | 814,080 bytes |
-| Cranelift/native | 863,232 bytes |
+| Cranelift | 863,232 bytes |
 | C | 875,520 bytes |
 
 LLVM was 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes

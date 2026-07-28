@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -11,11 +13,13 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path, PurePosixPath
 
 
@@ -30,6 +34,33 @@ ARCHIVE_SUFFIXES = {
 }
 DOWNLOAD_RETRIES = 5
 DOWNLOAD_RETRY_BASE_DELAY_SECONDS = 2
+
+# Canonical backend names. `native` is only a deprecated CLI alias for
+# `cranelift` and never appears in an artifact name, package label, or
+# contract entry.
+CANONICAL_BACKENDS = ("llvm", "cranelift", "c")
+REQUIRED_COMPONENTS = (
+    "compiler",
+    "direct_link_sidecar",
+    "runtime_archives",
+    "llvm_provider",
+    "c_toolchain",
+)
+# Object packages ship freestanding runtime archives only: a hosted
+# archive would need the host CRT, which is exactly the C-toolchain
+# dependency these packages exist to remove.
+FREESTANDING_PROFILES = ("freestanding", "freestanding_gfx", "freestanding_core")
+# The published matrix. macOS is C-only: there is no Darwin object target
+# for either object backend.
+SUPPORTED_RELEASE_TARGETS = {
+    "windows-x86_64": ("llvm", "cranelift", "c"),
+    "linux-x86_64": ("llvm", "cranelift", "c"),
+    "macos-x86_64": ("c",),
+}
+PACKAGE_METADATA_NAME = "oscan-package.json"
+PROVIDER_PROVENANCE_NAME = "llvm-provider-provenance.json"
+NATIVE_LINK_DIR_NAME = "native-link"
+NATIVE_LINK_MANIFEST_NAME = "native-link-assets.json"
 
 
 def fail(message: str) -> "NoReturn":
@@ -117,80 +148,244 @@ def load_manifest(path: Path) -> dict:
 
 
 def load_release_contract(path: Path) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if data.get("schema_version") != 1:
-        fail(f"unsupported release contract schema in {path}")
+    """Load and fully validate the release contract (schema 2).
+
+    Schema 2 replaces schema 1's single "full bundle per target" model with
+    an explicit target x backend variant matrix: every artifact this
+    repository publishes is one (target, backend) pair with its own archive
+    names, Cargo feature, distribution stamp, capability flag, and component
+    list. There is no `-full` bundle any more, and `native` is never an
+    artifact label (it survives only as a deprecated CLI alias).
+    """
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read release contract {path}: {exc}")
+    if data.get("schema_version") != 2:
+        fail(
+            f"unsupported release contract schema in {path}: expected schema_version 2 "
+            f"(target x backend variants), got {data.get('schema_version')!r}"
+        )
     for key in (
-        "phase",
         "install_surface",
         "toolchains_committed_to_git",
-        "release_layout",
-        "native_backend",
+        "backends",
+        "components",
         "lookup_contract",
-        "bundled_targets",
-        "binary_only_targets",
+        "variants",
     ):
         if key not in data:
             fail(f"release contract {path} is missing '{key}'")
-
-    if data["phase"] != "phase1":
-        fail(f"unsupported release contract phase '{data['phase']}'")
     if data["install_surface"] != "github-releases":
         fail(f"unsupported release install surface '{data['install_surface']}'")
     if data["toolchains_committed_to_git"]:
-        fail("phase 1 release contract must keep toolchains out of git")
+        fail("the release contract must keep toolchains out of git")
 
-    release_layout = data["release_layout"]
-    for key in ("binary_position", "toolchain_position", "binary_and_toolchain_are_siblings"):
-        if key not in release_layout:
-            fail(f"release contract {path} is missing release_layout.{key}")
-    if release_layout["binary_position"] != "archive-root":
-        fail(
-            "unsupported release layout: expected release_layout.binary_position to be "
-            "'archive-root'"
-        )
-    if release_layout["toolchain_position"] != "archive-root/toolchain":
-        fail(
-            "unsupported release layout: expected release_layout.toolchain_position to be "
-            "'archive-root/toolchain'"
-        )
-    if not release_layout["binary_and_toolchain_are_siblings"]:
-        fail("unsupported release layout: oscan binary and toolchain must remain siblings")
-
-    native_backend = data["native_backend"]
-    for key in (
-        "runtime_source_position",
-        "runtime_archive_position_template",
-        "source_files",
-    ):
-        if key not in native_backend:
-            fail(f"release contract {path} is missing native_backend.{key}")
-    if native_backend["runtime_source_position"] != "archive-root/native-runtime":
-        fail("native runtime sources must be staged at archive-root/native-runtime")
-    if (
-        native_backend["runtime_archive_position_template"]
-        != "archive-root/build/runtime-archives/{target}"
-    ):
-        fail(
-            "native runtime archives must be staged at "
-            "archive-root/build/runtime-archives/{target}"
-        )
-    if native_backend["source_files"] != ["osc_native_shim.c", "osc_runtime.h"]:
-        fail(
-            "native_backend.source_files must contain osc_native_shim.c and "
-            "osc_runtime.h in that order"
-        )
+    _validate_contract_backends(path, data["backends"])
+    _validate_contract_components(path, data["components"])
 
     lookup_contract = data["lookup_contract"]
     for platform in ("windows", "linux"):
         if platform not in lookup_contract:
             fail(f"release contract {path} is missing lookup_contract.{platform}")
-        lookup_entry = lookup_contract[platform]
         for key in ("search_roots", "bin_directories", "compiler_names"):
-            if key not in lookup_entry:
+            if key not in lookup_contract[platform]:
                 fail(f"release contract {path} is missing lookup_contract.{platform}.{key}")
 
+    _validate_contract_variants(path, data)
     return data
+
+
+def _validate_contract_backends(path: Path, backends: dict) -> None:
+    if sorted(backends) != sorted(CANONICAL_BACKENDS):
+        fail(
+            f"release contract {path} must declare exactly the canonical backends "
+            f"{', '.join(CANONICAL_BACKENDS)}, got {', '.join(sorted(backends))}"
+        )
+    for name, spec in backends.items():
+        if not isinstance(spec, dict):
+            fail(f"release contract backend '{name}' must be an object")
+        for key in ("cargo_feature", "artifact_suffix", "kind"):
+            if key not in spec:
+                fail(f"release contract backend '{name}' is missing '{key}'")
+        if spec["cargo_feature"] != f"backend-{name}":
+            fail(
+                f"release contract backend '{name}' must use cargo feature 'backend-{name}', "
+                f"got '{spec['cargo_feature']}'"
+            )
+        if spec["artifact_suffix"] != name:
+            fail(
+                f"release contract backend '{name}' must use artifact suffix '{name}', got "
+                f"'{spec['artifact_suffix']}'"
+            )
+        if spec["kind"] not in ("object", "c-source"):
+            fail(f"release contract backend '{name}' has unknown kind '{spec['kind']}'")
+
+
+def _validate_contract_components(path: Path, components: dict) -> None:
+    missing = [name for name in REQUIRED_COMPONENTS if name not in components]
+    if missing:
+        fail(f"release contract {path} is missing component definition(s): {', '.join(missing)}")
+    if components["direct_link_sidecar"].get("position") != "archive-root/native-link":
+        fail("direct-link sidecar assets must be staged at archive-root/native-link")
+    if (
+        components["runtime_archives"].get("position_template")
+        != "archive-root/build/runtime-archives/{target}"
+    ):
+        fail(
+            "runtime archives must be staged at archive-root/build/runtime-archives/{target}"
+        )
+    allowed_profiles = components["runtime_archives"].get("allowed_profiles")
+    if allowed_profiles != list(FREESTANDING_PROFILES):
+        fail(
+            "release contract runtime_archives.allowed_profiles must be "
+            f"{list(FREESTANDING_PROFILES)} (freestanding only: object packages ship no hosted "
+            "archive)"
+        )
+    for name in ("llvm_provider", "c_toolchain"):
+        if components[name].get("position") != "archive-root/toolchain":
+            fail(f"component '{name}' must be staged at archive-root/toolchain")
+
+
+def _validate_contract_variants(path: Path, contract: dict) -> None:
+    variants = contract["variants"]
+    if not variants:
+        fail(f"release contract {path} declares no variants")
+    seen_archive_names: dict[str, str] = {}
+    seen_roots: dict[str, str] = {}
+    for target, target_spec in variants.items():
+        if target not in SUPPORTED_RELEASE_TARGETS:
+            fail(f"release contract declares unsupported target '{target}'")
+        for key in ("binary_name", "archive_format", "backends"):
+            if key not in target_spec:
+                fail(f"release contract target '{target}' is missing '{key}'")
+        if target_spec["archive_format"] not in ARCHIVE_SUFFIXES:
+            fail(
+                f"unsupported archive format '{target_spec['archive_format']}' for target "
+                f"'{target}'"
+            )
+        backends = target_spec["backends"]
+        if not backends:
+            fail(f"release contract target '{target}' declares no backends")
+        expected_backends = SUPPORTED_RELEASE_TARGETS[target]
+        if sorted(backends) != sorted(expected_backends):
+            fail(
+                f"release contract target '{target}' must declare backends "
+                f"{', '.join(expected_backends)}, got {', '.join(sorted(backends))}"
+            )
+        for backend, variant in backends.items():
+            _validate_contract_variant(path, contract, target, backend, variant)
+            name = variant["archive_name_template"]
+            root = variant["archive_root_template"]
+            if name in seen_archive_names:
+                fail(
+                    f"release contract archive name '{name}' is used by both "
+                    f"{seen_archive_names[name]} and {target}/{backend}"
+                )
+            if root in seen_roots:
+                fail(
+                    f"release contract archive root '{root}' is used by both "
+                    f"{seen_roots[root]} and {target}/{backend}"
+                )
+            seen_archive_names[name] = f"{target}/{backend}"
+            seen_roots[root] = f"{target}/{backend}"
+
+
+def _validate_contract_variant(
+    path: Path, contract: dict, target: str, backend: str, variant: dict
+) -> None:
+    where = f"release contract variant {target}/{backend}"
+    if backend not in contract["backends"]:
+        fail(f"{where} names a backend the contract does not declare")
+    for key in (
+        "archive_name_template",
+        "archive_root_template",
+        "cargo_feature",
+        "distribution_backend",
+        "toolchain_free",
+        "components",
+        "runtime_profiles",
+    ):
+        if key not in variant:
+            fail(f"{where} is missing '{key}'")
+
+    backend_spec = contract["backends"][backend]
+    if variant["cargo_feature"] != backend_spec["cargo_feature"]:
+        fail(
+            f"{where} declares cargo feature '{variant['cargo_feature']}', but backend "
+            f"'{backend}' is built with '{backend_spec['cargo_feature']}'"
+        )
+    if variant["distribution_backend"] != backend:
+        fail(
+            f"{where} declares distribution backend '{variant['distribution_backend']}', which "
+            f"does not match the variant's own backend '{backend}'"
+        )
+
+    suffix = ARCHIVE_SUFFIXES[contract["variants"][target]["archive_format"]]
+    for field in ("archive_name_template", "archive_root_template"):
+        template = variant[field]
+        if "{version}" not in template:
+            fail(f"{where} {field} must include '{{version}}'")
+        if "native" in template:
+            fail(
+                f"{where} {field} uses 'native', which is only a deprecated CLI alias; the "
+                "canonical artifact label is 'cranelift'"
+            )
+    if not variant["archive_name_template"].endswith(f"-{backend}{suffix}"):
+        fail(f"{where} archive_name_template must end with '-{backend}{suffix}'")
+    if not variant["archive_root_template"].endswith(f"-{backend}"):
+        fail(f"{where} archive_root_template must end with '-{backend}'")
+
+    components = variant["components"]
+    unknown = [name for name in components if name not in contract["components"]]
+    if unknown:
+        fail(f"{where} lists undefined component(s): {', '.join(unknown)}")
+    if "compiler" not in components:
+        fail(f"{where} must include the 'compiler' component")
+
+    has_c_toolchain = "c_toolchain" in components
+    if variant["toolchain_free"] and has_c_toolchain:
+        fail(f"{where} claims toolchain_free but ships the c_toolchain component")
+    if backend == "c" and variant["toolchain_free"]:
+        fail(f"{where} is a C-backend package and can never be toolchain-free")
+
+    profiles = variant["runtime_profiles"]
+    invalid = [profile for profile in profiles if profile not in FREESTANDING_PROFILES]
+    if invalid:
+        fail(f"{where} lists non-freestanding runtime profile(s): {', '.join(invalid)}")
+
+    if contract["backends"][backend]["kind"] == "object":
+        if not variant["toolchain_free"]:
+            fail(f"{where} is an object package and must be toolchain-free")
+        for required in ("direct_link_sidecar", "runtime_archives"):
+            if required not in components:
+                fail(f"{where} is an object package and must include the '{required}' component")
+        if not profiles:
+            fail(f"{where} must declare at least one freestanding runtime profile")
+        if backend == "llvm":
+            if "llvm_provider" not in components:
+                fail(f"{where} must include the 'llvm_provider' component")
+            source = variant.get("llvm_provider_source")
+            if source not in contract["components"]["llvm_provider"]["sources"]:
+                fail(f"{where} declares unknown llvm_provider_source {source!r}")
+            if source == "direct-link-sidecar" and not variant.get("llvm_provider_asset"):
+                fail(
+                    f"{where} shares its provider with the direct-link sidecar, so it must name "
+                    "the sidecar asset in 'llvm_provider_asset'"
+                )
+        elif "llvm_provider" in components:
+            fail(f"{where} is a Cranelift package and must not ship an LLVM provider")
+    else:
+        for forbidden in ("direct_link_sidecar", "runtime_archives", "llvm_provider"):
+            if forbidden in components:
+                fail(
+                    f"{where} is a C package and must not ship the '{forbidden}' component"
+                )
+        if profiles:
+            fail(f"{where} is a C package and must not ship native runtime archives")
+
+    if target.startswith("macos") and has_c_toolchain:
+        fail(f"{where} must not bundle a C toolchain: macOS relies on the Apple CLT")
 
 
 def render_release_template(template: str, version: str, field_name: str) -> str:
@@ -200,90 +395,70 @@ def render_release_template(template: str, version: str, field_name: str) -> str
         fail(f"release template '{field_name}' is missing placeholder data: {exc}")
 
 
-def resolve_release_target(contract: dict, contract_path: Path, target: str) -> dict:
-    if target in contract["bundled_targets"]:
-        target_spec = dict(contract["bundled_targets"][target])
-        target_spec["target_class"] = "bundled"
-    elif target in contract["binary_only_targets"]:
-        target_spec = dict(contract["binary_only_targets"][target])
-        target_spec["target_class"] = "binary-only"
-    else:
-        fail(f"release contract does not define target '{target}'")
-
-    for key in (
-        "binary_name",
-        "bundle_kind",
-        "archive_format",
-        "archive_name_template",
-        "archive_root_template",
-    ):
-        if key not in target_spec:
-            fail(f"release target '{target}' is missing '{key}'")
-
-    archive_format = target_spec["archive_format"]
-    if archive_format not in ARCHIVE_SUFFIXES:
-        fail(f"unsupported archive format '{archive_format}' for target '{target}'")
-
-    archive_name_template = target_spec["archive_name_template"]
-    archive_root_template = target_spec["archive_root_template"]
-    if "{version}" not in archive_name_template:
-        fail(f"release target '{target}' archive_name_template must include '{{version}}'")
-    if "{version}" not in archive_root_template:
-        fail(f"release target '{target}' archive_root_template must include '{{version}}'")
-    if not archive_name_template.endswith(ARCHIVE_SUFFIXES[archive_format]):
+def resolve_release_variant(
+    contract: dict, contract_path: Path, target: str, backend: str
+) -> dict:
+    """The fully resolved (target, backend) variant spec, or a hard error."""
+    variants = contract["variants"]
+    if target not in variants:
         fail(
-            f"release target '{target}' archive_name_template must end with "
-            f"{ARCHIVE_SUFFIXES[archive_format]}"
+            f"release contract does not define target '{target}' "
+            f"(known: {', '.join(sorted(variants))})"
         )
-    if target_spec["target_class"] == "bundled" and target_spec["bundle_kind"] != "full":
-        fail(f"bundled release target '{target}' must use bundle_kind 'full'")
-    if target_spec["target_class"] == "binary-only" and target_spec["bundle_kind"] != "binary-only":
-        fail(f"binary-only release target '{target}' must use bundle_kind 'binary-only'")
+    target_spec = variants[target]
+    if backend not in target_spec["backends"]:
+        fail(
+            f"release contract does not define backend '{backend}' for target '{target}' "
+            f"(known: {', '.join(sorted(target_spec['backends']))})"
+        )
 
-    if target_spec["target_class"] == "bundled":
-        manifest_name = target_spec.get("toolchain_manifest")
-        if not manifest_name:
-            fail(f"release target '{target}' is missing 'toolchain_manifest'")
+    spec = dict(target_spec["backends"][backend])
+    spec["target"] = target
+    spec["backend"] = backend
+    spec["binary_name"] = target_spec["binary_name"]
+    spec["archive_format"] = target_spec["archive_format"]
+    spec["platform"] = target.split("-", 1)[0]
+    spec["backend_kind"] = contract["backends"][backend]["kind"]
+
+    manifest_name = target_spec.get("toolchain_manifest")
+    if manifest_name:
         manifest_path = contract_path.parent / manifest_name
         if not manifest_path.is_file():
             fail(f"toolchain manifest not found for target '{target}': {manifest_path}")
-        target_spec["toolchain_manifest_path"] = manifest_path
-    else:
-        for key in ("requires_host_compiler", "required_host_toolchain", "note_file"):
-            if key not in target_spec:
-                fail(f"release target '{target}' is missing '{key}'")
-        note_path = contract_path.parent / target_spec["note_file"]
+        spec["toolchain_manifest"] = manifest_name
+        spec["toolchain_manifest_path"] = manifest_path
+    note_file = target_spec.get("note_file")
+    if note_file:
+        note_path = contract_path.parent / note_file
         if not note_path.is_file():
             fail(f"note file not found for target '{target}': {note_path}")
-        target_spec["note_file_path"] = note_path
+        spec["note_file"] = note_file
+        spec["note_file_path"] = note_path
+    return spec
 
-    native_runtime_modes = target_spec.get("native_runtime_modes")
-    if not isinstance(native_runtime_modes, list):
-        fail(f"release target '{target}' must define native_runtime_modes as a list")
-    invalid_modes = [
-        mode
-        for mode in native_runtime_modes
-        if mode not in ("hosted", "freestanding", "freestanding_gfx", "freestanding_core")
-    ]
-    if invalid_modes:
-        fail(
-            f"release target '{target}' has invalid native runtime mode(s): "
-            f"{', '.join(invalid_modes)}"
-        )
-    native_smoke_mode = target_spec.get("native_smoke_mode")
-    if native_runtime_modes and native_smoke_mode not in native_runtime_modes:
-        fail(
-            f"release target '{target}' native_smoke_mode must name one of its "
-            "native_runtime_modes"
-        )
-    if not native_runtime_modes and native_smoke_mode is not None:
-        fail(
-            f"release target '{target}' has no native_runtime_modes, so "
-            "native_smoke_mode must be null"
-        )
 
-    target_spec["target"] = target
-    return target_spec
+def release_variant_matrix(contract: dict) -> list[dict]:
+    """Every (target, backend) pair the contract publishes, in a stable order."""
+    matrix: list[dict] = []
+    for target in sorted(contract["variants"]):
+        target_spec = contract["variants"][target]
+        for backend in sorted(target_spec["backends"]):
+            variant = target_spec["backends"][backend]
+            matrix.append(
+                {
+                    "target": target,
+                    "backend": backend,
+                    "cargo_feature": variant["cargo_feature"],
+                    "distribution_backend": variant["distribution_backend"],
+                    "toolchain_free": variant["toolchain_free"],
+                    "archive_format": target_spec["archive_format"],
+                    "archive_name_template": variant["archive_name_template"],
+                    "archive_root_template": variant["archive_root_template"],
+                    "components": list(variant["components"]),
+                    "runtime_profiles": list(variant["runtime_profiles"]),
+                }
+            )
+    return matrix
 
 
 def python_unpack_format(archive_type: str) -> str:
@@ -433,48 +608,421 @@ def remove_path(path: Path) -> None:
     shutil.rmtree(path, onerror=handle_remove_readonly)
 
 
-def _extract_with_system_tar(archive_path: Path, dest: Path) -> bool:
-    """Extract using system tar. Handles absolute symlinks that Python 3.14+ rejects."""
-    tar_bin = shutil.which("tar")
-    if not tar_bin:
-        return False
-    result = subprocess.run(
-        [tar_bin, "-xf", str(archive_path), "-C", str(dest)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    return result.returncode == 0
+def archive_member_parts(name: str) -> list[str] | None:
+    """The safe, relative components of an archive member name, or None.
+
+    Absolute paths, drive letters, UNC names, and any `..` component are
+    rejected outright: a release archive may only ever describe paths
+    *below* the directory it is extracted into.
+    """
+    normalized = name.replace("\\", "/")
+    if normalized.startswith("/"):
+        return None
+    if len(normalized) >= 2 and normalized[1] == ":":
+        return None
+    parts: list[str] = []
+    for part in normalized.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            return None
+        parts.append(part)
+    return parts
 
 
-def extract_archive(archive_path: Path, archive_type: str, destination: Path, strip_components: int) -> None:
-    temp_root = archive_path.parent / f".extract-{archive_path.stem}"
-    ensure_clean_dir(temp_root)
-    try:
-        if _extract_with_system_tar(archive_path, temp_root):
-            pass  # system tar succeeded
-        else:
-            shutil.unpack_archive(
-                str(archive_path),
-                str(temp_root),
-                format=python_unpack_format(archive_type),
+def _member_destination(root: Path, parts: list[str], archive_path: Path, name: str) -> Path:
+    """The on-disk path for a validated member, with a containment re-check.
+
+    The component walk is the second half of the guarantee: a member name
+    can be perfectly relative and still escape if one of its parent
+    directories is a symlink planted by an earlier member. Links are
+    materialized only after every file is written *and* are themselves
+    constrained to the root, so this cannot happen; the check stays because
+    it is what makes that argument true rather than assumed.
+    """
+    candidate = root
+    for part in parts:
+        candidate = candidate / part
+        if candidate.is_symlink():
+            fail(
+                f"archive '{archive_path.name}' member '{name}' resolves through the symlink "
+                f"'{candidate}'; refusing to extract"
             )
-        source_root = temp_root
-        for _ in range(strip_components):
-            children = [child for child in source_root.iterdir()]
-            if len(children) != 1 or not children[0].is_dir():
-                fail(
-                    f"cannot strip {strip_components} path component(s) from {archive_path.name}; "
-                    "expected a single top-level directory"
-                )
-            source_root = children[0]
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        fail(f"archive '{archive_path.name}' member '{name}' escapes the extraction root")
+    return candidate
+
+
+def _strip_parts(
+    parts: list[str],
+    strip_components: int,
+    is_directory: bool,
+    archive_path: Path,
+    name: str,
+) -> list[str] | None:
+    if strip_components <= 0:
+        return parts
+    if len(parts) <= strip_components:
+        if is_directory or len(parts) == strip_components:
+            return None
+        fail(
+            f"cannot strip {strip_components} path component(s) from member '{name}' of "
+            f"{archive_path.name}"
+        )
+    return parts[strip_components:]
+
+
+def _write_member_stream(source, destination: Path, mode: int) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("wb") as handle:
+        shutil.copyfileobj(source, handle, 1024 * 1024)
+    # Owner read/write always: pruning and packaging have to be able to
+    # read and delete what was just extracted, whatever the archive says.
+    os.chmod(destination, (mode & 0o777) | stat.S_IRUSR | stat.S_IWUSR)
+
+
+def _resolve_absolute_link_in_root(root: Path, link_dir: Path, target: str) -> Path | None:
+    """Resolve an absolute symlink target against the extracted tree.
+
+    Sysroot-based cross toolchains ship links like
+    `x86_64-linux-musl/lib/ld-musl-x86_64.so.1 -> /lib/libc.so`, where "/"
+    means "this toolchain's own sysroot", not the host root. Every ancestor
+    of the link is tried as a stand-in root, innermost first; the host
+    filesystem is never consulted.
+    """
+    relative = PurePosixPath(target.replace("\\", "/")).parts[1:]
+    if not relative or (len(target) >= 2 and target[1] == ":"):
+        # A drive-letter target is a host path by construction, never a
+        # sysroot-relative one.
+        return None
+    ancestors: list[Path] = []
+    current = link_dir
+    while True:
+        ancestors.append(current)
+        if current == root or current.parent == current:
+            break
+        current = current.parent
+    for ancestor in ancestors:
+        candidate = ancestor.joinpath(*relative)
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.exists() or candidate.is_symlink():
+            return candidate
+    return None
+
+
+def _materialize_link(
+    root: Path,
+    destination: Path,
+    kind: str,
+    target: str,
+    archive_path: Path,
+    name: str,
+    allow_absolute_symlinks: bool,
+) -> None:
+    if kind == "hardlink":
+        resolved = Path(os.path.normpath(destination.parent / target))
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            fail(
+                f"archive '{archive_path.name}' member '{name}' hard-links outside the "
+                "extraction root"
+            )
+        if not resolved.is_file():
+            fail(
+                f"archive '{archive_path.name}' member '{name}' hard-links to "
+                f"'{target}', which the archive never provides"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(resolved, destination)
+        except OSError:
+            shutil.copy2(resolved, destination)
+        return
+
+    absolute = target.startswith("/") or target.startswith("\\") or (
+        len(target) >= 2 and target[1] == ":"
+    )
+    if absolute:
+        if not allow_absolute_symlinks:
+            fail(
+                f"archive '{archive_path.name}' member '{name}' is a symlink to the absolute "
+                f"path '{target}'; refusing to extract"
+            )
+        resolved = _resolve_absolute_link_in_root(root, destination.parent, target)
+        if resolved is None:
+            fail(
+                f"archive '{archive_path.name}' member '{name}' is a symlink to '{target}', "
+                "which does not resolve inside the archive's own tree; it would point at the "
+                "build host's filesystem"
+            )
+        link_target = os.path.relpath(resolved, destination.parent)
+    else:
+        resolved = Path(os.path.normpath(destination.parent / target))
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            fail(
+                f"archive '{archive_path.name}' member '{name}' is a symlink to '{target}', "
+                "which escapes the extraction root"
+            )
+        link_target = target.replace("\\", "/")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() or destination.is_symlink():
         remove_path(destination)
-        shutil.move(str(source_root), str(destination))
-    finally:
-        if temp_root.exists():
-            remove_path(temp_root)
+    try:
+        os.symlink(link_target, destination)
+        return
+    except OSError as exc:
+        # Windows hosts without the symlink privilege: copy the in-tree
+        # target instead. Nothing outside the root can be reached either
+        # way, and the substitution is reported rather than hidden.
+        if resolved.is_file():
+            shutil.copy2(resolved, destination)
+            return
+        if resolved.is_dir():
+            shutil.copytree(resolved, destination, symlinks=False, dirs_exist_ok=True)
+            return
+        print(
+            f"warning: archive '{archive_path.name}' member '{name}' could not be created as "
+            f"a link to '{target}', and that target is not available in the extracted tree; "
+            f"skipping it ({exc})",
+            file=sys.stderr,
+        )
+
+
+def _extract_tar_safely(
+    archive_path: Path,
+    archive_type: str,
+    root: Path,
+    strip_components: int,
+    allow_absolute_symlinks: bool,
+) -> list[str]:
+    mode = {"gztar": "r:gz", "xztar": "r:xz", "bztar": "r:bz2"}[
+        python_unpack_format(archive_type)
+    ]
+    extracted: list[str] = []
+    deferred: list[tuple[list[str], str, str, str]] = []
+    top_level: set[str] = set()
+    with tarfile.open(archive_path, mode) as archive:
+        for member in archive:
+            parts = archive_member_parts(member.name)
+            if parts is None:
+                fail(
+                    f"archive '{archive_path.name}' member '{member.name}' is not a safe "
+                    "relative path; refusing to extract"
+                )
+            if not parts:
+                continue
+            top_level.add(parts[0])
+            if member.mode & (stat.S_ISUID | stat.S_ISGID):
+                fail(
+                    f"archive '{archive_path.name}' member '{member.name}' is setuid/setgid; "
+                    "refusing to extract"
+                )
+            if not (member.isreg() or member.isdir() or member.issym() or member.islnk()):
+                fail(
+                    f"archive '{archive_path.name}' member '{member.name}' is neither a file, "
+                    "directory, nor link; refusing to extract"
+                )
+            stripped = _strip_parts(
+                parts, strip_components, member.isdir(), archive_path, member.name
+            )
+            if stripped is None:
+                continue
+            destination = _member_destination(root, stripped, archive_path, member.name)
+            relative = PurePosixPath(*stripped).as_posix()
+            if member.isdir():
+                destination.mkdir(parents=True, exist_ok=True)
+                extracted.append(relative + "/")
+                continue
+            if member.issym():
+                deferred.append((stripped, "symlink", member.linkname, member.name))
+                extracted.append(relative)
+                continue
+            if member.islnk():
+                link_parts = archive_member_parts(member.linkname)
+                if link_parts is None:
+                    fail(
+                        f"archive '{archive_path.name}' member '{member.name}' hard-links to "
+                        f"the unsafe path '{member.linkname}'"
+                    )
+                link_stripped = _strip_parts(
+                    link_parts, strip_components, False, archive_path, member.linkname
+                )
+                if link_stripped is None:
+                    fail(
+                        f"archive '{archive_path.name}' member '{member.name}' hard-links "
+                        f"outside the archive's stripped root ('{member.linkname}')"
+                    )
+                link_destination = _member_destination(
+                    root, link_stripped, archive_path, member.linkname
+                )
+                deferred.append(
+                    (
+                        stripped,
+                        "hardlink",
+                        os.path.relpath(link_destination, destination.parent),
+                        member.name,
+                    )
+                )
+                extracted.append(relative)
+                continue
+            source = archive.extractfile(member)
+            if source is None:
+                fail(
+                    f"archive '{archive_path.name}' member '{member.name}' has no readable "
+                    "content"
+                )
+            with source:
+                _write_member_stream(source, destination, member.mode)
+            extracted.append(relative)
+    if strip_components > 0 and len(top_level) > 1:
+        fail(
+            f"cannot strip {strip_components} path component(s) from {archive_path.name}; "
+            f"expected a single top-level directory, found {', '.join(sorted(top_level))}"
+        )
+    for stripped, kind, target, name in deferred:
+        destination = _member_destination(root, stripped, archive_path, name)
+        _materialize_link(
+            root, destination, kind, target, archive_path, name, allow_absolute_symlinks
+        )
+    return extracted
+
+
+def _extract_zip_safely(
+    archive_path: Path,
+    root: Path,
+    strip_components: int,
+    allow_absolute_symlinks: bool,
+) -> list[str]:
+    extracted: list[str] = []
+    deferred: list[tuple[list[str], str, str, str]] = []
+    top_level: set[str] = set()
+    with zipfile.ZipFile(archive_path) as archive:
+        for info in archive.infolist():
+            if info.flag_bits & 0x1:
+                fail(
+                    f"archive '{archive_path.name}' member '{info.filename}' is encrypted; "
+                    "refusing to extract"
+                )
+            parts = archive_member_parts(info.filename)
+            if parts is None:
+                fail(
+                    f"archive '{archive_path.name}' member '{info.filename}' is not a safe "
+                    "relative path; refusing to extract"
+                )
+            if not parts:
+                continue
+            top_level.add(parts[0])
+            unix_mode = (info.external_attr >> 16) & 0xFFFF
+            if unix_mode & (stat.S_ISUID | stat.S_ISGID):
+                fail(
+                    f"archive '{archive_path.name}' member '{info.filename}' is "
+                    "setuid/setgid; refusing to extract"
+                )
+            is_symlink = stat.S_ISLNK(unix_mode)
+            is_directory = info.is_dir() or (
+                stat.S_ISDIR(unix_mode) and not info.file_size
+            )
+            if not is_symlink and unix_mode and not (
+                stat.S_ISREG(unix_mode) or is_directory
+            ):
+                fail(
+                    f"archive '{archive_path.name}' member '{info.filename}' is neither a "
+                    "file, directory, nor symlink; refusing to extract"
+                )
+            stripped = _strip_parts(
+                parts, strip_components, is_directory, archive_path, info.filename
+            )
+            if stripped is None:
+                continue
+            destination = _member_destination(root, stripped, archive_path, info.filename)
+            relative = PurePosixPath(*stripped).as_posix()
+            if is_directory:
+                destination.mkdir(parents=True, exist_ok=True)
+                extracted.append(relative + "/")
+                continue
+            if is_symlink:
+                target = archive.read(info).decode("utf-8", errors="strict")
+                deferred.append((stripped, "symlink", target, info.filename))
+                extracted.append(relative)
+                continue
+            permissions = unix_mode & 0o777 if unix_mode else 0o644
+            with archive.open(info) as source:
+                _write_member_stream(source, destination, permissions)
+            extracted.append(relative)
+    if strip_components > 0 and len(top_level) > 1:
+        fail(
+            f"cannot strip {strip_components} path component(s) from {archive_path.name}; "
+            f"expected a single top-level directory, found {', '.join(sorted(top_level))}"
+        )
+    for stripped, kind, target, name in deferred:
+        destination = _member_destination(root, stripped, archive_path, name)
+        _materialize_link(
+            root, destination, kind, target, archive_path, name, allow_absolute_symlinks
+        )
+    return extracted
+
+
+def extract_archive_safely(
+    archive_path: Path,
+    archive_type: str,
+    destination: Path,
+    strip_components: int,
+    *,
+    allow_absolute_symlinks: bool = False,
+) -> list[str]:
+    """Extract a *verified* archive member by member into a fresh directory.
+
+    Nothing is ever handed to an external extractor and no member is
+    written before it has been checked: absolute names, drive letters,
+    `..` traversal, device/fifo members, setuid bits, encrypted entries,
+    hard links leaving the tree, and symlinks resolving outside the
+    extraction root are all hard errors. Links are materialized only after
+    every regular member exists, so no member can be written *through* a
+    link planted by an earlier one.
+
+    `allow_absolute_symlinks` accepts sysroot-style absolute symlinks
+    (`/lib/libc.so`) by rewriting them against the archive's own tree; a
+    target that does not resolve inside that tree is still rejected, so a
+    staged toolchain can never reference the build host's filesystem. With
+    it off — the rule for payload archives such as the pinned LLVM provider
+    — only relative links contained by the extraction root survive, which
+    is exactly what an archive's own alias links (`libLLVM.so.22 ->
+    libLLVM.so.22.1`) are.
+    """
+    if strip_components < 0:
+        fail(f"invalid strip_components {strip_components} for {archive_path.name}")
+    if not archive_path.is_file():
+        fail(f"archive not found: {archive_path}")
+    if archive_path.stat().st_size == 0:
+        fail(f"archive '{archive_path}' is empty")
+    ensure_clean_dir(destination)
+    root = destination.resolve()
+    unpack_format = python_unpack_format(archive_type)
+    try:
+        if unpack_format == "zip":
+            if not zipfile.is_zipfile(archive_path):
+                fail(f"archive '{archive_path}' is not a valid zip archive")
+            return _extract_zip_safely(
+                archive_path, root, strip_components, allow_absolute_symlinks
+            )
+        return _extract_tar_safely(
+            archive_path,
+            archive_type,
+            root,
+            strip_components,
+            allow_absolute_symlinks,
+        )
+    except (tarfile.TarError, zipfile.BadZipFile, EOFError, OSError) as exc:
+        fail(f"cannot read archive '{archive_path}': {exc}")
 
 
 def create_wrapper(destination_root: Path, wrapper_spec: dict) -> None:
@@ -653,8 +1201,131 @@ def fetch_declared_archive(archive: dict, download_dir: Path) -> Path:
     return download_path
 
 
+def llvm_provider_declared_files(spec: dict) -> list[dict]:
+    """Exactly the archive members the manifest authorizes for the overlay.
+
+    An LLVM provider archive is a general-purpose upstream tarball; only the
+    members named here — the code generator itself plus the notices and
+    metadata the manifest lists — may ever reach a release package. Anything
+    else in the archive is ignored by construction rather than by filtering.
+    """
+    files = spec.get("files")
+    if not isinstance(files, list) or not files:
+        fail(
+            "a present LLVM code generator with a separate archive must declare a non-empty "
+            "toolchain.llvm_code_generator.files list"
+        )
+    notices = spec.get("notice_files") or []
+    if not isinstance(notices, list):
+        fail("toolchain.llvm_code_generator.notice_files must be a list when present")
+    declared: list[dict] = []
+    seen: set[str] = set()
+    for file_spec in list(files) + list(notices):
+        if not isinstance(file_spec, dict) or "source" not in file_spec or "path" not in file_spec:
+            fail("each LLVM provider file must declare 'source' and 'path'")
+        source = safe_relative_path(file_spec["source"]).as_posix()
+        path = safe_relative_path(file_spec["path"]).as_posix()
+        if path in seen:
+            fail(f"the LLVM provider declares '{path}' twice")
+        seen.add(path)
+        declared.append({"source": source, "path": path})
+    return declared
+
+
+def extract_llvm_provider_archive(
+    spec: dict, archive_path: Path, destination: Path, description: str
+) -> dict:
+    """Authenticate and safely extract a pinned LLVM provider archive.
+
+    The archive carries alias links beside the real library, so links are
+    extracted rather than refused — but only relative ones that stay inside
+    the archive's own tree. An absolute link, or one resolving outside the
+    root, is still a hard error, and no link is ever staged unless the
+    repository manifest declares the file it names.
+    """
+    archive = spec.get("archive")
+    if not isinstance(archive, dict):
+        fail(f"{description}: this target declares no separately pinned provider archive")
+    verified = verify_supplied_archive(archive_path, archive, description)
+    strip_components = int(spec.get("extract", {}).get("strip_components", 0))
+    extract_archive_safely(
+        archive_path,
+        archive["type"],
+        destination,
+        strip_components,
+        allow_absolute_symlinks=False,
+    )
+    assert_no_escaping_symlinks(destination, description)
+    return verified
+
+
+def resolve_contained_payload(source: Path, root: Path, description: str, label: str) -> Path:
+    """The regular file a declared archive member ultimately names.
+
+    A pinned provider archive legitimately ships alias links next to the
+    real library (`lib/libLLVM.so.22`, `lib/libLLVM-22.so` ->
+    `libLLVM.so.22.1`), so a declared source is allowed to be a link. What
+    it may never be is a link out of the extraction root, a dangling link,
+    or anything other than a regular file once fully resolved — `realpath`
+    collapses the whole chain, so a multi-hop alias cannot smuggle in a
+    target the individual member checks would have caught.
+    """
+    if not source.exists() and not source.is_symlink():
+        fail(f"{description} is missing declared file '{label}'")
+    resolved = Path(os.path.realpath(source))
+    root_real = Path(os.path.realpath(root))
+    try:
+        resolved.relative_to(root_real)
+    except ValueError:
+        fail(
+            f"{description} declares '{label}', which resolves to '{resolved}' outside the "
+            "extracted archive"
+        )
+    if not resolved.is_file():
+        fail(
+            f"{description} declares '{label}', which does not resolve to a regular file "
+            "inside the archive"
+        )
+    return resolved
+
+
+def copy_declared_provider_files(
+    extracted: Path, declared: list[dict], destination_root: Path, description: str
+) -> list[dict]:
+    """Copy only the declared members, each checked to be a real payload.
+
+    An alias link is resolved and staged as a deterministic regular copy of
+    the file it names; undeclared members — including the archive's own
+    alias links — are never staged, because only this list is walked.
+    """
+    staged: list[dict] = []
+    for file_spec in declared:
+        source = extracted / safe_relative_path(file_spec["source"])
+        resolved = resolve_contained_payload(
+            source, extracted, description, file_spec["source"]
+        )
+        if resolved.stat().st_size == 0:
+            fail(f"{description} declares '{file_spec['source']}', which is empty")
+        relative = safe_relative_path(file_spec["path"])
+        target = destination_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resolved, target)
+        entry = {
+            "path": relative.as_posix(),
+            "sha256": compute_digest(target, "sha256"),
+            "size": target.stat().st_size,
+        }
+        archive_relative = resolved.relative_to(Path(os.path.realpath(extracted))).as_posix()
+        if archive_relative != safe_relative_path(file_spec["source"]).as_posix():
+            # The declared source was an alias: record what was actually
+            # copied so the evidence names the real payload.
+            entry["archive_source"] = archive_relative
+        staged.append(entry)
+    return staged
+
+
 def stage_llvm_code_generator(root: Path, manifest: dict, download_dir: Path) -> None:
-    """Overlay a separately pinned LLVM provider into a staged toolchain.
+    """Overlay a separately pinned LLVM provider into a fetched toolchain.
 
     Windows' llvm-mingw archive already contains libLLVM, so its manifest
     declares no overlay. Linux keeps the compact musl cross-toolchain archive
@@ -667,31 +1338,19 @@ def stage_llvm_code_generator(root: Path, manifest: dict, download_dir: Path) ->
     archive = spec.get("archive")
     if archive is None:
         return
-    files = spec.get("files")
-    if not isinstance(files, list) or not files:
-        fail(
-            "a present LLVM code generator with a separate archive must declare a non-empty "
-            "toolchain.llvm_code_generator.files list"
-        )
+    declared = llvm_provider_declared_files(spec)
 
     archive_path = fetch_declared_archive(archive, download_dir)
-    staged_provider = download_dir / f".llvm-provider-{manifest.get('target', 'unknown')}"
-    try:
-        strip_components = int(spec.get("extract", {}).get("strip_components", 0))
-        extract_archive(archive_path, archive["type"], staged_provider, strip_components)
-        for file_spec in files:
-            if not isinstance(file_spec, dict) or "source" not in file_spec or "path" not in file_spec:
-                fail("each LLVM provider file must declare 'source' and 'path'")
-            source = staged_provider / safe_relative_path(file_spec["source"])
-            destination = root / safe_relative_path(file_spec["path"])
-            if not source.is_file():
-                fail(
-                    f"LLVM provider archive '{archive_path.name}' is missing declared file "
-                    f"'{file_spec['source']}'"
-                )
-            copy_path(source, destination)
-    finally:
-        remove_path(staged_provider)
+    description = (
+        f"pinned LLVM provider archive for {manifest.get('target', 'unknown')} "
+        f"('{archive_path.name}')"
+    )
+    with temporary_staging_dir(
+        download_dir, f".llvm-provider-{manifest.get('target', 'unknown')}-"
+    ) as workspace:
+        extracted = workspace / "provider"
+        extract_llvm_provider_archive(spec, archive_path, extracted, description)
+        copy_declared_provider_files(extracted, declared, root, description)
 
 
 def verify_llvm_code_generator(root: Path, manifest: dict) -> Path | None:
@@ -727,14 +1386,111 @@ def verify_llvm_code_generator(root: Path, manifest: dict) -> Path | None:
     return candidate
 
 
-def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
-    manifest = load_manifest(manifest_path)
-    archive = manifest["toolchain"]["archive"]
-    download_path = fetch_declared_archive(archive, download_dir)
+def declared_archive_digest(archive: dict, description: str) -> dict:
+    """The pinned digest of a manifest-declared archive, or a hard error.
 
+    A release input that carries no pinned digest cannot be authenticated,
+    so there is no "unverified but accepted" path here.
+    """
+    digest = archive.get("digest")
+    if not isinstance(digest, dict):
+        fail(f"{description} declares no pinned digest; it cannot be trusted as a release input")
+    algorithm = str(digest.get("algorithm", "")).lower()
+    value = str(digest.get("value", "")).lower()
+    if algorithm not in hashlib.algorithms_guaranteed:
+        fail(f"{description} pins an unsupported digest algorithm {digest.get('algorithm')!r}")
+    if not value:
+        fail(f"{description} pins an empty digest value")
+    return {"algorithm": algorithm, "value": value}
+
+
+def verify_supplied_archive(archive_path: Path, archive: dict, description: str) -> dict:
+    """Authenticate a caller-supplied archive against its pinned digest.
+
+    This is the trust boundary for release staging: everything downstream —
+    extraction, pruning, copying, the recorded provenance — is only as good
+    as this check, so it happens before a single member is read.
+    """
+    digest = declared_archive_digest(archive, description)
+    if not archive_path.is_file():
+        fail(f"{description}: archive not found at {archive_path}")
+    size = archive_path.stat().st_size
+    if size == 0:
+        fail(f"{description}: archive {archive_path} is empty")
+    actual = compute_digest(archive_path, digest["algorithm"]).lower()
+    if actual != digest["value"]:
+        fail(
+            f"{description}: archive {archive_path} does not match the pinned "
+            f"{digest['algorithm']} digest (expected {digest['value']}, got {actual})"
+        )
+    return {"algorithm": digest["algorithm"], "value": actual, "size": size}
+
+
+@contextlib.contextmanager
+def temporary_staging_dir(parent: Path, prefix: str):
+    """A scratch directory beside the release output that always goes away.
+
+    Extraction happens here, never into the bundle: a rejected archive must
+    not be able to leave a partial payload where packaging could pick it up.
+    """
+    parent.mkdir(parents=True, exist_ok=True)
+    path = Path(tempfile.mkdtemp(prefix=prefix, dir=str(parent)))
+    try:
+        yield path
+    finally:
+        remove_path(path)
+
+
+def assert_no_escaping_symlinks(root: Path, description: str) -> None:
+    """Fail if any staged symlink can reach outside its own tree.
+
+    Copying follows symlinks, so a link left pointing at the build host
+    would quietly pull host content into a release package. Links that
+    dangle *inside* the tree are fine — pruning legitimately removes their
+    targets — because they can never name anything the archive did not.
+    """
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        if not path.is_symlink():
+            continue
+        target = os.readlink(path)
+        if os.path.isabs(target) or (len(target) >= 2 and target[1] == ":"):
+            fail(
+                f"{description}: '{path.relative_to(root).as_posix()}' is an absolute symlink "
+                f"to '{target}'; a packaged toolchain must not reference the build host"
+            )
+        resolved = Path(os.path.normpath(path.parent / target))
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            fail(
+                f"{description}: '{path.relative_to(root).as_posix()}' is a symlink to "
+                f"'{target}', which escapes the staged tree"
+            )
+
+
+def prepare_toolchain_from_archive(
+    manifest: dict, archive_path: Path, destination: Path, description: str
+) -> dict:
+    """Verify, safely extract, and prune one pinned toolchain archive.
+
+    The single implementation shared by `fetch-toolchain` (which downloads
+    the archive first) and release staging (which is handed an already
+    downloaded, cached archive and never touches the network). Both get the
+    same digest check, the same member-validated extraction, and the same
+    manifest-driven strip/symlink-fix/prune/wrapper rules.
+    """
+    archive = manifest["toolchain"]["archive"]
+    verified = verify_supplied_archive(archive_path, archive, description)
     strip_components = int(manifest["toolchain"].get("extract", {}).get("strip_components", 0))
-    extract_archive(download_path, archive["type"], destination, strip_components)
+    extract_archive_safely(
+        archive_path,
+        archive["type"],
+        destination,
+        strip_components,
+        allow_absolute_symlinks=True,
+    )
     fix_absolute_symlinks(destination)
+    assert_no_escaping_symlinks(destination, description)
 
     # Ensure all files are writable (zip archives may preserve read-only attributes)
     if os.name == "nt":
@@ -749,10 +1505,22 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
     if prune_config:
         prune_toolchain(destination, prune_config)
 
-    stage_llvm_code_generator(destination, manifest, download_dir)
-
     for wrapper in manifest["stage"].get("wrappers", []):
         create_wrapper(destination, wrapper)
+
+    return verified
+
+
+def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) -> tuple[dict, Path]:
+    manifest = load_manifest(manifest_path)
+    archive = manifest["toolchain"]["archive"]
+    download_path = fetch_declared_archive(archive, download_dir)
+
+    prepare_toolchain_from_archive(
+        manifest, download_path, destination, f"pinned toolchain archive for {manifest['target']}"
+    )
+
+    stage_llvm_code_generator(destination, manifest, download_dir)
 
     # Pruning happens above, so this is the last chance to notice that a
     # glob removed the packaged LLVM code generator `--backend llvm`
@@ -762,80 +1530,146 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
     return manifest, destination
 
 
-def write_install_readme(
-    path: Path,
-    target_spec: dict,
-    asset_name: str,
-    cross_linker_targets: list[str] | None = None,
-) -> None:
-    platform, arch = target_spec["target"].split("-", 1)
-    bundle_kind = target_spec["bundle_kind"]
+def write_install_readme(path: Path, variant: dict, asset_name: str) -> None:
+    """The package README: what this artifact is, and precisely what it can
+    and cannot do. Every claim here is enforced by the compiler itself (see
+    `backend::select` and `backend::no_toolchain`), so it must not overstate
+    a package's capabilities."""
+    target = variant["target"]
+    platform, arch = target.split("-", 1)
+    backend = variant["backend"]
+    components = variant["components"]
+
     if platform == "windows":
         install_hint = "Run install.ps1 from this directory, or keep this directory on PATH."
-        extra = "This bundle keeps oscan.exe next to toolchain/ so bundled compiler discovery works after installation."
-    elif platform == "linux":
-        install_hint = "Run install.sh from this directory, or keep this directory on PATH."
-        manifest = load_manifest(
-            REPO_ROOT / "packaging" / "toolchains" / target_spec["toolchain_manifest"]
-        )
-        llvm_spec = llvm_code_generator_spec(manifest) or {}
-        packages = llvm_spec.get("debian_packages", [])
-        dependency_note = ""
-        if packages:
-            dependency_note = (
-                " The packaged LLVM provider uses standard host shared libraries. "
-                "On Debian/Ubuntu install them with: sudo apt-get install "
-                + " ".join(packages)
-                + "."
-            )
-        extra = (
-            "This full bundle keeps oscan next to toolchain/ so bundled compiler discovery "
-            f"works after installation.{dependency_note}"
-        )
     else:
         install_hint = "Run install.sh from this directory, or copy oscan somewhere on PATH."
-        extra = (
-            f"macOS phase 1 archives ship the {target_spec['binary_name']} binary only; "
-            f"{target_spec['required_host_toolchain']} remains required."
+
+    lines: list[str] = [
+        f"Oscan release asset: {asset_name}",
+        f"Platform: {platform} {arch}",
+        f"Backend: {backend} (this package's only backend, and its default)",
+        "",
+        install_hint,
+        "",
+        "What this package contains",
+        "--------------------------",
+    ]
+    if variant["backend_kind"] == "object":
+        lines.append(
+            f"  oscan compiled with --features {variant['cargo_feature']} only: it emits object "
+            "code directly and never writes or compiles C."
         )
-        if target_spec.get("note_file"):
-            extra = f"{extra} See {target_spec['note_file']}."
-
-    cross_linker_note = ""
-    if cross_linker_targets:
-        targets_list = "\n".join(f"  - cross-linkers/{t}/" for t in cross_linker_targets)
-        cross_linker_note = (
-            "\n"
-            "This bundle also includes static cross-linker sidecars for\n"
-            "cross-compiling `--backend native` freestanding executables to\n"
-            "other Linux targets from this host, without needing an external\n"
-            "toolchain. Each target's directory ships both the linker binary\n"
-            "and its matching freestanding runtime archive:\n"
-            f"{targets_list}\n"
-            "To use one, point oscan at both explicitly:\n"
-            "  OSCAN_NATIVE_LINKER=./cross-linkers/<target>/<triple>-ld \\\n"
-            "  OSCAN_NATIVE_LINKER_FLAVOR=elf \\\n"
-            "  OSCAN_RUNTIME_ARCHIVE_DIR=./cross-linkers/<target> \\\n"
-            "  oscan prog.osc --backend native --native-target <target> -o prog\n"
-            f"This binary's own embedded linker only targets {target_spec['target']};\n"
-            "the sidecars are separate opt-in binaries for the other targets listed above.\n"
+        lines.append(
+            f"  {NATIVE_LINK_DIR_NAME}/  the linker and its runtime libraries, verified against "
+            f"{NATIVE_LINK_DIR_NAME}/{NATIVE_LINK_MANIFEST_NAME} (SHA-256) before every use."
         )
+        lines.append(
+            f"  build/runtime-archives/{target}/  precompiled freestanding runtime archives "
+            f"({', '.join(variant['runtime_profiles'])})."
+        )
+        if "llvm_provider" in components:
+            if variant.get("llvm_provider_source") == "direct-link-sidecar":
+                lines.append(
+                    f"  the LLVM code generator is the single verified "
+                    f"{variant.get('llvm_provider_asset', 'libLLVM')} in {NATIVE_LINK_DIR_NAME}/ "
+                    "— it is shared with the linker rather than duplicated."
+                )
+            else:
+                lines.append(
+                    "  toolchain/  the packaged LLVM code generator only (no clang, no GCC, no "
+                    "headers, no sysroot, no LLVM command-line tools)."
+                )
+        lines += [
+            "",
+            "What this package does NOT do",
+            "-----------------------------",
+            "  --backend c, --emit-c and -o *.c are refused: this build has no C backend.",
+            "  --libc is refused: the hosted runtime needs this machine's CRT/libm.",
+            "  --extra-c/--extra-cflags are refused: there is no C compilation step.",
+            "  extern functions with `str` parameters/returns need a generated C shim and are "
+            "refused for the same reason.",
+            "  No C compiler is bundled, and none is searched for on PATH.",
+        ]
+        if backend == "cranelift" and platform == "windows":
+            lines.append(
+                "  libLLVM in this package is only LLD's runtime dependency; this build has no "
+                "LLVM backend (--backend llvm is not included)."
+            )
+        lines.append(
+            f"  Other backends are not included: --backend {'llvm' if backend == 'cranelift' else 'cranelift'} "
+            "and --backend c report which package to install instead."
+        )
+    else:
+        lines.append(
+            f"  oscan compiled with --features {variant['cargo_feature']} only: it emits C and "
+            "needs a C toolchain to compile it."
+        )
+        if "c_toolchain" in components:
+            lines.append(
+                "  toolchain/  the pinned C toolchain this package uses; oscan finds it beside "
+                "its own executable, never on PATH."
+            )
+        else:
+            lines.append(
+                f"  No toolchain is bundled: {variant.get('required_host_toolchain', 'a host C toolchain')} "
+                "must be installed on this machine."
+            )
+        lines += [
+            "",
+            "What this package does NOT do",
+            "-----------------------------",
+            "  --backend llvm and --backend cranelift are not included; each reports which "
+            "package to install instead.",
+            "  No native-link sidecar, LLVM provider, or freestanding runtime archives are "
+            "shipped.",
+        ]
+        if variant.get("note_file"):
+            lines.append(f"  See {variant['note_file']} for the macOS phase 1 note.")
 
-    text = textwrap.dedent(
-        f"""\
-        Oscan release asset: {asset_name}
-        Platform: {platform} {arch}
-        Bundle type: {bundle_kind}
+    lines += [
+        "",
+        f"Package metadata: {PACKAGE_METADATA_NAME}",
+        "GitHub Releases are the canonical install surface.",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
 
-        {install_hint}
-        {extra}
-        """
-    ) + cross_linker_note + textwrap.dedent(
-        """
-        GitHub Releases are the canonical install surface for phase 1 bundles.
-        """
+
+def write_package_metadata(
+    path: Path,
+    variant: dict,
+    version: str,
+    archive_name: str,
+    bundle_name: str,
+    component_digests: dict,
+) -> None:
+    """Machine-readable record of what this package is, mirroring what the
+    packaged compiler reports through `oscan --version`."""
+    metadata = {
+        "schema_version": 1,
+        "version": version,
+        "target": variant["target"],
+        "backend": variant["backend"],
+        "available_backends": [variant["backend"]],
+        "default_backend": variant["distribution_backend"],
+        "cargo_feature": variant["cargo_feature"],
+        "toolchain_free": variant["toolchain_free"],
+        "components": list(variant["components"]),
+        "runtime_profiles": list(variant["runtime_profiles"]),
+        "archive_name": archive_name,
+        "archive_root": bundle_name,
+        "requirements": {
+            "host_c_toolchain": variant.get("required_host_toolchain")
+            if variant.get("requires_host_compiler")
+            else None,
+            "bundled_c_toolchain": "c_toolchain" in variant["components"],
+        },
+        "component_digests": component_digests,
+    }
+    path.write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
     )
-    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def copy_license_files(source_root: Path, destination_root: Path, globs: list[str]) -> list[str]:
@@ -854,86 +1688,169 @@ def copy_license_files(source_root: Path, destination_root: Path, globs: list[st
     return copied
 
 
-def write_provenance_file(path: Path, manifest: dict, copied_licenses: list[str]) -> None:
-    digest = manifest["toolchain"]["archive"].get("digest")
-    digest_line = (
-        f"Archive digest ({digest['algorithm']}): {digest['value']}"
-        if digest and isinstance(digest, dict)
-        else "Archive digest: not verified"
-    )
-    licenses = "\n".join(f"- {entry}" for entry in copied_licenses) or "- none matched configured globs"
-    text = textwrap.dedent(
-        f"""\
-        Toolchain vendor: {manifest["toolchain"]["vendor"]}
-        Toolchain version: {manifest["toolchain"]["version"]}
-        Target: {manifest["target"]}
-        Archive URL: {manifest["toolchain"]["archive"]["url"]}
-        {digest_line}
+def write_provenance_file(
+    path: Path,
+    manifest: dict,
+    copied_licenses: list[str],
+    verified_archive: dict,
+    source_manifest: str,
+) -> None:
+    """Record which authenticated source archive this toolchain came from.
 
-        Copied license files:
-        {licenses}
-        """
+    The digest written here is the one that was actually computed over the
+    staged archive and matched against the manifest, not a value copied out
+    of the manifest and asserted.
+    """
+    licenses = "\n".join(f"- {entry}" for entry in copied_licenses) or "- none matched configured globs"
+    text = (
+        textwrap.dedent(
+            f"""\
+            Toolchain vendor: {manifest["toolchain"]["vendor"]}
+            Toolchain version: {manifest["toolchain"]["version"]}
+            Target: {manifest["target"]}
+            Source manifest: {source_manifest}
+            Archive URL: {manifest["toolchain"]["archive"]["url"]}
+            Archive digest ({verified_archive["algorithm"]}): {verified_archive["value"]}
+            Archive size (bytes): {verified_archive["size"]}
+
+            Copied license files:
+            """
+        )
+        + licenses
+        + "\n"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
+def _is_executable_entry(relative: PurePosixPath, source: Path | None = None) -> bool:
+    """Which staged files carry the executable bit in a package.
+
+    Canonicalized rather than copied from the build machine: a Windows
+    checkout has no Unix permission bits to preserve, and a Linux one may
+    carry whatever umask the runner had. The compiler binary, the install
+    script, and the staged linker/runtime binaries must be executable; data
+    files must not be.
+    """
+    name = relative.name
+    # Preserve a packaged toolchain's own executability: any source file
+    # with an executable bit set stays executable (nested bin/ and libexec/
+    # tools included). Windows-hosted assembly has no such bits, which is
+    # why the known package executables below are listed explicitly.
+    if source is not None and not source.is_dir():
+        try:
+            if source.stat().st_mode & 0o111:
+                return True
+        except OSError:
+            pass
+    if name in ("oscan", "install.sh"):
+        return True
+    if relative.parts and relative.parts[0] == NATIVE_LINK_DIR_NAME:
+        return relative.suffix in ("", ".exe", ".dll", ".so") or ".so." in name
+    if relative.suffix in (".sh", ".exe"):
+        return True
+    return False
+
+
+def _archive_entries(bundle_dir: Path) -> list[tuple[PurePosixPath, Path]]:
+    """Every staged entry, in one deterministic (sorted, POSIX) order."""
+    entries = [
+        (PurePosixPath(item.relative_to(bundle_dir).as_posix()), item)
+        for item in bundle_dir.rglob("*")
+    ]
+    return sorted(entries, key=lambda pair: pair[0].as_posix())
+
+
 def create_zip_archive(bundle_dir: Path, archive_path: Path) -> None:
+    """Byte-for-byte reproducible ZIP: sorted entries, one fixed timestamp,
+    canonical modes, and no host-dependent metadata (no external tool, no
+    source mtimes, no creator-system quirks)."""
     if archive_path.exists():
         archive_path.unlink()
-    result = subprocess.run(
-        ["tar", "-a", "-cf", str(archive_path), "-C", str(bundle_dir.parent), bundle_dir.name],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
+    stamp = time.gmtime(archive_epoch())
+    date_time = (
+        stamp.tm_year,
+        stamp.tm_mon,
+        stamp.tm_mday,
+        stamp.tm_hour,
+        stamp.tm_min,
+        stamp.tm_sec,
     )
-    if result.returncode != 0:
-        fail(f"failed to create {archive_path.name}: {result.stderr.strip()}")
+    root = PurePosixPath(bundle_dir.name)
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for relative, source in _archive_entries(bundle_dir):
+            arcname = (root / relative).as_posix()
+            if source.is_dir():
+                info = zipfile.ZipInfo(arcname + "/", date_time=date_time)
+                info.external_attr = ((0o40000 | 0o755) << 16) | 0x10
+                info.create_system = 3
+                archive.writestr(info, b"")
+                continue
+            mode = 0o755 if _is_executable_entry(relative, source) else 0o644
+            info = zipfile.ZipInfo(arcname, date_time=date_time)
+            info.external_attr = (0o100000 | mode) << 16
+            info.create_system = 3
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, source.read_bytes())
 
 
-def normalize_tarinfo(info: tarfile.TarInfo) -> tarfile.TarInfo:
+def normalize_tarinfo(info: tarfile.TarInfo, mode: int | None = None) -> tarfile.TarInfo:
     info.uid = 0
     info.gid = 0
     info.uname = ""
     info.gname = ""
     info.mtime = archive_epoch()
+    if mode is not None:
+        info.mode = mode
+    info.pax_headers = {}
     return info
 
 
 def create_tar_archive(bundle_dir: Path, archive_path: Path, archive_format: str) -> None:
-    mode = {
-        "tar.gz": "w:gz",
-        "tar.xz": "w:xz",
-    }.get(archive_format)
-    if mode is None:
+    """Byte-for-byte reproducible tar.gz/tar.xz.
+
+    Sorted entries, normalized ownership/timestamps/modes, and — for gzip —
+    a fixed header mtime with no embedded file name, which is the part
+    `tarfile`'s own gzip mode would otherwise take from the clock and the
+    output path.
+    """
+    if archive_format not in ("tar.gz", "tar.xz"):
         fail(f"unsupported tar archive format '{archive_format}'")
     if archive_path.exists():
         archive_path.unlink()
-    entries = sorted(
-        [bundle_dir] + list(bundle_dir.rglob("*")),
-        key=lambda item: item.relative_to(bundle_dir.parent).as_posix(),
-    )
-    tar_kwargs: dict[str, object] = {"format": tarfile.GNU_FORMAT}
-    if archive_format == "tar.gz":
-        tar_kwargs["compresslevel"] = 9
-    with tarfile.open(archive_path, mode, **tar_kwargs) as archive:
-        for entry in entries:
-            arcname = entry.relative_to(bundle_dir.parent).as_posix()
-            if entry.is_symlink():
-                info = tarfile.TarInfo(arcname)
-                info.type = tarfile.SYMTYPE
-                info.linkname = os.readlink(entry)
-                info.mode = entry.lstat().st_mode & 0o777
-                archive.addfile(normalize_tarinfo(info))
+
+    def write_members(archive: tarfile.TarFile) -> None:
+        root = PurePosixPath(bundle_dir.name)
+        info = archive.gettarinfo(str(bundle_dir), root.as_posix())
+        archive.addfile(normalize_tarinfo(info, 0o755))
+        for relative, source in _archive_entries(bundle_dir):
+            arcname = (root / relative).as_posix()
+            if source.is_symlink():
+                link = tarfile.TarInfo(arcname)
+                link.type = tarfile.SYMTYPE
+                link.linkname = os.readlink(source)
+                archive.addfile(normalize_tarinfo(link, 0o777))
                 continue
-            if entry.is_dir():
-                info = archive.gettarinfo(str(entry), arcname)
-                archive.addfile(normalize_tarinfo(info))
+            if source.is_dir():
+                info = archive.gettarinfo(str(source), arcname)
+                archive.addfile(normalize_tarinfo(info, 0o755))
                 continue
-            with entry.open("rb") as handle:
-                info = archive.gettarinfo(str(entry), arcname)
-                archive.addfile(normalize_tarinfo(info), handle)
+            mode = 0o755 if _is_executable_entry(relative, source) else 0o644
+            info = archive.gettarinfo(str(source), arcname)
+            with source.open("rb") as handle:
+                archive.addfile(normalize_tarinfo(info, mode), handle)
+
+    if archive_format == "tar.xz":
+        with tarfile.open(archive_path, "w:xz", format=tarfile.GNU_FORMAT) as archive:
+            write_members(archive)
+        return
+
+    with archive_path.open("wb") as raw:
+        with gzip.GzipFile(
+            filename="", mode="wb", fileobj=raw, compresslevel=9, mtime=archive_epoch()
+        ) as compressed:
+            with tarfile.open(fileobj=compressed, mode="w", format=tarfile.GNU_FORMAT) as archive:
+                write_members(archive)
 
 
 def _release_bundle_relative_path(position: str, field_name: str, target: str) -> Path:
@@ -1028,7 +1945,7 @@ def validate_runtime_archive_release_toolchain(
         )
 
     # Schema 2 archives must carry the precompiled native shim (§3.2 of
-    # docs/design/native-link-embedding.md); the freestanding native backend
+    # docs/design/native-link-embedding.md); the freestanding object backends
     # no longer compiles osc_native_shim.c locally, so a schema-2 archive
     # that is missing the shim member would silently break that contract.
     if manifest.get("schema_version") == 2:
@@ -1059,80 +1976,699 @@ def validate_runtime_archive_release_toolchain(
         )
 
 
-def stage_native_runtime_assets(
-    contract: dict,
-    target_spec: dict,
-    bundle_dir: Path,
-    runtime_archive_dir: Path,
-) -> None:
-    target = target_spec["target"]
-    native_spec = contract["native_backend"]
+def stage_direct_link_sidecar(
+    bundle_dir: Path, variant: dict, native_link_dir: Path
+) -> dict:
+    """Stage the prepared native-link asset set by explicit allowlist.
+
+    Exactly the manifest plus the files that manifest declares are copied,
+    each verified against its declared SHA-256 first. Nothing else in the
+    prepared directory is staged, so a stray file there can never reach a
+    package.
+    """
+    manifest_path = native_link_dir / NATIVE_LINK_MANIFEST_NAME
+    if not manifest_path.is_file():
+        fail(
+            f"native-link asset manifest not found: {manifest_path} (run "
+            "scripts/prepare-embed-assets.ps1|.sh for this target first)"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read native-link asset manifest {manifest_path}: {exc}")
+    if manifest.get("schema_version") != 1:
+        fail(
+            f"unsupported native-link asset manifest schema in {manifest_path}: "
+            f"{manifest.get('schema_version')!r}"
+        )
+    if manifest.get("target") != variant["target"]:
+        fail(
+            f"native-link asset manifest {manifest_path} is staged for target "
+            f"{manifest.get('target')!r}, expected {variant['target']!r}"
+        )
+
+    entries = [manifest.get("linker")] + list(manifest.get("assets", []))
+    destination_root = bundle_dir / NATIVE_LINK_DIR_NAME
+    staged: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            fail(f"native-link asset manifest {manifest_path} has a malformed entry")
+        for key in ("role", "name", "install_subpath", "sha256"):
+            if not entry.get(key):
+                fail(f"native-link asset manifest {manifest_path} entry is missing '{key}'")
+        relative = safe_relative_path(entry["install_subpath"])
+        source = native_link_dir / relative
+        if not source.is_file():
+            fail(
+                f"native-link asset '{entry['name']}' is missing from {native_link_dir} "
+                f"(expected {source})"
+            )
+        actual = compute_digest(source, "sha256")
+        if actual.lower() != str(entry["sha256"]).lower():
+            fail(
+                f"native-link asset '{entry['name']}' digest mismatch in {native_link_dir}: "
+                f"manifest has {entry['sha256']}, actual is {actual}"
+            )
+        copy_path(source, destination_root / relative)
+        staged.append(relative.as_posix())
+    copy_path(manifest_path, destination_root / NATIVE_LINK_MANIFEST_NAME)
+
+    linker = manifest.get("linker") or {}
+    linker_dir = safe_relative_path(linker["install_subpath"]).parent
+    for entry in manifest.get("assets", []):
+        if entry.get("role") != "linker_runtime":
+            continue
+        if safe_relative_path(entry["install_subpath"]).parent != linker_dir:
+            fail(
+                f"native-link runtime library '{entry['name']}' is staged outside the linker's "
+                "own directory; the compiler refuses a package whose linker cannot find its "
+                "sibling runtime libraries"
+            )
+    return {
+        "manifest": manifest,
+        "staged": staged,
+        "digest": compute_digest(manifest_path, "sha256"),
+    }
+
+
+def stage_freestanding_runtime_archives(
+    bundle_dir: Path, variant: dict, runtime_archive_dir: Path
+) -> dict:
+    """Stage exactly the freestanding archive/manifest pairs this variant
+    declares — no hosted archive, no runtime sources, no runtime builder."""
+    target = variant["target"]
     runtime_contract = load_runtime_archive_contract(RUNTIME_ARCHIVE_CONTRACT_PATH)
-
-    source_destination = bundle_dir / _release_bundle_relative_path(
-        native_spec["runtime_source_position"],
-        "native_backend.runtime_source_position",
-        target,
-    )
-    for source_name in native_spec["source_files"]:
-        source_path = REPO_ROOT / "runtime" / safe_relative_path(source_name)
-        if not source_path.is_file():
-            fail(f"native runtime source not found: {source_path}")
-        copy_path(source_path, source_destination / source_name)
-
-    archive_destination = bundle_dir / _release_bundle_relative_path(
-        native_spec["runtime_archive_position_template"],
-        "native_backend.runtime_archive_position_template",
-        target,
-    )
-    for mode in target_spec["native_runtime_modes"]:
-        mode_spec = runtime_contract["modes"][mode]
+    destination = bundle_dir / "build" / "runtime-archives" / target
+    digests: dict = {}
+    for profile in variant["runtime_profiles"]:
+        if profile not in FREESTANDING_PROFILES:
+            fail(f"runtime profile '{profile}' is not a freestanding profile")
+        mode_spec = runtime_contract["modes"][profile]
         archive_path = runtime_archive_dir / mode_spec["archive_name"]
         manifest_path = runtime_archive_dir / mode_spec["manifest_name"]
         if not archive_path.is_file() or not manifest_path.is_file():
             fail(
-                f"native runtime {mode} archive pair for '{target}' is missing from "
-                f"{runtime_archive_dir}; run scripts/build-runtime-archive.ps1|.sh "
-                f"--target {target} --mode {mode} before staging the release"
+                f"freestanding runtime {profile} archive pair for '{target}' is missing from "
+                f"{runtime_archive_dir}; build it before staging the release"
             )
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             fail(f"cannot read native runtime manifest {manifest_path}: {exc}")
-        if manifest.get("target") != target or manifest.get("mode") != mode:
+        if manifest.get("target") != target or manifest.get("mode") != profile:
             fail(
                 f"native runtime manifest {manifest_path} identifies "
-                f"{manifest.get('target')}/{manifest.get('mode')}, expected {target}/{mode}"
+                f"{manifest.get('target')}/{manifest.get('mode')}, expected {target}/{profile}"
             )
         validate_runtime_archive_release_toolchain(
             runtime_contract, target, manifest, manifest_path
         )
-        expected_digest = manifest.get("sha256")
         actual_digest = compute_digest(archive_path, "sha256")
-        if expected_digest != actual_digest:
+        if manifest.get("sha256") != actual_digest:
             fail(
-                f"native runtime archive digest mismatch for {archive_path}: "
-                f"manifest has {expected_digest!r}, actual is {actual_digest}"
+                f"native runtime archive digest mismatch for {archive_path}: manifest has "
+                f"{manifest.get('sha256')!r}, actual is {actual_digest}"
             )
-        copy_path(archive_path, archive_destination / archive_path.name)
-        copy_path(manifest_path, archive_destination / manifest_path.name)
+        copy_path(archive_path, destination / archive_path.name)
+        copy_path(manifest_path, destination / manifest_path.name)
+        digests[archive_path.name] = actual_digest
+    return digests
+
+
+def stage_llvm_provider_component(
+    bundle_dir: Path, variant: dict, sidecar: dict | None, provider_archive: Path | None
+) -> dict:
+    """Make the packaged LLVM code generator available to this package.
+
+    Windows shares the single verified `libLLVM` already staged in
+    `native-link/` — the provider search reaches into that directory and the
+    compiler verifies the file against the sidecar manifest before loading
+    it, so staging a second copy would only duplicate ~80 MB.
+
+    Linux authenticates the pinned provider *archive* against the digest in
+    this repository's toolchain manifest, extracts only the members that
+    manifest declares, and stages them into the executable-relative
+    `toolchain/` layout the provider already searches: no clang, no GCC, no
+    headers, no sysroot, no LLVM command-line tools. The archive is the only
+    input; nothing about the payload is taken on the word of a file that
+    travelled with it.
+    """
+    source = variant.get("llvm_provider_source")
+    if source == "direct-link-sidecar":
+        asset_name = variant["llvm_provider_asset"]
+        if sidecar is None:
+            fail("the LLVM provider is shared with the native-link sidecar, which was not staged")
+        declared = [
+            entry
+            for entry in sidecar["manifest"].get("assets", [])
+            if entry.get("role") == "linker_runtime" and entry.get("name") == asset_name
+        ]
+        if not declared:
+            fail(
+                f"this package shares its LLVM code generator with the native-link sidecar, but "
+                f"'{asset_name}' is not declared there as a linker_runtime asset"
+            )
+        return {
+            "source": "direct-link-sidecar",
+            "path": f"{NATIVE_LINK_DIR_NAME}/{declared[0]['install_subpath']}",
+            "sha256": declared[0]["sha256"],
+        }
+
+    manifest_path = variant.get("toolchain_manifest_path")
+    if manifest_path is None:
+        fail("a manifest-sourced LLVM provider needs the target's toolchain manifest")
+    manifest_path = Path(manifest_path)
+    manifest = load_manifest(manifest_path)
+    if manifest.get("target") != variant["target"]:
+        fail(
+            f"toolchain manifest {manifest_path} describes target {manifest.get('target')!r}, "
+            f"but this package targets {variant['target']!r}"
+        )
+    spec = llvm_code_generator_spec(manifest)
+    if spec is None or spec.get("status") != "present":
+        fail(
+            f"target '{variant['target']}' declares no packaged LLVM code generator, so an "
+            "llvm variant cannot be staged for it"
+        )
+    if not isinstance(spec.get("archive"), dict):
+        fail(
+            f"target '{variant['target']}' embeds its LLVM code generator in the toolchain "
+            "archive; it has no separately pinned provider archive to stage"
+        )
+    if provider_archive is None:
+        fail(
+            "staging an LLVM package for this target needs --llvm-provider-archive (the "
+            "already downloaded, digest-pinned provider archive); release staging never "
+            "downloads"
+        )
+    provider_archive = Path(provider_archive)
+    declared = llvm_provider_declared_files(spec)
+    description = (
+        f"pinned LLVM provider archive for {variant['target']} "
+        f"({manifest_path.name} -> '{provider_archive.name}')"
+    )
+    toolchain_root = bundle_dir / "toolchain"
+    with temporary_staging_dir(
+        bundle_dir.parent, f".llvm-provider-{variant['target']}-"
+    ) as workspace:
+        extracted = workspace / "provider"
+        verified = extract_llvm_provider_archive(
+            spec, provider_archive, extracted, description
+        )
+        staged = copy_declared_provider_files(
+            extracted, declared, toolchain_root, description
+        )
+
+    generator = verify_llvm_code_generator(toolchain_root, manifest)
+    provenance = {
+        "schema_version": 1,
+        "target": variant["target"],
+        "source_manifest": manifest_path.name,
+        "source_archive": {
+            "url": spec["archive"]["url"],
+            "type": spec["archive"]["type"],
+            "digest": {"algorithm": verified["algorithm"], "value": verified["value"]},
+            "size": verified["size"],
+        },
+        "staged_root": "toolchain",
+        "files": sorted(staged, key=lambda entry: entry["path"]),
+    }
+    write_provider_provenance_evidence(
+        bundle_dir / "LICENSES" / "llvm-provider" / PROVIDER_PROVENANCE_NAME, provenance
+    )
+    return {
+        "source": "toolchain-manifest",
+        "path": f"toolchain/{safe_relative_path(spec['path']).as_posix()}",
+        "sha256": compute_digest(generator, "sha256") if generator else None,
+        "staged": [entry["path"] for entry in staged],
+        "source_manifest": manifest_path.name,
+        "source_archive_digest": {
+            "algorithm": verified["algorithm"],
+            "value": verified["value"],
+        },
+    }
+
+
+def write_provider_provenance_evidence(path: Path, provenance: dict) -> None:
+    """Write the staged provider's provenance record.
+
+    This file is *output*, never input: it states which pinned archive was
+    verified and what was actually staged from it. Nothing in the packaging
+    pipeline reads it back to decide whether a payload can be trusted.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n"
+    )
+
+
+def llvm_provider_staged_paths(manifest: dict) -> set[str]:
+    """Every toolchain-relative path the separately pinned LLVM provider
+    overlay contributes, derived from the manifest rather than guessed from
+    file names.
+
+    A C package must ship the complete C toolchain and *none* of this: the
+    provider is only there for `--backend llvm`, which a C package does not
+    contain, and it is by far the largest single payload in the bundle.
+    """
+    spec = llvm_code_generator_spec(manifest)
+    if spec is None:
+        return set()
+    # Only a *separately overlaid* provider is excludable. Windows' llvm-mingw
+    # archive integrates libLLVM into the toolchain itself: clang.exe links
+    # against it, so removing it from a Windows C package would break the very
+    # compiler that package exists to ship. Such a manifest declares no
+    # provider archive of its own, and nothing is excluded here.
+    if not spec.get("archive"):
+        return set()
+    paths: set[str] = set()
+    declared = spec.get("path")
+    if declared:
+        paths.add(safe_relative_path(declared).as_posix())
+    for file_spec in spec.get("files", []) or []:
+        if isinstance(file_spec, dict) and file_spec.get("path"):
+            paths.add(safe_relative_path(file_spec["path"]).as_posix())
+    for file_spec in spec.get("notice_files", []) or []:
+        if isinstance(file_spec, dict) and file_spec.get("path"):
+            paths.add(safe_relative_path(file_spec["path"]).as_posix())
+    for extra in spec.get("metadata_files", []) or []:
+        paths.add(safe_relative_path(extra).as_posix())
+    return paths
+
+
+def resolve_declared_archive(
+    archive: dict, download_dir: Path, description: str, allow_download: bool
+) -> tuple[Path, dict]:
+    """The verified local path of a pinned archive, downloading only if asked.
+
+    Staging is handed archives by CI and must never reach the network, so
+    the download is opt-in; the digest check is not.
+    """
+    url = archive["url"]
+    file_name = Path(urllib.parse.urlparse(url).path).name
+    if not file_name:
+        fail(f"cannot derive archive file name from {url}")
+    archive_path = download_dir / file_name
+    if not archive_path.is_file():
+        if not allow_download:
+            fail(
+                f"{description}: {archive_path} is not present in the download cache and "
+                "downloading was not requested"
+            )
+        download_dir.mkdir(parents=True, exist_ok=True)
+        download_file(url, archive_path)
+    verified = verify_supplied_archive(archive_path, archive, description)
+    return archive_path, verified
+
+
+def manifest_component_archive(manifest: dict, component: str) -> tuple[dict, str]:
+    """The pinned archive spec for one manifest component."""
+    target = manifest.get("target", "unknown")
+    if component == "toolchain":
+        return manifest["toolchain"]["archive"], f"pinned toolchain archive for {target}"
+    if component == "llvm-provider":
+        spec = llvm_code_generator_spec(manifest)
+        if spec is None or spec.get("status") != "present":
+            fail(f"target '{target}' declares no packaged LLVM code generator")
+        archive = spec.get("archive")
+        if not isinstance(archive, dict):
+            fail(
+                f"target '{target}' embeds its LLVM code generator in the toolchain archive; "
+                "it has no separately pinned provider archive"
+            )
+        return archive, f"pinned LLVM provider archive for {target}"
+    fail(f"unknown archive component '{component}'")
+
+
+def resolve_archive_command(args: argparse.Namespace) -> int:
+    """Print the verified local path of a manifest-pinned archive.
+
+    This is how CI turns "the manifest pins X" into the concrete
+    `--toolchain-archive` / `--llvm-provider-archive` input for staging:
+    download once (`--download`), then resolve offline as often as needed.
+    """
+    manifest = load_manifest(Path(args.manifest).resolve())
+    archive, description = manifest_component_archive(manifest, args.component)
+    archive_path, _ = resolve_declared_archive(
+        archive, Path(args.download_dir).resolve(), description, args.download
+    )
+    print(str(archive_path))
+    return 0
+
+
+def prepare_llvm_provider(args: argparse.Namespace) -> int:
+    """Download (once) and verify the pinned provider archive, then print it.
+
+    CI runs this per target and feeds the printed path straight to
+    `stage-release --llvm-provider-archive`. The archive itself is the
+    release input; `--extract-to` only unpacks the manifest-declared members
+    for human inspection and is never consulted by packaging.
+    """
+    manifest_path = Path(args.manifest).resolve()
+    manifest = load_manifest(manifest_path)
+    target = manifest["target"]
+    spec = llvm_code_generator_spec(manifest)
+    if spec is None or spec.get("status") != "present":
+        fail(f"target '{target}' declares no packaged LLVM code generator to prepare")
+    if not isinstance(spec.get("archive"), dict):
+        fail(
+            f"target '{target}' embeds its LLVM code generator in the toolchain archive; it has "
+            "no separately pinned provider archive to prepare"
+        )
+    declared = llvm_provider_declared_files(spec)
+
+    download_dir = Path(args.download_dir).resolve()
+    description = f"pinned LLVM provider archive for {target} ({manifest_path.name})"
+    if args.archive:
+        archive_path = Path(args.archive).resolve()
+        verify_supplied_archive(archive_path, spec["archive"], description)
+    else:
+        archive_path, _ = resolve_declared_archive(
+            spec["archive"], download_dir, description, not args.no_download
+        )
+
+    if args.extract_to:
+        inspection = Path(args.extract_to).resolve()
+        with temporary_staging_dir(inspection.parent, f".provider-inspect-{target}-") as workspace:
+            extracted = workspace / "provider"
+            extract_llvm_provider_archive(spec, archive_path, extracted, description)
+            ensure_clean_dir(inspection)
+            copy_declared_provider_files(extracted, declared, inspection, description)
+        print(
+            f"Extracted {len(declared)} declared provider file(s) to {inspection} for "
+            "inspection only; staging consumes the archive itself",
+            file=sys.stderr,
+        )
+
+    print(str(archive_path))
+    return 0
+
+
+def assert_toolchain_matches_manifest(
+    root: Path, manifest: dict, variant: dict, description: str
+) -> None:
+    """The staged tree really is this target's declared toolchain.
+
+    File names alone prove nothing, so every check here is driven by the
+    manifest: the declared runtime compiler and archiver must exist as real,
+    non-empty, executable files at their declared paths, and the target the
+    manifest describes must be the target being packaged.
+    """
+    if manifest.get("target") != variant["target"]:
+        fail(
+            f"{description}: manifest describes target {manifest.get('target')!r}, but this "
+            f"package targets {variant['target']!r}"
+        )
+    runtime = manifest["toolchain"].get("runtime")
+    if not isinstance(runtime, dict):
+        fail(f"{description}: manifest declares no runtime toolchain to verify")
+    for role in ("compiler", "archiver"):
+        relative = safe_relative_path(runtime[role]["path"])
+        candidate = root / relative
+        if not candidate.is_file():
+            fail(
+                f"{description}: the archive does not provide the manifest-declared {role} "
+                f"'{relative.as_posix()}'"
+            )
+        if candidate.stat().st_size == 0:
+            fail(f"{description}: the manifest-declared {role} '{relative.as_posix()}' is empty")
+        # PE binaries carry no Unix mode inside a zip, so the executable bit
+        # is only meaningful for the archives (and hosts) that record it.
+        if os.name != "nt" and relative.suffix.lower() != ".exe":
+            if not os.access(candidate, os.X_OK):
+                fail(
+                    f"{description}: the manifest-declared {role} '{relative.as_posix()}' is "
+                    "not executable"
+                )
+
+
+def assert_c_toolchain_provider_layout(root: Path, manifest: dict, description: str) -> None:
+    """A C package's toolchain must be exactly the base archive.
+
+    Windows' llvm-mingw archive integrates libLLVM — `clang.exe` links
+    against it — so it has to survive pruning. Linux overlays its provider
+    from a *separate* pinned archive, so the base toolchain archive must not
+    already contain it; if it does, the supplied archive is not the base
+    archive this manifest pins.
+    """
+    overlaid = llvm_provider_staged_paths(manifest)
+    if overlaid:
+        present = sorted(
+            relative for relative in overlaid if (root / safe_relative_path(relative)).exists()
+        )
+        if present:
+            fail(
+                f"{description}: the base toolchain archive already contains the separately "
+                f"overlaid LLVM provider ({', '.join(present)}); a C package stages the base "
+                "archive only"
+            )
+        return
+    spec = llvm_code_generator_spec(manifest)
+    if spec is not None and spec.get("status") == "present":
+        # Integrated provider: the C compiler in this package links against
+        # it, so its absence is a broken package, not a smaller one.
+        verify_llvm_code_generator(root, manifest)
+
+
+def copy_trusted_toolchain_tree(
+    source_root: Path, destination_root: Path, excluded: set[str], description: str
+) -> list[str]:
+    """Copy an extracted toolchain into the bundle, entry by entry.
+
+    Explicit rather than `copytree`: every entry is classified before it is
+    copied, the manifest-declared LLVM provider paths are skipped, and a
+    symlink that resolves outside the extracted tree is an error instead of
+    a silent copy of whatever the build host happens to have there.
+    """
+    skipped: list[str] = []
+    root = source_root.resolve()
+    for item in sorted(source_root.rglob("*"), key=lambda path: path.as_posix()):
+        relative = item.relative_to(source_root).as_posix()
+        if relative in excluded:
+            skipped.append(relative)
+            continue
+        if item.is_symlink():
+            immediate = Path(os.path.normpath(item.parent / os.readlink(item)))
+            resolved = Path(os.path.realpath(item))
+            for candidate in (immediate, resolved):
+                try:
+                    candidate.relative_to(root)
+                except ValueError:
+                    fail(
+                        f"{description}: staged entry '{relative}' is a symlink leaving the "
+                        "extracted toolchain"
+                    )
+            if resolved.is_dir():
+                # Directory links are not walked: the tree is copied as
+                # files, and following one would either duplicate the whole
+                # toolchain (sysroots ship `usr -> .`) or loop.
+                print(
+                    f"note: {description}: skipping directory symlink '{relative}'",
+                    file=sys.stderr,
+                )
+                continue
+            if not resolved.is_file():
+                # A link whose in-tree target pruning removed: it can only
+                # ever have named something from this archive, so dropping
+                # it cannot leak host content.
+                continue
+            shutil.copy2(resolved, _prepared_destination(destination_root / Path(relative)))
+            continue
+        if item.is_dir():
+            continue
+        if not item.is_file():
+            fail(f"{description}: staged entry '{relative}' is not a regular file")
+        shutil.copy2(item, _prepared_destination(destination_root / Path(relative)))
+    return skipped
+
+
+def _prepared_destination(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def stage_c_toolchain_component(
+    bundle_dir: Path, variant: dict, toolchain_archive: Path
+) -> dict:
+    """Stage the pinned C toolchain from its authenticated source archive.
+
+    The archive — not a directory somebody prepared earlier — is the
+    authority: it is checked against the digest this repository's manifest
+    pins, extracted member by member into a scratch directory, pruned by the
+    manifest's own rules, checked to actually be this target's toolchain,
+    and only then copied into the sibling `toolchain/` directory the
+    compiler's secure lookup expects.
+    """
+    toolchain_archive = Path(toolchain_archive)
+    manifest_path = variant.get("toolchain_manifest_path")
+    if manifest_path is None:
+        fail(f"target '{variant['target']}' declares no toolchain manifest to stage")
+    manifest_path = Path(manifest_path)
+    manifest = load_manifest(manifest_path)
+    if manifest["stage"]["root"] != "toolchain":
+        fail(
+            f"manifest stage root '{manifest['stage']['root']}' does not match the sibling "
+            "toolchain layout the release contract requires"
+        )
+    description = (
+        f"pinned C toolchain archive for {variant['target']} "
+        f"({manifest_path.name} -> '{toolchain_archive.name}')"
+    )
+    destination = bundle_dir / "toolchain"
+    # A C package ships the complete C toolchain and none of the separately
+    # overlaid LLVM provider: the excluded set comes from the manifest's own
+    # declaration, never from a name guess.
+    excluded = llvm_provider_staged_paths(manifest)
+    with temporary_staging_dir(
+        bundle_dir.parent, f".c-toolchain-{variant['target']}-"
+    ) as workspace:
+        extracted = workspace / "toolchain"
+        verified = prepare_toolchain_from_archive(
+            manifest, toolchain_archive, extracted, description
+        )
+        assert_toolchain_matches_manifest(extracted, manifest, variant, description)
+        assert_c_toolchain_provider_layout(extracted, manifest, description)
+        copy_trusted_toolchain_tree(extracted, destination, excluded, description)
+        copied_licenses = copy_license_files(
+            extracted,
+            bundle_dir / "LICENSES" / "toolchain",
+            manifest["stage"].get("license_globs", []),
+        )
+    copy_path(manifest_path, bundle_dir / Path(variant["toolchain_manifest"]).name)
+    write_provenance_file(
+        bundle_dir / "LICENSES" / "toolchain-source.txt",
+        manifest,
+        copied_licenses,
+        verified,
+        manifest_path.name,
+    )
+    return {
+        "vendor": manifest["toolchain"]["vendor"],
+        "version": manifest["toolchain"]["version"],
+        "source_manifest": manifest_path.name,
+        "source_archive": {
+            "url": manifest["toolchain"]["archive"]["url"],
+            "type": manifest["toolchain"]["archive"]["type"],
+            "digest": {"algorithm": verified["algorithm"], "value": verified["value"]},
+            "size": verified["size"],
+        },
+    }
+
+
+C_COMPILER_EXECUTABLE_NAMES = (
+    "clang",
+    "clang.exe",
+    "clang++",
+    "clang++.exe",
+    "cc",
+    "cc.exe",
+    "gcc",
+    "gcc.exe",
+    "g++",
+    "g++.exe",
+    "cl.exe",
+    "cpp",
+    "cpp.exe",
+)
+
+
+def assert_object_package_is_toolchain_free(bundle_dir: Path, variant: dict) -> None:
+    """Belt-and-braces denylist: an object package may not contain a C
+    compiler, C headers, or a sysroot, whatever the allowlists staged."""
+    for path in sorted(bundle_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle_dir).as_posix()
+        name = path.name
+        if name in C_COMPILER_EXECUTABLE_NAMES:
+            fail(
+                f"{variant['target']}/{variant['backend']} package must be toolchain-free, but "
+                f"it contains a C compiler executable: {relative}"
+            )
+        if name.endswith(".h") and not relative.startswith("native-link/"):
+            fail(
+                f"{variant['target']}/{variant['backend']} package must be toolchain-free, but "
+                f"it contains a C header: {relative}"
+            )
+        if "/sysroot/" in f"/{relative}" or "/include/" in f"/{relative}":
+            fail(
+                f"{variant['target']}/{variant['backend']} package must be toolchain-free, but "
+                f"it contains toolchain headers/sysroot: {relative}"
+            )
+    for forbidden in ("native-runtime", "cross-linkers"):
+        if (bundle_dir / forbidden).exists():
+            fail(
+                f"{variant['target']}/{variant['backend']} package must not ship '{forbidden}/'"
+            )
+    hosted = bundle_dir / "build" / "runtime-archives" / variant["target"] / "libosc_runtime_hosted.a"
+    if hosted.exists():
+        fail("an object package must not ship the hosted runtime archive")
+
+
+def assert_c_package_has_no_object_payload(bundle_dir: Path, variant: dict) -> None:
+    for forbidden in (NATIVE_LINK_DIR_NAME, "build", "native-runtime", "cross-linkers"):
+        if (bundle_dir / forbidden).exists():
+            fail(
+                f"{variant['target']}/{variant['backend']} is a C package and must not ship "
+                f"'{forbidden}/'"
+            )
+
+
+REMOVED_STAGING_INPUTS = {
+    "toolchain_dir": (
+        "--toolchain-dir",
+        "--toolchain-archive",
+        "a prepared toolchain directory is not an authenticated release input: its contents "
+        "cannot be checked against the digest the toolchain manifest pins",
+    ),
+    "llvm_provider_dir": (
+        "--llvm-provider-dir",
+        "--llvm-provider-archive",
+        "a prepared provider directory carried its own provenance record, which is "
+        "self-asserted: only the pinned source archive can be authenticated",
+    ),
+}
+
+
+class RemovedOption(argparse.Action):
+    """Refuse a removed input instead of quietly accepting it."""
+
+    def __init__(self, option_strings, dest, replacement: str = "", reason: str = "", **kwargs):
+        super().__init__(option_strings, dest, **kwargs)
+        self.replacement = replacement
+        self.reason = reason
+
+    def __call__(self, parser, namespace, values, option_string=None) -> None:
+        fail(
+            f"{option_string} has been removed: {self.reason}. Pass {self.replacement} "
+            "instead (see 'release_tools.py resolve-archive')."
+        )
+
+
+def reject_removed_staging_inputs(args: argparse.Namespace) -> None:
+    """Also refuse the removed inputs when the namespace is built directly."""
+    for dest, (option, replacement, reason) in REMOVED_STAGING_INPUTS.items():
+        if getattr(args, dest, None):
+            fail(
+                f"{option} has been removed from release staging: {reason}. "
+                f"Pass {replacement} with the pinned source archive instead."
+            )
 
 
 def stage_release(args: argparse.Namespace) -> int:
     contract_path = Path(args.contract).resolve()
     contract = load_release_contract(contract_path)
-    target_spec = resolve_release_target(contract, contract_path, args.target)
-    target = target_spec["target"]
-    platform = target.split("-", 1)[0]
+    variant = resolve_release_variant(contract, contract_path, args.target, args.backend)
+    target = variant["target"]
+    platform = variant["platform"]
     version = args.version
+    reject_removed_staging_inputs(args)
+
     bundle_name = render_release_template(
-        target_spec["archive_root_template"], version, "archive_root_template"
+        variant["archive_root_template"], version, "archive_root_template"
     )
     archive_name = render_release_template(
-        target_spec["archive_name_template"], version, "archive_name_template"
-    )
-    expected_toolchain_root = contract["release_layout"]["toolchain_position"].removeprefix(
-        "archive-root/"
+        variant["archive_name_template"], version, "archive_name_template"
     )
     output_dir = Path(args.output_dir).resolve()
     bundle_dir = output_dir / "stage" / bundle_name
@@ -1141,101 +2677,618 @@ def stage_release(args: argparse.Namespace) -> int:
     binary_source = Path(args.binary).resolve()
     if not binary_source.is_file():
         fail(f"binary not found: {binary_source}")
-    binary_name = target_spec["binary_name"]
-    binary_destination = bundle_dir / binary_name
+    binary_destination = bundle_dir / variant["binary_name"]
     copy_path(binary_source, binary_destination)
     if platform != "windows":
         binary_destination.chmod(0o755)
+    component_digests = {variant["binary_name"]: compute_digest(binary_destination, "sha256")}
 
     install_source = REPO_ROOT / "scripts" / (
         "install-oscan.ps1" if platform == "windows" else "install-oscan.sh"
     )
-    install_destination = bundle_dir / (
-        "install.ps1" if platform == "windows" else "install.sh"
-    )
+    install_destination = bundle_dir / ("install.ps1" if platform == "windows" else "install.sh")
     copy_path(install_source, install_destination)
     if platform != "windows":
         install_destination.chmod(0o755)
 
-    cross_linker_targets: list[str] = []
-    if args.cross_linker_sidecar_dir:
-        sidecar_source = Path(args.cross_linker_sidecar_dir).resolve()
-        if sidecar_source.is_dir():
-            cross_linkers_dest = bundle_dir / "cross-linkers"
-            for child in sorted(sidecar_source.iterdir(), key=lambda item: item.name):
-                if not child.is_dir():
-                    continue
-                copy_path(child, cross_linkers_dest / child.name)
-                if platform != "windows":
-                    for linker_bin in (cross_linkers_dest / child.name).iterdir():
-                        if linker_bin.is_file():
-                            linker_bin.chmod(0o755)
-                cross_linker_targets.append(child.name)
+    sidecar = None
+    if "direct_link_sidecar" in variant["components"]:
+        if not args.native_link_dir:
+            fail(
+                f"staging {target}/{variant['backend']} needs --native-link-dir (the prepared "
+                "native-link asset set for this target)"
+            )
+        sidecar = stage_direct_link_sidecar(
+            bundle_dir, variant, Path(args.native_link_dir).resolve()
+        )
+        component_digests[f"{NATIVE_LINK_DIR_NAME}/{NATIVE_LINK_MANIFEST_NAME}"] = sidecar[
+            "digest"
+        ]
 
-    write_install_readme(
-        bundle_dir / "README-install.txt",
-        target_spec,
-        archive_name,
-        cross_linker_targets=cross_linker_targets,
-    )
+    if "runtime_archives" in variant["components"]:
+        runtime_archive_dir = (
+            Path(args.runtime_archive_dir).resolve()
+            if args.runtime_archive_dir
+            else REPO_ROOT / "build" / "runtime-archives" / target
+        )
+        component_digests.update(
+            stage_freestanding_runtime_archives(bundle_dir, variant, runtime_archive_dir)
+        )
 
-    runtime_archive_dir = (
-        Path(args.runtime_archive_dir).resolve()
-        if args.runtime_archive_dir
-        else REPO_ROOT / "build" / "runtime-archives" / target
-    )
-    if target_spec["native_runtime_modes"]:
-        stage_native_runtime_assets(
-            contract,
-            target_spec,
+    provider_info = None
+    if "llvm_provider" in variant["components"]:
+        provider_info = stage_llvm_provider_component(
             bundle_dir,
-            runtime_archive_dir,
+            variant,
+            sidecar,
+            Path(args.llvm_provider_archive).resolve()
+            if args.llvm_provider_archive
+            else None,
         )
 
-    if target_spec["target_class"] == "bundled":
-        manifest_path = Path(target_spec["toolchain_manifest_path"])
-        manifest = load_manifest(manifest_path)
-        if manifest["target"] != target:
-            fail(f"manifest target {manifest['target']} does not match requested {target}")
-        if manifest["bundle_kind"] != target_spec["bundle_kind"]:
+    toolchain_info = None
+    if "c_toolchain" in variant["components"]:
+        if not args.toolchain_archive:
             fail(
-                f"manifest bundle kind {manifest['bundle_kind']} does not match release "
-                f"contract bundle kind {target_spec['bundle_kind']} for {target}"
+                f"staging {target}/{variant['backend']} needs --toolchain-archive (the "
+                "already downloaded, digest-pinned C toolchain source archive for this target)"
             )
-        if manifest["stage"]["root"] != expected_toolchain_root:
-            fail(
-                f"manifest stage root '{manifest['stage']['root']}' does not match the "
-                "release contract sibling toolchain layout"
-            )
-        toolchain_root = bundle_dir / safe_relative_path(manifest["stage"]["root"])
-        fetched_manifest, fetched_root = fetch_toolchain(
-            manifest_path,
-            output_dir / "downloads",
-            toolchain_root,
+        toolchain_info = stage_c_toolchain_component(
+            bundle_dir, variant, Path(args.toolchain_archive).resolve()
         )
-        copy_path(manifest_path, bundle_dir / Path(target_spec["toolchain_manifest"]).name)
-        copied_licenses = copy_license_files(
-            fetched_root,
-            bundle_dir / "LICENSES" / "toolchain",
-            fetched_manifest["stage"].get("license_globs", []),
-        )
-        write_provenance_file(
-            bundle_dir / "LICENSES" / "toolchain-source.txt",
-            fetched_manifest,
-            copied_licenses,
-        )
+
+    if variant.get("note_file_path"):
+        copy_path(Path(variant["note_file_path"]), bundle_dir / Path(variant["note_file"]).name)
+
+    write_install_readme(bundle_dir / "README-install.txt", variant, archive_name)
+    if provider_info is not None:
+        component_digests["llvm_provider"] = provider_info
+    if toolchain_info is not None:
+        component_digests["c_toolchain"] = toolchain_info
+    write_package_metadata(
+        bundle_dir / PACKAGE_METADATA_NAME,
+        variant,
+        version,
+        archive_name,
+        bundle_name,
+        component_digests,
+    )
+
+    if variant["backend_kind"] == "object":
+        assert_object_package_is_toolchain_free(bundle_dir, variant)
     else:
-        note_path = Path(target_spec["note_file_path"])
-        copy_path(note_path, bundle_dir / Path(target_spec["note_file"]).name)
+        assert_c_package_has_no_object_payload(bundle_dir, variant)
 
     archive_path = output_dir / archive_name
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    if target_spec["archive_format"] == "zip":
+    if variant["archive_format"] == "zip":
         create_zip_archive(bundle_dir, archive_path)
     else:
-        create_tar_archive(bundle_dir, archive_path, target_spec["archive_format"])
+        create_tar_archive(bundle_dir, archive_path, variant["archive_format"])
 
     print(str(archive_path))
+    return 0
+
+
+CI_RUNNERS = {
+    "windows": "windows-latest",
+    "linux": "ubuntu-latest",
+    "macos": "macos-15-intel",
+}
+CI_PLATFORM_LABELS = {"windows": "Windows", "linux": "Linux", "macos": "macOS"}
+
+
+def ci_target_matrix(contract: dict, version: str) -> list[dict]:
+    """The release workflow's package matrix: one entry per *target*.
+
+    Deliberately not one entry per (target, backend): every backend variant
+    of a target reuses the same pinned toolchain download, the same
+    freestanding runtime archives, and the same native-link sidecar, so
+    fanning out per backend would repeat the most expensive work in the
+    release three times per platform. The per-target entry therefore carries
+    the canonical backend list, and the job builds/assembles/smokes them
+    sequentially.
+    """
+    entries: list[dict] = []
+    rendered_archives: dict[str, str] = {}
+    for target in sorted(contract["variants"]):
+        target_spec = contract["variants"][target]
+        platform = target.split("-", 1)[0]
+        if platform not in CI_RUNNERS:
+            fail(f"release contract target '{target}' has no CI runner mapping")
+        declared = target_spec["backends"]
+        unknown = sorted(set(declared) - set(CANONICAL_BACKENDS))
+        if unknown:
+            fail(
+                f"release contract target '{target}' declares non-canonical backend(s): "
+                f"{', '.join(unknown)}"
+            )
+        backends = [backend for backend in CANONICAL_BACKENDS if backend in declared]
+        if not backends:
+            fail(f"release contract target '{target}' declares no backends")
+
+        archives: list[str] = []
+        runtime_profiles: list[str] = []
+        needs_toolchain_archive = False
+        needs_provider_archive = False
+        needs_native_link = False
+        for backend in backends:
+            variant = declared[backend]
+            archive_name = render_release_template(
+                variant["archive_name_template"], version, "archive_name_template"
+            )
+            if archive_name in rendered_archives:
+                fail(
+                    f"release archive name '{archive_name}' is produced by both "
+                    f"{rendered_archives[archive_name]} and {target}/{backend}"
+                )
+            rendered_archives[archive_name] = f"{target}/{backend}"
+            archives.append(archive_name)
+            components = variant["components"]
+            if "c_toolchain" in components:
+                needs_toolchain_archive = True
+            if "direct_link_sidecar" in components:
+                needs_native_link = True
+            if (
+                "llvm_provider" in components
+                and variant.get("llvm_provider_source") == "toolchain-manifest"
+            ):
+                needs_provider_archive = True
+            for profile in variant["runtime_profiles"]:
+                if profile not in runtime_profiles:
+                    runtime_profiles.append(profile)
+
+        # The base toolchain archive is also what the runtime archives are
+        # compiled with and what the native-link sidecar is cut from, so a
+        # target needs it whenever it needs either of those.
+        needs_base_toolchain = (
+            needs_toolchain_archive or needs_native_link or bool(runtime_profiles)
+        )
+        entries.append(
+            {
+                "target": target,
+                "label": f"{CI_PLATFORM_LABELS[platform]} {target.split('-', 1)[1]}",
+                "os": CI_RUNNERS[platform],
+                "binary_name": target_spec["binary_name"],
+                "binary_path": f"target/release/{target_spec['binary_name']}",
+                "backends": ",".join(backends),
+                "archives": ",".join(archives),
+                "runtime_profiles": ",".join(runtime_profiles),
+                "needs_base_toolchain": "true" if needs_base_toolchain else "false",
+                "needs_native_link": "true" if needs_native_link else "false",
+                "needs_provider_archive": "true" if needs_provider_archive else "false",
+                "msi_backend": "llvm" if platform == "windows" and "llvm" in backends else "",
+            }
+        )
+    if not entries:
+        fail("the release contract publishes no packages")
+    return entries
+
+
+def ci_matrix_command(args: argparse.Namespace) -> int:
+    contract = load_release_contract(Path(args.contract).resolve())
+    entries = ci_target_matrix(contract, args.version)
+    print(json.dumps({"include": entries}, separators=(",", ":"), sort_keys=True))
+    return 0
+
+
+def expected_package_metadata(variant: dict, version: str) -> dict:
+    """What `oscan-package.json` must say for this variant at this version.
+
+    Derived from the contract rather than restated, so a package whose
+    metadata drifts from the contract that produced it fails instead of
+    being described by whatever it happens to contain.
+    """
+    return {
+        "schema_version": 1,
+        "version": version,
+        "target": variant["target"],
+        "backend": variant["backend"],
+        "available_backends": [variant["backend"]],
+        "default_backend": variant["distribution_backend"],
+        "cargo_feature": variant["cargo_feature"],
+        "toolchain_free": variant["toolchain_free"],
+        "components": list(variant["components"]),
+        "runtime_profiles": list(variant["runtime_profiles"]),
+        "archive_name": render_release_template(
+            variant["archive_name_template"], version, "archive_name_template"
+        ),
+        "archive_root": render_release_template(
+            variant["archive_root_template"], version, "archive_root_template"
+        ),
+    }
+
+
+def _verify_package_metadata(root: Path, variant: dict, version: str | None) -> dict:
+    """Check the package's own machine-readable record against the contract."""
+    metadata_path = root / PACKAGE_METADATA_NAME
+    if not metadata_path.is_file():
+        fail(f"packaged bundle {root} is missing {PACKAGE_METADATA_NAME}")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read {metadata_path}: {exc}")
+    if version is None:
+        version = metadata.get("version")
+        if not isinstance(version, str) or not version:
+            fail(f"{metadata_path} has no usable 'version' field")
+    for key, expected in expected_package_metadata(variant, version).items():
+        actual = metadata.get(key)
+        if actual != expected:
+            fail(
+                f"{metadata_path} field '{key}' is {actual!r}, expected {expected!r} for "
+                f"{variant['target']}/{variant['backend']}"
+            )
+    requirements = metadata.get("requirements")
+    if not isinstance(requirements, dict):
+        fail(f"{metadata_path} has no 'requirements' block")
+    expected_bundled = "c_toolchain" in variant["components"]
+    if requirements.get("bundled_c_toolchain") is not expected_bundled:
+        fail(
+            f"{metadata_path} claims bundled_c_toolchain="
+            f"{requirements.get('bundled_c_toolchain')!r}, expected {expected_bundled!r}"
+        )
+    expected_host = (
+        variant.get("required_host_toolchain") if variant.get("requires_host_compiler") else None
+    )
+    if requirements.get("host_c_toolchain") != expected_host:
+        fail(
+            f"{metadata_path} claims host_c_toolchain="
+            f"{requirements.get('host_c_toolchain')!r}, expected {expected_host!r}"
+        )
+    return metadata
+
+
+def _verify_sidecar_component(root: Path, variant: dict) -> dict:
+    """Every native-link asset the packaged manifest declares must be
+    present, at its declared subpath, with its declared content."""
+    manifest_path = root / NATIVE_LINK_DIR_NAME / NATIVE_LINK_MANIFEST_NAME
+    if not manifest_path.is_file():
+        fail(
+            f"{variant['target']}/{variant['backend']} declares the direct_link_sidecar "
+            f"component, but {manifest_path} is missing"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        fail(f"cannot read packaged native-link manifest {manifest_path}: {exc}")
+    if manifest.get("target") != variant["target"]:
+        fail(
+            f"packaged native-link manifest {manifest_path} is staged for "
+            f"{manifest.get('target')!r}, expected {variant['target']!r}"
+        )
+    linker = manifest.get("linker")
+    if not isinstance(linker, dict) or not linker.get("install_subpath"):
+        fail(f"packaged native-link manifest {manifest_path} declares no linker")
+    for entry in [linker] + list(manifest.get("assets", [])):
+        if not isinstance(entry, dict):
+            fail(f"packaged native-link manifest {manifest_path} has a malformed entry")
+        staged = root / NATIVE_LINK_DIR_NAME / safe_relative_path(entry["install_subpath"])
+        if not staged.is_file():
+            fail(
+                f"packaged native-link asset '{entry.get('name')}' is missing from the installed "
+                f"package (expected {staged})"
+            )
+        actual = compute_digest(staged, "sha256")
+        if actual.lower() != str(entry.get("sha256", "")).lower():
+            fail(
+                f"packaged native-link asset '{entry.get('name')}' digest mismatch: manifest has "
+                f"{entry.get('sha256')!r}, actual is {actual}"
+            )
+    return manifest
+
+
+def _verify_runtime_archive_component(root: Path, variant: dict) -> None:
+    """Exactly the declared freestanding archive/manifest pairs, at the one
+    fixed executable-relative location a packaged compiler looks in."""
+    target = variant["target"]
+    runtime_contract = load_runtime_archive_contract(RUNTIME_ARCHIVE_CONTRACT_PATH)
+    archive_root = root / "build" / "runtime-archives" / target
+    if not archive_root.is_dir():
+        fail(
+            f"{target}/{variant['backend']} declares runtime_archives, but "
+            f"{archive_root} does not exist; the compiler resolves its runtime archives "
+            "relative to its own executable and never auto-builds them"
+        )
+    expected_files: set[str] = set()
+    for profile in variant["runtime_profiles"]:
+        mode_spec = runtime_contract["modes"][profile]
+        archive_path = archive_root / mode_spec["archive_name"]
+        manifest_path = archive_root / mode_spec["manifest_name"]
+        for path in (archive_path, manifest_path):
+            if not path.is_file():
+                fail(f"packaged bundle is missing runtime asset {path}")
+        expected_files.add(archive_path.name)
+        expected_files.add(manifest_path.name)
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            fail(f"cannot read packaged runtime manifest {manifest_path}: {exc}")
+        if manifest.get("target") != target or manifest.get("mode") != profile:
+            fail(
+                f"packaged runtime manifest {manifest_path} identifies "
+                f"{manifest.get('target')}/{manifest.get('mode')}, expected {target}/{profile}"
+            )
+        actual = compute_digest(archive_path, "sha256")
+        if manifest.get("sha256") != actual:
+            fail(
+                f"packaged runtime archive digest mismatch for {archive_path}: manifest has "
+                f"{manifest.get('sha256')!r}, actual is {actual}"
+            )
+    unexpected = sorted(
+        entry.name for entry in archive_root.iterdir() if entry.name not in expected_files
+    )
+    if unexpected:
+        fail(
+            f"packaged runtime archive directory {archive_root} contains files this variant "
+            f"does not declare: {', '.join(unexpected)}"
+        )
+
+
+def _verify_llvm_provider_component(root: Path, variant: dict, sidecar: dict | None) -> None:
+    source = variant.get("llvm_provider_source")
+    if source == "direct-link-sidecar":
+        asset_name = variant["llvm_provider_asset"]
+        if sidecar is None:
+            fail(
+                f"{variant['target']}/{variant['backend']} shares its LLVM provider with the "
+                "native-link sidecar, but no sidecar was packaged"
+            )
+        declared = [
+            entry
+            for entry in sidecar.get("assets", [])
+            if entry.get("role") == "linker_runtime" and entry.get("name") == asset_name
+        ]
+        if not declared:
+            fail(
+                f"packaged native-link manifest does not declare '{asset_name}' as a "
+                "linker_runtime asset, so this package has no LLVM code generator to load"
+            )
+        staged = root / NATIVE_LINK_DIR_NAME / safe_relative_path(declared[0]["install_subpath"])
+        if not staged.is_file():
+            fail(f"packaged LLVM code generator '{asset_name}' is missing (expected {staged})")
+        if (root / "toolchain").exists():
+            fail(
+                f"{variant['target']}/{variant['backend']} shares the sidecar's LLVM provider "
+                "and must not ship a separate toolchain/ directory"
+            )
+        return
+    manifest_path = variant.get("toolchain_manifest_path")
+    if manifest_path is None:
+        fail("a manifest-sourced LLVM provider needs the target's toolchain manifest")
+    manifest = load_manifest(Path(manifest_path))
+    verify_llvm_code_generator(root / "toolchain", manifest)
+    provenance = root / "LICENSES" / "llvm-provider" / PROVIDER_PROVENANCE_NAME
+    if not provenance.is_file():
+        fail(f"packaged LLVM provider is missing its provenance evidence ({provenance})")
+
+
+def _verify_c_toolchain_component(root: Path, variant: dict, contract: dict) -> None:
+    toolchain_root = root / "toolchain"
+    if not toolchain_root.is_dir():
+        fail(
+            f"{variant['target']}/{variant['backend']} declares the c_toolchain component, but "
+            f"{toolchain_root} does not exist"
+        )
+    manifest_path = variant.get("toolchain_manifest_path")
+    if manifest_path is None:
+        fail(f"target '{variant['target']}' declares no toolchain manifest")
+    manifest = load_manifest(Path(manifest_path))
+    runtime = manifest["toolchain"]["runtime"]
+    for role in ("compiler", "archiver", "linker"):
+        tool = toolchain_root / safe_relative_path(runtime[role]["path"])
+        if not tool.is_file():
+            fail(
+                f"packaged C toolchain is missing its {role}: {tool} (declared by "
+                f"{Path(manifest_path).name})"
+            )
+    lookup = contract["lookup_contract"][variant["platform"]]
+    found = [
+        str(candidate.relative_to(root).as_posix())
+        for bin_dir in lookup["bin_directories"]
+        for name in lookup["compiler_names"]
+        for candidate in [root / PurePosixPath(bin_dir.replace("\\", "/")) / name]
+        if candidate.is_file()
+    ]
+    if not found:
+        fail(
+            f"packaged C toolchain has no compiler where the contract's lookup finds one "
+            f"(searched {', '.join(lookup['bin_directories'])} for "
+            f"{', '.join(lookup['compiler_names'])})"
+        )
+    excluded = sorted(
+        relative
+        for relative in llvm_provider_staged_paths(manifest)
+        if (toolchain_root / safe_relative_path(relative)).exists()
+    )
+    if excluded:
+        fail(
+            f"{variant['target']}/{variant['backend']} is a C package and must not ship the "
+            f"separately overlaid LLVM provider payload: {', '.join(excluded)}"
+        )
+
+
+def _verify_absent_components(root: Path, variant: dict) -> None:
+    """The other half of the contract: what a variant must *not* contain."""
+    components = variant["components"]
+    if "direct_link_sidecar" not in components and (root / NATIVE_LINK_DIR_NAME).exists():
+        fail(
+            f"{variant['target']}/{variant['backend']} does not declare a native-link sidecar, "
+            f"but the package contains '{NATIVE_LINK_DIR_NAME}/'"
+        )
+    if not variant["runtime_profiles"] and (root / "build").exists():
+        fail(
+            f"{variant['target']}/{variant['backend']} ships no runtime archives, but the "
+            "package contains 'build/'"
+        )
+    if "c_toolchain" not in components and variant.get("llvm_provider_source") != (
+        "toolchain-manifest"
+    ):
+        if (root / "toolchain").exists():
+            fail(
+                f"{variant['target']}/{variant['backend']} declares no toolchain payload, but "
+                "the package contains 'toolchain/'"
+            )
+    for forbidden in ("native-runtime", "cross-linkers", "runtime"):
+        if (root / forbidden).exists():
+            fail(f"{variant['target']}/{variant['backend']} must not ship '{forbidden}/'")
+
+
+def _verify_object_package_payload(root: Path, variant: dict) -> None:
+    """An object package carries no C-toolchain payload of any kind: no
+    compiler, no headers, no sysroot, no C sources, no hosted runtime."""
+    for path in sorted(root.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if path.name in C_COMPILER_EXECUTABLE_NAMES:
+            fail(
+                f"{variant['target']}/{variant['backend']} must be toolchain-free, but the "
+                f"installed package contains a C compiler executable: {relative}"
+            )
+        if path.name.endswith(".h") and not relative.startswith(f"{NATIVE_LINK_DIR_NAME}/"):
+            fail(
+                f"{variant['target']}/{variant['backend']} must be toolchain-free, but the "
+                f"installed package contains a C header: {relative}"
+            )
+        if path.name.endswith(".c"):
+            fail(
+                f"{variant['target']}/{variant['backend']} must ship no runtime C source, but "
+                f"the installed package contains: {relative}"
+            )
+        if "/sysroot/" in f"/{relative}" or "/include/" in f"/{relative}":
+            fail(
+                f"{variant['target']}/{variant['backend']} must be toolchain-free, but the "
+                f"installed package contains toolchain headers/sysroot: {relative}"
+            )
+    hosted = (
+        root / "build" / "runtime-archives" / variant["target"] / "libosc_runtime_hosted.a"
+    )
+    if hosted.exists():
+        fail("an object package must not ship the hosted runtime archive")
+
+
+def _verify_c_package_payload(root: Path, variant: dict) -> None:
+    for forbidden in (NATIVE_LINK_DIR_NAME, "build"):
+        if (root / forbidden).exists():
+            fail(
+                f"{variant['target']}/{variant['backend']} is a C package and must not ship "
+                f"'{forbidden}/'"
+            )
+    if variant["platform"] == "macos" and (root / "toolchain").exists():
+        fail(
+            "the macOS C package relies on the host Apple Command Line Tools and must not "
+            "bundle a C toolchain"
+        )
+
+
+def verify_package_layout(
+    root: Path,
+    contract_path: Path,
+    target: str,
+    backend: str,
+    version: str | None = None,
+    archive: Path | None = None,
+    expect_archive_root_name: bool = False,
+) -> dict:
+    """Assert that an extracted or installed package is exactly the variant
+    the contract describes — nothing missing, nothing extra.
+
+    This is the assertion half of the release smoke test, kept here so the
+    PowerShell and shell smoke scripts check identical facts and so it can
+    be tested hermetically against staged fixture packages.
+    """
+    contract = load_release_contract(contract_path)
+    variant = resolve_release_variant(contract, contract_path, target, backend)
+    if not root.is_dir():
+        fail(f"package root '{root}' is not a directory")
+
+    if archive is not None:
+        suffix = ARCHIVE_SUFFIXES[variant["archive_format"]]
+        if not archive.name.endswith(suffix):
+            fail(
+                f"archive '{archive}' does not carry the '{suffix}' format the contract declares "
+                f"for {target}"
+            )
+        if version is not None:
+            expected_name = render_release_template(
+                variant["archive_name_template"], version, "archive_name_template"
+            )
+            if archive.name != expected_name:
+                fail(f"archive '{archive.name}' is not the contract name '{expected_name}'")
+
+    metadata = _verify_package_metadata(root, variant, version)
+    version = metadata["version"]
+    if expect_archive_root_name and root.name != metadata["archive_root"]:
+        fail(
+            f"extracted bundle directory '{root.name}' is not the contract archive root "
+            f"'{metadata['archive_root']}'"
+        )
+
+    binary = root / variant["binary_name"]
+    if not binary.is_file():
+        fail(f"package is missing its compiler binary: {binary}")
+    if binary.stat().st_size == 0:
+        fail(f"packaged compiler binary is empty: {binary}")
+    if variant["platform"] != "windows" and not os.access(binary, os.X_OK):
+        fail(f"packaged compiler binary is not executable: {binary}")
+
+    sidecar = None
+    if "direct_link_sidecar" in variant["components"]:
+        sidecar = _verify_sidecar_component(root, variant)
+    if "runtime_archives" in variant["components"]:
+        _verify_runtime_archive_component(root, variant)
+    if "llvm_provider" in variant["components"]:
+        _verify_llvm_provider_component(root, variant, sidecar)
+    if "c_toolchain" in variant["components"]:
+        _verify_c_toolchain_component(root, variant, contract)
+    _verify_absent_components(root, variant)
+
+    if variant["backend_kind"] == "object":
+        _verify_object_package_payload(root, variant)
+    else:
+        _verify_c_package_payload(root, variant)
+
+    if variant.get("note_file") and not (root / Path(variant["note_file"]).name).is_file():
+        fail(f"package is missing the contract note file '{variant['note_file']}'")
+    return metadata
+
+
+def verify_package_layout_command(args: argparse.Namespace) -> int:
+    metadata = verify_package_layout(
+        Path(args.root).resolve(),
+        Path(args.contract).resolve(),
+        args.target,
+        args.backend,
+        version=args.version,
+        archive=Path(args.archive).resolve() if args.archive else None,
+        expect_archive_root_name=args.stage == "extracted",
+    )
+    print(
+        f"{args.target}/{args.backend} {args.stage} package layout OK "
+        f"(version {metadata['version']}, components: {', '.join(metadata['components'])})"
+    )
+    return 0
+
+
+def list_variants_command(args: argparse.Namespace) -> int:
+    contract = load_release_contract(Path(args.contract).resolve())
+    matrix = release_variant_matrix(contract)
+    if args.target:
+        matrix = [entry for entry in matrix if entry["target"] == args.target]
+    if args.backend:
+        matrix = [entry for entry in matrix if entry["backend"] == args.backend]
+    if not matrix:
+        fail("no release variant matches the requested target/backend")
+    print(json.dumps(matrix, indent=2, sort_keys=True))
+    return 0
+
+
+def validate_contract_command(args: argparse.Namespace) -> int:
+    contract_path = Path(args.contract).resolve()
+    contract = load_release_contract(contract_path)
+    count = len(release_variant_matrix(contract))
+    print(f"{contract_path}: schema 2 OK, {count} variants")
     return 0
 
 
@@ -1255,7 +3308,7 @@ def verify_llvm_code_generator_command(args: argparse.Namespace) -> int:
     if verified is None:
         print(
             "this target's toolchain manifest declares no packaged LLVM code generator "
-            "(--backend llvm is unavailable for it; --backend native/c are unaffected)",
+            "(--backend llvm is unavailable for it; --backend cranelift/c are unaffected)",
             file=sys.stderr,
         )
     else:
@@ -2567,6 +4620,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     stage = subparsers.add_parser("stage-release")
     stage.add_argument("--target", required=True)
+    stage.add_argument(
+        "--backend",
+        required=True,
+        choices=list(CANONICAL_BACKENDS),
+        help="which backend variant to package ('native' is only a deprecated CLI alias for cranelift and is never an artifact label)",
+    )
     stage.add_argument("--contract", default=str(CONTRACT_PATH))
     stage.add_argument("--version", required=True)
     stage.add_argument("--binary", required=True)
@@ -2574,14 +4633,158 @@ def build_parser() -> argparse.ArgumentParser:
     stage.add_argument(
         "--runtime-archive-dir",
         default=None,
-        help="directory containing the target's prebuilt runtime archive/manifest pairs",
+        help="directory containing the target's prebuilt freestanding runtime archive/manifest pairs",
     )
     stage.add_argument(
-        "--cross-linker-sidecar-dir",
+        "--native-link-dir",
         default=None,
-        help="directory of per-target cross-linker sidecar subdirs (e.g. build/cross-linker-sidecars) to bundle as cross-linkers/<target>/ in the release archive",
+        help="prepared native-link asset directory (native-link-assets.json plus its assets at their install_subpaths) for object variants",
+    )
+    stage.add_argument(
+        "--toolchain-archive",
+        default=None,
+        help="the pinned C toolchain source archive for the c variant; verified against the digest in this repository's toolchain manifest before anything is extracted (see 'resolve-archive')",
+    )
+    stage.add_argument(
+        "--llvm-provider-archive",
+        default=None,
+        help="the pinned LLVM provider source archive for targets whose provider comes from the toolchain manifest rather than the native-link sidecar (see 'resolve-archive')",
+    )
+    stage.add_argument(
+        "--toolchain-dir",
+        nargs=1,
+        action=RemovedOption,
+        default=None,
+        replacement="--toolchain-archive",
+        reason=REMOVED_STAGING_INPUTS["toolchain_dir"][2],
+        help=argparse.SUPPRESS,
+    )
+    stage.add_argument(
+        "--llvm-provider-dir",
+        nargs=1,
+        action=RemovedOption,
+        default=None,
+        replacement="--llvm-provider-archive",
+        reason=REMOVED_STAGING_INPUTS["llvm_provider_dir"][2],
+        help=argparse.SUPPRESS,
     )
     stage.set_defaults(func=stage_release)
+
+    prepare_provider = subparsers.add_parser(
+        "prepare-llvm-provider",
+        help="download (once) and digest-verify the pinned LLVM provider archive, printing the verified archive path for 'stage-release --llvm-provider-archive'",
+    )
+    prepare_provider.add_argument("--manifest", required=True)
+    prepare_provider.add_argument("--download-dir", required=True)
+    prepare_provider.add_argument(
+        "--archive",
+        default=None,
+        help="verify an already downloaded archive instead of consulting the download cache",
+    )
+    prepare_provider.add_argument(
+        "--no-download",
+        action="store_true",
+        help="fail instead of downloading when the archive is not already cached",
+    )
+    prepare_provider.add_argument(
+        "--extract-to",
+        default=None,
+        help="also extract the manifest-declared provider files here for inspection; packaging always consumes the archive itself",
+    )
+    prepare_provider.add_argument(
+        "--destination",
+        nargs=1,
+        action=RemovedOption,
+        default=None,
+        replacement="--extract-to (for inspection) plus --llvm-provider-archive when staging",
+        reason=(
+            "a prepared provider directory is no longer a staging input; the pinned archive is"
+        ),
+        help=argparse.SUPPRESS,
+    )
+    prepare_provider.set_defaults(func=prepare_llvm_provider)
+
+    resolve = subparsers.add_parser(
+        "resolve-archive",
+        help="print the verified local path of a manifest-pinned archive (offline unless --download is given)",
+    )
+    resolve.add_argument("--manifest", required=True)
+    resolve.add_argument("--download-dir", required=True)
+    resolve.add_argument(
+        "--component",
+        choices=("toolchain", "llvm-provider"),
+        default="toolchain",
+    )
+    resolve.add_argument(
+        "--download",
+        action="store_true",
+        help="download the archive when it is not already cached (staging itself never downloads)",
+    )
+    resolve.set_defaults(func=resolve_archive_command)
+
+    variants = subparsers.add_parser(
+        "list-variants",
+        help="print the target x backend release matrix this contract publishes",
+    )
+    variants.add_argument("--contract", default=str(CONTRACT_PATH))
+    variants.add_argument("--target", default=None)
+    variants.add_argument("--backend", default=None, choices=list(CANONICAL_BACKENDS))
+    variants.set_defaults(func=list_variants_command)
+
+    verify_layout = subparsers.add_parser(
+        "verify-package-layout",
+        help=(
+            "assert an extracted or installed package is exactly the (target, backend) variant "
+            "the contract describes: metadata fields, component presence, and component absence"
+        ),
+    )
+    verify_layout.add_argument("--target", required=True)
+    verify_layout.add_argument("--backend", required=True, choices=list(CANONICAL_BACKENDS))
+    verify_layout.add_argument(
+        "--root",
+        required=True,
+        help="the extracted archive-root directory, or the directory the package installed into",
+    )
+    verify_layout.add_argument(
+        "--stage",
+        choices=("extracted", "installed"),
+        default="extracted",
+        help="'extracted' additionally requires the directory to be named after the archive root",
+    )
+    verify_layout.add_argument(
+        "--version",
+        default=None,
+        help="the release version; defaults to the version the package itself records",
+    )
+    verify_layout.add_argument(
+        "--archive",
+        default=None,
+        help="also check this archive's name/suffix against the contract",
+    )
+    verify_layout.add_argument("--contract", default=str(CONTRACT_PATH))
+    verify_layout.set_defaults(func=verify_package_layout_command)
+
+    validate_contract = subparsers.add_parser(
+        "validate-contract",
+        help="validate the release contract without staging anything",
+    )
+    validate_contract.add_argument("--contract", default=str(CONTRACT_PATH))
+    validate_contract.set_defaults(func=validate_contract_command)
+
+    ci_matrix = subparsers.add_parser(
+        "ci-matrix",
+        help=(
+            "print the release workflow's package matrix (one entry per target, each carrying "
+            "that target's canonical backend list and the prepared inputs it needs)"
+        ),
+    )
+    ci_matrix.add_argument("--contract", default=str(CONTRACT_PATH))
+    ci_matrix.add_argument(
+        "--version",
+        required=True,
+        help="the release version, used to render each variant's archive name",
+    )
+    ci_matrix.set_defaults(func=ci_matrix_command)
 
     verify_llvm = subparsers.add_parser(
         "verify-llvm-code-generator",

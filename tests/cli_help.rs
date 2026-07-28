@@ -1,3 +1,19 @@
+//! CLI-surface coverage.
+//!
+//! These tests run against whatever backends the package was built with,
+//! and against the distribution stamp it was built under: cargo sets the
+//! package's own feature cfgs for integration-test targets too, and
+//! `build.rs` re-exports the validated stamp as `OSCAN_DISTRIBUTION_BACKEND`
+//! for every target in the package. So `cfg!(feature = "backend-c")` and
+//! [`distribution_backend`] here describe exactly the `oscan` binary under
+//! test. Tests that need a specific backend are gated on it; the rest
+//! derive their expectations from [`compiled_in_backends`] /
+//! [`distribution_backend`], so
+//! `cargo test --no-default-features --features backend-<name>` — stamped
+//! or not — is a first-class configuration rather than a build that merely
+//! compiles.
+
+#[cfg(any(feature = "backend-llvm", feature = "backend-cranelift"))]
 use object::Object;
 use std::fs;
 use std::path::Path;
@@ -8,29 +24,224 @@ fn oscan_binary_path() -> String {
         .expect("CARGO_BIN_EXE_oscan should be set for integration tests")
 }
 
-#[test]
-fn long_help_flag_prints_usage_and_succeeds() {
-    let output = Command::new(oscan_binary_path())
+/// Every environment variable that steers discovery of the LLVM provider,
+/// the native linker, the runtime archive, or the strict no-toolchain
+/// profile. Child processes start without all of them, so an ambient
+/// developer/CI setting can neither mask nor fake what these tests assert;
+/// a test that needs one sets it back deliberately.
+const DISCOVERY_ENV: [&str; 10] = [
+    "OSCAN_LLVM_LIB",
+    "OSCAN_LLVM_DIR",
+    "OSCAN_TOOLCHAIN_DIR",
+    "OSCAN_CC",
+    "OSCAN_NATIVE_LINKER",
+    "OSCAN_NATIVE_LINKER_FLAVOR",
+    "OSCAN_NATIVE_ASSET_CACHE_DIR",
+    "OSCAN_RUNTIME_ARCHIVE_DIR",
+    "OSCAN_RUNTIME_BUILDER",
+    "OSCAN_NO_TOOLCHAIN",
+];
+
+/// `oscan` with a scrubbed environment.
+fn oscan_command() -> Command {
+    let mut command = Command::new(oscan_binary_path());
+    for name in DISCOVERY_ENV {
+        command.env_remove(name);
+    }
+    command
+}
+
+/// `oscan` with a scrubbed environment plus this run's deliberately
+/// configured packaged LLVM provider (see [`llvm_provider_configured`]),
+/// for the tests that need the code generator to actually load.
+#[cfg(feature = "backend-llvm")]
+fn oscan_provider_command() -> Command {
+    let mut command = oscan_command();
+    for name in ["OSCAN_LLVM_LIB", "OSCAN_LLVM_DIR"] {
+        if let Ok(value) = std::env::var(name) {
+            command.env(name, value);
+        }
+    }
+    command
+}
+
+/// The backends this build of `oscan` contains, in canonical order.
+fn compiled_in_backends() -> Vec<&'static str> {
+    let mut backends = Vec::new();
+    if cfg!(feature = "backend-llvm") {
+        backends.push("llvm");
+    }
+    if cfg!(feature = "backend-cranelift") {
+        backends.push("cranelift");
+    }
+    if cfg!(feature = "backend-c") {
+        backends.push("c");
+    }
+    backends
+}
+
+/// The backend this build is a distribution *of*, read from the same
+/// compile-time stamp `build.rs` validated. `None` for an ordinary
+/// development build (the variable is unset, or set to an empty value).
+fn distribution_backend() -> Option<&'static str> {
+    let raw = option_env!("OSCAN_DISTRIBUTION_BACKEND")?.trim();
+    let stamped = ["llvm", "cranelift", "c"]
+        .into_iter()
+        .find(|name| raw.eq_ignore_ascii_case(name));
+    assert!(
+        raw.is_empty() || stamped.is_some(),
+        "OSCAN_DISTRIBUTION_BACKEND={raw:?} is not a valid backend name"
+    );
+    if let Some(stamped) = stamped {
+        assert_eq!(
+            compiled_in_backends(),
+            vec![stamped],
+            "a stamped distribution build must enable exactly its own backend"
+        );
+    }
+    stamped
+}
+
+/// The backend an implicit (no `--backend`) invocation resolves to, when
+/// that is decided at build time rather than by probing this host.
+fn build_time_default_backend() -> Option<&'static str> {
+    match (distribution_backend(), compiled_in_backends().as_slice()) {
+        (Some(stamped), _) => Some(stamped),
+        (None, [only]) => Some(only),
+        _ => None,
+    }
+}
+
+/// A build without the C backend is intrinsically strict (see
+/// `backend::no_toolchain`), so every C-toolchain flag is refused.
+fn toolchain_free_build() -> bool {
+    !cfg!(feature = "backend-c")
+}
+
+fn help_output() -> String {
+    let output = oscan_command()
         .arg("--help")
         .output()
         .expect("failed to run oscan --help");
+    assert!(output.status.success(), "expected --help to succeed");
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
 
-    assert!(
-        output.status.success(),
-        "expected --help to exit successfully"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+#[test]
+fn long_help_flag_prints_usage_and_succeeds() {
+    let stdout = help_output();
     assert!(stdout.contains("usage: oscan"));
-    assert!(stdout.contains("--target <arch>"));
-    assert!(stdout.contains("--libc"));
-    assert!(stdout.contains("including with LLVM/Cranelift"));
-    assert!(stdout.contains("--allow-elevated-native-link"));
-    assert!(stdout.contains("Trusted CI/release only"));
+    assert!(stdout.contains("--extra-obj"));
+    if cfg!(feature = "backend-c") {
+        assert!(stdout.contains("--target <arch>"));
+    }
+    if !toolchain_free_build() {
+        assert!(stdout.contains("--libc"));
+        if cfg!(any(feature = "backend-llvm", feature = "backend-cranelift")) {
+            assert!(stdout.contains("including with LLVM/Cranelift"));
+        }
+    }
+    if cfg!(any(feature = "backend-llvm", feature = "backend-cranelift")) {
+        assert!(stdout.contains("--allow-elevated-native-link"));
+        assert!(stdout.contains("Trusted CI/release only"));
+    }
+}
+
+/// A backend-specific build must not advertise flags it can only refuse:
+/// the usage line and the option list are both built from what is
+/// actually compiled in.
+#[test]
+fn help_only_advertises_flags_this_build_can_honor() {
+    let stdout = help_output();
+    let usage = stdout
+        .lines()
+        .next()
+        .expect("help starts with a usage line");
+
+    assert!(usage.contains(&format!("[--backend {}]", compiled_in_backends().join("|"))));
+    assert_eq!(usage.contains("[--emit-c]"), cfg!(feature = "backend-c"));
+    assert_eq!(
+        usage.contains("[--target <arch>]"),
+        cfg!(feature = "backend-c")
+    );
+    assert_eq!(
+        usage.contains("[--emit-llvm-ir]"),
+        cfg!(feature = "backend-llvm")
+    );
+    assert_eq!(usage.contains("[--libc]"), !toolchain_free_build());
+    assert_eq!(
+        usage.contains("[--extra-c <file.c>]"),
+        !toolchain_free_build()
+    );
+    assert!(usage.contains("[--extra-obj <file.o|.obj>]"));
+
+    if toolchain_free_build() {
+        // The closing note deliberately *names* the refused routes; the
+        // flag list itself must not offer them.
+        let advertised: String = stdout
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("(this build"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for absent in [
+            "--emit-c ",
+            "--target <arch>",
+            "--libc ",
+            "--extra-cflags",
+            "OSCAN_CC ",
+            "OSCAN_TOOLCHAIN_DIR",
+            "OSCAN_NO_TOOLCHAIN=1",
+            // A build that refuses compiler-driver linking must not offer
+            // it as a linker flavor, or describe it as a fallback.
+            "'compiler-driver'",
+            "otherwise a compiler driver",
+        ] {
+            assert!(
+                !advertised.contains(absent),
+                "a toolchain-free build must not advertise {absent}: {stdout}"
+            );
+        }
+        assert!(
+            stdout.contains("this build includes no C backend"),
+            "{stdout}"
+        );
+    }
+    if cfg!(any(feature = "backend-llvm", feature = "backend-cranelift")) {
+        // Both kinds of build advertise the direct linker flavors; only a
+        // build that still has a C toolchain advertises the legacy
+        // compiler-driver one, and a toolchain-free build additionally
+        // says an override must name a direct flavor explicitly.
+        assert!(
+            stdout.contains("'mingw' (direct ld.lld, Windows)"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("'elf' (direct GNU ld, Linux)"), "{stdout}");
+        if toolchain_free_build() {
+            assert!(
+                stdout.contains("OSCAN_NATIVE_LINKER_FLAVOR=mingw|elf"),
+                "{stdout}"
+            );
+            assert!(
+                stdout.contains("this build never links through a C compiler driver"),
+                "{stdout}"
+            );
+        } else {
+            assert!(stdout.contains("'compiler-driver' (legacy)"), "{stdout}");
+        }
+    }
+    if !cfg!(feature = "backend-llvm") {
+        assert!(!stdout.contains("OSCAN_LLVM_LIB"), "{stdout}");
+        assert!(!stdout.contains("--emit-llvm-ir"), "{stdout}");
+    }
+    if !cfg!(any(feature = "backend-llvm", feature = "backend-cranelift")) {
+        assert!(!stdout.contains("--native-target"), "{stdout}");
+        assert!(!stdout.contains("OSCAN_NATIVE_LINKER"), "{stdout}");
+    }
 }
 
 #[test]
 fn short_help_flag_prints_usage_and_succeeds() {
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg("-h")
         .output()
         .expect("failed to run oscan -h");
@@ -38,12 +249,12 @@ fn short_help_flag_prints_usage_and_succeeds() {
     assert!(output.status.success(), "expected -h to exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("usage: oscan"));
-    assert!(stdout.contains("--target <arch>"));
+    assert!(stdout.contains(&format!("[--backend {}]", compiled_in_backends().join("|"))));
 }
 
 #[test]
 fn help_mentions_extra_obj() {
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg("--help")
         .output()
         .expect("failed to run oscan --help");
@@ -55,7 +266,7 @@ fn help_mentions_extra_obj() {
 
 #[test]
 fn help_mentions_extra_lib() {
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg("--help")
         .output()
         .expect("failed to run oscan --help");
@@ -66,12 +277,13 @@ fn help_mentions_extra_lib() {
     assert!(stdout.contains("system library name"));
 }
 
+#[cfg(feature = "backend-c")]
 #[test]
 fn elevated_native_link_opt_in_is_rejected_for_c_backend() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .args(["--backend", "c", "--allow-elevated-native-link"])
         .arg(&source)
         .arg("--emit-c")
@@ -86,42 +298,237 @@ fn elevated_native_link_opt_in_is_rejected_for_c_backend() {
 
 #[test]
 fn help_describes_backend_roles_and_default() {
-    let output = Command::new(oscan_binary_path())
-        .arg("--help")
-        .output()
-        .expect("failed to run oscan --help");
-
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("default: LLVM when its packaged code generator is available"));
-    assert!(
-        stdout.contains("Direct LLVM object code through Oscan's own packaged LLVM code generator")
-    );
-    assert!(stdout.contains("no C, no toolchain"));
-    assert!(stdout.contains("Portability/reference"));
-    assert!(stdout.contains("Cranelift object code"));
-    assert!(stdout.contains("--emit-c"));
-    assert!(stdout.contains("--emit-llvm-ir"));
-    assert!(stdout.contains("C-backend source"));
-    assert!(stdout.contains("OSCAN_LLVM_LIB"));
-    assert!(stdout.contains("OSCAN_LLVM_DIR"));
+    let stdout = help_output();
+    if cfg!(feature = "backend-llvm") {
+        assert!(stdout
+            .contains("Direct LLVM object code through Oscan's own packaged LLVM code generator"));
+        assert!(stdout.contains("no C, no toolchain"));
+        assert!(stdout.contains("--emit-llvm-ir"));
+        assert!(stdout.contains("OSCAN_LLVM_LIB"));
+        assert!(stdout.contains("OSCAN_LLVM_DIR"));
+    }
+    if cfg!(feature = "backend-cranelift") {
+        assert!(stdout.contains("Cranelift object code"));
+    }
+    if cfg!(feature = "backend-c") {
+        assert!(stdout.contains("Portability/reference"));
+        assert!(stdout.contains("--emit-c"));
+        assert!(stdout.contains("C-backend source"));
+    }
+    // The "default:" clause must describe the build in hand, not the
+    // all-backends policy.
+    let expected_default = match (distribution_backend(), compiled_in_backends().as_slice()) {
+        (Some(stamped), _) => {
+            format!("default: {stamped}; this build includes only the {stamped} backend")
+        }
+        (None, [only]) => format!("default: {only}; the only backend in this build"),
+        (None, backends) if backends.contains(&"llvm") => {
+            let rest: Vec<&str> = backends.iter().copied().filter(|b| *b != "llvm").collect();
+            format!(
+                "default: LLVM when its packaged code generator is available; {} otherwise",
+                rest.join("/")
+            )
+        }
+        _ => "default: cranelift when this host is a supported native target; c otherwise"
+            .to_string(),
+    };
+    assert!(stdout.contains(&expected_default), "{stdout}");
     // The C-mediated path is gone: nothing in the help may suggest the
     // LLVM backend needs Clang or an installed LLVM toolchain.
     assert!(!stdout.contains("OSCAN_LLVM_CLANG"));
     assert!(!stdout.contains("OSCAN_LLVM_TOOLCHAIN_DIR"));
 }
 
+/// `cranelift` is the canonical spelling everywhere the compiler talks
+/// about backends; `native` only survives as an alias, and the help says
+/// exactly that rather than advertising it as a choice.
+#[test]
+fn help_advertises_the_canonical_backend_names() {
+    let stdout = help_output();
+    let choices = compiled_in_backends().join("|");
+    assert!(
+        stdout.contains(&format!("[--backend {choices}]")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("  --backend {choices} ")),
+        "{stdout}"
+    );
+    assert_eq!(
+        stdout.contains("('native' is a deprecated alias for 'cranelift')"),
+        cfg!(feature = "backend-cranelift"),
+        "{stdout}"
+    );
+    // The old spelling must not be advertised as canonical anywhere.
+    assert!(!stdout.contains("llvm|c|native"), "{stdout}");
+    assert!(!stdout.contains("--backend native"), "{stdout}");
+}
+
+/// `--backend native` keeps working, warns exactly once, and resolves to
+/// the Cranelift backend (proved by the diagnostic naming it).
+#[cfg(feature = "backend-cranelift")]
+#[test]
+fn the_native_backend_alias_warns_once_and_selects_cranelift() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output = oscan_command()
+        .arg(&source)
+        .args(["--backend", "native", "--emit-c"])
+        .output()
+        .expect("failed to run backend alias validation");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.matches("'--backend native' is deprecated").count(),
+        1,
+        "exactly one deprecation warning expected: {stderr}"
+    );
+    assert!(stderr.contains("use '--backend cranelift'"), "{stderr}");
+    // Same rejection the canonical spelling produces, so the alias really
+    // selected the Cranelift backend rather than something else.
+    assert!(!output.status.success());
+    assert!(
+        stderr.contains("cranelift backend produces object code"),
+        "{stderr}"
+    );
+}
+
+#[cfg(feature = "backend-cranelift")]
+#[test]
+fn the_canonical_cranelift_spelling_is_not_deprecated() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output = oscan_command()
+        .arg(&source)
+        .args(["--backend", "cranelift", "--emit-c"])
+        .output()
+        .expect("failed to run canonical backend validation");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("deprecated"), "{stderr}");
+    assert!(
+        stderr.contains("cranelift backend produces object code"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn an_unknown_backend_names_the_canonical_choices() {
+    let output = oscan_command()
+        .args(["--backend", "cranelifty"])
+        .output()
+        .expect("failed to run unknown-backend validation");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown backend 'cranelifty'"), "{stderr}");
+    assert!(stderr.contains("llvm, cranelift, c"), "{stderr}");
+    assert!(stderr.contains("deprecated alias"), "{stderr}");
+}
+
+/// Selecting a backend this build does not contain is a named error that
+/// points at the package which does contain it.
+#[test]
+fn a_compiled_out_backend_is_refused_with_an_actionable_error() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    for backend in ["llvm", "cranelift", "c"] {
+        if compiled_in_backends().contains(&backend) {
+            continue;
+        }
+        let output = oscan_command()
+            .arg(&source)
+            .args(["--backend", backend])
+            .output()
+            .expect("failed to run compiled-out backend validation");
+
+        assert!(!output.status.success(), "{backend} unexpectedly succeeded");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "the {backend} backend is not included in this compiler build"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("ends in '-{backend}'")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!(
+                "this build includes: {}",
+                compiled_in_backends().join(", ")
+            )),
+            "{stderr}"
+        );
+    }
+}
+
+/// `--version` carries the build's backend inventory so tests and release
+/// smoke checks can assert what a packaged compiler contains and which
+/// backend it defaults to — in every feature configuration.
+#[test]
+fn version_reports_available_and_default_backends() {
+    let output = oscan_command()
+        .arg("--version")
+        .output()
+        .expect("failed to run oscan --version");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut lines = stdout.lines();
+    assert!(
+        lines.next().unwrap_or_default().starts_with("oscan "),
+        "{stdout}"
+    );
+    // Whole lines, not substrings: "default-backend: c" is a prefix of
+    // "default-backend: cranelift".
+    let line = |key: &str| {
+        stdout
+            .lines()
+            .find(|line| line.starts_with(key))
+            .unwrap_or_else(|| panic!("--version is missing '{key}': {stdout}"))
+    };
+    let backends = compiled_in_backends();
+    assert_eq!(
+        line("backends: "),
+        format!("backends: {}", backends.join(", "))
+    );
+    let expected_default = build_time_default_backend()
+        .map(str::to_string)
+        .unwrap_or_else(|| "auto".to_string());
+    assert_eq!(
+        line("default-backend: "),
+        format!("default-backend: {expected_default}")
+    );
+    assert_eq!(
+        line("distribution: "),
+        format!("distribution: {}", distribution_backend().unwrap_or("none"))
+    );
+    assert_eq!(
+        line("toolchain-free: "),
+        format!(
+            "toolchain-free: {}",
+            if toolchain_free_build() { "yes" } else { "no" }
+        )
+    );
+}
+
+#[cfg(feature = "backend-c")]
 #[test]
 fn implicit_emit_c_matches_explicit_c_source_output() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let default_output = Command::new(oscan_binary_path())
+    let default_output = oscan_command()
         .arg(&source)
         .arg("--emit-c")
         .output()
         .expect("failed to run default backend");
-    let explicit_c_output = Command::new(oscan_binary_path())
+    let explicit_c_output = oscan_command()
         .arg(&source)
         .args(["--backend", "c", "--emit-c"])
         .output()
@@ -151,6 +558,7 @@ fn implicit_emit_c_matches_explicit_c_source_output() {
         )
     )
 ))]
+#[cfg(feature = "backend-cranelift")]
 #[test]
 fn default_backend_emits_an_object_on_supported_hosts() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -158,7 +566,7 @@ fn default_backend_emits_an_object_on_supported_hosts() {
         .join("hello.osc");
     let output_path =
         std::env::temp_dir().join(format!("oscan-default-object-{}.obj", process::id()));
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
         .arg("-o")
         .arg(&output_path)
@@ -187,6 +595,7 @@ fn default_backend_emits_an_object_on_supported_hosts() {
         )
     )
 ))]
+#[cfg(all(feature = "backend-llvm", feature = "backend-cranelift"))]
 #[test]
 fn unavailable_implicit_llvm_falls_back_to_cranelift() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -196,7 +605,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
     let output_path =
         std::env::temp_dir().join(format!("oscan-llvm-fallback-{}.obj", process::id()));
     let _ = fs::remove_file(&output_path);
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
         .args(["--verbose", "-o"])
         .arg(&output_path)
@@ -210,7 +619,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("[verbose] native backend target:"));
+    assert!(stderr.contains("[verbose] cranelift backend target:"));
     let bytes = fs::read(&output_path).expect("Cranelift fallback object should exist");
     fs::remove_file(&output_path).expect("failed to remove fallback object");
     let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
@@ -228,6 +637,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
         )
     )
 ))]
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn unavailable_explicit_llvm_never_falls_back() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -238,7 +648,7 @@ fn unavailable_explicit_llvm_never_falls_back() {
     let output_path =
         std::env::temp_dir().join(format!("oscan-explicit-llvm-failure-{}.obj", process::id()));
     let _ = fs::remove_file(&output_path);
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
         .args(["--backend", "llvm", "-o"])
         .arg(&output_path)
@@ -254,7 +664,7 @@ fn unavailable_explicit_llvm_never_falls_back() {
     );
     assert!(stderr.contains("OSCAN_LLVM_LIB"), "{stderr}");
     // No silent fallback to Cranelift or C, and no partial output.
-    assert!(!stderr.contains("[verbose] native backend target:"));
+    assert!(!stderr.contains("[verbose] cranelift backend target:"));
     assert!(!output_path.exists());
 }
 
@@ -269,31 +679,38 @@ fn unavailable_explicit_llvm_never_falls_back() {
         )
     )
 ))]
+#[cfg(feature = "backend-cranelift")]
 #[test]
-fn elevated_native_link_opt_in_is_harmless_for_native_object_only_output() {
+fn elevated_native_link_opt_in_is_harmless_for_cranelift_object_only_output() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
     let output_path =
         std::env::temp_dir().join(format!("oscan-allow-elevated-object-{}.obj", process::id()));
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
-        .args(["--backend", "native", "--allow-elevated-native-link", "-o"])
+        .args([
+            "--backend",
+            "cranelift",
+            "--allow-elevated-native-link",
+            "-o",
+        ])
         .arg(&output_path)
         .output()
-        .expect("failed to run native object-only validation");
+        .expect("failed to run cranelift object-only validation");
 
     assert!(
         output.status.success(),
-        "native object-only output with opt-in failed: {}",
+        "cranelift object-only output with opt-in failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let bytes = fs::read(&output_path).expect("native object output should exist");
-    fs::remove_file(&output_path).expect("failed to remove native object output");
+    let bytes = fs::read(&output_path).expect("cranelift object output should exist");
+    fs::remove_file(&output_path).expect("failed to remove cranelift object output");
     let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
     assert_eq!(object.kind(), object::ObjectKind::Relocatable);
 }
 
+#[cfg(feature = "backend-c")]
 #[test]
 fn c_output_extension_selects_the_c_backend_implicitly() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -301,13 +718,13 @@ fn c_output_extension_selects_the_c_backend_implicitly() {
         .join("hello.osc");
     let implicit_path = std::env::temp_dir().join(format!("oscan-implicit-c-{}.c", process::id()));
     let explicit_path = std::env::temp_dir().join(format!("oscan-explicit-c-{}.c", process::id()));
-    let implicit_output = Command::new(oscan_binary_path())
+    let implicit_output = oscan_command()
         .arg(&source)
         .arg("-o")
         .arg(&implicit_path)
         .output()
         .expect("failed to run implicit C backend");
-    let explicit_output = Command::new(oscan_binary_path())
+    let explicit_output = oscan_command()
         .arg(&source)
         .args(["--backend", "c", "-o"])
         .arg(&explicit_path)
@@ -331,50 +748,53 @@ fn c_output_extension_selects_the_c_backend_implicitly() {
     assert_eq!(implicit_c, explicit_c);
 }
 
+#[cfg(feature = "backend-cranelift")]
 #[test]
-fn native_backend_rejects_c_source_emission() {
+fn cranelift_backend_rejects_c_source_emission() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
-        .args(["--backend", "native", "--emit-c"])
+        .args(["--backend", "cranelift", "--emit-c"])
         .output()
-        .expect("failed to run native backend validation");
+        .expect("failed to run cranelift backend validation");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("--emit-c requires the C portability/reference backend"));
-    assert!(stderr.contains("native backend produces object code"));
+    assert!(stderr.contains("cranelift backend produces object code"));
 }
 
+#[cfg(feature = "backend-cranelift")]
 #[test]
-fn native_backend_rejects_a_c_output_extension() {
+fn cranelift_backend_rejects_a_c_output_extension() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
     let output_path =
         std::env::temp_dir().join(format!("oscan-rejected-native-c-{}.c", process::id()));
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
-        .args(["--backend", "native", "-o"])
+        .args(["--backend", "cranelift", "-o"])
         .arg(&output_path)
         .output()
-        .expect("failed to run native backend validation");
+        .expect("failed to run cranelift backend validation");
 
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("C source output (-o *.c) requires"));
-    assert!(stderr.contains("native backend produces object code"));
+    assert!(stderr.contains("cranelift backend produces object code"));
     assert!(!output_path.exists());
 }
 
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn llvm_backend_rejects_c_source_emission() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
         .args(["--backend", "llvm", "--emit-c"])
         .output()
@@ -391,8 +811,11 @@ fn non_llvm_backends_reject_llvm_ir_emission() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
-    for backend in ["c", "native"] {
-        let output = Command::new(oscan_binary_path())
+    for backend in compiled_in_backends()
+        .into_iter()
+        .filter(|backend| *backend != "llvm")
+    {
+        let output = oscan_command()
             .arg(&source)
             .args(["--backend", backend, "--emit-llvm-ir"])
             .output()
@@ -407,6 +830,7 @@ fn non_llvm_backends_reject_llvm_ir_emission() {
     }
 }
 
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn llvm_ir_extension_rejects_run_mode() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -414,7 +838,7 @@ fn llvm_ir_extension_rejects_run_mode() {
         .join("hello.osc");
     let output_path = std::env::temp_dir().join(format!("oscan-run-llvm-ir-{}.ll", process::id()));
     let _ = fs::remove_file(&output_path);
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_command()
         .arg(&source)
         .arg("--run")
         .arg("-o")
@@ -433,6 +857,7 @@ fn llvm_ir_extension_rejects_run_mode() {
 /// `OSCAN_LLVM_LIB`/`OSCAN_LLVM_DIR`). The direct LLVM tests below are
 /// skipped without it; `unavailable_explicit_llvm_never_falls_back`
 /// covers the missing-provider path itself.
+#[cfg(feature = "backend-llvm")]
 fn llvm_provider_configured() -> bool {
     let configured = std::env::var_os("OSCAN_LLVM_LIB").is_some()
         || std::env::var_os("OSCAN_LLVM_DIR").is_some();
@@ -443,6 +868,7 @@ fn llvm_provider_configured() -> bool {
     configured
 }
 
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn configured_llvm_provider_becomes_the_implicit_default() {
     if !llvm_provider_configured() {
@@ -453,7 +879,7 @@ fn configured_llvm_provider_becomes_the_implicit_default() {
         .join("hello.osc");
     let output_path =
         std::env::temp_dir().join(format!("oscan-default-llvm-{}.obj", process::id()));
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_provider_command()
         .arg(&source)
         .args(["--verbose", "-o"])
         .arg(&output_path)
@@ -477,6 +903,7 @@ fn configured_llvm_provider_becomes_the_implicit_default() {
     assert_eq!(object.kind(), object::ObjectKind::Relocatable);
 }
 
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn llvm_ir_output_is_deterministic_and_direct() {
     if !llvm_provider_configured() {
@@ -486,7 +913,7 @@ fn llvm_ir_output_is_deterministic_and_direct() {
         .join("examples")
         .join("hello.osc");
     let emit = || {
-        Command::new(oscan_binary_path())
+        oscan_provider_command()
             .arg(&source)
             .args(["--backend", "llvm", "--emit-llvm-ir"])
             .output()
@@ -526,6 +953,7 @@ fn llvm_ir_output_is_deterministic_and_direct() {
     assert!(!ir.contains("llvm.memcpy"), "no memcpy intrinsic: {ir}");
 }
 
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn llvm_ir_extension_selects_llvm_when_provider_is_configured() {
     if !llvm_provider_configured() {
@@ -536,7 +964,7 @@ fn llvm_ir_extension_selects_llvm_when_provider_is_configured() {
         .join("hello.osc");
     let output_path =
         std::env::temp_dir().join(format!("oscan-implicit-llvm-{}.ll", process::id()));
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_provider_command()
         .arg(&source)
         .arg("-o")
         .arg(&output_path)
@@ -557,6 +985,7 @@ fn llvm_ir_extension_selects_llvm_when_provider_is_configured() {
 /// C/header file anywhere: no `.c`, `.h`, `.i`, `.ll`, `.bc`, or `.s`
 /// artifact may survive an object-only compile, and the scratch
 /// directory the old C-mediated path used must never be created.
+#[cfg(feature = "backend-llvm")]
 #[test]
 fn llvm_object_emission_leaves_no_c_or_intermediate_artifacts() {
     if !llvm_provider_configured() {
@@ -570,7 +999,7 @@ fn llvm_object_emission_leaves_no_c_or_intermediate_artifacts() {
     fs::create_dir_all(&work_dir).expect("failed to create work directory");
     let output_path = work_dir.join("program.obj");
 
-    let output = Command::new(oscan_binary_path())
+    let output = oscan_provider_command()
         .arg(&source)
         .args(["--backend", "llvm", "-o"])
         .arg(&output_path)

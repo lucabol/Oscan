@@ -24,7 +24,10 @@ function Write-FakeCompiler {
         Set-Content -LiteralPath $Path -NoNewline -Value @'
 @echo off
 set "backend=%2"
-echo %* | findstr /i /c:"--backend native" >nul && exit /b 21
+rem The matrix must probe the canonical spelling: `native` is only the
+rem deprecated CLI alias and must never be what the script asks for.
+echo %* | findstr /i /c:"--backend native" >nul && exit /b 23
+echo %* | findstr /i /c:"--backend cranelift" >nul && exit /b 21
 if not "%OSCAN_MATRIX_FAIL_SAMPLE%"=="" (
   echo %* | findstr /i /c:"%OSCAN_MATRIX_FAIL_SAMPLE%" >nul && exit /b 22
 )
@@ -42,6 +45,9 @@ goto arguments
         Set-Content -LiteralPath $Path -NoNewline -Value @'
 #!/bin/sh
 if [ "$2" = "native" ]; then
+    exit 23
+fi
+if [ "$2" = "cranelift" ]; then
     exit 21
 fi
 if [ -n "$OSCAN_MATRIX_FAIL_SAMPLE" ]; then
@@ -72,14 +78,15 @@ try {
     Write-FakeCompiler $compiler
 
     $output = Join-Path $TestRoot "output"
-    [void](New-Item -ItemType Directory -Path (Join-Path $output "native") -Force)
+    [void](New-Item -ItemType Directory -Path (Join-Path $output "cranelift") -Force)
     $staleSentinel = Join-Path $output "stale-artifact.txt"
     Set-Content -LiteralPath $staleSentinel -NoNewline -Value "stale"
     $run = & pwsh -NoProfile -File $Script -Oscan $compiler -SourceDirectory $sources -OutputDirectory $output 2>&1 | Out-String
     Assert-MatrixTest ($LASTEXITCODE -eq 0) "matrix should pass with C and LLVM fake backends: $run"
     Assert-MatrixTest ($run -match [regex]::Escape("Output root: $output")) "matrix did not print its absolute output root"
     Assert-MatrixTest (-not (Test-Path -LiteralPath $staleSentinel)) "matrix did not remove stale output-root artifacts"
-    Assert-MatrixTest ($run -match "SKIP Cranelift/native") "matrix did not skip unavailable native backend"
+    Assert-MatrixTest ($run -match "SKIP Cranelift") "matrix did not skip the unavailable cranelift backend"
+    Assert-MatrixTest ($run -notmatch "exited 23") "matrix probed the deprecated '--backend native' alias instead of the canonical 'cranelift'"
     Assert-MatrixTest ($run -match "Compiled artifacts: 6/6 \(3 samples x 2 backends\)") "matrix did not report the sample/backend artifact count"
     Assert-MatrixTest ($run -match "same name\.osc.*") "matrix table did not contain samples"
 
@@ -88,7 +95,8 @@ try {
     Assert-MatrixTest ($cArtifacts.Count -eq 3 -and $llvmArtifacts.Count -eq 3) "matrix did not produce one artifact per sample/backend"
     Assert-MatrixTest (@($cArtifacts.Name | Select-Object -Unique).Count -eq 3) "sanitized sample names were not unique"
     Assert-MatrixTest (@($cArtifacts | Where-Object { $_.Extension -in @(".c", ".ll") }).Count -eq 0) "matrix emitted source instead of executables"
-    Assert-MatrixTest (-not (Test-Path -LiteralPath (Join-Path $output "native"))) "matrix emitted artifacts for an unavailable backend"
+    Assert-MatrixTest (-not (Test-Path -LiteralPath (Join-Path $output "cranelift"))) "matrix emitted artifacts for an unavailable backend"
+    Assert-MatrixTest (-not (Test-Path -LiteralPath (Join-Path $output "native"))) "matrix must name its output directories after the canonical backends"
 
     $env:OSCAN_MATRIX_FAIL_SAMPLE = "nested\z.osc"
     $failedOutput = Join-Path $TestRoot "failed-output"

@@ -1,29 +1,29 @@
 #!/usr/bin/env pwsh
 #
-# Size-matrix regression tool for the native backend's freestanding runtime
+# Size-matrix regression tool for the object backends' freestanding runtime
 # profiles (see src/backend/link.rs's "Freestanding runtime profiles" docs
 # and runtime/osc_runtime_freestanding_core.c).
 #
-# Measures C-backend vs native-backend executable size for a handful of
+# Measures C-backend vs Cranelift-backend executable size for a handful of
 # representative programs — core (no feature-specific builtins), sockets,
-# TLS, and graphics — and asserts native/C stays within a per-family ratio
+# TLS, and graphics — and asserts cranelift/C stays within a per-family ratio
 # threshold, rather than pinning an exact byte count (executable size shifts
 # by a few bytes with any compiler/runtime change; a brittle exact-byte
 # assertion would need constant updating for unrelated reasons). "core" is
-# the family this repo's native-size-* work measures/enforces most tightly
-# (see compare-backend-size.ps1 and the native-size-profiles todo); sockets/
-# TLS/graphics are report-and-guard: they establish a regression ceiling at
-# today's measured ratio (rounded up for headroom) without requiring exact
-# native/C parity, since their remaining gap is ordinary Cranelift-vs-Clang
-# code-generation density (tracked separately by native-size-codegen), not
-# unreachable dead weight.
+# the family this repo's object-backend size work measures/enforces most
+# tightly (see compare-backend-size.ps1 and the native-size-profiles todo);
+# sockets/TLS/graphics are report-and-guard: they establish a regression
+# ceiling at today's measured ratio (rounded up for headroom) without
+# requiring exact cranelift/C parity, since their remaining gap is ordinary
+# Cranelift-vs-Clang code-generation density (tracked separately by
+# native-size-codegen), not unreachable dead weight.
 #
 # The ratio thresholds below assume the release-pinned llvm-mingw Clang/LLD
 # toolchain (or a comparably size-tuned modern Clang+LLD) is what actually
 # builds the runtime archives/objects — see packaging/toolchains/*.json and
 # the native-size-toolchain todo. Without it (e.g. a plain GCC found on
 # PATH, or an on-demand archive build falling back to whatever compiler
-# scripts/release_tools.py's default_cc_for_target discovers), native
+# scripts/release_tools.py's default_cc_for_target discovers), Cranelift
 # executables are legitimately much larger and this script will correctly
 # report a threshold failure — that reflects the active toolchain, not a
 # regression in the runtime-profile logic this script exists to guard. Set
@@ -74,7 +74,7 @@ $extension = if ($IsWindows -or $env:OS -eq "Windows_NT") { ".exe" } else { "" }
 
 # Name, source .osc, whether a network-dependent run-equivalence check
 # should be attempted (skipped entirely under -SkipNetwork), and the
-# max acceptable native/C size ratio.
+# max acceptable cranelift/C size ratio.
 $matrix = @(
     [PSCustomObject]@{ Name = "core";   Source = "examples\hello.osc";                Network = $false; MaxRatio = 1.10 },
     [PSCustomObject]@{ Name = "socket"; Source = "tests\positive\builtin_socket.osc";  Network = $false; MaxRatio = 1.20 },
@@ -93,8 +93,8 @@ foreach ($case in $matrix) {
     }
 
     $cOutput = Join-Path $outputDir "$($case.Name)-c$extension"
-    $nativeOutput = Join-Path $outputDir "$($case.Name)-native$extension"
-    foreach ($output in @($cOutput, $nativeOutput)) {
+    $craneliftOutput = Join-Path $outputDir "$($case.Name)-cranelift$extension"
+    foreach ($output in @($cOutput, $craneliftOutput)) {
         Remove-Item $output -Force -ErrorAction SilentlyContinue
     }
 
@@ -105,16 +105,16 @@ foreach ($case in $matrix) {
         $failed = $true
         continue
     }
-    $nativeCompileOutput = & $oscanPath --backend native $sourcePath -o $nativeOutput 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $nativeOutput)) {
-        Write-Host "FAIL $($case.Name): native backend compilation failed`n$nativeCompileOutput"
+    $craneliftCompileOutput = & $oscanPath --backend cranelift $sourcePath -o $craneliftOutput 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $craneliftOutput)) {
+        Write-Host "FAIL $($case.Name): cranelift backend compilation failed`n$craneliftCompileOutput"
         $failed = $true
         continue
     }
 
     $cSize = (Get-Item $cOutput).Length
-    $nativeSize = (Get-Item $nativeOutput).Length
-    $ratio = if ($cSize -eq 0) { 0.0 } else { $nativeSize / $cSize }
+    $craneliftSize = (Get-Item $craneliftOutput).Length
+    $ratio = if ($cSize -eq 0) { 0.0 } else { $craneliftSize / $cSize }
 
     $runOk = $true
     if ($case.Network -and $SkipNetwork) {
@@ -122,9 +122,9 @@ foreach ($case in $matrix) {
     } else {
         $cRun = (& $cOutput 2>&1 | Out-String).TrimEnd()
         $cExit = $LASTEXITCODE
-        $nativeRun = (& $nativeOutput 2>&1 | Out-String).TrimEnd()
-        $nativeExit = $LASTEXITCODE
-        if ($cExit -ne $nativeExit -or $cRun -ne $nativeRun) {
+        $craneliftRun = (& $craneliftOutput 2>&1 | Out-String).TrimEnd()
+        $craneliftExit = $LASTEXITCODE
+        if ($cExit -ne $craneliftExit -or $cRun -ne $craneliftRun) {
             if ($case.Network) {
                 # Network-dependent cases (e.g. tls_fetch.osc's real HTTPS
                 # requests) can legitimately fail/differ in a sandboxed or
@@ -132,9 +132,9 @@ foreach ($case in $matrix) {
                 # regression, so this only warns rather than failing the
                 # size-matrix gate. Re-run with connectivity (or pass
                 # -SkipNetwork) to get a real equivalence check.
-                Write-Host "  WARN $($case.Name): outputs differ/network-dependent (not failing size check) — C: '$cRun' (exit $cExit) vs native: '$nativeRun' (exit $nativeExit)"
+                Write-Host "  WARN $($case.Name): outputs differ/network-dependent (not failing size check) — C: '$cRun' (exit $cExit) vs cranelift: '$craneliftRun' (exit $craneliftExit)"
             } else {
-                Write-Host "FAIL $($case.Name): outputs differ — C: '$cRun' (exit $cExit) vs native: '$nativeRun' (exit $nativeExit)"
+                Write-Host "FAIL $($case.Name): outputs differ — C: '$cRun' (exit $cExit) vs cranelift: '$craneliftRun' (exit $craneliftExit)"
                 $failed = $true
                 $runOk = $false
             }
@@ -149,7 +149,7 @@ foreach ($case in $matrix) {
     $results += [PSCustomObject]@{
         Family      = $case.Name
         CBytes      = $cSize
-        NativeBytes = $nativeSize
+        CraneliftBytes = $craneliftSize
         Ratio       = $ratio
         MaxRatio    = $case.MaxRatio
         Pass        = ($withinThreshold -and $runOk)
@@ -157,16 +157,16 @@ foreach ($case in $matrix) {
 }
 
 Write-Host ""
-Write-Host "Native/C executable size matrix"
-Write-Host ("{0,-8} {1,12} {2,12} {3,8} {4,8} {5,5}" -f "Family", "C bytes", "Native", "Ratio", "MaxOK", "Pass")
+Write-Host "Cranelift/C executable size matrix"
+Write-Host ("{0,-8} {1,12} {2,12} {3,8} {4,8} {5,5}" -f "Family", "C bytes", "Cranelift", "Ratio", "MaxOK", "Pass")
 foreach ($r in $results) {
     Write-Host ("{0,-8} {1,12} {2,12} {3,8:N3} {4,8:N2} {5,5}" -f `
-        $r.Family, (Format-Size $r.CBytes), (Format-Size $r.NativeBytes), $r.Ratio, $r.MaxRatio, $(if ($r.Pass) { "OK" } else { "FAIL" }))
+        $r.Family, (Format-Size $r.CBytes), (Format-Size $r.CraneliftBytes), $r.Ratio, $r.MaxRatio, $(if ($r.Pass) { "OK" } else { "FAIL" }))
 }
 Write-Host ""
 
 if ($failed) {
-    Write-Host "size-matrix: FAILED (native backend exceeded its native/C size ratio threshold, or a non-network case's output diverged, for at least one family)"
+    Write-Host "size-matrix: FAILED (cranelift backend exceeded its cranelift/C size ratio threshold, or a non-network case's output diverged, for at least one family)"
     exit 1
 }
 

@@ -11,14 +11,14 @@
 //! copy-on-bind value semantics, checked arithmetic through runtime
 //! calls, `Result` layout and `try` early-return, string interpolation,
 //! the C-ABI entry wrapper's lifecycle, and so on. Duplicating that body
-//! of decisions per backend is how two backends silently diverge.
+//! of decisions per object backend is how Cranelift and LLVM silently diverge.
 //!
 //! So `src/backend/func.rs` (the translator) is written *once*, against
 //! this module's [`LirModule`] trait, and every backend supplies an
 //! implementation:
 //!
 //! * `lir_cranelift::CraneliftLir` — Cranelift SSA + `cranelift-object`
-//!   (`--backend native`).
+//!   (`--backend cranelift`).
 //! * `llvm::emit::LlvmEmitter` — deterministic textual LLVM IR handed to
 //!   the in-process bundled `libLLVM` (`--backend llvm`).
 //!
@@ -49,6 +49,15 @@
 //!   `inbounds`/`exact`/fast-math semantics. Oscan's checked arithmetic
 //!   is implemented by real runtime calls, and pointer arithmetic is
 //!   plain integer arithmetic on addresses.
+
+// This interface is deliberately larger than any single backend needs
+// (`LirArtifact::LlvmIr` and the `copy_chunks` helper have no Cranelift
+// caller; several accessors have no LLVM caller), so it is only fully
+// exercised when both object backends are compiled in.
+#![cfg_attr(
+    not(all(feature = "backend-cranelift", feature = "backend-llvm")),
+    allow(dead_code)
+)]
 
 use std::fmt;
 

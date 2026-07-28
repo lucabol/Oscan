@@ -24,8 +24,14 @@
 //!
 //! 1. `OSCAN_LLVM_LIB` — an explicit path to the shared library.
 //! 2. `OSCAN_LLVM_DIR` / `OSCAN_TOOLCHAIN_DIR` — a directory to search.
-//! 3. The packaged toolchain directory next to the running `oscan`
-//!    executable (`<exe dir>/toolchain/...`).
+//! 3. Executable-relative roots, in order: `<exe dir>/toolchain/...`,
+//!    `<exe dir>/native-link/...` (a schema-v2 package's verified sidecar,
+//!    where Windows shares one `libLLVM-22.dll` between this code
+//!    generator and `ld.lld.exe`), and `<exe dir>` itself.
+//!
+//! A candidate inside the sidecar directory is only used once the sidecar
+//! manifest has verified it (see
+//! [`crate::backend::native_assets::sidecar`]).
 //!
 //! The bare platform loader search path is deliberately **not** used: a
 //! code generator is executed code, so it must never be picked up from
@@ -410,6 +416,18 @@ impl LlvmProvider {
         }
         let mut failures = Vec::new();
         for candidate in &candidates {
+            // A candidate inside the executable-relative native-link
+            // sidecar directory (Windows stores one `libLLVM-22.dll` there
+            // and shares it between this code generator and `ld.lld.exe`)
+            // is only ever loaded when the sidecar manifest declares it and
+            // its SHA-256 matches. Anything else there is not "packaged",
+            // it merely sits in a packaged directory.
+            if let Err(reason) =
+                crate::backend::native_assets::sidecar::require_verified_if_inside(candidate)
+            {
+                failures.push(format!("  {}: {reason}", candidate.display()));
+                continue;
+            }
             match Self::load_from(candidate) {
                 Ok(provider) => return Ok(provider),
                 Err(reason) => failures.push(format!("  {}: {reason}", candidate.display())),
@@ -1093,6 +1111,14 @@ pub fn search_candidates_with(
     }
     if let Some(exe_dir) = exe_path.and_then(|p| p.parent()) {
         roots.push(exe_dir.join("toolchain"));
+        // A backend-specific package stages one copy of the code generator
+        // under its native-link sidecar directory, where `ld.lld.exe` also
+        // finds it as a sibling runtime dependency (Windows resolves a
+        // loaded EXE's imports from its own directory first). Candidates
+        // from here are only loaded after
+        // `native_assets::sidecar::require_verified_if_inside` vouches for
+        // them; see `LlvmProvider::load`.
+        roots.push(exe_dir.join(crate::backend::native_assets::sidecar::SIDECAR_DIR_NAME));
         roots.push(exe_dir.to_path_buf());
     }
 
@@ -1133,7 +1159,7 @@ fn no_provider_error() -> String {
         "the LLVM backend needs Oscan's packaged LLVM {REQUIRED_LLVM_MAJOR} code generator \
          ({}), but no usable copy was found next to this executable; set OSCAN_LLVM_LIB to \
          its full path, set OSCAN_LLVM_DIR/OSCAN_TOOLCHAIN_DIR to the packaged toolchain, or \
-         select --backend native/--backend c",
+         select --backend cranelift/--backend c",
         sys::library_file_names().join(" / ")
     )
 }
@@ -1340,7 +1366,7 @@ mod tests {
     fn the_missing_provider_error_names_the_recovery_options() {
         let message = no_provider_error();
         assert!(message.contains("OSCAN_LLVM_LIB"));
-        assert!(message.contains("--backend native"));
+        assert!(message.contains("--backend cranelift"));
         assert!(message.contains("--backend c"));
         assert!(message.contains(&REQUIRED_LLVM_MAJOR.to_string()));
     }

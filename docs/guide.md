@@ -6,17 +6,22 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ## Compiler Backends
 
-Oscan has three production backends:
+Oscan has three production backends, and each release package contains exactly
+one of them:
 
-| Backend | Purpose | Packaged Windows/Linux behavior |
+| Backend | Purpose | Packaged behavior |
 |---|---|---|
-| `llvm` | Preferred optimized backend | Direct LLVM IR and in-process object emission; selected by default |
-| `native` / `cranelift` | Fast independent Cranelift backend and fallback | Direct object emission; selected explicitly or when LLVM is unavailable |
-| `c` | Portable C99, readable source output, and correctness oracle | Selected explicitly, for `.c` output, macOS, WASI, and C-only targets |
+| `llvm` | **Recommended** optimized backend | Direct LLVM IR and in-process object emission; the `llvm` package's default |
+| `cranelift` | Independent direct-codegen backend | Direct object emission; the `cranelift` package's default, and the fallback in a multi-backend build when LLVM is unavailable |
+| `c` | Portable C99, readable source output, and correctness oracle | The `c` package's default; also used for `.c` output, macOS, WASI, and C-only targets |
 
-The packaged freestanding LLVM and Cranelift paths invoke no C compiler.
-Hosted mode, extra C sources, and the C backend use the bundled or host C
-toolchain. See [Backend Roles and Toolchain Lookup](#backend-roles-and-toolchain-lookup-windowslinux)
+`--backend native` is a deprecated compatibility alias for `--backend
+cranelift`; it warns once and is never used as a package or artifact name.
+
+The packaged freestanding LLVM and Cranelift paths invoke no C compiler and
+ship none. Hosted mode, extra C sources, and the C backend need the C
+package's bundled toolchain (or a host one in a source build). See
+[Backend Roles and Toolchain Lookup](#backend-roles-and-toolchain-lookup-windowslinux)
 for the full selection and fallback rules.
 
 ---
@@ -25,38 +30,66 @@ for the full selection and fallback rules.
 
 ### Download Prebuilt Releases (Recommended)
 
-The easiest way to get started is to download a prebuilt Oscan binary from [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux releases include an LLVM 22 provider, self-contained freestanding object-backend link assets, and a bundled C toolchain for explicit C-backend builds, hosted mode, and C inputs.
+The easiest way to get started is to download a prebuilt Oscan package from
+[GitHub Releases](https://github.com/lucabol/Oscan/releases). Every artifact is
+one (platform, backend) package: Windows and Linux publish `llvm`, `cranelift`
+and `c` archives; macOS publishes `c`. See the
+[README's artifact table](../README.md#option-1-github-releases-recommended-for-most-users)
+for the full matrix and what each package contains.
 
-**Windows x86_64 (full bundle with toolchain):**
+**Windows x86_64:**
 
-1. Download `oscan-vX.Y.Z-windows-x86_64-full.zip`
-2. Extract to a stable location (e.g., `C:\Program Files\oscan\`)
-3. Add the directory to your PATH (or run the included `install.ps1`)
-4. Verify: `oscan --help`
+1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip` (recommended), or the
+   `-cranelift.zip`/`-c.zip` package, or the recommended installer
+   `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
+2. Verify exactly that asset against the release's `SHA256SUMS` (filter the
+   file to the asset you downloaded rather than checking every line):
+   ```powershell
+   $asset = 'oscan-vX.Y.Z-windows-x86_64-llvm.zip'
+   $expected = (Select-String -Path SHA256SUMS -Pattern "\s\*?$([regex]::Escape($asset))$").Line.Split(' ')[0]
+   if ((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw "checksum mismatch" }
+   ```
+3. Extract to a stable location and run the included `install.ps1` (or add the
+   directory to your PATH); for the MSI, just run it
+4. Verify: `oscan --version`
 
-No separate C compiler installation needed — the bundle includes everything.
+`scripts/install-latest.ps1 -Backend llvm|cranelift|c` does all of this for you
+and verifies the checksum (and refuses to install unverified when a release
+publishes no `SHA256SUMS`, unless you pass `-SkipChecksum`).
 
-**Linux x86_64 (full bundle with toolchain):**
+**Linux x86_64:**
 
-1. Download `oscan-vX.Y.Z-linux-x86_64-full.tar.gz` or `.tar.xz`
-2. Extract: `tar xf oscan-*.tar.gz`
-3. Move to a stable location (e.g., `~/.local/oscan/` or `/opt/oscan/`)
-4. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
-5. Add to PATH or run the included `install.sh`
-6. Verify: `oscan --help`
+1. Download `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` (recommended), or the
+   `-cranelift.tar.xz`/`-c.tar.xz` package, keeping its original file name
+2. Verify exactly that asset, then extract:
+   ```bash
+   grep -E "[[:space:]]\*?oscan-vX.Y.Z-linux-x86_64-llvm\.tar\.xz$" SHA256SUMS | sha256sum -c -
+   tar xf oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz
+   ```
+3. For the `llvm` package on Debian/Ubuntu:
+   `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+4. Add to PATH or run the included `install.sh`
+5. Verify: `oscan --version`
 
-The Linux bundle ships a tested C toolchain and pinned `libLLVM`. The provider
-requires glibc 2.34 or newer plus the listed host runtime libraries, but no
-installed C/Clang/LLVM toolchain.
+The Linux `llvm` package ships the pinned LLVM code generator only (no clang,
+no GCC, no headers, no sysroot). It requires glibc 2.34 or newer plus the host
+runtime libraries listed above, but no installed C/Clang/LLVM toolchain. The
+`cranelift` package needs nothing extra; the `c` package carries its own
+pinned C toolchain.
 
 **macOS:**
 
-1. Download the macOS release archive
-2. Extract: `tar xf oscan-*.tar.gz`
+1. Download `oscan-vX.Y.Z-macos-x86_64-c.tar.gz`, keeping its original file name
+2. Verify exactly that asset, then extract:
+   ```bash
+   grep -E "[[:space:]]\*?oscan-vX.Y.Z-macos-x86_64-c\.tar\.gz$" SHA256SUMS | shasum -a 256 -c -
+   tar xf oscan-vX.Y.Z-macos-x86_64-c.tar.gz
+   ```
 3. Copy the `oscan` binary to `/usr/local/bin/` or another directory in your PATH
-4. Verify: `oscan --help`
+4. Verify: `oscan --version`
 
-**macOS requires Xcode Command Line Tools** (a native C compiler). Install with:
+**macOS requires Xcode Command Line Tools** (a native C compiler), because the
+macOS package is a C-backend package:
 
 ```bash
 xcode-select --install
@@ -68,7 +101,7 @@ If you prefer to build Oscan yourself, you'll need:
 
 - **Rust toolchain** (to compile the Oscan compiler itself)
 - **LLVM 22 shared library** only when running the LLVM backend from a source
-  build; release bundles package it, and no Clang executable or LLVM SDK is used
+  build; release packages ship it, and no Clang executable or LLVM SDK is used
 - **C compiler** (GCC, Clang, or MSVC) for the C backend, hosted object-backend
   mode, `--extra-c`, and final linking when packaged direct-link assets are absent
 
@@ -78,27 +111,33 @@ cd Oscan
 cargo build --release
 ```
 
-The binary is `target/release/oscan` (or `oscan.exe` on Windows).
+The binary is `target/release/oscan` (or `oscan.exe` on Windows). A default
+source build contains all three backends; released packages are single-backend
+builds (`--no-default-features --features backend-<name>`).
 
 ### Why `toolchain/` Is Not in Git
 
-Release archives on Windows and Linux include a `toolchain/` directory bundled with the Oscan binary. This directory is **not** committed to the Git repository because:
+The `c` release packages (and the Linux `llvm` package's provider directory)
+include a `toolchain/` directory bundled with the Oscan binary. It is **not**
+committed to the Git repository because:
 
 - It contains large platform-specific binaries (not source code)
 - It is generated during release builds, not during development
 - Committing binary toolchains would bloat the repository and make version control unwieldy
 
 The bundled `toolchain/` directory exists only in release artifacts, where it
-lives alongside the `oscan` binary in the unpacked archive. Oscan automatically
-discovers its LLVM provider there; it also uses the bundled compiler for
-explicit C, hosted, and extra-C builds.
+lives alongside the `oscan` binary in the unpacked archive. Oscan discovers its
+LLVM provider or C compiler there — relative to its own executable, never from
+`PATH` or the current directory.
 
 ### Upgrade and Uninstall (Phase 1)
 
-**Phase 1 releases** do not yet use a system package manager, so upgrades and uninstalls are manual:
+**Phase 1 releases** do not yet use a system package manager, so upgrades and uninstalls are manual — and the right procedure depends on how you installed:
 
-- **Upgrade:** Download the new release archive and extract it to the same location (or a new location and update your PATH)
-- **Uninstall:** Remove the directory containing `oscan` and `toolchain/`
+- **Upgrade (archive install):** Download the new package and extract it to the same location (or a new location and update your PATH).
+- **Upgrade (Windows MSI):** Run the new MSI; it replaces the previous MSI install in place.
+- **Uninstall (archive install):** Remove the directory containing `oscan` and, if the package had one, its `toolchain/`/`native-link/` subdirectories, then remove it from your PATH.
+- **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps → Oscan → Uninstall**, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-llvm.msi /quiet`. Do **not** just delete the installed directory: that leaves the product registered with Windows Installer.
 
 A future release may add WinGet, Homebrew, and Scoop support for easier package management.
 
@@ -779,8 +818,8 @@ Use `--extra-obj` and `--extra-lib` to link precompiled object files (`.o` or `.
 ```
 oscan myapp.osc --extra-obj mylib.o --run
 oscan myapp.osc --extra-obj obj1.o --extra-obj obj2.o --extra-lib mylib.a -o myapp
-oscan myapp.osc --backend native --libc --extra-lib winhttp --extra-lib ws2_32 -o myapp
-oscan myapp.osc --backend native --extra-lib precompiled.a --native-target linux-aarch64 -o myapp
+oscan myapp.osc --backend cranelift --libc --extra-lib winhttp --extra-lib ws2_32 -o myapp
+oscan myapp.osc --backend cranelift --extra-lib precompiled.a --native-target linux-aarch64 -o myapp
 ```
 
 Both flags are repeatable. This is useful for linking hand-written assembly, C libraries precompiled with different flags, or FFI bindings that don't need recompilation.
@@ -932,12 +971,14 @@ let x: i32 = 1;
 
 ## Backend Roles and Toolchain Lookup (Windows/Linux)
 
-Ordinary executable, object, and `--run` builds prefer the **LLVM backend**
-when the host has a supported object target and a compatible packaged LLVM
-provider. If LLVM is not available, Oscan falls back to the **Cranelift
-backend** (`--backend native`), then to the **C backend**. Explicit
-`--backend llvm|native|c` always wins, and an explicit LLVM failure never falls
-back.
+A released package contains exactly one backend and defaults to it. In a
+multi-backend (development) build, ordinary executable, object, and `--run`
+builds prefer the **LLVM backend** when the host has a supported object target
+and a compatible packaged LLVM provider; if LLVM is not available, Oscan falls
+back to the **Cranelift backend**, then to the **C backend**. Explicit
+`--backend llvm|cranelift|c` always wins, and an explicit LLVM failure never
+falls back. `--backend native` still selects Cranelift, with one deprecation
+warning.
 
 LLVM uses this production pipeline:
 
@@ -961,14 +1002,17 @@ LLVM provider lookup order:
 1. `OSCAN_LLVM_LIB` — absolute shared-library path
 2. `OSCAN_LLVM_DIR` — absolute provider directory
 3. `OSCAN_TOOLCHAIN_DIR` — absolute packaged-toolchain root
-4. executable-relative `toolchain/` and executable directory
+4. executable-relative roots, in order: `<exe-dir>/toolchain`,
+   `<exe-dir>/native-link` (the verified package sidecar; Windows shares one
+   `libLLVM-22.dll` there between the code generator and `ld.lld.exe`), and
+   `<exe-dir>` itself
 
 Relative overrides, the current directory, `PATH`, and bare loader lookup are
-not accepted. Windows and Linux full bundles include LLVM 22 and therefore
+not accepted. The Windows and Linux `llvm` packages ship LLVM 22 and therefore
 default to LLVM. macOS remains on the C backend because it has no packaged
 LLVM/Cranelift object target.
 
-For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in a `toolchain/` directory instead of always requiring a separately installed system compiler.
+For builds that need a C compiler on Windows and Linux, Oscan can use a bundled C toolchain shipped in the `c` package's `toolchain/` directory instead of always requiring a separately installed system compiler. The `llvm` and `cranelift` packages ship no C compiler and refuse the builds that would need one.
 
 Lookup order:
 
@@ -986,23 +1030,39 @@ When a bundled toolchain directory is used, Oscan searches platform-specific and
 `OSCAN_TOOLCHAIN_DIR` points at the root of the bundled toolchain. If no override or bundled toolchain is present, host compiler fallback still applies. Cross-compilation targets such as `riscv64` and `wasi` still require their own target-specific toolchains.
 
 **Exception — Windows and Linux x86-64 freestanding object-backend final
-links:** in a packaged build (release bundles and CI builds that embed the
-direct-link assets), the C-compiler lookup above is not needed to link an
-already emitted LLVM or Cranelift object, and `OSCAN_CC` is not consulted at
-all for such a build. `oscan` embeds its own linker plus the minimal support
+links:** in a packaged build, the C-compiler lookup above is not needed to link
+an already emitted LLVM or Cranelift object, and `OSCAN_CC` is not consulted at
+all for such a build. `oscan` uses its own linker plus the minimal support
 files it needs (`ld.lld` + 5 DLLs on Windows; a fully static
-`x86_64-linux-musl-ld` on Linux), extracting them on first use to a local cache
-(`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
-`$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete; rebuilt automatically). LLVM emission uses packaged
-`libLLVM` in-process. Linux AArch64/RISC-V64 cross-links use target-matched
-linker/runtime sidecars; the Linux LLVM provider exports both targets, while
-the Windows provider exports AArch64 but not RISC-V. Hosted `--libc` mode,
+`x86_64-linux-musl-ld` on Linux). Those files reach the compiler in one of two
+ways:
+
+- **Release packages (schema v2):** they ship as a verified sidecar at
+  `<exe-dir>/native-link/` (manifest `native-link-assets.json`, SHA-256 per
+  file). The binary embeds nothing, and verified files are **used in place** —
+  never copied into a cache. The manifest is read only from that fixed
+  executable-relative path, and any verification failure is a hard error with
+  no fallback.
+- **Optional embedded builds** (`OSCAN_EMBED_ASSETS_DIR` +
+  `OSCAN_REQUIRE_EMBEDDED_ASSETS=1`, used by CI smoke jobs and standalone
+  single-file builds): the same assets live inside the binary and are
+  extracted on first use to a local cache
+  (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
+  `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets`
+  on Linux — safe to delete; rebuilt automatically).
+
+LLVM emission uses packaged `libLLVM` in-process. Linux AArch64/RISC-V64
+cross-links need a target-matched
+linker and runtime archive supplied through `OSCAN_NATIVE_LINKER` and
+`OSCAN_RUNTIME_ARCHIVE_DIR` (packages ship only their own target's assets); the
+Linux LLVM provider exports both targets, while the Windows provider exports
+AArch64 but not RISC-V. Hosted `--libc` mode,
 explicit `--extra-c` sources, generated string-ABI extern shims, and plain
-development builds without embedded direct-link assets still use the
-C-compiler lookup above. Set `OSCAN_NO_TOOLCHAIN=1` to reject every such
-escape hatch. The C backend also supports ARM64/RISC-V64 through the
-corresponding C cross toolchains.
+development builds with neither sidecar nor embedded direct-link assets still
+use the C-compiler lookup above; the `llvm`/`cranelift` packages refuse all of
+them outright rather than looking for a compiler. Set `OSCAN_NO_TOOLCHAIN=1` to
+reject every such escape hatch in a development build. The C backend also
+supports ARM64/RISC-V64 through the corresponding C cross toolchains.
 
 ---
 
