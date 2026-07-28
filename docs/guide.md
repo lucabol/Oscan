@@ -4,6 +4,21 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 **Interested in safety?** See [Safety Guide](safety.md) to learn how Oscan prevents 11 of 11 major bug categories that plague C.
 
+## Compiler Backends
+
+Oscan has three production backends:
+
+| Backend | Purpose | Packaged Windows/Linux behavior |
+|---|---|---|
+| `llvm` | Preferred optimized backend | Direct LLVM IR and in-process object emission; selected by default |
+| `native` / `cranelift` | Fast independent Cranelift backend and fallback | Direct object emission; selected explicitly or when LLVM is unavailable |
+| `c` | Portable C99, readable source output, and correctness oracle | Selected explicitly, for `.c` output, macOS, WASI, and C-only targets |
+
+The packaged freestanding LLVM and Cranelift paths invoke no C compiler.
+Hosted mode, extra C sources, and the C backend use the bundled or host C
+toolchain. See [Backend Roles and Toolchain Lookup](#backend-roles-and-toolchain-lookup-windowslinux)
+for the full selection and fallback rules.
+
 ---
 
 ## Installation
@@ -73,7 +88,10 @@ Release archives on Windows and Linux include a `toolchain/` directory bundled w
 - It is generated during release builds, not during development
 - Committing binary toolchains would bloat the repository and make version control unwieldy
 
-The bundled `toolchain/` directory exists only in release artifacts, where it lives alongside the `oscan` binary in the unpacked archive. When you use the bundled release, the Oscan compiler automatically discovers and uses this sibling `toolchain/` directory for C compilation.
+The bundled `toolchain/` directory exists only in release artifacts, where it
+lives alongside the `oscan` binary in the unpacked archive. Oscan automatically
+discovers its LLVM provider there; it also uses the bundled compiler for
+explicit C, hosted, and extra-C builds.
 
 ### Upgrade and Uninstall (Phase 1)
 

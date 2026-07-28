@@ -80,6 +80,7 @@ try {
     Assert-MatrixTest ($run -match [regex]::Escape("Output root: $output")) "matrix did not print its absolute output root"
     Assert-MatrixTest (-not (Test-Path -LiteralPath $staleSentinel)) "matrix did not remove stale output-root artifacts"
     Assert-MatrixTest ($run -match "SKIP Cranelift/native") "matrix did not skip unavailable native backend"
+    Assert-MatrixTest ($run -match "Compiled artifacts: 6/6 \(3 samples x 2 backends\)") "matrix did not report the sample/backend artifact count"
     Assert-MatrixTest ($run -match "same name\.osc.*") "matrix table did not contain samples"
 
     $cArtifacts = @(Get-ChildItem -LiteralPath (Join-Path $output "c") -File)

@@ -249,6 +249,10 @@ try {
     Pop-Location
 }
 
+$expectedArtifactCount = $samples.Count * $availableBackends.Count
+$successfulArtifactCount = @($results.Values | Where-Object { $_.Status -eq "OK" }).Count
+Write-Host ""
+Write-Host "Compiled artifacts: $successfulArtifactCount/$expectedArtifactCount ($($samples.Count) samples x $($availableBackends.Count) backends)"
 Write-Host ""
 Write-Host "Executable size matrix (bytes)"
 $sampleWidth = [Math]::Max(6, (($samples | ForEach-Object { $_.RelativePath.Length } | Measure-Object -Maximum).Maximum))

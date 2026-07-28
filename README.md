@@ -7,8 +7,20 @@
 
 **A minimalist language for LLM code generation.** Write clear, unambiguous programs that compile through LLVM, portable C99, or direct Cranelift object code. Oscan is designed so that LLMs *understand what they are writing* — a small, explicit grammar with readable C and LLVM IR output you can inspect.
 
+## Three Backends
+
+Oscan ships three production backends. Packaged Windows and Linux builds prefer
+LLVM automatically; explicit `--backend llvm|native|c` selection always wins.
+
+| Backend | Role | Compilation path | Packaged freestanding requirement |
+|---|---|---|---|
+| **LLVM** | Preferred default | Typed Oscan IR -> shared LIR -> LLVM IR -> in-process LLVM 22 -> object | Packaged `libLLVM` and Oscan's direct linker; no C/Clang executable |
+| **Cranelift** (`native`) | Fast direct-codegen fallback and independent implementation | Typed Oscan IR -> shared LIR -> Cranelift object | Oscan's direct linker; no C compiler |
+| **C** | Portability, readable source output, and differential oracle | Typed Oscan program -> C99 -> C compiler | Bundled or host C toolchain |
+
 ## Contents
 
+- [Three Backends](#three-backends)
 - [Language Highlights](#language-highlights)
 - [For AI Coding Agents](#for-ai-coding-agents)
 - [A Quick Look](#a-quick-look)
@@ -315,8 +327,17 @@ Linux). No installed C compiler, Clang executable, LLVM SDK, `llc`, `opt`, or
 `llvm-as` is involved.
 
 The pinned Windows release configuration gates `hello.osc` size in CI. The
-current recursive 37-example matrix totals 814,080 bytes for LLVM versus
-875,520 bytes for C, so LLVM is 61,440 bytes (7.02%) smaller in aggregate.
+current recursive matrix compiled all 37 examples with all three backends (111
+executables):
+
+| Backend | `hello.osc` | 37-example total |
+|---|---:|---:|
+| LLVM | 6,144 bytes | 814,080 bytes |
+| Cranelift/native | 6,656 bytes | 863,232 bytes |
+| C | 8,704 bytes | 875,520 bytes |
+
+LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
+(7.02%) smaller than C in aggregate.
 `scripts/compare-backend-size.ps1` enforces the focused `hello.osc` invariant;
 `scripts/sample-backend-matrix.ps1` reports the complete matrix and totals.
 
@@ -443,10 +464,10 @@ executable on the current machine. Each remaining backend gets its own
 subdirectory under the output root (`tests\build\sample-backend-matrix` by
 default, override with `-OutputDirectory`); the absolute output root is printed
 first and wiped before the run. Nested and case-colliding sample names are
-flattened to unique artifact names. It finishes with a deterministic,
-sorted size table (bytes per sample per backend), and exits non-zero if any
-available backend fails to compile a sample or does not produce a non-empty
-host executable. Pass `-Oscan <path>` to pick a compiler; otherwise
+flattened to unique artifact names. It reports the sample/backend artifact
+count, then finishes with a deterministic, sorted size table (bytes per sample
+per backend), and exits non-zero if any available backend fails to compile a
+sample or does not produce a non-empty host executable. Pass `-Oscan <path>` to pick a compiler; otherwise
 `target/release` then `target/debug` are used.
 
 The repository currently includes:

@@ -2334,44 +2334,33 @@ Error: division by zero
 
 ### 13.1 Pipeline
 
-```
-Source Code (.osc)
-    │
-    ▼
-┌──────────┐
-│  Lexer   │  Source → Token stream
-└──────────┘
-    │
-    ▼
-┌──────────┐
-│  Parser  │  Token stream → Untyped AST
-└──────────┘
-    │
-    ▼
-┌───────────────────┐
-│  Name Collection  │  Pass 1: Collect all top-level names (types, functions, constants)
-└───────────────────┘
-    │
-    ▼
-┌───────────────────┐
-│  Name Resolution  │  Pass 2: Resolve all references, check anti-shadowing
-│  & Type Checking  │  Annotate AST with types → Typed AST
-└───────────────────┘
-    │
-    ▼
-┌──────────────────┐
-│  C Code Generator │  Typed AST → C source file
-└──────────────────┘
-    │
-    ▼
-┌──────────────────┐
-│  C Compiler      │  C source → executable (gcc/clang)
-│  (external)      │
-└──────────────────┘
+```text
+Source (.osc) -> Lexer -> Parser -> Name resolution and type checking
+                                      |
+                                      v
+                              Typed Oscan IR
+                       +--------------+--------------+
+                       |                             |
+                       v                             v
+                  C backend                    Shared typed LIR
+                  C99 source                  /                \
+                       |                     v                  v
+                       v               Direct LLVM IR      Cranelift
+              Bundled/host C compiler       |                object
+                       |                     v                  |
+                       |              Packaged LLVM 22          |
+                       |              in-process object         |
+                       |                     |                  |
+                       +---------------------+------------------+
+                                             |
+                                             v
+                                Runtime archive + linker
+                                             |
+                                             v
+                                         Executable
 ```
 
-The diagram above describes the C backend. After type checking, the typed
-program is lowered to Oscan's typed IR, and the selected backend takes over:
+After type checking, the selected backend takes over:
 
 - **C** (`--backend c`): the C code generator above, compiled by an external
   or bundled C toolchain. Also the source-emission, macOS, WASI, and
@@ -2471,14 +2460,17 @@ int main(void) {
 ### 13.7 File Extension
 
 - Oscan source files use the `.osc` extension.
-- Generated C files use the `.c` extension with the same base name.
+- Generated C uses `.c`; directly emitted LLVM IR uses `.ll`; relocatable
+  object output uses `.o` or `.obj`.
 
 ### 13.8 Compilation Command
 
 ```bash
-oscan input.osc --run          # Compile with the selected backend and run
-oscan input.osc -o output.c    # Transpile to C
-cc output.c osc_runtime.c -o program  # Compile with C compiler
+oscan input.osc --run                 # Prefer LLVM, then Cranelift, then C
+oscan input.osc --backend llvm --run  # Require direct LLVM
+oscan input.osc --backend native -o output.o
+oscan input.osc -o output.ll          # Emit direct LLVM IR
+oscan input.osc -o output.c           # Emit C99
 ```
 
 ---

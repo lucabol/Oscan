@@ -15,7 +15,8 @@ By the end, you will have used:
 - pure `fn` and side-effecting `fn!` functions;
 - structs;
 - exhaustive `match` and `Result` error handling; and
-- standalone executable and generated C output.
+- standalone executables, the preferred LLVM path, and generated C/LLVM IR
+  output.
 
 Every complete program below is runnable. Replace the contents of `oscwc.osc`
 at each checkpoint rather than trying to combine the checkpoints.
@@ -64,6 +65,10 @@ Compile and run it:
 ```text
 oscan oscwc.osc --run
 ```
+
+The Windows and Linux full bundles use LLVM by default. You can require one of
+the three backends with `--backend llvm`, `--backend native`, or `--backend c`;
+explicit selection never silently changes to another backend.
 
 You should see:
 
@@ -476,7 +481,10 @@ This program counts newline characters, matching the traditional core of
 - Structs group related values.
 - Fallible operations return `Result`, and `match` handles every outcome.
 - `--run` is the fast edit-run loop; omitting it creates an executable.
+- Oscan provides LLVM, Cranelift/native, and C backends; packaged Windows/Linux
+  builds prefer LLVM.
 - A `.c` output path keeps Oscan's generated C.
+- A `.ll` output path keeps the directly emitted LLVM IR.
 
 ## Where to go next
 

@@ -163,10 +163,23 @@ as an absolute path and wipes before the run. Backends that cannot produce a
 host executable on this machine are probed once and skipped with a printed
 reason; the remaining ones must compile every sample into a non-empty host
 executable or the script fails. It ends with a deterministic size table (bytes
-per sample per available backend, sorted by sample path), aggregate backend
-totals, and the aggregate LLVM-versus-C byte and percentage difference.
+per sample per available backend, sorted by sample path), an explicit
+sample/backend artifact count, aggregate backend totals, and the aggregate
+LLVM-versus-C byte and percentage difference.
 `tests\sample_backend_matrix.tests.ps1` exercises that behavior against a fake
 compiler.
+
+The pinned Windows release-toolchain run on 2026-07-28 compiled all 37 recursive
+examples with LLVM, Cranelift/native, and C: 111 executables with no failures.
+
+| Backend | Aggregate size |
+|---|---:|
+| LLVM | 814,080 bytes |
+| Cranelift/native | 863,232 bytes |
+| C | 875,520 bytes |
+
+LLVM was 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
+(7.02%) smaller than C.
 
 ### Test individual file:
 ```powershell

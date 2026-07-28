@@ -280,8 +280,17 @@ packaged smoke. This is a provider-load gate, not a toolchain dependency:
 normal freestanding LLVM code generation still invokes no compiler or LLVM
 command-line tool. `README-install.txt` records the same end-user packages.
 
-The current pinned Windows matrix totals 814,080 bytes for LLVM versus 875,520
-bytes for C across all 37 examples: LLVM is 61,440 bytes (7.02%) smaller.
+The current pinned Windows matrix compiles all 37 examples with all three
+backends (111 executables):
+
+| Backend | Aggregate size |
+|---|---:|
+| LLVM | 814,080 bytes |
+| Cranelift/native | 863,232 bytes |
+| C | 875,520 bytes |
+
+LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
+(7.02%) smaller than C.
 
 ### Windows native size-toolchain benchmark
 

@@ -430,4 +430,6 @@ extern {
 
 The one gap (stack overflow) is structural, affects only edge cases, and matches the behavior of other modern languages like Rust, Go, and Java.
 
-This safety is the foundation for **confident LLM code generation**: the compiler catches mistakes before they become bugs, and the generated C can be audited for correctness.
+This safety is the foundation for **confident LLM code generation**: the
+compiler catches mistakes before they become bugs, and either generated C or
+directly emitted LLVM IR can be inspected when auditing compiler output.
