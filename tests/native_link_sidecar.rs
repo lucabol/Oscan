@@ -244,9 +244,10 @@ fn a_sidecar_in_the_current_directory_is_ignored() {
         .output()
         .expect("failed to run object emission");
     let emit_stderr = String::from_utf8_lossy(&emit.stderr);
+    let cwd_sidecar = cwd.join("native-link");
     assert!(
-        !emit_stderr.contains("native-link assets are unusable"),
-        "compilation must not consult a CWD sidecar: {emit_stderr}"
+        !emit_stderr.contains(cwd_sidecar.to_string_lossy().as_ref()),
+        "compilation must not mention the CWD sidecar: {emit_stderr}"
     );
 }
 
