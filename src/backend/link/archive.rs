@@ -82,7 +82,7 @@ pub(super) fn find_runtime_source_dir() -> Option<PathBuf> {
 ///    build fails closed here — no auto-build at all; it must rely on
 ///    `OSCAN_RUNTIME_ARCHIVE_DIR` or a shipped prebuilt archive instead.
 fn find_release_tools_script() -> Result<Option<PathBuf>, String> {
-    find_release_tools_script_with(crate::backend::native_assets::EMBEDDED_ASSETS_PRESENT)
+    find_release_tools_script_with(crate::backend::native_assets::packaged_assets_present())
 }
 
 /// Testable core of [`find_release_tools_script`], parameterized over the
@@ -127,6 +127,69 @@ fn env_var_nonempty(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// The explicit runtime-archive directory override, if it names one. Goes
+/// through [`env_var_nonempty`] so an exported-but-empty (or
+/// whitespace-only) `OSCAN_RUNTIME_ARCHIVE_DIR` reads as "unset" rather
+/// than as the current directory — a packaged compiler must never resolve
+/// its runtime archive against wherever it happened to be launched.
+fn runtime_archive_override_dir() -> Option<String> {
+    env_var_nonempty("OSCAN_RUNTIME_ARCHIVE_DIR")
+}
+
+/// The fixed, executable-relative runtime-archive layout every packaged
+/// release uses: `<root>/build/runtime-archives/<target>/`. The
+/// native-link sidecar manifest (see
+/// [`crate::backend::native_assets::sidecar`]) describes only linker/
+/// import-library/compiler-builtins assets, so runtime archives stay a
+/// separate package component with this one documented location —
+/// matching `packaging/toolchains/release-contract.json`'s
+/// `archive-root/build/runtime-archives/{target}`, which is exactly
+/// `<exe-dir>/build/runtime-archives/{target}` once the binary sits at the
+/// archive root.
+pub(super) fn packaged_runtime_archive_root(root: &Path, target: NativeTarget) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for segment in crate::backend::native_assets::sidecar::RUNTIME_ARCHIVE_SUBPATH {
+        path.push(segment);
+    }
+    path.join(target.archive_tag())
+}
+
+/// Roots to search for a prebuilt runtime archive.
+///
+/// A **distribution** build — one stamped with `OSCAN_DISTRIBUTION_BACKEND`
+/// at compile time (see [`crate::backend::select`]) — searches exactly one
+/// root: the directory its own executable lives in, which is the package
+/// root. Not its ancestors, not the current directory, not the checkout it
+/// was built from. A packaged compiler ships its archives; anything else
+/// found nearby is somebody else's file. `OSCAN_RUNTIME_ARCHIVE_DIR`
+/// remains the one explicit escape hatch and is handled by the caller
+/// before this is consulted.
+///
+/// Every other build (development, and full releases that embed their
+/// assets) keeps the existing broader search: exe ancestors,
+/// `CARGO_MANIFEST_DIR`, then the current directory.
+fn runtime_archive_roots() -> Vec<PathBuf> {
+    runtime_archive_roots_for(
+        crate::backend::select::distribution_backend().is_some(),
+        current_exe_dir(),
+    )
+}
+
+/// Pure core of [`runtime_archive_roots`].
+fn runtime_archive_roots_for(is_distribution: bool, exe_dir: Option<PathBuf>) -> Vec<PathBuf> {
+    if is_distribution {
+        return exe_dir.into_iter().collect();
+    }
+    repo_root_candidates()
+}
+
+/// The canonical directory containing the running `oscan` binary.
+fn current_exe_dir() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let exe = fs::canonicalize(&exe).unwrap_or(exe);
+    exe.parent().map(Path::to_path_buf)
+}
+
 pub(super) fn archive_name(
     runtime_mode: RuntimeMode,
     profile: FreestandingProfile,
@@ -154,7 +217,10 @@ pub(super) fn find_or_build_runtime_archive(
     profile: FreestandingProfile,
 ) -> Result<PathBuf, String> {
     let archive_name = archive_name(runtime_mode, profile);
-    if let Ok(dir) = env::var("OSCAN_RUNTIME_ARCHIVE_DIR") {
+    // Empty/whitespace is "unset", never "the current directory": an
+    // exported-but-empty OSCAN_RUNTIME_ARCHIVE_DIR must not turn a
+    // packaged lookup into a CWD-relative one.
+    if let Some(dir) = runtime_archive_override_dir() {
         let p = PathBuf::from(&dir).join(archive_name);
         return if p.is_file() {
             Ok(p)
@@ -166,18 +232,34 @@ pub(super) fn find_or_build_runtime_archive(
         };
     }
 
-    for base in repo_root_candidates() {
-        let p = base
-            .join("build")
-            .join("runtime-archives")
-            .join(target.archive_tag())
-            .join(archive_name);
+    for base in runtime_archive_roots() {
+        let p = packaged_runtime_archive_root(&base, target).join(archive_name);
         if p.is_file() {
             if is_verbose() {
                 eprintln!("[verbose] Using existing runtime archive: {}", p.display());
             }
             return Ok(p);
         }
+    }
+
+    // A distribution package ships its own runtime archives at one fixed
+    // place. Not finding them there is package corruption, not a cue to
+    // start looking for a C toolchain to build one with.
+    if let Some(backend) = crate::backend::select::distribution_backend() {
+        let expected = current_exe_dir()
+            .map(|dir| packaged_runtime_archive_root(&dir, target).join(archive_name))
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "<exe-dir>/build/runtime-archives/{}/{archive_name}",
+                    target.archive_tag()
+                )
+            });
+        return Err(format!(
+            "this {backend} distribution is missing its {runtime_mode} runtime archive: '{expected}' \
+             does not exist. The package is incomplete or corrupt — reinstall it, or set \
+             OSCAN_RUNTIME_ARCHIVE_DIR to a directory containing {archive_name}"
+        ));
     }
 
     // Strict no-toolchain profile: a runtime archive that has to be
@@ -193,16 +275,17 @@ pub(super) fn find_or_build_runtime_archive(
     let script = match find_release_tools_script()? {
         Some(script) => script,
         None => {
-            return Err(if crate::backend::native_assets::EMBEDDED_ASSETS_PRESENT {
-                format!(
+            return Err(
+                if crate::backend::native_assets::packaged_assets_present() {
+                    format!(
                     "no {runtime_mode} Oscan runtime archive found (build/runtime-archives/<target>/{archive_name}) \
                      and this is an installed/release oscan build (it embeds its own native-link assets), which \
                      never auto-builds a runtime archive from scripts/release_tools.py; set \
                      OSCAN_RUNTIME_ARCHIVE_DIR to a directory containing {archive_name}, or reinstall/update to a \
                      release that ships one"
                 )
-            } else {
-                format!(
+                } else {
+                    format!(
                     "no {runtime_mode} Oscan runtime archive found (build/runtime-archives/<target>/{archive_name}) \
                      and no trusted scripts/release_tools.py was found to build one (only CARGO_MANIFEST_DIR's own \
                      scripts/release_tools.py is trusted for a dev build — never the current directory); run \
@@ -210,7 +293,8 @@ pub(super) fn find_or_build_runtime_archive(
                      to a directory containing {archive_name}, or set OSCAN_RUNTIME_BUILDER to an explicit, \
                      trusted release_tools.py path"
                 )
-            });
+                },
+            );
         }
     };
     let repo_root = script
@@ -441,7 +525,7 @@ pub(super) fn resolve_shim_source(
         RuntimeMode::Freestanding => Err(format!(
             "runtime archive '{}' predates the precompiled native shim (manifest contains_native_shim \
              is false/absent); rebuild it with 'scripts/build-runtime-archive.ps1 -Mode freestanding' \
-             (or fetch a current release). The freestanding native backend no longer compiles \
+             (or fetch a current release). The freestanding object backends no longer compile \
              osc_native_shim.c locally.",
             archive_path.display()
         )),
@@ -467,6 +551,132 @@ pub(super) fn resolve_shim_source(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    /// The one documented, executable-relative layout a packaged release
+    /// stages its runtime archives under. The parent packaging layer
+    /// stages `archive-root/build/runtime-archives/<target>/`, which is
+    /// exactly this path once the binary sits at the archive root.
+    #[test]
+    fn packaged_runtime_archives_live_under_a_fixed_executable_relative_root() {
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\packages\oscan")
+        } else {
+            PathBuf::from("/opt/oscan")
+        };
+        assert_eq!(
+            packaged_runtime_archive_root(&root, NativeTarget::LinuxX64),
+            root.join("build")
+                .join("runtime-archives")
+                .join("linux-x86_64")
+        );
+        assert_eq!(
+            packaged_runtime_archive_root(&root, NativeTarget::WindowsX64),
+            root.join("build")
+                .join("runtime-archives")
+                .join("windows-x86_64")
+        );
+    }
+
+    /// An exported-but-empty `OSCAN_RUNTIME_ARCHIVE_DIR` reads as unset —
+    /// it must never turn into a current-directory lookup, in a
+    /// distribution package or anywhere else.
+    #[test]
+    fn an_empty_runtime_archive_override_is_treated_as_unset() {
+        let _lock = RUNTIME_BUILDER_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let restore = env::var("OSCAN_RUNTIME_ARCHIVE_DIR").ok();
+
+        for value in ["", "   ", "\t"] {
+            env::set_var("OSCAN_RUNTIME_ARCHIVE_DIR", value);
+            assert_eq!(
+                runtime_archive_override_dir(),
+                None,
+                "{value:?} must read as unset, never as the current directory"
+            );
+        }
+        env::set_var("OSCAN_RUNTIME_ARCHIVE_DIR", "  /opt/archives  ");
+        assert_eq!(
+            runtime_archive_override_dir().as_deref(),
+            Some("/opt/archives"),
+            "a real value is still honored (trimmed)"
+        );
+
+        env::remove_var("OSCAN_RUNTIME_ARCHIVE_DIR");
+        assert_eq!(runtime_archive_override_dir(), None);
+
+        // ...and with no usable override, a distribution build still looks
+        // only in its own package root.
+        let exe_dir = if cfg!(windows) {
+            PathBuf::from(r"C:\packages\oscan-v1")
+        } else {
+            PathBuf::from("/opt/oscan-v1")
+        };
+        let roots = runtime_archive_roots_for(true, Some(exe_dir.clone()));
+        assert_eq!(roots, vec![exe_dir]);
+        assert!(!roots.contains(&PathBuf::from(".")), "{roots:?}");
+
+        match restore {
+            Some(value) => env::set_var("OSCAN_RUNTIME_ARCHIVE_DIR", value),
+            None => env::remove_var("OSCAN_RUNTIME_ARCHIVE_DIR"),
+        }
+    }
+
+    /// A distribution package looks in exactly one place: its own root.
+    /// A runtime archive planted in a *parent* directory (or the current
+    /// directory, or the checkout it was built from) is never picked up.
+    #[test]
+    fn a_distribution_build_searches_only_its_own_package_root() {
+        let exe_dir = if cfg!(windows) {
+            PathBuf::from(r"C:\packages\oscan-v1")
+        } else {
+            PathBuf::from("/opt/oscan-v1")
+        };
+        let roots = runtime_archive_roots_for(true, Some(exe_dir.clone()));
+        assert_eq!(roots, vec![exe_dir.clone()]);
+
+        let parent = exe_dir
+            .parent()
+            .expect("the fixture has a parent")
+            .to_path_buf();
+        assert!(
+            !roots.contains(&parent),
+            "a planted parent directory must never be searched: {roots:?}"
+        );
+        assert!(!roots.contains(&PathBuf::from(".")), "{roots:?}");
+        if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
+            assert!(!roots.contains(&PathBuf::from(manifest_dir)), "{roots:?}");
+        }
+    }
+
+    /// Development builds (and unstamped releases) keep the existing
+    /// lookup, current-directory fallback included.
+    #[test]
+    fn a_development_build_keeps_the_existing_lookup() {
+        let dev_roots = runtime_archive_roots_for(false, current_exe_dir());
+        assert_eq!(dev_roots, repo_root_candidates());
+        assert!(
+            dev_roots.contains(&PathBuf::from(".")),
+            "a dev build keeps its current-directory fallback: {dev_roots:?}"
+        );
+
+        // The live selector follows *this* build's own stamp, whichever
+        // way this test binary was built.
+        let is_distribution = crate::backend::select::distribution_backend().is_some();
+        assert_eq!(
+            runtime_archive_roots(),
+            runtime_archive_roots_for(is_distribution, current_exe_dir())
+        );
+        if is_distribution {
+            assert_eq!(
+                runtime_archive_roots(),
+                current_exe_dir().into_iter().collect::<Vec<_>>(),
+                "a distribution build searches only its own package root"
+            );
+        } else {
+            assert_eq!(runtime_archive_roots(), dev_roots);
+        }
+    }
 
     #[test]
     fn runtime_modes_select_distinct_archives() {
@@ -584,6 +794,9 @@ mod tests {
 
     #[test]
     fn shim_policy_falls_back_locally_for_hosted_legacy_archive() {
+        // The outcome depends on the strict no-toolchain profile, which
+        // another test may be arming through the environment right now.
+        let _strict = crate::backend::no_toolchain::testing::lock_strict_profile_env();
         let manifest = RuntimeArchiveManifest {
             contains_native_shim: false,
             ..Default::default()
@@ -592,9 +805,18 @@ mod tests {
             RuntimeMode::Hosted,
             Path::new("libosc_runtime_hosted.a"),
             Some(&manifest),
-        )
-        .expect("hosted legacy archive is a diagnosed fallback, not an error");
-        assert!(matches!(source, ShimSource::CompileLocally));
+        );
+        if crate::backend::no_toolchain::is_strict() {
+            // Compiling the shim locally needs a C compiler, so the
+            // strict profile (armed by the environment, or intrinsic to a
+            // build with no C backend) refuses it by name instead.
+            let err = source.expect_err("the strict profile must refuse a local shim compile");
+            assert!(err.contains("osc_native_shim.c"), "{err}");
+        } else {
+            let source =
+                source.expect("hosted legacy archive is a diagnosed fallback, not an error");
+            assert!(matches!(source, ShimSource::CompileLocally));
+        }
     }
 
     #[test]

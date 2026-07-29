@@ -1,6 +1,7 @@
 mod ast;
 mod backend;
 mod c_name;
+#[cfg(feature = "backend-c")]
 mod codegen;
 mod error;
 mod ir;
@@ -14,10 +15,15 @@ mod types;
 use std::collections::HashSet;
 use std::env;
 use std::fs;
+#[cfg(feature = "backend-c")]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(feature = "backend-c")]
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use backend::select::{self, Backend, SelectionInputs};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
@@ -26,6 +32,7 @@ pub(crate) fn is_verbose() -> bool {
 }
 
 /// Log a Command's full command line when --verbose is active.
+#[cfg(feature = "backend-c")]
 pub(crate) fn verbose_command(label: &str, cmd: &Command) {
     if is_verbose() {
         let prog = cmd.get_program().to_string_lossy();
@@ -37,6 +44,7 @@ pub(crate) fn verbose_command(label: &str, cmd: &Command) {
     }
 }
 
+#[cfg(feature = "backend-c")]
 fn push_extra_lib_args(command: &mut Command, extra_lib_files: &[String]) {
     for lib in extra_lib_files {
         if backend::link::is_system_library_name(lib) {
@@ -47,58 +55,77 @@ fn push_extra_lib_args(command: &mut Command, extra_lib_files: &[String]) {
     }
 }
 
-const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
-const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
-const EMBEDDED_RUNTIME_GRAPHICS_INC: &str = include_str!("../runtime/osc_runtime_graphics.inc");
-const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
-const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
-const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
-const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
-const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
-const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/math.h");
-const EMBEDDED_NANOSVG_H: &str = include_str!("../deps/laststanding/compat/nanosvg/nanosvg.h");
-const EMBEDDED_NANOSVGRAST_H: &str =
-    include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
-const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
-const EMBEDDED_L_TT_H: &str = include_str!("../deps/laststanding/l_tt.h");
-const EMBEDDED_STB_TRUETYPE_H: &str = include_str!("../deps/laststanding/stb_truetype.h");
+/// The C backend's embedded runtime and dependency headers: written to a
+/// scratch directory next to the generated `program.c` whenever a C
+/// compile/link runs. Only the `backend-c` build contains them, because
+/// only the C backend ever emits a translation unit that `#include`s them
+/// (the object backends link Oscan's prebuilt runtime archive instead).
+#[cfg(feature = "backend-c")]
+mod c_embed {
+    pub const EMBEDDED_RUNTIME_H: &str = include_str!("../runtime/osc_runtime.h");
+    pub const EMBEDDED_RUNTIME_C: &str = include_str!("../runtime/osc_runtime.c");
+    pub const EMBEDDED_RUNTIME_GRAPHICS_INC: &str =
+        include_str!("../runtime/osc_runtime_graphics.inc");
+    pub const EMBEDDED_L_OS_H: &str = include_str!("../deps/laststanding/l_os.h");
+    pub const EMBEDDED_L_GFX_H: &str = include_str!("../deps/laststanding/l_gfx.h");
+    pub const EMBEDDED_L_IMG_H: &str = include_str!("../deps/laststanding/l_img.h");
+    pub const EMBEDDED_STB_IMAGE_H: &str = include_str!("../deps/laststanding/stb_image.h");
+    pub const EMBEDDED_L_SVG_H: &str = include_str!("../deps/laststanding/l_svg.h");
+    pub const EMBEDDED_COMPAT_MATH_H: &str = include_str!("../deps/laststanding/compat/math.h");
+    pub const EMBEDDED_NANOSVG_H: &str =
+        include_str!("../deps/laststanding/compat/nanosvg/nanosvg.h");
+    pub const EMBEDDED_NANOSVGRAST_H: &str =
+        include_str!("../deps/laststanding/compat/nanosvg/nanosvgrast.h");
+    pub const EMBEDDED_L_TLS_H: &str = include_str!("../deps/laststanding/l_tls.h");
+    pub const EMBEDDED_L_TT_H: &str = include_str!("../deps/laststanding/l_tt.h");
+    pub const EMBEDDED_STB_TRUETYPE_H: &str = include_str!("../deps/laststanding/stb_truetype.h");
 
-// BearSSL public headers (for l_tls.h on Linux)
-const EMBEDDED_BEARSSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl.h");
-const EMBEDDED_BEARSSL_HASH_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_hash.h");
-const EMBEDDED_BEARSSL_HMAC_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_hmac.h");
-const EMBEDDED_BEARSSL_KDF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_kdf.h");
-const EMBEDDED_BEARSSL_RAND_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_rand.h");
-const EMBEDDED_BEARSSL_PRF_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_prf.h");
-const EMBEDDED_BEARSSL_BLOCK_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_block.h");
-const EMBEDDED_BEARSSL_AEAD_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_aead.h");
-const EMBEDDED_BEARSSL_RSA_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_rsa.h");
-const EMBEDDED_BEARSSL_EC_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ec.h");
-const EMBEDDED_BEARSSL_SSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_ssl.h");
-const EMBEDDED_BEARSSL_X509_H: &str =
-    include_str!("../deps/laststanding/bearssl/inc/bearssl_x509.h");
-const EMBEDDED_BEARSSL_PEM_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl_pem.h");
+    // BearSSL public headers (for l_tls.h on Linux)
+    pub const EMBEDDED_BEARSSL_H: &str = include_str!("../deps/laststanding/bearssl/inc/bearssl.h");
+    pub const EMBEDDED_BEARSSL_HASH_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_hash.h");
+    pub const EMBEDDED_BEARSSL_HMAC_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_hmac.h");
+    pub const EMBEDDED_BEARSSL_KDF_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_kdf.h");
+    pub const EMBEDDED_BEARSSL_RAND_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_rand.h");
+    pub const EMBEDDED_BEARSSL_PRF_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_prf.h");
+    pub const EMBEDDED_BEARSSL_BLOCK_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_block.h");
+    pub const EMBEDDED_BEARSSL_AEAD_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_aead.h");
+    pub const EMBEDDED_BEARSSL_RSA_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_rsa.h");
+    pub const EMBEDDED_BEARSSL_EC_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_ec.h");
+    pub const EMBEDDED_BEARSSL_SSL_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_ssl.h");
+    pub const EMBEDDED_BEARSSL_X509_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_x509.h");
+    pub const EMBEDDED_BEARSSL_PEM_H: &str =
+        include_str!("../deps/laststanding/bearssl/inc/bearssl_pem.h");
 
-const BEARSSL_HEADERS: &[(&str, &str)] = &[
-    ("bearssl.h", EMBEDDED_BEARSSL_H),
-    ("bearssl_hash.h", EMBEDDED_BEARSSL_HASH_H),
-    ("bearssl_hmac.h", EMBEDDED_BEARSSL_HMAC_H),
-    ("bearssl_kdf.h", EMBEDDED_BEARSSL_KDF_H),
-    ("bearssl_rand.h", EMBEDDED_BEARSSL_RAND_H),
-    ("bearssl_prf.h", EMBEDDED_BEARSSL_PRF_H),
-    ("bearssl_block.h", EMBEDDED_BEARSSL_BLOCK_H),
-    ("bearssl_aead.h", EMBEDDED_BEARSSL_AEAD_H),
-    ("bearssl_rsa.h", EMBEDDED_BEARSSL_RSA_H),
-    ("bearssl_ec.h", EMBEDDED_BEARSSL_EC_H),
-    ("bearssl_ssl.h", EMBEDDED_BEARSSL_SSL_H),
-    ("bearssl_x509.h", EMBEDDED_BEARSSL_X509_H),
-    ("bearssl_pem.h", EMBEDDED_BEARSSL_PEM_H),
-];
+    pub const BEARSSL_HEADERS: &[(&str, &str)] = &[
+        ("bearssl.h", EMBEDDED_BEARSSL_H),
+        ("bearssl_hash.h", EMBEDDED_BEARSSL_HASH_H),
+        ("bearssl_hmac.h", EMBEDDED_BEARSSL_HMAC_H),
+        ("bearssl_kdf.h", EMBEDDED_BEARSSL_KDF_H),
+        ("bearssl_rand.h", EMBEDDED_BEARSSL_RAND_H),
+        ("bearssl_prf.h", EMBEDDED_BEARSSL_PRF_H),
+        ("bearssl_block.h", EMBEDDED_BEARSSL_BLOCK_H),
+        ("bearssl_aead.h", EMBEDDED_BEARSSL_AEAD_H),
+        ("bearssl_rsa.h", EMBEDDED_BEARSSL_RSA_H),
+        ("bearssl_ec.h", EMBEDDED_BEARSSL_EC_H),
+        ("bearssl_ssl.h", EMBEDDED_BEARSSL_SSL_H),
+        ("bearssl_x509.h", EMBEDDED_BEARSSL_X509_H),
+        ("bearssl_pem.h", EMBEDDED_BEARSSL_PEM_H),
+    ];
+}
+
+#[cfg(feature = "backend-c")]
+use c_embed::*;
 
 fn resolve_imports(
     path: &Path,
@@ -271,94 +298,138 @@ fn print_usage(to_stderr: bool) {
             println!("{line}");
         }
     };
-    print_line(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--emit-c] [--emit-llvm-ir] [--libc] [--backend llvm|c|native] [--native-target <tag>] [--target <arch>] [--allow-elevated-native-link] [--extra-c <file.c>] [--extra-cflags <flag>] [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
+    let choices = select::cli_choices();
+    let has_c = Backend::C.is_compiled_in();
+    let has_llvm = Backend::Llvm.is_compiled_in();
+    let has_object_backend = has_llvm || Backend::Cranelift.is_compiled_in();
+    // A build with no C backend refuses every C-toolchain route (see
+    // `backend::no_toolchain`), so it must not advertise the flags and
+    // environment variables that only make sense for one.
+    let has_c_toolchain = !backend::no_toolchain::TOOLCHAIN_FREE_BUILD;
+
+    // The usage line is assembled from the same availability facts as the
+    // option list below, so a backend-specific build never advertises a
+    // flag it can only ever refuse.
+    let mut usage = String::from(
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run]",
     );
-    print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
-    print_line("  --emit-llvm-ir   Emit textual LLVM IR to stdout (or use -o file.ll)");
-    print_line("  --libc           Use the hosted libc runtime (including with LLVM/Cranelift)");
-    print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
-    print_line("  --backend llvm|c|native  Backend (default: LLVM when its packaged code generator is available; native/c otherwise)");
-    print_line("    llvm    Direct LLVM object code through Oscan's own packaged LLVM code generator (no C, no toolchain)");
-    print_line("    c       Portability/reference, C source, macOS, and WASI backend");
-    print_line("    native  Cranelift object code for supported Windows and Linux hosts/targets");
+    if has_c {
+        usage.push_str(" [--emit-c]");
+    }
+    if has_llvm {
+        usage.push_str(" [--emit-llvm-ir]");
+    }
+    if has_c_toolchain {
+        usage.push_str(" [--libc]");
+    }
+    usage.push_str(&format!(" [--backend {choices}]"));
+    if has_object_backend {
+        usage.push_str(" [--native-target <tag>]");
+    }
+    if has_c {
+        usage.push_str(" [--target <arch>]");
+    }
+    if has_object_backend {
+        usage.push_str(" [--allow-elevated-native-link]");
+    }
+    if has_c_toolchain {
+        usage.push_str(" [--extra-c <file.c>] [--extra-cflags <flag>]");
+    }
+    usage.push_str(
+        " [--extra-obj <file.o|.obj>] [--extra-lib <file.a|.lib|name>] [-o output] <file.osc>",
+    );
+    print_line(&usage);
+    if has_c {
+        print_line("  --emit-c        Emit C-backend source to stdout (or use -o file.c)");
+    }
+    if has_llvm {
+        print_line("  --emit-llvm-ir   Emit textual LLVM IR to stdout (or use -o file.ll)");
+    }
+    if has_c_toolchain {
+        print_line(if has_object_backend {
+            "  --libc           Use the hosted libc runtime (including with LLVM/Cranelift)"
+        } else {
+            "  --libc           Use the hosted libc runtime"
+        });
+    }
+    if has_c {
+        print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
+    }
     print_line(&format!(
-        "  --native-target <tag>  LLVM/Cranelift object target: {} (default: host; implicitly selects native)",
-        backend::NativeTarget::accepted_values()
+        "  --backend {choices}  Backend (default: {})",
+        select::default_description()
     ));
-    print_line("  --allow-elevated-native-link  Trusted CI/release only: allow native final link/--run from an elevated process; only bypasses the elevated-process refusal, not path/cache/sandbox checks");
-    print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
-    print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
+    for backend in select::compiled_in() {
+        print_line(match backend {
+            Backend::Llvm => "    llvm       Direct LLVM object code through Oscan's own packaged LLVM code generator (no C, no toolchain)",
+            Backend::Cranelift => "    cranelift  Cranelift object code for supported Windows and Linux hosts/targets",
+            Backend::C => "    c          Portability/reference, C source, macOS, and WASI backend",
+        });
+    }
+    if Backend::Cranelift.is_compiled_in() {
+        print_line(&format!(
+            "    ('{}' is a deprecated alias for 'cranelift')",
+            select::NATIVE_ALIAS
+        ));
+    }
+    if has_object_backend {
+        print_line(&format!(
+            "  --native-target <tag>  LLVM/Cranelift object target: {} (default: host; implicitly selects an object backend)",
+            backend::NativeTarget::accepted_values()
+        ));
+        print_line("  --allow-elevated-native-link  Trusted CI/release only: allow native final link/--run from an elevated process; only bypasses the elevated-process refusal, not path/cache/sandbox checks");
+    }
+    if has_c_toolchain {
+        print_line("  --extra-c <file> Extra C source file to compile and link (repeatable)");
+        print_line("  --extra-cflags <flag>  Extra flag passed to the C compiler (repeatable)");
+    }
     print_line("  --extra-obj <file>  Precompiled object file to link (.o/.obj, repeatable)");
     print_line("  --extra-lib <lib>  Static library path (.a/.lib) or system library name, e.g. winhttp (repeatable)");
-    print_line("  OSCAN_CC         Override the detected C compiler command or path");
-    print_line(&format!(
-        "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
-        toolchain_search_hint()
-    ));
-    print_line(
-        "  OSCAN_NATIVE_LINKER  Override the linker used by --backend native (Windows freestanding: a ld.lld-compatible binary; Linux freestanding: a GNU ld-compatible binary; otherwise a compiler driver)",
-    );
-    print_line(
-        "  OSCAN_NATIVE_LINKER_FLAVOR  How to invoke OSCAN_NATIVE_LINKER/the default native linker: 'mingw' (direct ld.lld, Windows), 'elf' (direct GNU ld, Linux), or 'compiler-driver' (legacy)",
-    );
-    print_line(
-        "  OSCAN_NATIVE_ASSET_CACHE_DIR  Override where extracted embedded native-link assets are cached (default: %LOCALAPPDATA%\\oscan\\native-assets\\ on Windows, $XDG_CACHE_HOME/oscan/native-assets on Linux)",
-    );
-    print_line("  OSCAN_LLVM_LIB   Full path to Oscan's packaged LLVM code generator shared library (--backend llvm)");
-    print_line("  OSCAN_LLVM_DIR   Directory to search for the packaged LLVM code generator");
-    print_line(
-        "  OSCAN_NO_TOOLCHAIN=1  Strict no-toolchain profile: refuse the C backend, --extra-c/--extra-cflags, runtime-archive/shim auto-build, and compiler-driver linking instead of silently using a host C toolchain",
-    );
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Backend {
-    Llvm,
-    C,
-    Native,
-}
-
-impl Backend {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Llvm => "llvm",
-            Self::C => "c",
-            Self::Native => "native",
-        }
+    if has_c_toolchain {
+        print_line("  OSCAN_CC         Override the detected C compiler command or path");
+        print_line(&format!(
+            "  OSCAN_TOOLCHAIN_DIR  Bundled toolchain root (default: {})",
+            toolchain_search_hint()
+        ));
     }
-}
-
-impl std::fmt::Display for Backend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-fn resolve_backend(
-    explicit_backend: Option<Backend>,
-    c_source_output: bool,
-    llvm_ir_output: bool,
-    c_cross_target: bool,
-    native_target_requested: bool,
-    native_host_supported: bool,
-    llvm_available: bool,
-) -> Backend {
-    explicit_backend.unwrap_or_else(|| {
-        if c_source_output || c_cross_target {
-            Backend::C
-        } else if llvm_ir_output {
-            Backend::Llvm
-        } else if native_target_requested {
-            Backend::Native
-        } else if llvm_available && native_host_supported {
-            Backend::Llvm
-        } else if native_host_supported {
-            Backend::Native
+    if has_object_backend {
+        // A build with no C backend refuses compiler-driver linking
+        // outright (see `backend::link::driver`), and a bare
+        // `OSCAN_NATIVE_LINKER` with no flavor *is* the compiler-driver
+        // path — so such a build advertises only the direct flavors and
+        // says the pairing is required.
+        if has_c_toolchain {
+            print_line(
+                "  OSCAN_NATIVE_LINKER  Override the linker used by the LLVM/Cranelift backends (Windows freestanding: a ld.lld-compatible binary; Linux freestanding: a GNU ld-compatible binary; otherwise a compiler driver)",
+            );
+            print_line(
+                "  OSCAN_NATIVE_LINKER_FLAVOR  How to invoke OSCAN_NATIVE_LINKER/the default native linker: 'mingw' (direct ld.lld, Windows), 'elf' (direct GNU ld, Linux), or 'compiler-driver' (legacy)",
+            );
         } else {
-            Backend::C
+            print_line(
+                "  OSCAN_NATIVE_LINKER  Override the linker used by the LLVM/Cranelift backends (Windows: a ld.lld-compatible binary; Linux: a GNU ld-compatible binary); must be paired with OSCAN_NATIVE_LINKER_FLAVOR=mingw|elf, because an unflavored override would mean linking through a C compiler driver",
+            );
+            print_line(
+                "  OSCAN_NATIVE_LINKER_FLAVOR  How to invoke OSCAN_NATIVE_LINKER/the default native linker: 'mingw' (direct ld.lld, Windows) or 'elf' (direct GNU ld, Linux); this build never links through a C compiler driver",
+            );
         }
-    })
+        print_line(
+            "  OSCAN_NATIVE_ASSET_CACHE_DIR  Override where extracted embedded native-link assets are cached (default: %LOCALAPPDATA%\\oscan\\native-assets\\ on Windows, $XDG_CACHE_HOME/oscan/native-assets on Linux)",
+        );
+    }
+    if has_llvm {
+        print_line("  OSCAN_LLVM_LIB   Full path to Oscan's packaged LLVM code generator shared library (--backend llvm)");
+        print_line("  OSCAN_LLVM_DIR   Directory to search for the packaged LLVM code generator");
+    }
+    if has_c_toolchain {
+        print_line(
+            "  OSCAN_NO_TOOLCHAIN=1  Strict no-toolchain profile: refuse the C backend, --libc, --extra-c/--extra-cflags, generated C shims, runtime-archive/shim auto-build, and compiler-driver linking instead of silently using a host C toolchain",
+        );
+    } else {
+        print_line(
+            "  (this build includes no C backend, so the strict no-toolchain profile is always active: the C backend, --libc, --extra-c/--extra-cflags, generated C shims, runtime-archive auto-build, and linking through a C compiler driver are all refused)",
+        );
+    }
 }
 
 fn main() {
@@ -375,7 +446,8 @@ fn main() {
     let mut show_warnings = false;
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
-    let mut explicit_backend = None;
+    let mut explicit_backend: Option<Backend> = None;
+    let mut used_native_alias = false;
     let mut native_target_arg: Option<String> = None;
     let mut allow_elevated_native_link = false;
     let mut program_args: Vec<String> = Vec::new();
@@ -397,7 +469,12 @@ fn main() {
             "--warnings" | "-W" => show_warnings = true,
             "--verbose" => verbose = true,
             "--version" | "-V" => {
+                // The build-metadata block lets tests and packaged release
+                // smoke checks assert which backends this compiler actually
+                // contains, and which one it defaults to, without having to
+                // compile anything.
                 println!("oscan {}", env!("GIT_VERSION"));
+                println!("{}", select::version_metadata());
                 return;
             }
             "--help" | "-h" => {
@@ -422,18 +499,21 @@ fn main() {
             "--backend" => {
                 i += 1;
                 let val = args.get(i).cloned().unwrap_or_else(|| {
-                    eprintln!("error: --backend requires an argument (llvm, c, native)");
+                    eprintln!(
+                        "error: --backend requires an argument ({})",
+                        select::compiled_in_list()
+                    );
                     process::exit(1);
                 });
-                explicit_backend = Some(match val.as_str() {
-                    "llvm" => Backend::Llvm,
-                    "c" => Backend::C,
-                    "native" | "cranelift" => Backend::Native,
-                    other => {
-                        eprintln!("error: unknown backend '{other}' (supported: llvm, c, native)");
-                        process::exit(1);
-                    }
+                let (backend, alias) = Backend::parse_cli(&val).unwrap_or_else(|| {
+                    eprintln!(
+                        "error: unknown backend '{val}' (supported: llvm, cranelift, c; '{}' is a deprecated alias for cranelift)",
+                        select::NATIVE_ALIAS
+                    );
+                    process::exit(1);
                 });
+                explicit_backend = Some(backend);
+                used_native_alias |= alias;
             }
             "--native-target" => {
                 i += 1;
@@ -507,6 +587,12 @@ fn main() {
         i += 1;
     }
 
+    // One concise deprecation notice for the legacy spelling, emitted
+    // before anything else this invocation prints.
+    if used_native_alias {
+        eprintln!("{}", select::deprecated_alias_warning());
+    }
+
     let output_ends_in_c = output_path
         .as_ref()
         .map(|path| path.ends_with(".c"))
@@ -518,35 +604,48 @@ fn main() {
     let native_host_supported = backend::NativeTarget::try_host().is_ok();
     // Probe Oscan's own packaged LLVM code generator only when the backend
     // is not already pinned: loading a shared library is cheap but not
-    // free, and an explicit `--backend c`/`--backend native` must never
-    // depend on it being present at all.
-    let llvm_backend = if explicit_backend.is_none()
-        && !emit_c
-        && !output_ends_in_c
-        && target.is_none()
-        && native_host_supported
-    {
-        backend::llvm::LlvmBackend::load().ok().filter(|llvm| {
-            // Only prefer LLVM by default when it can actually target this
-            // host; a provider that lacks the host back end is not a
-            // usable default (capability gate, not a silent fallback —
-            // `--backend llvm` still reports the precise reason).
-            backend::NativeTarget::try_host()
-                .map(|host| llvm.supports(host))
-                .unwrap_or(false)
-        })
-    } else {
-        None
-    };
-    let backend_kind = resolve_backend(
-        explicit_backend,
-        emit_c || output_ends_in_c,
-        emit_llvm_ir || output_ends_in_ll,
-        target.is_some(),
-        native_target_arg.is_some(),
-        native_host_supported,
-        llvm_backend.is_some(),
+    // free, and an explicit `--backend c`/`--backend cranelift` must never
+    // depend on it being present at all. A distribution build never
+    // probes for the *default* either — its default is decided at build
+    // time (see `backend::select`) — but an explicit `--backend llvm`
+    // still loads it below, and still fails loudly when it cannot.
+    #[cfg(feature = "backend-llvm")]
+    let llvm_backend = probe_default_llvm_backend(
+        explicit_backend.is_none()
+            && select::distribution_backend().is_none()
+            && !emit_c
+            && !output_ends_in_c
+            && target.is_none()
+            && native_host_supported,
     );
+    // Without the LLVM backend there is nothing to preload, and nothing
+    // downstream reads this in a build that also has no Cranelift backend.
+    #[cfg(not(feature = "backend-llvm"))]
+    #[allow(unused_variables)]
+    let llvm_backend: PreloadedLlvmBackend = ();
+    #[cfg(feature = "backend-llvm")]
+    let llvm_available = llvm_backend.is_some();
+    #[cfg(not(feature = "backend-llvm"))]
+    let llvm_available = false;
+
+    let backend_kind = select::resolve_backend(
+        explicit_backend,
+        SelectionInputs {
+            c_source_output: emit_c || output_ends_in_c,
+            llvm_ir_output: emit_llvm_ir || output_ends_in_ll,
+            c_cross_target: target.is_some(),
+            native_target_requested: native_target_arg.is_some(),
+            native_host_supported,
+            llvm_available,
+        },
+    );
+
+    // A backend that was compiled out of this build is a hard, named
+    // error — never a fallback to whatever else happens to be here.
+    if !backend_kind.is_compiled_in() {
+        eprintln!("error: {}", select::unavailable_error(backend_kind));
+        process::exit(1);
+    }
 
     // Backend-selection validation. `--target` (C-backend cross-compile
     // to riscv64/wasi) and `--native-target` (native-backend target
@@ -574,15 +673,15 @@ fn main() {
             );
             process::exit(1);
         }
-        if backend_kind == Backend::Native && (emit_llvm_ir || output_ends_in_ll) {
+        if backend_kind == Backend::Cranelift && (emit_llvm_ir || output_ends_in_ll) {
             eprintln!(
-                "error: LLVM IR output requires --backend llvm; the native backend emits Cranelift object code"
+                "error: LLVM IR output requires --backend llvm; the cranelift backend emits Cranelift object code"
             );
             process::exit(1);
         }
     } else {
         if native_target_arg.is_some() {
-            eprintln!("error: --native-target requires --backend llvm or --backend native");
+            eprintln!("error: --native-target requires --backend llvm or --backend cranelift");
             process::exit(1);
         }
         if allow_elevated_native_link {
@@ -605,14 +704,26 @@ fn main() {
     // silently taken. The C backend *is* such a route — it emits C that
     // something has to compile — so selecting it (explicitly, via
     // `--emit-c`/`-o *.c`, or via `--target`'s cross-compile path) is a
-    // hard error here rather than a quiet fallback.
+    // hard error here rather than a quiet fallback. The profile is armed
+    // either by `OSCAN_NO_TOOLCHAIN=1` or, intrinsically, by a build that
+    // contains no C backend at all.
     if backend::no_toolchain::is_strict() {
         if backend_kind == Backend::C {
             eprintln!(
                 "error: {}",
                 backend::no_toolchain::refusal(
                     "the C backend",
-                    "use --backend llvm (Oscan's packaged code generator) or --backend native"
+                    "use --backend llvm (Oscan's packaged code generator) or --backend cranelift"
+                )
+            );
+            process::exit(1);
+        }
+        if use_libc {
+            eprintln!(
+                "error: {}",
+                backend::no_toolchain::refusal(
+                    "--libc (the hosted runtime links this machine's CRT/libm through a C toolchain)",
+                    "drop --libc to link the freestanding runtime archive Oscan packages itself"
                 )
             );
             process::exit(1);
@@ -638,6 +749,7 @@ fn main() {
             process::exit(1);
         }
     }
+    #[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
     let native_target = if backend_kind != Backend::C {
         Some(match native_target_arg.as_deref().unwrap_or("host") {
             // Both "no --native-target given" and an explicit
@@ -645,7 +757,7 @@ fn main() {
             // this machine — and must fail the same clean way (naming
             // the unsupported host, never silently defaulting to some
             // other target) when this host's OS/architecture isn't one
-            // the native backend supports; see `NativeTarget::try_host`.
+            // the object backends support; see `NativeTarget::try_host`.
             "host" => backend::NativeTarget::try_host().unwrap_or_else(|e| {
                 eprintln!("error: {e}");
                 process::exit(1);
@@ -759,6 +871,7 @@ fn main() {
         process::exit(1);
     }
 
+    #[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
     if let Some(native_target) = native_target {
         let runtime_mode = if use_libc {
             backend::RuntimeMode::Hosted
@@ -786,106 +899,144 @@ fn main() {
         return;
     }
 
-    // macOS: l_os.h uses Linux syscalls for Unix; freestanding is not possible on macOS
-    let freestanding = match &target {
-        Some(CrossTarget::RiscV64) => true, // RISC-V always freestanding
-        Some(CrossTarget::Wasi) => false,   // WASI always libc mode
-        None => {
-            if !use_libc && cfg!(target_os = "macos") {
-                eprintln!("note: freestanding mode not supported on macOS; using libc mode");
-                false
-            } else {
-                !use_libc
-            }
-        }
-    };
-
-    let c_code = codegen::CodeGenerator::generate(&ir_program, freestanding);
-    if is_verbose() {
-        eprintln!(
-            "[verbose] Generated C code ({} bytes, freestanding={})",
-            c_code.len(),
-            freestanding
-        );
+    // Only the C backend is left. In a build without it, selection above
+    // already refused the request by name, so this is unreachable rather
+    // than a fallback.
+    #[cfg(not(feature = "backend-c"))]
+    {
+        eprintln!("error: {}", select::unavailable_error(Backend::C));
+        process::exit(1);
     }
 
-    // Determine the output mode:
-    //   --run           → compile and execute
-    //   --emit-c        → output C code (to stdout or -o file)
-    //   -o foo.c        → output C code to foo.c (extension-based detection)
-    //   otherwise       → compile to executable
-    if run_mode {
-        if target.is_some() {
-            eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
-            process::exit(1);
-        }
-        run_program(
-            &path,
-            &c_code,
-            freestanding,
-            show_warnings,
-            &program_args,
-            &extra_c_files,
-            &extra_cflags,
-            &extra_obj_files,
-            &extra_lib_files,
-        );
-    } else if emit_c || output_ends_in_c {
-        // Emit C mode
-        if let Some(out_path) = output_path {
-            match fs::write(&out_path, &c_code) {
-                Ok(_) => eprintln!("Wrote {}", out_path),
-                Err(e) => {
-                    eprintln!("error writing {out_path}: {e}");
-                    process::exit(1);
+    #[cfg(feature = "backend-c")]
+    {
+        // macOS: l_os.h uses Linux syscalls for Unix; freestanding is not possible on macOS
+        let freestanding = match &target {
+            Some(CrossTarget::RiscV64) => true, // RISC-V always freestanding
+            Some(CrossTarget::Wasi) => false,   // WASI always libc mode
+            None => {
+                if !use_libc && cfg!(target_os = "macos") {
+                    eprintln!("note: freestanding mode not supported on macOS; using libc mode");
+                    false
+                } else {
+                    !use_libc
                 }
             }
-        } else {
-            println!("{}", c_code);
+        };
+
+        let c_code = codegen::CodeGenerator::generate(&ir_program, freestanding);
+        if is_verbose() {
+            eprintln!(
+                "[verbose] Generated C code ({} bytes, freestanding={})",
+                c_code.len(),
+                freestanding
+            );
         }
-    } else {
-        // Default: compile to executable
-        let exe_path = match output_path {
-            Some(ref p) => {
-                let pb = PathBuf::from(p);
-                if pb.extension().is_none() {
-                    if matches!(target, Some(CrossTarget::Wasi)) {
-                        pb.with_extension("wasm")
-                    } else if cfg!(windows) {
-                        pb.with_extension("exe")
+
+        // Determine the output mode:
+        //   --run           → compile and execute
+        //   --emit-c        → output C code (to stdout or -o file)
+        //   -o foo.c        → output C code to foo.c (extension-based detection)
+        //   otherwise       → compile to executable
+        if run_mode {
+            if target.is_some() {
+                eprintln!("error: --run cannot be used with --target (cross-compiled binaries cannot be executed directly)");
+                process::exit(1);
+            }
+            run_program(
+                &path,
+                &c_code,
+                freestanding,
+                show_warnings,
+                &program_args,
+                &extra_c_files,
+                &extra_cflags,
+                &extra_obj_files,
+                &extra_lib_files,
+            );
+        } else if emit_c || output_ends_in_c {
+            // Emit C mode
+            if let Some(out_path) = output_path {
+                match fs::write(&out_path, &c_code) {
+                    Ok(_) => eprintln!("Wrote {}", out_path),
+                    Err(e) => {
+                        eprintln!("error writing {out_path}: {e}");
+                        process::exit(1);
+                    }
+                }
+            } else {
+                println!("{}", c_code);
+            }
+        } else {
+            // Default: compile to executable
+            let exe_path = match output_path {
+                Some(ref p) => {
+                    let pb = PathBuf::from(p);
+                    if pb.extension().is_none() {
+                        if matches!(target, Some(CrossTarget::Wasi)) {
+                            pb.with_extension("wasm")
+                        } else if cfg!(windows) {
+                            pb.with_extension("exe")
+                        } else {
+                            pb
+                        }
                     } else {
                         pb
                     }
-                } else {
+                }
+                None => {
+                    let stem = Path::new(&path)
+                        .file_stem()
+                        .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                        .to_os_string();
+                    let mut pb = PathBuf::from(stem);
+                    if matches!(target, Some(CrossTarget::Wasi)) {
+                        pb.set_extension("wasm");
+                    } else if cfg!(windows) {
+                        pb.set_extension("exe");
+                    }
                     pb
                 }
-            }
-            None => {
-                let stem = Path::new(&path)
-                    .file_stem()
-                    .unwrap_or_else(|| std::ffi::OsStr::new("output"))
-                    .to_os_string();
-                let mut pb = PathBuf::from(stem);
-                if matches!(target, Some(CrossTarget::Wasi)) {
-                    pb.set_extension("wasm");
-                } else if cfg!(windows) {
-                    pb.set_extension("exe");
-                }
-                pb
-            }
-        };
-        compile_to_executable(
-            &c_code,
-            &exe_path,
-            freestanding,
-            target.as_ref(),
-            show_warnings,
-            &extra_c_files,
-            &extra_cflags,
-            &extra_obj_files,
-            &extra_lib_files,
-        );
+            };
+            compile_to_executable(
+                &c_code,
+                &exe_path,
+                freestanding,
+                target.as_ref(),
+                show_warnings,
+                &extra_c_files,
+                &extra_cflags,
+                &extra_obj_files,
+                &extra_lib_files,
+            );
+        }
     }
+}
+
+/// The packaged LLVM code generator, preloaded during default-backend
+/// selection. `()` in a build without the LLVM backend, so the object
+/// orchestration below keeps one signature in every configuration.
+#[cfg(feature = "backend-llvm")]
+type PreloadedLlvmBackend = Option<backend::llvm::LlvmBackend>;
+#[cfg(not(feature = "backend-llvm"))]
+type PreloadedLlvmBackend = ();
+
+/// Load Oscan's own packaged LLVM code generator for *default* backend
+/// selection. Only prefer LLVM by default when it can actually target this
+/// host; a provider that lacks the host back end is not a usable default
+/// (capability gate, not a silent fallback — an explicit `--backend llvm`
+/// still loads it separately and still reports the precise reason it
+/// could not).
+#[cfg(feature = "backend-llvm")]
+fn probe_default_llvm_backend(probe: bool) -> PreloadedLlvmBackend {
+    if !probe {
+        return None;
+    }
+    backend::llvm::LlvmBackend::load().ok().filter(|llvm| {
+        backend::NativeTarget::try_host()
+            .map(|host| llvm.supports(host))
+            .unwrap_or(false)
+    })
 }
 
 /// Drives an object backend end to end: object emission,
@@ -912,6 +1063,10 @@ fn main() {
 /// exactly `0700`, rather than silently trusting a best-effort default
 /// (verified explicitly by `native_scratch_dir_has_0700_permissions_on_unix`
 /// below).
+#[cfg_attr(
+    not(any(feature = "backend-cranelift", feature = "backend-llvm")),
+    allow(dead_code)
+)]
 fn create_native_scratch_dir() -> std::io::Result<tempfile::TempDir> {
     let dir = tempfile::Builder::new().prefix("oscan_native_").tempdir()?;
     #[cfg(unix)]
@@ -929,10 +1084,12 @@ fn harden_native_scratch_dir_unix(path: &Path) -> std::io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))
 }
 
+#[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
+#[allow(clippy::too_many_arguments)]
 fn run_object_backend(
     ir_program: &ir::Program,
     backend_kind: Backend,
-    llvm_backend: Option<backend::llvm::LlvmBackend>,
+    llvm_backend: PreloadedLlvmBackend,
     native_target: backend::NativeTarget,
     runtime_mode: backend::RuntimeMode,
     source_path: &str,
@@ -948,6 +1105,8 @@ fn run_object_backend(
     extra_lib_files: &[String],
 ) {
     let _ = show_warnings;
+    #[cfg(not(feature = "backend-llvm"))]
+    let _ = (&llvm_backend, emit_llvm_ir);
     if is_verbose() {
         eprintln!(
             "[verbose] {} backend target: {native_target}, runtime: {runtime_mode}",
@@ -955,13 +1114,17 @@ fn run_object_backend(
         );
     }
     let compile_output = match backend_kind {
-        Backend::Native => match backend::compile_object(ir_program, native_target, runtime_mode) {
-            Ok(output) => output,
-            Err(e) => {
-                eprintln!("{}", e.with_file(source_path));
-                process::exit(1);
+        #[cfg(feature = "backend-cranelift")]
+        Backend::Cranelift => {
+            match backend::compile_object(ir_program, native_target, runtime_mode) {
+                Ok(output) => output,
+                Err(e) => {
+                    eprintln!("{}", e.with_file(source_path));
+                    process::exit(1);
+                }
             }
-        },
+        }
+        #[cfg(feature = "backend-llvm")]
         Backend::Llvm => {
             // Load the packaged code generator here when the backend was
             // selected explicitly (the default-selection probe above only
@@ -1013,7 +1176,7 @@ fn run_object_backend(
                 generated_extern_shim_c: llvm_output.generated_extern_shim_c,
             }
         }
-        Backend::C => unreachable!("C backend does not use object orchestration"),
+        other => unreachable!("the {other} backend does not use object orchestration"),
     };
     if is_verbose() {
         eprintln!(
@@ -1053,6 +1216,24 @@ fn run_object_backend(
         }
         eprintln!("Wrote {out_path}");
         return;
+    }
+
+    // A generated C shim (user `extern` functions with `str` in their
+    // signature) is compiled by a host C compiler as part of the final
+    // link below, so it is one of the routes the strict no-toolchain
+    // profile refuses by name — whether that profile came from
+    // `OSCAN_NO_TOOLCHAIN=1` or from a build that contains no C backend
+    // at all.
+    if compile_output.generated_extern_shim_c.is_some() {
+        if let Err(reason) = backend::no_toolchain::refuse_if_strict(
+            "compiling the generated C shim for `extern` functions with `str` parameters or \
+             returns",
+            "give those externs scalar-only signatures, or precompile a shim yourself and pass \
+             --extra-obj",
+        ) {
+            eprintln!("error: {reason}");
+            process::exit(1);
+        }
     }
 
     // Security review 2026-07-15 (findings 2 & 3): refuse a native final
@@ -1281,6 +1462,7 @@ enum CrossTarget {
     Wasi,
 }
 
+#[cfg(feature = "backend-c")]
 fn find_wasi_sysroot() -> Option<String> {
     if let Ok(val) = env::var("WASI_SYSROOT") {
         if Path::new(&val).exists() {
@@ -1327,10 +1509,14 @@ pub(crate) fn compiler_source_label(source: CompilerSource) -> &'static str {
 }
 
 /// The invocable command for `compiler`, only when it is GCC or Clang
-/// (`None` for MSVC): used by the native (Cranelift) backend's linker
-/// discovery in `src/backend/link.rs`, which drives GCC/Clang as a linker
-/// front-end for `.o`/`.a` inputs rather than `cl.exe`/`link.exe` (see that
-/// module for why).
+/// (`None` for MSVC): used by the object backends' linker discovery in
+/// `src/backend/link/`, which drives GCC/Clang as a linker front-end for
+/// `.o`/`.a` inputs rather than `cl.exe`/`link.exe` (see that module for
+/// why).
+#[cfg_attr(
+    not(any(feature = "backend-cranelift", feature = "backend-llvm")),
+    allow(dead_code)
+)]
 pub(crate) fn gcc_or_clang_cmd(compiler: &CCompiler) -> Option<(&str, CompilerSource)> {
     match compiler {
         CCompiler::Gcc { cmd, source } | CCompiler::Clang { cmd, source } => {
@@ -1688,6 +1874,7 @@ pub(crate) fn find_c_compiler() -> Option<CCompiler> {
 /// then falling back to a `runtime/` in the current working directory.
 /// Returns `None` when no on-disk runtime directory is found (embedded files
 /// will be used as a fallback).
+#[cfg(feature = "backend-c")]
 fn find_runtime_dir() -> Option<PathBuf> {
     let exe = env::current_exe().ok();
     // include_cwd = true: unchanged, out-of-scope behavior for this pass —
@@ -1716,6 +1903,7 @@ fn find_extra_include_dirs(runtime_dir: &Path) -> Vec<PathBuf> {
 /// 2. packaging/prebuilt/<host-triple>/ (committed prebuilt for dev/CI)
 /// 3. <exe-dir>/toolchain/lib/ (release bundle layout)
 /// 4. <exe-dir>/lib/ (minimal install layout)
+#[cfg(feature = "backend-c")]
 fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
     // Dev mode: locally built copy under deps/laststanding/bearssl/build/
     for dir in include_dirs {
@@ -1764,6 +1952,7 @@ fn find_bearssl_lib(include_dirs: &[PathBuf]) -> Option<String> {
 /// `fs::remove_dir_all` cleanup racing a same-PID successor's
 /// `fs::create_dir_all` of the identical path intermittently manifests as
 /// spurious "path not found"/"access denied" I/O errors.
+#[cfg(feature = "backend-c")]
 fn unique_temp_dir_name() -> String {
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
     let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1775,6 +1964,7 @@ fn unique_temp_dir_name() -> String {
 }
 
 /// Write C code to a temp file, compile it to `exe_path`, and clean up the temp C file.
+#[cfg(feature = "backend-c")]
 fn compile_to_executable(
     c_code: &str,
     exe_path: &Path,
@@ -1910,6 +2100,7 @@ fn compile_to_executable(
     eprintln!("Compiled {}", exe_path.display());
 }
 
+#[cfg(feature = "backend-c")]
 fn run_program(
     source_path: &str,
     c_code: &str,
@@ -2056,6 +2247,7 @@ fn run_program(
 }
 
 /// Detect a C compiler and invoke it. Returns true on success.
+#[cfg(feature = "backend-c")]
 fn invoke_c_compiler(
     c_file: &Path,
     exe_file: &Path,
@@ -2303,6 +2495,7 @@ fn invoke_c_compiler(
     }
 }
 
+#[cfg(feature = "backend-c")]
 fn compile_with_gcc_or_clang(
     cmd: &str,
     c_file: &Path,
@@ -2442,6 +2635,7 @@ fn compile_with_gcc_or_clang(
     }
 }
 
+#[cfg(feature = "backend-c")]
 fn compile_cross_riscv64(
     cmd: &str,
     c_file: &Path,
@@ -2509,6 +2703,7 @@ fn compile_cross_riscv64(
     }
 }
 
+#[cfg(feature = "backend-c")]
 fn compile_cross_wasi(
     cmd: &str,
     c_file: &Path,
@@ -2568,6 +2763,7 @@ fn compile_cross_wasi(
     }
 }
 
+#[cfg(feature = "backend-c")]
 fn compile_with_msvc(
     cl_path: &str,
     vcvars: Option<&str>,
@@ -2749,57 +2945,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn backend_resolution_covers_implicit_policy_and_explicit_overrides() {
-        assert_eq!(
-            resolve_backend(Some(Backend::C), false, false, false, false, true, true),
-            Backend::C
-        );
-        assert_eq!(
-            resolve_backend(Some(Backend::Native), true, true, true, false, false, true),
-            Backend::Native
-        );
-        assert_eq!(
-            resolve_backend(Some(Backend::Llvm), true, false, true, false, false, false),
-            Backend::Llvm
-        );
-        assert_eq!(
-            resolve_backend(None, true, false, false, false, true, true),
-            Backend::C
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, true, false, true, true),
-            Backend::C
-        );
-        assert_eq!(
-            resolve_backend(None, false, true, false, false, true, false),
-            Backend::Llvm
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, true, false, true),
-            Backend::Native
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, false, true, true),
-            Backend::Llvm
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, false, false, true),
-            Backend::C
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, true, false, false),
-            Backend::Native
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, false, true, false),
-            Backend::Native
-        );
-        assert_eq!(
-            resolve_backend(None, false, false, false, false, false, false),
-            Backend::C
-        );
-    }
+    // Backend-selection policy (including the distribution default and
+    // compiled-in availability) is unit-tested in `backend::select`,
+    // which owns it.
 
     #[test]
     fn compiler_override_detects_requested_compiler() {

@@ -19,17 +19,21 @@ typed ir::Program
 
 Normal freestanding `--backend llvm` compilation does **not** generate C and
 does not invoke Clang, GCC, `cc`, `cl`, `llvm-as`, `opt`, or `llc`. Users do not
-need an installed C or LLVM toolchain. Release bundles carry the exact LLVM
-shared library, precompiled runtime archives, and direct linker assets.
+need an installed C or LLVM toolchain. The published `llvm` packages carry the
+exact LLVM shared library, precompiled runtime archives, and direct linker
+assets — and no C compiler, headers, or sysroot.
 
-The other backends remain supported:
+The other backends remain supported, each in its own package:
 
-- `--backend native` / `--backend cranelift`: direct Cranelift object emission.
+- `--backend cranelift`: direct Cranelift object emission (`--backend native`
+  is a deprecated alias for it).
 - `--backend c`: portable C99/source-emission, macOS, WASI, and the
   differential reference implementation.
 
 An explicit backend is strict. In particular, an explicit LLVM failure is
-reported and is never retried through Cranelift or C.
+reported and is never retried through Cranelift or C, and a single-backend
+package refuses a backend it does not contain by naming the package to install
+instead.
 
 ## 2. Shared semantic lowering
 
@@ -75,7 +79,14 @@ LLVM major version 22 is required exactly. Search order is:
 1. `OSCAN_LLVM_LIB` — an absolute shared-library path;
 2. `OSCAN_LLVM_DIR` — an absolute packaged-provider directory;
 3. `OSCAN_TOOLCHAIN_DIR` — an absolute packaged-toolchain root;
-4. executable-relative `toolchain/` and the executable directory.
+4. executable-relative roots, in order: `<exe-dir>/toolchain`,
+   `<exe-dir>/native-link`, and `<exe-dir>` itself.
+
+`<exe-dir>/native-link` is the schema-v2 package sidecar: on Windows the one
+staged `libLLVM-22.dll` is shared between this code generator and
+`ld.lld.exe`, which needs it as a sibling runtime dependency. A candidate
+found there is only accepted after the sidecar manifest has verified it
+(see `src/backend/native_assets/sidecar.rs`).
 
 Relative overrides, the current working directory, `PATH`, and the platform's
 bare library-loader search path are not used. The provider is executable code,
@@ -84,10 +95,10 @@ so loading an arbitrary `libLLVM` found near user input would be unsafe.
 Target support is probed from exported target initializers rather than assumed.
 The current packaged providers are:
 
-| Host bundle | LLVM | Provider targets |
+| Package | LLVM | Provider targets |
 |---|---:|---|
-| Windows x86-64 | 22.1.2 | x86-64, AArch64 |
-| Linux x86-64 | 22.1.8 | x86-64, AArch64, RISC-V64 |
+| Windows x86-64 `llvm` | 22.1.2 | x86-64, AArch64 |
+| Linux x86-64 `llvm` | 22.1.8 | x86-64, AArch64, RISC-V64 |
 
 The Windows provider intentionally rejects RISC-V because that library does not
 export the RISC-V initializers.
@@ -143,7 +154,8 @@ implementation language does not create an end-user C-toolchain dependency.
 
 Backend resolution is:
 
-1. explicit `--backend llvm|native|c`;
+1. explicit `--backend llvm|cranelift|c` (`native` is a deprecated alias for
+   `cranelift`), or, in a single-backend package, that package's own backend;
 2. C source or C-only cross-target requests select C;
 3. LLVM IR requests select LLVM;
 4. explicit `--native-target` without `--backend` selects Cranelift for
@@ -152,10 +164,12 @@ Backend resolution is:
 6. Cranelift on a supported object host;
 7. C otherwise.
 
-Both Windows and Linux full bundles package LLVM and therefore default to LLVM.
-Source-built compilers default to LLVM only when an executable-relative or
-explicit provider is available. Capability fallback applies only during
-implicit selection; an explicit LLVM request never falls back.
+The published Windows and Linux `llvm` packages ship the provider and therefore
+default to LLVM by construction: a distribution build is stamped with its own
+backend and never probes for a default. Source-built (multi-backend) compilers
+default to LLVM only when an executable-relative or explicit provider is
+available. Capability fallback applies only during implicit selection in such a
+build; an explicit LLVM request never falls back.
 
 ## 7. Exact no-toolchain boundary
 
@@ -194,12 +208,12 @@ The pinned Windows release build currently produces:
 
 | Backend | `hello.osc` | 37-example total |
 |---|---:|---:|
-| LLVM | 6,144 bytes | 814,080 bytes |
-| Cranelift/native | 6,656 bytes | 863,232 bytes |
+| LLVM | 5,632 bytes | 811,008 bytes |
+| Cranelift | 6,144 bytes | 861,696 bytes |
 | C | 8,704 bytes | 875,520 bytes |
 
-LLVM is 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
-(7.02%) smaller than C in aggregate. The matrix covers 111 executables: every
+LLVM is 50,688 bytes (5.88%) smaller than Cranelift and 64,512 bytes
+(7.37%) smaller than C in aggregate. The matrix covers 111 executables: every
 one of the 37 recursive examples compiled with every backend.
 
 The aggregate result uses `scripts/sample-backend-matrix.ps1`. Size equality is

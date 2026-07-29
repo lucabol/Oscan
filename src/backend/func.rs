@@ -1,7 +1,7 @@
 //! Translates one `ir::FnDef` body into `super::lir` instructions.
 //!
 //! This is *the* shared semantic lowering: every object backend
-//! (`--backend native`'s Cranelift and `--backend llvm`'s direct LLVM
+//! (`--backend cranelift`'s Cranelift and `--backend llvm`'s direct LLVM
 //! emitter) runs this exact code against its own [`LirBuilder`], so the
 //! implicit arena ABI, aggregate representation, copy-on-bind value
 //! semantics, checked arithmetic, `defer`/`try`/`match`/loop lowering,
@@ -77,7 +77,7 @@ fn unsupported(span: Span, what: impl std::fmt::Display) -> CompileError {
     CompileError::new(
         span,
         format!(
-            "native backend: {what} is not supported (use --backend c when portable C lowering supports this construct)"
+            "LLVM/Cranelift object backends: {what} is not supported (use --backend c when portable C lowering supports this construct)"
         ),
     )
 }

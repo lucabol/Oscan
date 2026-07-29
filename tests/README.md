@@ -82,13 +82,13 @@ The PowerShell runner compares either object backend with the C oracle:
 
 ```powershell
 .\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend llvm
-.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend native
+.\run_tests.ps1 -Oscan ..\target\release\oscan.exe -Backend cranelift
 # Full repository runner:
 .\test.ps1 -Backend llvm
-.\test.ps1 -Backend native
+.\test.ps1 -Backend cranelift
 # Focused runtime/link-mode regressions:
 .\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
-.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+.\tests\native_hosted.tests.ps1 -Oscan .\target\release\oscan.exe -Backend cranelift
 # Packaged freestanding LLVM must work without a separate C compiler/linker:
 .\tests\llvm_toolchain_isolation.tests.ps1 `
   -Oscan .\target\release\oscan.exe `
@@ -122,7 +122,7 @@ Negative tests fail in the shared frontend. The standalone runner exercises C
 explicitly and also checks the selected candidate backend during differential
 runs.
 
-The focused hosted-mode regression accepts `-Backend llvm|native`. It verifies
+The focused hosted-mode regression accepts `-Backend llvm|cranelift`. It verifies
 that the selected backend remains libc-free by default, while explicit
 `--libc` differentially runs all FFI fixtures (including libm symbols),
 preserves object-only output, passes `--extra-c`/`--extra-cflags` through the
@@ -140,19 +140,22 @@ Cranelift, and LLVM outputs and fails if LLVM is larger than C.
 `scripts/sample-backend-matrix.ps1` is a local (not CI-gated) cross-backend
 build check over the sample programs. It recursively collects every `.osc`
 file under `examples/` (`-SourceDirectory` overrides the root), probes `llvm`,
-`native`, and `c` with a tiny throwaway program, and skips any backend that
+`cranelift`, and `c` with a tiny throwaway program, and skips any backend that
 cannot produce a host executable here, printing the probe diagnostic instead of
 failing. Surviving backends each get their own subdirectory under the output
 root (`tests\build\sample-backend-matrix` unless `-OutputDirectory` says
 otherwise); that root is printed as an absolute path and wiped before the run,
 and nested/case-colliding sample names are flattened to unique artifact names.
+`-Oscan` selects one multi-backend compiler; `-LlvmOscan`,
+`-CraneliftOscan`, and `-COscan` instead map each backend to its extracted
+single-backend release compiler.
 The run ends with a deterministic size table sorted by sample path, listing
 bytes per sample per available backend. It exits non-zero when an *available*
 backend fails to compile a sample or does not leave a non-empty host executable
 (MZ on Windows, ELF elsewhere) behind. `sample_backend_matrix.tests.ps1` covers
-this behavior with a fake compiler: skipped backend, stale-output cleanup,
-name flattening, executable-not-source artifacts, and the non-zero exit on a
-sample failure.
+this behavior with fake compilers: skipped backend, per-package compiler
+mapping, stale-output cleanup, name flattening, executable-not-source artifacts,
+and the non-zero exit on a sample failure.
 
 ### Cross-platform runs (WSL Linux x64, object-backend cross-link, ARM64)
 
@@ -160,7 +163,7 @@ sample failure.
 test outside Windows. They honor the same `expected_exit/<name>.expected`
 convention as the differential oracle above:
 
-- The WSL object-backend cross-link phase (`--backend llvm|native`
+- The WSL object-backend cross-link phase (`--backend llvm|cranelift`
   cross-emitted to `linux-x86_64`, linked and run under WSL) reads
   `expected_exit/<name>.expected` for each attempted test and fails a program
   whose actual exit code doesn't match its declared expectation (default

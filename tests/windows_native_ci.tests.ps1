@@ -38,9 +38,9 @@ function Invoke-NativeValidation {
         throw "native-link isolation suite failed with exit code $LASTEXITCODE"
     }
 
-    & (Join-Path $ScriptDir "run_tests.ps1") -Oscan $compiler -Backend native
+    & (Join-Path $ScriptDir "run_tests.ps1") -Oscan $compiler -Backend cranelift
     if ($LASTEXITCODE -ne 0) {
-        throw "C-vs-native differential suite failed with exit code $LASTEXITCODE"
+        throw "C-vs-Cranelift differential suite failed with exit code $LASTEXITCODE"
     }
 
     & (Join-Path $ScriptDir "run_tests.ps1") -Oscan $compiler -Backend llvm
@@ -48,9 +48,9 @@ function Invoke-NativeValidation {
         throw "C-vs-LLVM differential suite failed with exit code $LASTEXITCODE"
     }
 
-    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler -Backend native
+    & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler -Backend cranelift
     if ($LASTEXITCODE -ne 0) {
-        throw "native extern str ABI suite failed with exit code $LASTEXITCODE"
+        throw "Cranelift extern str ABI suite failed with exit code $LASTEXITCODE"
     }
 
     & (Join-Path $ScriptDir "native_extern_str_abi.tests.ps1") -Oscan $compiler -Backend llvm
@@ -60,7 +60,7 @@ function Invoke-NativeValidation {
 
     & (Join-Path $ScriptDir "panic_message.tests.ps1") `
         -Oscan $compiler `
-        -Backends @("c", "native", "llvm") `
+        -Backends @("c", "cranelift", "llvm") `
         -SkipWSL
     if ($LASTEXITCODE -ne 0) {
         throw "cross-backend panic-message suite failed with exit code $LASTEXITCODE"
@@ -78,7 +78,7 @@ function Invoke-NativeValidation {
         }
         & (Join-Path $ScriptDir "backend_parity.ps1") `
             -Oscan $compiler `
-            -Backend native `
+            -Backend cranelift `
             -FreestandingOnly
         if ($LASTEXITCODE -ne 0) {
             throw "strict no-toolchain Cranelift parity suite failed with exit code $LASTEXITCODE"
@@ -125,7 +125,7 @@ osc_str host_label(osc_str value) {
     $env:OSCAN_RUNTIME_ARCHIVE_DIR = (Resolve-Path -LiteralPath $RuntimeArchiveDir).Path
     $env:OSCAN_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $ToolchainDir).Path
     $compileArgs = @(
-        "--backend", "native",
+        "--backend", "cranelift",
         "--native-target", "host",
         "--libc",
         "--allow-elevated-native-link",
@@ -160,7 +160,7 @@ try {
     }
 
     $compiler = (Resolve-Path -LiteralPath $Oscan).Path
-    $probeOutput = & $compiler examples\hello.osc --backend native `
+    $probeOutput = & $compiler examples\hello.osc --backend cranelift `
         -o tests\build\native_ci_elevation_probe.exe 2>&1 | Out-String
     $probeExit = $LASTEXITCODE
 

@@ -53,7 +53,7 @@ if ($leftoverCheck -match "exists") {
     throw "leftover renamed toolchain directory '$renamedDir'; restore it before rerunning this test"
 }
 
-$preflight = (Invoke-LinuxShell "cd '$linuxRepoRoot' && '$linuxOscan' --backend native -o /tmp/preflight_hello examples/hello.osc 2>&1") -join "`n"
+$preflight = (Invoke-LinuxShell "cd '$linuxRepoRoot' && '$linuxOscan' --backend cranelift -o /tmp/preflight_hello examples/hello.osc 2>&1") -join "`n"
 Assert-NativeLinkIsolation ($LASTEXITCODE -eq 0) "preflight native compile failed: $preflight"
 Assert-NativeLinkIsolation ($preflight -match "\(embedded\)") "preflight did not use embedded assets: $preflight"
 
@@ -71,7 +71,7 @@ try {
     }
 
     $pathValue = "$stubDir`:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-    $compile = (Invoke-LinuxShell "cd '$linuxRepoRoot' && env PATH='$pathValue' '$linuxOscan' --backend native -o /tmp/isolation_hello examples/hello.osc 2>&1") -join "`n"
+    $compile = (Invoke-LinuxShell "cd '$linuxRepoRoot' && env PATH='$pathValue' '$linuxOscan' --backend cranelift -o /tmp/isolation_hello examples/hello.osc 2>&1") -join "`n"
     Assert-NativeLinkIsolation ($LASTEXITCODE -eq 0) "isolated native compile failed: $compile"
     Assert-NativeLinkIsolation ($compile -match "\(embedded\)") "isolated link did not use the embedded linker: $compile"
 

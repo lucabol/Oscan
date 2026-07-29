@@ -4,9 +4,11 @@
 - **Integration Tests**: 134
 - **Positive Tests**: 99 (compile and run successfully)
 - **Negative Tests**: 35 (correctly rejected by compiler)
-- **Backend Policy**: supported hosts prefer LLVM when a compatible packaged provider is available,
-  then Cranelift; C remains the portability/reference oracle and both object
-  backends are differentially checked against it
+- **Backend Policy**: released packages contain exactly one backend and default to it;
+  a multi-backend development build prefers LLVM when a compatible packaged
+  provider is available, then Cranelift. C remains the portability/reference
+  oracle and both object backends are differentially checked against it
+  (`--backend native` is only a deprecated alias for `cranelift`)
 
 ## Positive Tests
 
@@ -118,13 +120,13 @@ cargo test
 ```powershell
 .\test.ps1
 .\test.ps1 -Backend llvm
-.\test.ps1 -Backend native
+.\test.ps1 -Backend cranelift
 ```
 
 ### Run the focused differential corpus:
 ```powershell
 .\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend llvm
-.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend native
+.\tests\run_tests.ps1 -Oscan .\target\release\oscan.exe -Backend cranelift
 ```
 
 ### Run the toolchain-light positive corpus:
@@ -155,6 +157,7 @@ Cranelift, and LLVM outputs and fails if LLVM is larger than C.
 ```powershell
 .\scripts\sample-backend-matrix.ps1
 .\scripts\sample-backend-matrix.ps1 -Oscan .\target\release\oscan.exe -SourceDirectory examples -OutputDirectory tests\build\sample-backend-matrix
+.\scripts\sample-backend-matrix.ps1 -LlvmOscan C:\oscan-llvm\oscan.exe -CraneliftOscan C:\oscan-cranelift\oscan.exe -COscan C:\oscan-c\oscan.exe
 ```
 
 This local (not CI-gated) check recursively compiles every `.osc` file under
@@ -162,24 +165,27 @@ This local (not CI-gated) check recursively compiles every `.osc` file under
 as an absolute path and wipes before the run. Backends that cannot produce a
 host executable on this machine are probed once and skipped with a printed
 reason; the remaining ones must compile every sample into a non-empty host
-executable or the script fails. It ends with a deterministic size table (bytes
-per sample per available backend, sorted by sample path), an explicit
+executable. `-Oscan` uses one multi-backend build; the three backend-specific
+compiler options compare extracted single-backend release packages.
+The script fails if any selected backend cannot compile a sample. It ends with
+a deterministic size table (bytes per sample per available backend, sorted by
+sample path), an explicit
 sample/backend artifact count, aggregate backend totals, and the aggregate
 LLVM-versus-C byte and percentage difference.
-`tests\sample_backend_matrix.tests.ps1` exercises that behavior against a fake
-compiler.
+`tests\sample_backend_matrix.tests.ps1` exercises that behavior against fake
+compilers.
 
 The pinned Windows release-toolchain run on 2026-07-28 compiled all 37 recursive
-examples with LLVM, Cranelift/native, and C: 111 executables with no failures.
+examples with LLVM, Cranelift, and C: 111 executables with no failures.
 
 | Backend | Aggregate size |
 |---|---:|
-| LLVM | 814,080 bytes |
-| Cranelift/native | 863,232 bytes |
+| LLVM | 811,008 bytes |
+| Cranelift | 861,696 bytes |
 | C | 875,520 bytes |
 
-LLVM was 49,152 bytes (5.69%) smaller than Cranelift and 61,440 bytes
-(7.02%) smaller than C.
+LLVM was 50,688 bytes (5.88%) smaller than Cranelift and 64,512 bytes
+(7.37%) smaller than C.
 
 ### Test individual file:
 ```powershell

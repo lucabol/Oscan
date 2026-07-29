@@ -56,12 +56,13 @@
       </Component>
     </ComponentGroup>
 
-    <!-- Toolchain directory harvested dynamically by build script -->
-    <ComponentGroupRef Id="ToolchainFiles" />
+    <!-- Bundle payload (toolchain/, native-link/, build/, LICENSES/, ...)
+         harvested dynamically by scripts/build-msi.ps1 -->
+    <ComponentGroupRef Id="BundlePayload" />
 
     <Feature Id="Complete" Title="Oscan" Level="1">
       <ComponentGroupRef Id="OscanFiles" />
-      <ComponentGroupRef Id="ToolchainFiles" />
+      <ComponentGroupRef Id="BundlePayload" />
     </Feature>
 
   </Package>

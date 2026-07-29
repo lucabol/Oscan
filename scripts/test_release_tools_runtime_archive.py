@@ -571,17 +571,17 @@ class AtomicPublicationTests(RepositoryScratchTests):
 
 
 class ReleaseStagingTests(RepositoryScratchTests):
-    def test_native_runtime_pairs_and_shim_sources_are_staged(self):
+    def test_freestanding_runtime_pairs_are_staged(self):
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
-        target_spec = rt.resolve_release_target(
-            contract, rt.CONTRACT_PATH, "windows-x86_64"
+        target_spec = rt.resolve_release_variant(
+            contract, rt.CONTRACT_PATH, "windows-x86_64", "cranelift"
         )
         runtime_archive_dir = self.scratch / "archives"
         runtime_archive_dir.mkdir(parents=True)
         runtime_contract = rt.load_runtime_archive_contract(
             rt.RUNTIME_ARCHIVE_CONTRACT_PATH
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             mode_spec = runtime_contract["modes"][mode]
             archive = runtime_archive_dir / mode_spec["archive_name"]
             archive.write_bytes(f"{mode} archive".encode())
@@ -597,18 +597,17 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         bundle_dir = self.scratch / "bundle"
-        rt.stage_native_runtime_assets(
-            contract, target_spec, bundle_dir, runtime_archive_dir
+        rt.stage_freestanding_runtime_archives(
+            bundle_dir, target_spec, runtime_archive_dir
         )
 
-        self.assertTrue(
-            (bundle_dir / "native-runtime" / "osc_native_shim.c").is_file()
-        )
-        self.assertTrue((bundle_dir / "native-runtime" / "osc_runtime.h").is_file())
+        # Object packages ship precompiled archives only: no runtime
+        # sources, and therefore no runtime builder, come along.
+        self.assertFalse((bundle_dir / "native-runtime").exists())
         staged_archives = (
             bundle_dir / "build" / "runtime-archives" / "windows-x86_64"
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             self.assertTrue(
                 (staged_archives / f"libosc_runtime_{mode}.a").is_file()
             )
@@ -616,21 +615,21 @@ class ReleaseStagingTests(RepositoryScratchTests):
                 (staged_archives / f"libosc_runtime_{mode}.json").is_file()
             )
 
-    def test_native_runtime_pairs_and_shim_sources_are_staged_linux(self):
+    def test_freestanding_runtime_pairs_are_staged_linux(self):
         """Linux parity for test_native_runtime_pairs_and_shim_sources_are_staged:
         staging must accept a Linux native runtime archive pair whose manifest
         carries the pinned musl toolchain provenance, exactly as it already
         does for Windows."""
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
-        target_spec = rt.resolve_release_target(
-            contract, rt.CONTRACT_PATH, "linux-x86_64"
+        target_spec = rt.resolve_release_variant(
+            contract, rt.CONTRACT_PATH, "linux-x86_64", "cranelift"
         )
         runtime_archive_dir = self.scratch / "archives"
         runtime_archive_dir.mkdir(parents=True)
         runtime_contract = rt.load_runtime_archive_contract(
             rt.RUNTIME_ARCHIVE_CONTRACT_PATH
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             mode_spec = runtime_contract["modes"][mode]
             archive = runtime_archive_dir / mode_spec["archive_name"]
             archive.write_bytes(f"{mode} archive".encode())
@@ -648,18 +647,17 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         bundle_dir = self.scratch / "bundle"
-        rt.stage_native_runtime_assets(
-            contract, target_spec, bundle_dir, runtime_archive_dir
+        rt.stage_freestanding_runtime_archives(
+            bundle_dir, target_spec, runtime_archive_dir
         )
 
-        self.assertTrue(
-            (bundle_dir / "native-runtime" / "osc_native_shim.c").is_file()
-        )
-        self.assertTrue((bundle_dir / "native-runtime" / "osc_runtime.h").is_file())
+        # Object packages ship precompiled archives only: no runtime
+        # sources, and therefore no runtime builder, come along.
+        self.assertFalse((bundle_dir / "native-runtime").exists())
         staged_archives = (
             bundle_dir / "build" / "runtime-archives" / "linux-x86_64"
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             self.assertTrue(
                 (staged_archives / f"libosc_runtime_{mode}.a").is_file()
             )
@@ -676,25 +674,29 @@ class ReleaseStagingTests(RepositoryScratchTests):
         self.assertNotIn("$(AR) rcs $(HOSTED_ARCHIVE)", makefile)
         self.assertNotIn("$(AR) rcs $(FREESTANDING_ARCHIVE)", makefile)
 
-    def test_release_assembly_uses_pinned_tools_and_an_isolated_archive_dir(self):
+    def test_release_assembly_consumes_prepared_runtime_archives(self):
+        """Assembly no longer builds runtime archives itself: CI prepares
+        them once per target and every backend variant of that target
+        reuses the same pair set."""
         assembly = (rt.REPO_ROOT / "scripts" / "assemble-release.ps1").read_text(
             encoding="utf-8"
         )
-        self.assertIn('ToolchainManifest"] = $manifestPath', assembly)
-        self.assertIn('OutDir = $runtimeArchiveDir', assembly)
+        self.assertIn('$runtimeArchiveDir = $PrebuiltRuntimeArchiveDir', assembly)
         self.assertIn('RuntimeArchiveDir"] = $runtimeArchiveDir', assembly)
+        self.assertIn('needs -PrebuiltRuntimeArchiveDir', assembly)
+        self.assertNotIn('build-runtime-archive.ps1', assembly)
 
     def test_staging_rejects_a_non_pinned_windows_runtime_toolchain(self):
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
-        target_spec = rt.resolve_release_target(
-            contract, rt.CONTRACT_PATH, "windows-x86_64"
+        target_spec = rt.resolve_release_variant(
+            contract, rt.CONTRACT_PATH, "windows-x86_64", "cranelift"
         )
         runtime_archive_dir = self.scratch / "archives"
         runtime_archive_dir.mkdir(parents=True)
         runtime_contract = rt.load_runtime_archive_contract(
             rt.RUNTIME_ARCHIVE_CONTRACT_PATH
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             mode_spec = runtime_contract["modes"][mode]
             archive = runtime_archive_dir / mode_spec["archive_name"]
             archive.write_bytes(f"{mode} archive".encode())
@@ -712,10 +714,9 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         with self.assertRaises(SystemExit) as ctx:
-            rt.stage_native_runtime_assets(
-                contract,
-                target_spec,
+            rt.stage_freestanding_runtime_archives(
                 self.scratch / "bundle",
+                target_spec,
                 runtime_archive_dir,
             )
         self.assertIn("compiler family mismatch", str(ctx.exception))
@@ -729,15 +730,15 @@ class ReleaseStagingTests(RepositoryScratchTests):
         next to the packaged musl cross-compiler without staging ever
         noticing the mismatch."""
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
-        target_spec = rt.resolve_release_target(
-            contract, rt.CONTRACT_PATH, "linux-x86_64"
+        target_spec = rt.resolve_release_variant(
+            contract, rt.CONTRACT_PATH, "linux-x86_64", "cranelift"
         )
         runtime_archive_dir = self.scratch / "archives"
         runtime_archive_dir.mkdir(parents=True)
         runtime_contract = rt.load_runtime_archive_contract(
             rt.RUNTIME_ARCHIVE_CONTRACT_PATH
         )
-        for mode in target_spec["native_runtime_modes"]:
+        for mode in target_spec["runtime_profiles"]:
             mode_spec = runtime_contract["modes"][mode]
             archive = runtime_archive_dir / mode_spec["archive_name"]
             archive.write_bytes(f"{mode} archive".encode())
@@ -755,10 +756,9 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         with self.assertRaises(SystemExit) as ctx:
-            rt.stage_native_runtime_assets(
-                contract,
-                target_spec,
+            rt.stage_freestanding_runtime_archives(
                 self.scratch / "bundle",
+                target_spec,
                 runtime_archive_dir,
             )
         self.assertIn("compiler target mismatch", str(ctx.exception))

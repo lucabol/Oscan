@@ -1,5 +1,5 @@
 //! Object emission, runtime-archive discovery/build, and final linking
-//! for the Cranelift native backend.
+//! for the Cranelift backend.
 //!
 //! Linking is deliberately driven through GCC/Clang as a linker front-end
 //! (`cc obj.o shim.o runtime.a -o out.exe`) rather than raw `link.exe`:
@@ -19,8 +19,8 @@
 //! # Explicit runtime modes
 //!
 //! [`link_executable`] receives an explicit [`RuntimeMode`]. The default
-//! CLI path passes `Freestanding`, keeping `--backend native` standalone
-//! and libc-free; only `--libc --backend native` passes `Hosted`, which
+//! CLI path passes `Freestanding`, keeping `--backend cranelift` standalone
+//! and libc-free; only `--libc --backend cranelift` passes `Hosted`, which
 //! selects the hosted archive and normal CRT/libm/system linking.
 //! [`archive::find_or_build_runtime_archive`] never substitutes one mode
 //! for the other: an unsupported `--native-target` or a missing toolchain
@@ -273,10 +273,28 @@ fn cross_link_permitted(
     embedded_assets_present: bool,
     embedded_target_matches: bool,
 ) -> bool {
-    let explicit_cross_override = has_native_linker_override
+    explicit_cross_override(
+        elf_eligible,
+        mingw_eligible,
+        has_native_linker_override,
+        flavor_override,
+    ) || (elf_eligible && embedded_assets_present && embedded_target_matches)
+}
+
+/// Whether an explicit, *target-matching* direct-linker override alone
+/// permits this cross-link. Factored out of [`cross_link_permitted`] so
+/// the caller can answer it **without** touching packaged assets: a
+/// complete override consumes no packaged linker, so it must not parse
+/// (or fail on) an unrelated sidecar package.
+fn explicit_cross_override(
+    elf_eligible: bool,
+    mingw_eligible: bool,
+    has_native_linker_override: bool,
+    flavor_override: Option<&str>,
+) -> bool {
+    has_native_linker_override
         && ((elf_eligible && flavor_override == Some("elf"))
-            || (mingw_eligible && flavor_override == Some("mingw")));
-    explicit_cross_override || (elf_eligible && embedded_assets_present && embedded_target_matches)
+            || (mingw_eligible && flavor_override == Some("mingw")))
 }
 
 /// Design §11.5: returns the target-appropriate GNU ld emulation name for
@@ -314,6 +332,19 @@ fn absolute_path_from_cwd(path: &Path) -> std::path::PathBuf {
 /// caller (capability analysis, embedded-asset lookup, manifest
 /// dedup) must agree on.
 const OPTIONAL_WINDOWS_LIBS: [&str; 5] = ["ws2_32", "user32", "gdi32", "secur32", "crypt32"];
+
+/// Every Windows import library a `MingwDirect` link requests, in that
+/// same fixed order: `kernel32` plus [`OPTIONAL_WINDOWS_LIBS`] (the
+/// "LLD-sees-all-optional-imports" rule, design §2.4). This is the
+/// authoritative list — the packaged-asset validator in
+/// [`crate::backend::native_assets::sidecar`] reads it rather than
+/// restating it, so a package can never satisfy the manifest check and
+/// then fail here.
+pub fn required_import_libs() -> Vec<&'static str> {
+    let mut libs = vec!["kernel32"];
+    libs.extend(OPTIONAL_WINDOWS_LIBS);
+    libs
+}
 
 /// Link `object_path`, the native shim, optional user C sources, and the
 /// explicitly selected runtime archive into an executable at `exe_path`.
@@ -389,43 +420,54 @@ pub fn link_executable(
     if !target.is_host() {
         let native_linker_override = driver::env_var_nonempty("OSCAN_NATIVE_LINKER");
         let flavor_override = driver::env_var_nonempty("OSCAN_NATIVE_LINKER_FLAVOR");
-        let can_cross = cross_link_permitted(
+        // A complete, target-matching override answers this on its own —
+        // and must do so *without* consulting packaged assets at all, so a
+        // corrupt or foreign sidecar package cannot block a link that
+        // never touches it.
+        let override_permits = explicit_cross_override(
             elf_eligible,
             mingw_eligible,
             native_linker_override.is_some(),
             flavor_override.as_deref(),
-            native_assets::EMBEDDED_ASSETS_PRESENT,
-            native_assets::embedded_target().as_deref() == Some(target.archive_tag()),
         );
-        if !can_cross {
-            let reason = if native_assets::EMBEDDED_ASSETS_PRESENT {
-                if let Some(embedded_target) = native_assets::embedded_target() {
-                    if embedded_target != target.archive_tag() {
-                        format!(
-                            "this oscan build has embedded assets for '{}', not '{}'",
-                            embedded_target,
-                            target.archive_tag()
-                        )
-                    } else {
-                        "no matching embedded linker assets".to_string()
+        if !override_permits {
+            let packaged_present = native_assets::packaged_assets_present();
+            let packaged_target = native_assets::packaged_target()?;
+            let can_cross = cross_link_permitted(
+                elf_eligible,
+                mingw_eligible,
+                native_linker_override.is_some(),
+                flavor_override.as_deref(),
+                packaged_present,
+                packaged_target.as_deref() == Some(target.archive_tag()),
+            );
+            if !can_cross {
+                let reason = if packaged_present {
+                    match packaged_target {
+                        Some(packaged_target) if packaged_target != target.archive_tag() => {
+                            format!(
+                                "this oscan build has packaged assets for '{packaged_target}', not '{}'",
+                                target.archive_tag()
+                            )
+                        }
+                        Some(_) => "no matching packaged linker assets".to_string(),
+                        None => "packaged asset manifest is missing 'target' field".to_string(),
                     }
                 } else {
-                    "embedded asset manifest is missing 'target' field".to_string()
-                }
-            } else {
-                "no embedded assets in this build".to_string()
-            };
-            return Err(format!(
-                "'{}' is not the host target ({}); cross-linking requires a matching \
-                 embedded ELF linker asset in this oscan build ({}) \
-                 (build with OSCAN_EMBED_ASSETS_DIR staged for '{}', or set \
-                 OSCAN_NATIVE_LINKER + OSCAN_NATIVE_LINKER_FLAVOR=elf to use an external \
-                 cross-linker)",
-                target,
-                NativeTarget::host(),
-                reason,
-                target.archive_tag(),
-            ));
+                    "no packaged assets in this build".to_string()
+                };
+                return Err(format!(
+                    "'{}' is not the host target ({}); cross-linking requires a matching \
+                     packaged ELF linker asset in this oscan build ({}) \
+                     (build with OSCAN_EMBED_ASSETS_DIR staged for '{}', or set \
+                     OSCAN_NATIVE_LINKER + OSCAN_NATIVE_LINKER_FLAVOR=elf to use an external \
+                     cross-linker)",
+                    target,
+                    NativeTarget::host(),
+                    reason,
+                    target.archive_tag(),
+                ));
+            }
         }
     }
 
@@ -436,7 +478,7 @@ pub fn link_executable(
         elf_eligible,
         &archive_path,
         manifest.as_ref(),
-        native_assets::EMBEDDED_ASSETS_PRESENT,
+        native_assets::packaged_assets_present(),
     )?;
 
     let plan = match selection {
@@ -498,7 +540,7 @@ fn build_mingw_plan(
     // Toolchain-version cross-check (design §4.3): no silent drift between
     // the embedded linker's toolchain and the runtime archive's toolchain.
     if let (Some(embedded_version), Some(archive_version)) = (
-        native_assets::embedded_toolchain_version(),
+        native_assets::packaged_toolchain_version()?,
         manifest.and_then(|m| m.toolchain_version.clone()),
     ) {
         if embedded_version != archive_version {
@@ -510,14 +552,15 @@ fn build_mingw_plan(
         }
     }
 
-    let extracted = native_assets::ensure_extracted(options.allow_elevated_native_link)
+    let extracted = native_assets::resolve_link_assets(target, options.allow_elevated_native_link)
         .map_err(|reason| driver::no_silent_fallback_error(&reason))?;
 
     let linker = match &mingw_source {
         driver::MingwLinkerSource::Embedded => {
             let linker_asset = extracted.linker().ok_or_else(|| {
                 driver::no_silent_fallback_error(&format!(
-                    "this build's embedded asset set has no 'linker' role entry (cache set dir: '{}')",
+                    "this build's {} native-link asset set has no 'linker' role entry (asset set dir: '{}')",
+                    extracted.source.as_str(),
                     extracted.dir.display()
                 ))
             })?;
@@ -545,7 +588,8 @@ fn build_mingw_plan(
     let builtins = extracted.compiler_builtins().map(|a| a.path.clone());
     if builtins.is_none() {
         return Err(driver::no_silent_fallback_error(&format!(
-            "this build's embedded asset set has no 'compiler_builtins' role entry (cache set dir: '{}')",
+            "this build's {} native-link asset set has no 'compiler_builtins' role entry (asset set dir: '{}')",
+            extracted.source.as_str(),
             extracted.dir.display()
         )));
     }
@@ -605,11 +649,13 @@ fn build_elf_plan(
 ) -> Result<LinkPlan, String> {
     let linker = match &elf_source {
         driver::ElfLinkerSource::Embedded => {
-            let extracted = native_assets::ensure_extracted(options.allow_elevated_native_link)
-                .map_err(|reason| driver::no_silent_fallback_error(&reason))?;
+            let extracted =
+                native_assets::resolve_link_assets(target, options.allow_elevated_native_link)
+                    .map_err(|reason| driver::no_silent_fallback_error(&reason))?;
             let linker_asset = extracted.linker().ok_or_else(|| {
                 driver::no_silent_fallback_error(&format!(
-                    "this build's embedded asset set has no 'linker' role entry (cache set dir: '{}')",
+                    "this build's {} native-link asset set has no 'linker' role entry (asset set dir: '{}')",
+                    extracted.source.as_str(),
                     extracted.dir.display()
                 ))
             })?;
@@ -670,7 +716,12 @@ fn resolve_embedded_system_lib(
         .import_lib(name)
         .map(|a| a.path.clone())
         .ok_or_else(|| {
-            format!("this build's embedded asset set is missing the '{name}' import library")
+            format!(
+                "this build's {} native-link asset set is missing the '{name}' import library \
+                 (asset set dir: '{}')",
+                extracted.source.as_str(),
+                extracted.dir.display()
+            )
         })?;
     Ok(SystemLib {
         name,
@@ -839,7 +890,7 @@ mod tests {
     // Regression test for a real bug found during Vasquez's native-link
     // embedding validation pass: `is_mingw_eligible` (formerly an inline
     // `mingw_eligible` computation in `link_executable`) did not check
-    // `runtime_mode`, so `--libc --backend native` (Hosted) on Windows
+    // `runtime_mode`, so `--libc --backend cranelift` (Hosted) on Windows
     // incorrectly qualified for MingwDirect whenever embedded assets were
     // present. MingwDirect's embedded import libraries are the freestanding
     // Win32 subset only (no msvcrt/ucrt), so every hosted link failed with
@@ -1151,6 +1202,39 @@ mod tests {
             false, // embedded_assets_present
             false, // embedded_target_matches
         ));
+    }
+
+    /// A complete, target-matching override answers the cross-link
+    /// question by itself, so the caller can skip every packaged-asset
+    /// lookup — that is what keeps a corrupt or foreign sidecar package
+    /// from blocking a link that never touches it.
+    #[test]
+    fn a_complete_override_decides_cross_linking_without_packaged_assets() {
+        assert!(explicit_cross_override(true, false, true, Some("elf")));
+        assert!(explicit_cross_override(false, true, true, Some("mingw")));
+        // Wrong flavor for this target, no override set, or a flavor with
+        // no linker: all of these still need the packaged-asset check.
+        assert!(!explicit_cross_override(false, true, true, Some("elf")));
+        assert!(!explicit_cross_override(true, false, false, Some("elf")));
+        assert!(!explicit_cross_override(true, false, true, None));
+        assert!(!explicit_cross_override(
+            true,
+            false,
+            true,
+            Some("compiler-driver")
+        ));
+    }
+
+    /// The import-library list the sidecar validator checks against is
+    /// exactly the one a `MingwDirect` link requests.
+    #[test]
+    fn required_import_libs_match_what_a_mingw_link_requests() {
+        let required = required_import_libs();
+        assert_eq!(required[0], "kernel32");
+        for lib in OPTIONAL_WINDOWS_LIBS {
+            assert!(required.contains(&lib), "{lib} missing from {required:?}");
+        }
+        assert_eq!(required.len(), OPTIONAL_WINDOWS_LIBS.len() + 1);
     }
 
     #[test]

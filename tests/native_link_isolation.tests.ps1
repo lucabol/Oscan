@@ -50,7 +50,7 @@ Remove-Item -LiteralPath $exePath -Force -ErrorAction SilentlyContinue
 # (EMBEDDED_ASSETS_PRESENT == false) cannot pass this test by construction --
 # fail with a clear, specific message rather than a confusing isolated-compile
 # failure below.
-$preflight = & $compiler --backend native -o (Join-Path $buildRoot "preflight_hello.exe") $helloSource 2>&1 | Out-String
+$preflight = & $compiler --backend cranelift -o (Join-Path $buildRoot "preflight_hello.exe") $helloSource 2>&1 | Out-String
 Assert-NativeLinkIsolation ($LASTEXITCODE -eq 0) "preflight native compile of examples/hello.osc failed: $preflight"
 Assert-NativeLinkIsolation ($preflight -match '\(embedded\)') `
     ("this oscan.exe was not built with embedded native-link assets (no '(embedded)' link " +
@@ -92,7 +92,7 @@ try {
     Assert-NativeLinkIsolation (-not (Test-Path -LiteralPath $toolchainPath)) `
         "toolchain dir '$toolchainPath' is still present -- isolation setup did not take effect"
 
-    $compile = & $compiler --backend native -o $exePath $helloSource 2>&1 | Out-String
+    $compile = & $compiler --backend cranelift -o $exePath $helloSource 2>&1 | Out-String
     Assert-NativeLinkIsolation ($LASTEXITCODE -eq 0) `
         "native compile of examples/hello.osc failed with no C compiler/linker reachable and the toolchain dir renamed away: $compile"
     Assert-NativeLinkIsolation ($compile -match '\(embedded\)') `

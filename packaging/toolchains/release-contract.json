@@ -1,58 +1,93 @@
 {
-  "schema_version": 1,
-  "phase": "phase1",
+  "schema_version": 2,
   "install_surface": "github-releases",
   "toolchains_committed_to_git": false,
-  "release_layout": {
-    "binary_position": "archive-root",
-    "toolchain_position": "archive-root/toolchain",
-    "binary_and_toolchain_are_siblings": true
+  "backends": {
+    "llvm": {
+      "cargo_feature": "backend-llvm",
+      "artifact_suffix": "llvm",
+      "kind": "object",
+      "description": "Direct in-process LLVM object code. No C compiler, no C source, no toolchain."
+    },
+    "cranelift": {
+      "cargo_feature": "backend-cranelift",
+      "artifact_suffix": "cranelift",
+      "kind": "object",
+      "description": "Cranelift object code. No C compiler, no C source, no toolchain. 'native' is only a deprecated CLI alias for this backend and is never an artifact label."
+    },
+    "c": {
+      "cargo_feature": "backend-c",
+      "artifact_suffix": "c",
+      "kind": "c-source",
+      "description": "Portability/reference backend: emits C and needs a C toolchain to compile it."
+    }
   },
-  "native_backend": {
-    "runtime_source_position": "archive-root/native-runtime",
-    "runtime_archive_position_template": "archive-root/build/runtime-archives/{target}",
-    "source_files": [
-      "osc_native_shim.c",
-      "osc_runtime.h"
-    ]
-  },
-  "llvm_code_generator": {
-    "role": "Oscan's own LLVM code generator for --backend llvm, loaded in-process. No clang/llvm-as/opt/llc subprocess and no installed LLVM SDK is ever used.",
-    "required_major": 22,
-    "declared_by": "the per-target toolchain manifest's toolchain.llvm_code_generator block",
-    "position": "archive-root/toolchain",
-    "search_roots": [
-      "$OSCAN_LLVM_LIB (full path to the library)",
-      "$OSCAN_LLVM_DIR",
-      "$OSCAN_TOOLCHAIN_DIR",
-      "<exe-dir>/toolchain",
-      "<exe-dir>"
-    ],
-    "search_subdirectories": [
-      "<root>/<platform>/bin",
-      "<root>/<platform>/lib",
-      "<root>/bin",
-      "<root>/lib",
-      "<root>"
-    ],
-    "search_names": {
-      "windows": [
-        "libLLVM-22.dll",
-        "LLVM-C.dll",
-        "libLLVM.dll"
-      ],
-      "linux": [
-        "libLLVM.so.22.1",
-        "libLLVM.so.22",
-        "libLLVM-22.so",
-        "libLLVM.so"
+  "components": {
+    "compiler": {
+      "position": "archive-root",
+      "description": "The feature-gated oscan binary, stamped with OSCAN_DISTRIBUTION_BACKEND."
+    },
+    "direct_link_sidecar": {
+      "position": "archive-root/native-link",
+      "manifest_name": "native-link-assets.json",
+      "description": "Verified executable-relative native-link assets (linker, its sibling runtime libraries, import libraries, compiler builtins) preserving each asset's install_subpath.",
+      "verified_by": "src/backend/native_assets/sidecar.rs"
+    },
+    "runtime_archives": {
+      "position_template": "archive-root/build/runtime-archives/{target}",
+      "description": "Precompiled freestanding runtime archives plus their manifests. Object packages ship no hosted archive, no runtime sources, and no runtime builder.",
+      "allowed_profiles": [
+        "freestanding",
+        "freestanding_gfx",
+        "freestanding_core"
       ]
     },
-    "never_searched": [
-      "the current working directory",
-      "PATH"
-    ],
-    "target_support": "gated on the initializers the packaged library actually exports (X86/AArch64/RISCV); a target the library cannot emit for is refused by name, never silently mis-emitted"
+    "llvm_provider": {
+      "position": "archive-root/toolchain",
+      "required_major": 22,
+      "declared_by": "the per-target toolchain manifest's toolchain.llvm_code_generator block",
+      "sources": [
+        "direct-link-sidecar",
+        "toolchain-manifest"
+      ],
+      "search_roots": [
+        "$OSCAN_LLVM_LIB (full path to the library)",
+        "$OSCAN_LLVM_DIR",
+        "$OSCAN_TOOLCHAIN_DIR",
+        "<exe-dir>/toolchain",
+        "<exe-dir>/native-link",
+        "<exe-dir>"
+      ],
+      "search_subdirectories": [
+        "<root>/<platform>/bin",
+        "<root>/<platform>/lib",
+        "<root>/bin",
+        "<root>/lib",
+        "<root>"
+      ],
+      "search_names": {
+        "windows": [
+          "libLLVM-22.dll",
+          "LLVM-C.dll",
+          "libLLVM.dll"
+        ],
+        "linux": [
+          "libLLVM.so.22.1",
+          "libLLVM.so.22",
+          "libLLVM-22.so",
+          "libLLVM.so"
+        ]
+      },
+      "never_searched": [
+        "the current working directory",
+        "PATH"
+      ],
+      "target_support": "gated on the initializers the packaged library actually exports (X86/AArch64/RISCV); a target the library cannot emit for is refused by name, never silently mis-emitted"
+    },
+    "c_toolchain": {
+      "position": "archive-root/toolchain",
+      "description": "The pinned, pruned C toolchain a C package needs to compile the C the backend emits."
+    }
   },
   "lookup_contract": {
     "windows": {
@@ -85,50 +120,137 @@
       ]
     }
   },
-  "bundled_targets": {
+  "variants": {
     "windows-x86_64": {
       "binary_name": "oscan.exe",
-      "bundle_kind": "full",
       "archive_format": "zip",
-      "archive_name_template": "oscan-v{version}-windows-x86_64-full.zip",
-      "archive_root_template": "oscan-v{version}-windows-x86_64-full",
       "toolchain_manifest": "windows-x86_64.json",
-      "native_runtime_modes": [
-        "hosted",
-        "freestanding",
-        "freestanding_gfx",
-        "freestanding_core"
-      ],
-      "native_smoke_mode": "freestanding"
+      "backends": {
+        "llvm": {
+          "archive_name_template": "oscan-v{version}-windows-x86_64-llvm.zip",
+          "archive_root_template": "oscan-v{version}-windows-x86_64-llvm",
+          "cargo_feature": "backend-llvm",
+          "distribution_backend": "llvm",
+          "toolchain_free": true,
+          "components": [
+            "compiler",
+            "direct_link_sidecar",
+            "runtime_archives",
+            "llvm_provider"
+          ],
+          "llvm_provider_source": "direct-link-sidecar",
+          "llvm_provider_asset": "libLLVM-22.dll",
+          "runtime_profiles": [
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
+        "cranelift": {
+          "archive_name_template": "oscan-v{version}-windows-x86_64-cranelift.zip",
+          "archive_root_template": "oscan-v{version}-windows-x86_64-cranelift",
+          "cargo_feature": "backend-cranelift",
+          "distribution_backend": "cranelift",
+          "toolchain_free": true,
+          "components": [
+            "compiler",
+            "direct_link_sidecar",
+            "runtime_archives"
+          ],
+          "runtime_profiles": [
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
+        "c": {
+          "archive_name_template": "oscan-v{version}-windows-x86_64-c.zip",
+          "archive_root_template": "oscan-v{version}-windows-x86_64-c",
+          "cargo_feature": "backend-c",
+          "distribution_backend": "c",
+          "toolchain_free": false,
+          "components": [
+            "compiler",
+            "c_toolchain"
+          ],
+          "runtime_profiles": []
+        }
+      }
     },
     "linux-x86_64": {
       "binary_name": "oscan",
-      "bundle_kind": "full",
       "archive_format": "tar.xz",
-      "archive_name_template": "oscan-v{version}-linux-x86_64-full.tar.xz",
-      "archive_root_template": "oscan-v{version}-linux-x86_64-full",
       "toolchain_manifest": "linux-x86_64.json",
-      "native_runtime_modes": [
-        "hosted",
-        "freestanding",
-        "freestanding_gfx",
-        "freestanding_core"
-      ],
-      "native_smoke_mode": "freestanding"
-    }
-  },
-  "binary_only_targets": {
+      "backends": {
+        "llvm": {
+          "archive_name_template": "oscan-v{version}-linux-x86_64-llvm.tar.xz",
+          "archive_root_template": "oscan-v{version}-linux-x86_64-llvm",
+          "cargo_feature": "backend-llvm",
+          "distribution_backend": "llvm",
+          "toolchain_free": true,
+          "components": [
+            "compiler",
+            "direct_link_sidecar",
+            "runtime_archives",
+            "llvm_provider"
+          ],
+          "llvm_provider_source": "toolchain-manifest",
+          "runtime_profiles": [
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
+        "cranelift": {
+          "archive_name_template": "oscan-v{version}-linux-x86_64-cranelift.tar.xz",
+          "archive_root_template": "oscan-v{version}-linux-x86_64-cranelift",
+          "cargo_feature": "backend-cranelift",
+          "distribution_backend": "cranelift",
+          "toolchain_free": true,
+          "components": [
+            "compiler",
+            "direct_link_sidecar",
+            "runtime_archives"
+          ],
+          "runtime_profiles": [
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
+        "c": {
+          "archive_name_template": "oscan-v{version}-linux-x86_64-c.tar.xz",
+          "archive_root_template": "oscan-v{version}-linux-x86_64-c",
+          "cargo_feature": "backend-c",
+          "distribution_backend": "c",
+          "toolchain_free": false,
+          "components": [
+            "compiler",
+            "c_toolchain"
+          ],
+          "runtime_profiles": []
+        }
+      }
+    },
     "macos-x86_64": {
       "binary_name": "oscan",
-      "bundle_kind": "binary-only",
       "archive_format": "tar.gz",
-      "archive_name_template": "oscan-v{version}-macos-x86_64.tar.gz",
-      "archive_root_template": "oscan-v{version}-macos-x86_64",
-      "requires_host_compiler": true,
-      "required_host_toolchain": "apple-clt",
       "note_file": "macos-phase1-note.md",
-      "native_runtime_modes": [],
-      "native_smoke_mode": null
+      "backends": {
+        "c": {
+          "archive_name_template": "oscan-v{version}-macos-x86_64-c.tar.gz",
+          "archive_root_template": "oscan-v{version}-macos-x86_64-c",
+          "cargo_feature": "backend-c",
+          "distribution_backend": "c",
+          "toolchain_free": false,
+          "components": [
+            "compiler"
+          ],
+          "requires_host_compiler": true,
+          "required_host_toolchain": "apple-clt",
+          "runtime_profiles": []
+        }
+      }
     }
   }
 }

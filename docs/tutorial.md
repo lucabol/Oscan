@@ -23,18 +23,22 @@ at each checkpoint rather than trying to combine the checkpoints.
 
 ## 1. Install Oscan
 
-Current prebuilt releases target x86-64. Download the archive for your
-operating system from
+Current prebuilt releases target x86-64, and each archive contains exactly one
+backend. Download the package for your operating system from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases):
 
-- **Windows x86-64 and Linux x86-64:** choose the `full` bundle, which includes
-  a packaged LLVM provider, direct-link assets, and a pinned C toolchain for
-  explicit C/hosted builds.
-- **macOS x86-64:** use the macOS archive and install Xcode Command Line Tools
-  first with
+- **Windows x86-64 and Linux x86-64:** choose the recommended `llvm` package
+  (`oscan-vX.Y.Z-windows-x86_64-llvm.zip` /
+  `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz`), which contains the packaged LLVM
+  code generator and direct-link assets and needs no C compiler. On Windows you
+  can instead run the `-llvm.msi` installer, or use
+  `scripts/install-latest.ps1 -Backend llvm`. The `-cranelift` and `-c`
+  packages are the alternatives.
+- **macOS x86-64:** use `oscan-vX.Y.Z-macos-x86_64-c.tar.gz` and install Xcode
+  Command Line Tools first with
   `xcode-select --install`.
 
-Extract the bundle, add its directory to `PATH`, and verify the installation:
+Extract the package, add its directory to `PATH`, and verify the installation:
 
 ```text
 oscan --help
@@ -66,9 +70,10 @@ Compile and run it:
 oscan oscwc.osc --run
 ```
 
-The Windows and Linux full bundles use LLVM by default. You can require one of
-the three backends with `--backend llvm`, `--backend native`, or `--backend c`;
-explicit selection never silently changes to another backend.
+The recommended `llvm` package uses LLVM by default; each package defaults to
+the one backend it contains. Where a build contains more than one, you can
+require a specific backend with `--backend llvm`, `--backend cranelift`, or
+`--backend c`; explicit selection never silently changes to another backend.
 
 You should see:
 
@@ -443,10 +448,11 @@ The output should be the same:
 2 6 40 sample.txt
 ```
 
-Oscan builds an executable directly, using the LLVM backend when its packaged
-LLVM 22 provider is available and falling back to the Cranelift or C backend
-otherwise. The packaged freestanding LLVM path generates no C and needs no
-installed C/Clang/LLVM toolchain. To keep generated C instead:
+Oscan builds an executable directly with the backend this package contains —
+LLVM for the recommended package, which loads its packaged LLVM 22 code
+generator in-process. That freestanding path generates no C and needs no
+installed C/Clang/LLVM toolchain. To keep generated C instead (with the `c`
+package, or any build that contains the C backend):
 
 ```text
 oscan oscwc.osc -o oscwc.c
@@ -481,8 +487,8 @@ This program counts newline characters, matching the traditional core of
 - Structs group related values.
 - Fallible operations return `Result`, and `match` handles every outcome.
 - `--run` is the fast edit-run loop; omitting it creates an executable.
-- Oscan provides LLVM, Cranelift/native, and C backends; packaged Windows/Linux
-  builds prefer LLVM.
+- Oscan provides LLVM, Cranelift, and C backends, one per release package;
+  LLVM is the recommended one.
 - A `.c` output path keeps Oscan's generated C.
 - A `.ll` output path keeps the directly emitted LLVM IR.
 

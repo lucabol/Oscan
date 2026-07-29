@@ -7,7 +7,7 @@
 # resolves to wherever that translation unit was compiled from, which is a
 # per-invocation temp directory for the C backend (it rewrites
 # runtime/osc_runtime.c into a fresh temp dir every compile) and the
-# repository's checked-out path for the native backend's precompiled
+# repository's checked-out path for the object backends' precompiled
 # archive. Comparing that path exactly would be comparing incidental build
 # environment/location, not runtime behavior, so this checks the stable
 # parts instead: the process exit code, the stdout printed before the
@@ -15,11 +15,11 @@
 # line (which must be byte-identical between backends and platforms, since
 # it is the part osc_panic actually formats).
 #
-# Usage: .\panic_message.tests.ps1 -Oscan <oscan-binary> [-Backends c,native,llvm] [-SkipWSL]
+# Usage: .\panic_message.tests.ps1 -Oscan <oscan-binary> [-Backends c,cranelift,llvm] [-SkipWSL]
 
 param(
     [Parameter(Mandatory = $true)][string]$Oscan,
-    [ValidateSet("c", "native", "llvm")][string[]]$Backends = @("c", "native"),
+    [ValidateSet("c", "cranelift", "llvm")][string[]]$Backends = @("c", "cranelift"),
     [switch]$SkipWSL
 )
 
@@ -105,7 +105,7 @@ if ($suffixes.ContainsKey("c")) {
     }
 }
 
-# ── WSL: freestanding native cross-link ──────────────────────────────
+# ── WSL: freestanding Cranelift cross-link ───────────────────────────
 if (-not $SkipWSL) {
     $wslAvailable = $false
     try {
@@ -118,9 +118,9 @@ if (-not $SkipWSL) {
     } else {
         $linuxObj = Join-Path $workDir "panic_probe.linux.o"
         Remove-Item -LiteralPath $linuxObj -Force -ErrorAction SilentlyContinue
-        & $oscanPath --backend native --native-target linux-x86_64 $sourcePath -o $linuxObj 2>$null
+        & $oscanPath --backend cranelift --native-target linux-x86_64 $sourcePath -o $linuxObj 2>$null
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $linuxObj)) {
-            $failures.Add("failed to emit the linux-x86_64 native object for the panic probe")
+            $failures.Add("failed to emit the linux-x86_64 Cranelift object for the panic probe")
         } else {
             $wslRoot = (& wsl -d Ubuntu -- wslpath -a ($repoRoot -replace '\\', '/')).Trim()
             $archiveDir = "$wslRoot/build/runtime-archives/linux-x86_64"
@@ -173,7 +173,7 @@ if (-not $SkipWSL) {
                 } catch {
                     $failures.Add("WSL: $_")
                 }
-                Write-Host "WSL:     native backend stderr: $wslStderr"
+                Write-Host "WSL:     Cranelift backend stderr: $wslStderr"
             }
         }
     }

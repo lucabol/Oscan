@@ -33,6 +33,7 @@ pub(super) enum LinkerFamily {
     Lld,
 }
 
+#[derive(Debug)]
 pub(super) struct LinkerDriver {
     pub(super) cmd: String,
     pub(super) source: CompilerSource,
@@ -89,7 +90,7 @@ pub(super) fn trusted_manifest_cc(cc: &str) -> Option<String> {
             trusted_roots.push(canonical_root);
         }
     }
-    if !crate::backend::native_assets::EMBEDDED_ASSETS_PRESENT {
+    if !crate::backend::native_assets::packaged_assets_present() {
         if let Some(manifest_dir) = option_env!("CARGO_MANIFEST_DIR") {
             if let Ok(canonical_root) = Path::new(manifest_dir).canonicalize() {
                 trusted_roots.push(canonical_root);
@@ -218,7 +219,7 @@ pub(super) fn find_linker_driver(
 
     match crate::find_c_compiler() {
         Some(_) if discovered.is_none() => Err(
-            "the native backend links object files with GCC or Clang (matching the toolchain used to \
+            "the LLVM/Cranelift object backends link object files with GCC or Clang (matching the toolchain used to \
              build the runtime archive), but only an MSVC (cl.exe) toolchain was found on this host; \
              install GCC or Clang (e.g. MinGW-w64, or LLVM), or set OSCAN_NATIVE_LINKER to a GCC/Clang \
              command"
@@ -241,7 +242,7 @@ pub(super) fn find_linker_driver(
                 })
                 .unwrap_or_default();
             Err(format!(
-                "no trusted C compiler found to act as the native backend's linker (searched the same \
+                "no trusted C compiler found to act as the LLVM/Cranelift object backends' linker (searched the same \
                  way --backend c does){recorded}; install GCC or a GNU-ABI Clang toolchain"
             ))
         }
@@ -363,12 +364,14 @@ pub(super) fn find_compiler_builtins_lib(cc: &str) -> Option<PathBuf> {
 /// either the `MingwDirect` flavor (embedded or an explicit override
 /// binary), the `ElfDirect` flavor (design §10), or the legacy
 /// `CompilerDriver` flavor.
+#[derive(Debug)]
 pub(super) enum LinkerSelection {
     Mingw(MingwLinkerSource),
     Elf(ElfLinkerSource),
     CompilerDriver(LinkerDriver),
 }
 
+#[derive(Debug)]
 pub(super) enum MingwLinkerSource {
     /// Use this build's embedded/extracted `ld.lld`.
     Embedded,
@@ -378,6 +381,7 @@ pub(super) enum MingwLinkerSource {
     Override { command: String },
 }
 
+#[derive(Debug)]
 pub(super) enum ElfLinkerSource {
     /// Use this build's embedded/extracted `x86_64-linux-musl-ld`.
     Embedded,
@@ -432,6 +436,39 @@ fn refuse_compiler_driver_if_strict() -> Result<(), String> {
     )
 }
 
+/// A direct linker flavor is only ever a *valid* choice for the inputs it
+/// can actually link: `mingw` for Windows COFF, `elf` for the Linux ELF
+/// targets, both only for freestanding links with no user `.c` sources
+/// (see [`super::is_mingw_eligible`]/[`super::is_elf_eligible`]).
+///
+/// Selecting one anyway would produce a plan for the wrong object format,
+/// or a plan that silently drops the hosted CRT and the user's `--extra-c`
+/// sources — inputs a direct linker cannot compile. Both are reported here
+/// as an actionable error instead.
+fn require_flavor_eligibility(
+    flavor: &str,
+    eligible: bool,
+    target: NativeTarget,
+    runtime_mode: RuntimeMode,
+) -> Result<(), String> {
+    if eligible {
+        return Ok(());
+    }
+    let reason = if runtime_mode == RuntimeMode::Hosted {
+        "a hosted (--libc) link needs the toolchain's CRT/libm, which a direct linker invocation \
+         does not provide"
+    } else {
+        "this target/input combination is not linkable by that flavor (a direct linker cannot \
+         compile user --extra-c sources, and each flavor handles only its own object format: \
+         'mingw' links Windows COFF, 'elf' links Linux ELF)"
+    };
+    Err(format!(
+        "OSCAN_NATIVE_LINKER_FLAVOR={flavor} cannot be used for target '{target}' in {runtime_mode} \
+         mode: {reason}. Unset OSCAN_NATIVE_LINKER_FLAVOR (or set it to 'compiler-driver') to link \
+         these inputs through a C compiler driver instead"
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn resolve_linker_selection_inner(
     target: NativeTarget,
@@ -470,6 +507,7 @@ fn resolve_linker_selection_inner(
         }
         // set / mingw: invoke that binary directly (Windows).
         (Some(cmd), Some("mingw")) => {
+            require_flavor_eligibility("mingw", mingw_eligible, target, runtime_mode)?;
             if !embedded_assets_present {
                 return Err(format!(
                     "OSCAN_NATIVE_LINKER_FLAVOR=mingw requires this oscan build to embed its own native-link \
@@ -484,9 +522,10 @@ fn resolve_linker_selection_inner(
         // MingwDirect, ElfDirect needs no embedded import libraries or
         // compiler builtins, so an explicit GNU ld override is complete by
         // itself and works in an ordinary dev build.
-        (Some(cmd), Some("elf")) => Ok(LinkerSelection::Elf(ElfLinkerSource::Override {
-            command: cmd,
-        })),
+        (Some(cmd), Some("elf")) => {
+            require_flavor_eligibility("elf", elf_eligible, target, runtime_mode)?;
+            Ok(LinkerSelection::Elf(ElfLinkerSource::Override { command: cmd }))
+        }
         (Some(_), Some(other)) => Err(format!(
             "OSCAN_NATIVE_LINKER_FLAVOR='{other}' is not recognized (expected 'compiler-driver', 'mingw', or 'elf')"
         )),
@@ -499,6 +538,7 @@ fn resolve_linker_selection_inner(
         // unset / mingw: FLAVOR alone selects MingwDirect for the
         // default-resolved (embedded) linker.
         (None, Some("mingw")) => {
+            require_flavor_eligibility("mingw", mingw_eligible, target, runtime_mode)?;
             if !embedded_assets_present {
                 return Err(
                     "OSCAN_NATIVE_LINKER_FLAVOR=mingw was set, but this oscan build has no embedded \
@@ -512,6 +552,7 @@ fn resolve_linker_selection_inner(
         // unset / elf: FLAVOR alone selects ElfDirect for the
         // default-resolved (embedded) linker.
         (None, Some("elf")) => {
+            require_flavor_eligibility("elf", elf_eligible, target, runtime_mode)?;
             if !embedded_assets_present {
                 return Err(
                     "OSCAN_NATIVE_LINKER_FLAVOR=elf was set, but this oscan build has no embedded \
@@ -683,8 +724,121 @@ mod tests {
         env::remove_var("OSCAN_NATIVE_LINKER_FLAVOR");
     }
 
+    /// An explicit direct flavor still has to be a *possible* way to link
+    /// these inputs: the wrong flavor for the target, a hosted link, or
+    /// user `.c` sources all make it an error rather than a plan that
+    /// silently drops inputs or emits the wrong object format.
+    #[test]
+    fn an_explicit_direct_flavor_requires_matching_eligibility() {
+        let _lock = LINKER_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        env::remove_var("OSCAN_NATIVE_LINKER");
+        env::remove_var("OSCAN_NATIVE_LINKER_FLAVOR");
+
+        // `elf` requested for a Windows COFF target.
+        let err = resolve_linker_selection_inner(
+            NativeTarget::WindowsX64,
+            RuntimeMode::Freestanding,
+            true,  // mingw_eligible
+            false, // elf_eligible
+            Path::new("dummy.a"),
+            None,
+            true,
+            Some("/usr/bin/ld".to_string()),
+            Some("elf".to_string()),
+        )
+        .expect_err("elf is not a way to link a COFF target");
+        assert!(err.contains("OSCAN_NATIVE_LINKER_FLAVOR=elf"), "{err}");
+        assert!(err.contains("windows-x86_64"), "{err}");
+        assert!(err.contains("compiler driver"), "{err}");
+
+        // `mingw` requested for a hosted (--libc) link.
+        let err = resolve_linker_selection_inner(
+            NativeTarget::WindowsX64,
+            RuntimeMode::Hosted,
+            false, // mingw_eligible (hosted is never direct-linkable)
+            false,
+            Path::new("dummy.a"),
+            None,
+            true,
+            None,
+            Some("mingw".to_string()),
+        )
+        .expect_err("a hosted link cannot use a direct linker");
+        assert!(err.contains("hosted"), "{err}");
+        assert!(err.contains("CRT"), "{err}");
+
+        // `elf` requested for a Linux target whose input set includes user
+        // `.c` sources (so `elf_eligible` is false): the direct plan would
+        // drop them.
+        let err = resolve_linker_selection_inner(
+            NativeTarget::LinuxX64,
+            RuntimeMode::Freestanding,
+            false,
+            false, // elf_eligible == false because --extra-c was passed
+            Path::new("dummy.a"),
+            None,
+            true,
+            Some("/usr/bin/ld".to_string()),
+            Some("elf".to_string()),
+        )
+        .expect_err("a direct linker cannot compile user C sources");
+        assert!(err.contains("--extra-c"), "{err}");
+    }
+
+    /// The platform-valid explicit override still resolves to a direct
+    /// linker: the eligibility gate only rejects impossible combinations.
+    #[test]
+    fn a_platform_valid_explicit_override_still_selects_the_direct_linker() {
+        let _lock = LINKER_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        env::remove_var("OSCAN_NATIVE_LINKER");
+        env::remove_var("OSCAN_NATIVE_LINKER_FLAVOR");
+
+        let selection = resolve_linker_selection_inner(
+            NativeTarget::LinuxX64,
+            RuntimeMode::Freestanding,
+            false,
+            true, // elf_eligible
+            Path::new("dummy.a"),
+            None,
+            false, // no packaged assets: an elf override is complete alone
+            Some("/usr/bin/ld".to_string()),
+            Some("elf".to_string()),
+        )
+        .expect("a platform-valid elf override is honored");
+        assert!(matches!(
+            selection,
+            LinkerSelection::Elf(ElfLinkerSource::Override { command }) if command == "/usr/bin/ld"
+        ));
+
+        let selection = resolve_linker_selection_inner(
+            NativeTarget::WindowsX64,
+            RuntimeMode::Freestanding,
+            true, // mingw_eligible
+            false,
+            Path::new("dummy.a"),
+            None,
+            true, // packaged import libs/builtins available
+            Some("C:/tools/ld.lld.exe".to_string()),
+            Some("mingw".to_string()),
+        )
+        .expect("a platform-valid mingw override is honored");
+        assert!(matches!(
+            selection,
+            LinkerSelection::Mingw(MingwLinkerSource::Override { command })
+                if command == "C:/tools/ld.lld.exe"
+        ));
+    }
+
     #[test]
     fn strict_profile_refuses_compiler_driver_before_discovery() {
+        // Both the linker env vars *and* the strict-profile env var are
+        // process-global; take the strict lock first (a fixed order, so
+        // this cannot deadlock against a test that takes only one).
+        let _strict = crate::backend::no_toolchain::testing::lock_strict_profile_env();
         let _lock = LINKER_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
@@ -710,8 +864,15 @@ mod tests {
             Ok(_) => panic!("strict profile must reject compiler-driver linking"),
             Err(error) => error,
         };
-        assert!(error.contains("strict no-toolchain profile"), "{error}");
         assert!(error.contains("external C compiler driver"), "{error}");
+        // A build that contains a C backend is armed by the variable and
+        // says so; a build without one is strict intrinsically and must
+        // not point at a variable that would not help.
+        if crate::backend::no_toolchain::TOOLCHAIN_FREE_BUILD {
+            assert!(error.contains("does not include the C backend"), "{error}");
+        } else {
+            assert!(error.contains("strict no-toolchain profile"), "{error}");
+        }
     }
 
     #[test]
@@ -758,7 +919,7 @@ mod tests {
         // trusted root -- exactly this repo's own local dev/CI toolchain
         // story (build/toolchain-windows-x86_64 lives under it).
         assert!(
-            !crate::backend::native_assets::EMBEDDED_ASSETS_PRESENT,
+            !crate::backend::native_assets::packaged_assets_present(),
             "this test assumes a normal `cargo test` dev build with no embedded assets"
         );
         let trusted_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");

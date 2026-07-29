@@ -4,6 +4,10 @@ param(
     [string]$Target,
 
     [Parameter(Mandatory = $true)]
+    [ValidateSet("llvm", "cranelift", "c")]
+    [string]$Backend,
+
+    [Parameter(Mandatory = $true)]
     [string]$Version,
 
     [Parameter(Mandatory = $true)]
@@ -15,10 +19,38 @@ param(
 
     [string]$RuntimeArchiveDir,
 
-    [string]$CrossLinkerSidecarDir
+    # Prepared native-link asset directory (native-link-assets.json plus its
+    # assets at their install_subpaths) for the llvm/cranelift variants. This
+    # stays a directory because every file in it carries a repo-derived
+    # manifest digest that staging re-verifies.
+    [string]$NativeLinkDir,
+
+    # The pinned C toolchain *source archive* for the c variant. Staging
+    # verifies it against the digest in packaging/toolchains/<target>.json
+    # before extracting a single member, so an arbitrary or foreign
+    # toolchain can never be packaged. Resolve it with
+    # 'release_tools.py resolve-archive'.
+    [string]$ToolchainArchive,
+
+    # The pinned LLVM provider *source archive* for targets whose provider
+    # comes from the toolchain manifest instead of the native-link sidecar.
+    # Verified against toolchain.llvm_code_generator.archive.digest; only the
+    # manifest-declared members are ever staged.
+    [string]$LlvmProviderArchive,
+
+    # Removed: a prepared directory cannot be authenticated.
+    [string]$ToolchainDir,
+
+    [string]$LlvmProviderDir
 )
 
 $ErrorActionPreference = "Stop"
+if ($ToolchainDir) {
+    throw "-ToolchainDir has been removed from release staging: a prepared toolchain directory cannot be checked against the digest the toolchain manifest pins. Pass -ToolchainArchive with the pinned source archive instead."
+}
+if ($LlvmProviderDir) {
+    throw "-LlvmProviderDir has been removed from release staging: its provenance record was self-asserted. Pass -LlvmProviderArchive with the pinned source archive instead."
+}
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 function Get-DefaultOutputDir {
@@ -50,6 +82,7 @@ $pythonArgs = @(
     $tool,
     "stage-release",
     "--target", $Target,
+    "--backend", $Backend,
     "--version", $Version,
     "--binary", $BinaryPath,
     "--output-dir", $OutputDir,
@@ -58,8 +91,14 @@ $pythonArgs = @(
 if ($RuntimeArchiveDir) {
     $pythonArgs += @("--runtime-archive-dir", $RuntimeArchiveDir)
 }
-if ($CrossLinkerSidecarDir) {
-    $pythonArgs += @("--cross-linker-sidecar-dir", $CrossLinkerSidecarDir)
+if ($NativeLinkDir) {
+    $pythonArgs += @("--native-link-dir", $NativeLinkDir)
+}
+if ($ToolchainArchive) {
+    $pythonArgs += @("--toolchain-archive", $ToolchainArchive)
+}
+if ($LlvmProviderArchive) {
+    $pythonArgs += @("--llvm-provider-archive", $LlvmProviderArchive)
 }
 
 $result = & python @pythonArgs

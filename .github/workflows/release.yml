@@ -1,5 +1,13 @@
 name: Oscan Release
 
+# Release contract schema 2: every published artifact is one (target,
+# backend) pair — Windows/Linux ship llvm, cranelift and c packages, macOS
+# ships c. The package job is keyed on the *target*, not on target x
+# backend, because all of a target's variants reuse the same pinned
+# toolchain download, the same freestanding runtime archives and the same
+# native-link sidecar; fanning out per backend would repeat the most
+# expensive work in the release three times per platform.
+
 on:
   push:
     tags:
@@ -30,67 +38,75 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       tag: ${{ steps.meta.outputs.tag }}
       should_publish: ${{ steps.meta.outputs.should_publish }}
-      matrix: ${{ steps.meta.outputs.matrix }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
+
       - name: Resolve release version and publish mode
         id: meta
-        shell: pwsh
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $contractPath = Join-Path $env:GITHUB_WORKSPACE 'packaging/toolchains/release-contract.json'
-          $contract = Get-Content $contractPath -Raw | ConvertFrom-Json -AsHashtable
-          $eventName = '${{ github.event_name }}'
-          $rawVersion = if ($eventName -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}' }
-          $rawVersion = $rawVersion.Trim()
-          if ([string]::IsNullOrWhiteSpace($rawVersion)) {
-            throw 'A release version is required.'
-          }
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            raw="${INPUT_VERSION:-}"
+          else
+            raw="${REF_NAME:-}"
+          fi
+          raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+          if [ -z "$raw" ]; then
+            echo "a release version is required" >&2
+            exit 1
+          fi
+          case "$raw" in
+            v*)
+              tag="$raw"
+              version="${raw#v}"
+              ;;
+            *)
+              version="$raw"
+              tag="v$raw"
+              ;;
+          esac
+          if [ -z "$version" ]; then
+            echo "resolved release version was empty" >&2
+            exit 1
+          fi
+          if [ "$EVENT_NAME" = "push" ]; then
+            publish=true
+          elif [ "${INPUT_PUBLISH:-}" = "true" ]; then
+            publish=true
+          else
+            publish=false
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "should_publish=$publish"
+          } >> "$GITHUB_OUTPUT"
 
-          if ($rawVersion.StartsWith('v')) {
-            $tag = $rawVersion
-            $version = $rawVersion.Substring(1)
-          } else {
-            $version = $rawVersion
-            $tag = "v$rawVersion"
-          }
+      - name: Validate the release contract
+        run: python3 scripts/release_tools.py validate-contract
 
-          if ([string]::IsNullOrWhiteSpace($version)) {
-            throw 'Resolved version was empty.'
-          }
-
-          $shouldPublish = if ($eventName -eq 'push') { 'true' } elseif ('${{ inputs.publish }}' -eq 'true') { 'true' } else { 'false' }
-
-          $targets = @()
-          $targets += $contract['bundled_targets'].Keys
-          $targets += $contract['binary_only_targets'].Keys
-          $matrixEntries = foreach ($target in ($targets | Sort-Object)) {
-            $platform, $arch = $target.Split('-', 2)
-            $runner = switch ($platform) {
-              'windows' { 'windows-latest' }
-              'linux' { 'ubuntu-latest' }
-              'macos' { 'macos-15-intel' }
-              default { throw "Unsupported platform '$platform' in release contract target '$target'." }
-            }
-            $labelPlatform = switch ($platform) {
-              'windows' { 'Windows' }
-              'linux' { 'Linux' }
-              'macos' { 'macOS' }
-              default { $platform }
-            }
-            @{
-              os = $runner
-              label = "$labelPlatform $arch"
-              target = $target
-              binary_path = if ($platform -eq 'windows') { 'target/release/oscan.exe' } else { 'target/release/oscan' }
-            }
-          }
-          $matrix = @{ include = @($matrixEntries) } | ConvertTo-Json -Compress -Depth 4
-
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "should_publish=$shouldPublish" >> $env:GITHUB_OUTPUT
-          "matrix=$matrix" >> $env:GITHUB_OUTPUT
+      - name: Derive the package matrix from the release contract
+        id: matrix
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          matrix="$(python3 scripts/release_tools.py ci-matrix --version "$RELEASE_VERSION")"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          python3 scripts/release_tools.py list-variants
 
   package:
     name: Package ${{ matrix.label }}
@@ -99,6 +115,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    env:
+      # Matrix values are passed through the environment rather than
+      # interpolated into script bodies, so nothing here depends on how a
+      # given shell would quote them.
+      RELEASE_TARGET: ${{ matrix.target }}
+      RELEASE_BACKENDS: ${{ matrix.backends }}
+      RELEASE_ARCHIVES: ${{ matrix.archives }}
+      RELEASE_RUNTIME_PROFILES: ${{ matrix.runtime_profiles }}
+      RELEASE_BINARY_NAME: ${{ matrix.binary_name }}
+      RELEASE_BINARY_PATH: ${{ matrix.binary_path }}
+      RELEASE_MSI_BACKEND: ${{ matrix.msi_backend }}
+      RELEASE_NEEDS_PROVIDER_ARCHIVE: ${{ matrix.needs_provider_archive }}
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -113,212 +143,306 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install packaged LLVM provider runtime dependencies (Linux)
-        if: matrix.target == 'linux-x86_64'
+      # Only the downloaded crate sources are cached. target/ deliberately is
+      # not: this job builds the same crate three times with three different,
+      # mutually exclusive feature sets, and a shared target/ cache across
+      # runs buys nothing there while risking a stale artifact being packaged.
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: release-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-cargo-${{ matrix.target }}-
+
+      # The packaged LLVM code generator is dlopen()ed by the llvm package's
+      # smoke test, so its shared-library dependencies must exist on the
+      # runner even though they are never shipped.
+      - name: Install packaged LLVM provider runtime dependencies
+        if: matrix.needs_provider_archive == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          packages=$(python3 -c "import json; m=json.load(open('packaging/toolchains/linux-x86_64.json')); print(' '.join(m['toolchain']['llvm_code_generator']['debian_packages']))")
+          packages=$(python3 -c "import json; m=json.load(open('packaging/toolchains/${RELEASE_TARGET}.json')); print(' '.join(m['toolchain']['llvm_code_generator']['debian_packages']))")
           sudo apt-get update
           sudo apt-get install --yes $packages
 
-      # --- Embedded native-link assets (Windows and Linux x86-64 for now; see
-      # docs/design/native-link-embedding.md §1.1/§5.5/§10/§11). These steps
-      # must run BEFORE `cargo build --release` so the linker asset set can be
-      # embedded into the oscan binary at build time, and BEFORE
-      # `assemble-release.ps1` so its own runtime-archive build (with the shim
-      # baked in) isn't duplicated.
-      # For Linux x86_64, we also fetch and build aarch64/riscv64 toolchains
-      # and runtime archives to package as sidecars (§11.1, §13.5).
-      - name: Fetch pinned toolchain (Windows and Linux, for embedded native-link assets)
-        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+      # One shared download cache per target: the base toolchain archive is
+      # resolved (and verified against the digest the manifest pins) once and
+      # then reused by the extraction below and by C-package staging, and the
+      # separately pinned LLVM provider archive is resolved once for the llvm
+      # package. Staging and assembly never download anything themselves.
+      - name: Resolve the pinned release archives
+        if: matrix.needs_base_toolchain == 'true'
+        id: archives
         shell: pwsh
         run: |
-          & ./scripts/fetch-toolchain.ps1 `
-            -ManifestPath "packaging/toolchains/${{ matrix.target }}.json" `
-            -Destination "build/toolchain-${{ matrix.target }}" `
-            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
+          $downloadDir = Join-Path $env:RUNNER_TEMP 'oscan-archive-cache'
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          $manifestPath = "packaging/toolchains/${env:RELEASE_TARGET}.json"
 
-      - name: Fetch aarch64 and riscv64 toolchains (Linux x86_64 only, for cross-linker sidecars)
-        if: matrix.target == 'linux-x86_64'
-        shell: pwsh
-        run: |
-          & ./scripts/fetch-toolchain.ps1 `
-            -ManifestPath "packaging/toolchains/linux-aarch64.json" `
-            -Destination "build/toolchain-linux-aarch64" `
-            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
-          & ./scripts/fetch-toolchain.ps1 `
-            -ManifestPath "packaging/toolchains/linux-riscv64.json" `
-            -Destination "build/toolchain-linux-riscv64" `
-            -DownloadDir (Join-Path $env:RUNNER_TEMP 'toolchain-downloads')
+          $toolchainArchive = & ./scripts/resolve-archive.ps1 `
+            -ManifestPath $manifestPath `
+            -Component toolchain `
+            -DownloadDir $downloadDir `
+            -Download | Select-Object -Last 1
+          if (-not $toolchainArchive -or -not (Test-Path -LiteralPath $toolchainArchive -PathType Leaf)) {
+            throw "Could not resolve the pinned toolchain archive for ${env:RELEASE_TARGET}."
+          }
+          "download_dir=$downloadDir" >> $env:GITHUB_OUTPUT
+          "toolchain_archive=$toolchainArchive" >> $env:GITHUB_OUTPUT
 
-      - name: Build runtime archives with native shim baked in (Windows and Linux)
-        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+          if ($env:RELEASE_NEEDS_PROVIDER_ARCHIVE -eq 'true') {
+            $providerArchive = & ./scripts/resolve-archive.ps1 `
+              -ManifestPath $manifestPath `
+              -Component llvm-provider `
+              -DownloadDir $downloadDir `
+              -Download | Select-Object -Last 1
+            if (-not $providerArchive -or -not (Test-Path -LiteralPath $providerArchive -PathType Leaf)) {
+              throw "Could not resolve the pinned LLVM provider archive for ${env:RELEASE_TARGET}."
+            }
+            "provider_archive=$providerArchive" >> $env:GITHUB_OUTPUT
+          }
+
+      # Extracted once, from the archive already in the cache above, and used
+      # only to build this target's runtime archives and to cut its
+      # native-link sidecar. The packages themselves are staged from the
+      # verified archive, never from this tree.
+      - name: Extract the pinned toolchain
+        if: matrix.needs_base_toolchain == 'true'
         shell: pwsh
         run: |
-          $manifestPath = "packaging/toolchains/${{ matrix.target }}.json"
+          & ./scripts/fetch-toolchain.ps1 `
+            -ManifestPath "packaging/toolchains/${env:RELEASE_TARGET}.json" `
+            -Destination "build/toolchain-${env:RELEASE_TARGET}" `
+            -DownloadDir '${{ steps.archives.outputs.download_dir }}'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Extracting the pinned toolchain for ${env:RELEASE_TARGET} failed."
+          }
+
+      # Built once per target with that target's pinned compiler/archiver and
+      # shared by every object package of this target.
+      - name: Build the freestanding runtime archives
+        if: matrix.runtime_profiles != ''
+        shell: pwsh
+        run: |
+          $target = $env:RELEASE_TARGET
+          $manifestPath = "packaging/toolchains/$target.json"
           $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
           $runtimeToolchain = $manifest['toolchain']['runtime']
-          $toolchainDir = "build/toolchain-${{ matrix.target }}"
-          $target = '${{ matrix.target }}'
-          if ($target -in @('linux-x86_64', 'linux-aarch64', 'linux-riscv64') -and
+          $toolchainDir = "build/toolchain-$target"
+          if ($target.StartsWith('linux') -and
               -not (Test-Path "packaging/prebuilt/$target/libbearssl.a" -PathType Leaf)) {
             throw "Linux release archives for $target require packaging/prebuilt/$target/libbearssl.a; build or restore it before releasing"
           }
-          & ./scripts/build-runtime-archive.ps1 `
-            -Target '${{ matrix.target }}' `
-            -Mode all `
-            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
-            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
-            -ToolchainManifest $manifestPath `
-            -OutDir "build/runtime-archives/${{ matrix.target }}"
+          $profiles = $env:RELEASE_RUNTIME_PROFILES.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          foreach ($runtimeProfile in $profiles) {
+            Write-Host "::group::runtime archive $runtimeProfile ($target)"
+            & ./scripts/build-runtime-archive.ps1 `
+              -Target $target `
+              -Mode $runtimeProfile `
+              -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
+              -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
+              -ToolchainManifest $manifestPath `
+              -OutDir "build/runtime-archives/$target"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Building the $runtimeProfile runtime archive for $target failed."
+            }
+            Write-Host "::endgroup::"
+          }
 
-      - name: Build aarch64 and riscv64 runtime archives (Linux x86_64 only, for cross-linker sidecars)
-        if: matrix.target == 'linux-x86_64'
-        shell: pwsh
-        run: |
-          # Build aarch64 runtime archives
-          $manifestPath = "packaging/toolchains/linux-aarch64.json"
-          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
-          $runtimeToolchain = $manifest['toolchain']['runtime']
-          $toolchainDir = "build/toolchain-linux-aarch64"
-          & ./scripts/build-runtime-archive.ps1 `
-            -Target 'linux-aarch64' `
-            -Mode all `
-            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
-            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
-            -ToolchainManifest $manifestPath `
-            -OutDir "build/runtime-archives/linux-aarch64"
-
-          # Build riscv64 runtime archives
-          $manifestPath = "packaging/toolchains/linux-riscv64.json"
-          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json -AsHashtable
-          $runtimeToolchain = $manifest['toolchain']['runtime']
-          $toolchainDir = "build/toolchain-linux-riscv64"
-          & ./scripts/build-runtime-archive.ps1 `
-            -Target 'linux-riscv64' `
-            -Mode all `
-            -CC (Join-Path $toolchainDir ([string]$runtimeToolchain['compiler']['path'])) `
-            -AR (Join-Path $toolchainDir ([string]$runtimeToolchain['archiver']['path'])) `
-            -ToolchainManifest $manifestPath `
-            -OutDir "build/runtime-archives/linux-riscv64"
-
-      - name: Stage embedded native-link assets (Windows and Linux)
-        if: startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')
+      # The verified, executable-relative native-link asset set (linker, its
+      # sibling runtime libraries, import libraries, compiler builtins) that
+      # every object package of this target ships as a sidecar. Prepared once;
+      # release binaries embed nothing, so OSCAN_EMBED_ASSETS_DIR is never set
+      # for the builds below.
+      - name: Prepare the native-link sidecar
+        if: matrix.needs_native_link == 'true'
         shell: pwsh
         run: |
           & ./scripts/prepare-embed-assets.ps1 `
-            -Target '${{ matrix.target }}' `
-            -ToolchainDir "build/toolchain-${{ matrix.target }}" `
-            -ToolchainManifest "packaging/toolchains/${{ matrix.target }}.json" `
-            -OutputDir "packaging/prebuilt/${{ matrix.target }}"
+            -Target ${env:RELEASE_TARGET} `
+            -ToolchainDir "build/toolchain-${env:RELEASE_TARGET}" `
+            -ToolchainManifest "packaging/toolchains/${env:RELEASE_TARGET}.json" `
+            -OutputDir "build/native-link/${env:RELEASE_TARGET}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Preparing the native-link sidecar for ${env:RELEASE_TARGET} failed."
+          }
 
-      - name: Prepare cross-linker sidecars for packaging (Linux x86_64 only)
-        if: matrix.target == 'linux-x86_64'
+      # One binary per backend, each built with exactly one backend feature
+      # and stamped with the matching distribution backend, then copied to a
+      # stable per-backend path before the next build overwrites
+      # target/release.
+      - name: Build the backend-specific compilers
         shell: pwsh
         run: |
-          # Prepare staging area for cross-linker sidecars that will be bundled
-          # in the linux-x86_64 release archive (§11.1, §13.5).
-          # Users can point OSCAN_NATIVE_LINKER at these to cross-compile.
-          #
-          # Bugfix (coordinator, post-live-validation): the sidecar directory
-          # must also ship the target's freestanding runtime archive
-          # (libosc_runtime_freestanding_core.a/libosc_runtime_freestanding.a),
-          # not just the ld binary. --backend native cross-linking needs
-          # BOTH an OSCAN_NATIVE_LINKER-compatible linker AND an
-          # OSCAN_RUNTIME_ARCHIVE_DIR pointing at a matching-target runtime
-          # archive (src/backend/link/archive.rs); without the archive
-          # co-packaged, a user with only this release bundle had no way to
-          # supply one and the "point OSCAN_NATIVE_LINKER at these to
-          # cross-compile" comment above was not actually achievable from
-          # the shipped bundle alone. Verified live: cross-linked +
-          # qemu-executed a real program using ONLY files from a directory
-          # laid out exactly like $sidecarBase/linux-{aarch64,riscv64}/ below.
-          $sidecarBase = "build/cross-linker-sidecars"
-          New-Item -ItemType Directory -Path "$sidecarBase/linux-aarch64" -Force | Out-Null
-          New-Item -ItemType Directory -Path "$sidecarBase/linux-riscv64" -Force | Out-Null
+          # A release binary consumes its verified sidecar at run time; it
+          # must never carry embedded assets.
+          Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS `
+            -ErrorAction SilentlyContinue
+          $backends = $env:RELEASE_BACKENDS.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          if ($backends.Count -eq 0) {
+            throw "The release contract lists no backends for ${env:RELEASE_TARGET}."
+          }
+          $binRoot = Join-Path $env:RUNNER_TEMP 'oscan-release-binaries'
+          foreach ($backend in $backends) {
+            Write-Host "::group::cargo build --release --no-default-features --features backend-$backend"
+            $env:OSCAN_DISTRIBUTION_BACKEND = $backend
+            $env:OSCAN_VERSION = $env:RELEASE_TAG
+            & cargo build --release --no-default-features --features "backend-$backend"
+            if ($LASTEXITCODE -ne 0) {
+              throw "cargo build failed for backend '$backend'."
+            }
+            if (-not (Test-Path -LiteralPath $env:RELEASE_BINARY_PATH -PathType Leaf)) {
+              throw "cargo produced no binary at ${env:RELEASE_BINARY_PATH} for backend '$backend'."
+            }
+            $destinationDir = Join-Path $binRoot $backend
+            New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
+            Copy-Item -LiteralPath $env:RELEASE_BINARY_PATH `
+              -Destination (Join-Path $destinationDir $env:RELEASE_BINARY_NAME) -Force
+            Write-Host "::endgroup::"
+          }
 
-          Copy-Item "build/toolchain-linux-aarch64/bin/aarch64-linux-musl-ld" "$sidecarBase/linux-aarch64/" -Force
-          Copy-Item "build/toolchain-linux-riscv64/bin/riscv64-linux-musl-ld" "$sidecarBase/linux-riscv64/" -Force
-
-          Copy-Item "build/runtime-archives/linux-aarch64/*" "$sidecarBase/linux-aarch64/" -Force
-          Copy-Item "build/runtime-archives/linux-riscv64/*" "$sidecarBase/linux-riscv64/" -Force
-
-          Write-Output "Cross-linker sidecars staged in $sidecarBase (linker + runtime archive per target)"
-
-      - name: Build release binary
-        run: cargo build --release
-        env:
-          OSCAN_VERSION: ${{ needs.prepare.outputs.tag }}
-          # Windows and Linux x86-64 freestanding native builds embed a linker;
-          # these are empty strings (no-ops for build.rs) on other targets.
-          OSCAN_EMBED_ASSETS_DIR: ${{ (startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')) && format('{0}/packaging/prebuilt/{1}', github.workspace, matrix.target) || '' }}
-          OSCAN_REQUIRE_EMBEDDED_ASSETS: ${{ (startsWith(matrix.target, 'windows') || startsWith(matrix.target, 'linux')) && '1' || '' }}
-
-      - name: Assemble release asset
-        id: assemble
+      # Each variant is assembled from only the prepared inputs its component
+      # list declares, and smoked immediately: an archive is never uploaded
+      # before the package it contains has been installed and exercised.
+      - name: Assemble and smoke every backend package
         shell: pwsh
         run: |
+          $target = $env:RELEASE_TARGET
+          $version = $env:RELEASE_VERSION
+          $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
+            ConvertFrom-Json -AsHashtable
+          $variants = $contract['variants'][$target]['backends']
+          $backends = $env:RELEASE_BACKENDS.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          $binRoot = Join-Path $env:RUNNER_TEMP 'oscan-release-binaries'
           $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
-          $assembleArgs = @{
-            Target = '${{ matrix.target }}'
-            Version = '${{ needs.prepare.outputs.version }}'
-            BinaryPath = '${{ matrix.binary_path }}'
-            OutputDir = $outputDir
-          }
-          if ('${{ matrix.target }}'.StartsWith('windows') -or '${{ matrix.target }}'.StartsWith('linux')) {
-            # Reuse the archives built above instead of assemble-release.ps1
-            # re-fetching the toolchain and rebuilding them a second time.
-            $assembleArgs['PrebuiltRuntimeArchiveDir'] = (Resolve-Path "build/runtime-archives/${{ matrix.target }}").Path
-          }
-          if ('${{ matrix.target }}' -eq 'linux-x86_64' -and (Test-Path 'build/cross-linker-sidecars')) {
-            # Bundle the aarch64/riscv64 cross-linker sidecars staged above
-            # (docs/design/native-link-embedding.md §11.1/§13.5) into the
-            # linux-x86_64 archive so users can cross-link without an
-            # external toolchain via OSCAN_NATIVE_LINKER.
-            $assembleArgs['CrossLinkerSidecarDir'] = (Resolve-Path 'build/cross-linker-sidecars').Path
-          }
-          $archivePath = & ./scripts/assemble-release.ps1 @assembleArgs
-          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+          $uploadDir = Join-Path $env:GITHUB_WORKSPACE 'release-upload'
+          New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
+          $toolchainArchive = '${{ steps.archives.outputs.toolchain_archive }}'
+          $providerArchive = '${{ steps.archives.outputs.provider_archive }}'
+          $produced = @()
 
-      - name: Smoke test packaged bundle
+          foreach ($backend in $backends) {
+            if (-not $variants.ContainsKey($backend)) {
+              throw "The release contract has no $target/$backend variant."
+            }
+            $variant = $variants[$backend]
+            $components = @($variant['components'])
+            $binary = Join-Path (Join-Path $binRoot $backend) $env:RELEASE_BINARY_NAME
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+              throw "No $backend compiler was built for $target (expected $binary)."
+            }
+
+            $assembleArgs = @{
+              Target = $target
+              Backend = $backend
+              Version = $version
+              BinaryPath = $binary
+              OutputDir = $outputDir
+            }
+            if ($components -contains 'direct_link_sidecar') {
+              $nativeLinkDir = "build/native-link/$target"
+              if (-not (Test-Path -LiteralPath $nativeLinkDir)) {
+                throw "$target/$backend needs a prepared native-link sidecar, but $nativeLinkDir is missing."
+              }
+              $assembleArgs['NativeLinkDir'] = (Resolve-Path -LiteralPath $nativeLinkDir).Path
+            }
+            if (@($variant['runtime_profiles']).Count -gt 0) {
+              $runtimeArchiveDir = "build/runtime-archives/$target"
+              if (-not (Test-Path -LiteralPath $runtimeArchiveDir)) {
+                throw "$target/$backend needs prebuilt runtime archives, but $runtimeArchiveDir is missing."
+              }
+              $assembleArgs['PrebuiltRuntimeArchiveDir'] = (Resolve-Path -LiteralPath $runtimeArchiveDir).Path
+            }
+            if ($components -contains 'c_toolchain') {
+              if (-not $toolchainArchive) {
+                throw "$target/$backend needs the pinned C toolchain archive, which was not resolved."
+              }
+              $assembleArgs['ToolchainArchive'] = $toolchainArchive
+            }
+            if ($components -contains 'llvm_provider' -and
+                $variant['llvm_provider_source'] -eq 'toolchain-manifest') {
+              if (-not $providerArchive) {
+                throw "$target/$backend needs the pinned LLVM provider archive, which was not resolved."
+              }
+              $assembleArgs['LlvmProviderArchive'] = $providerArchive
+            }
+
+            Write-Host "::group::assemble $target/$backend"
+            $archivePath = & ./scripts/assemble-release.ps1 @assembleArgs | Select-Object -Last 1
+            if (-not $archivePath -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+              throw "Assembling $target/$backend produced no archive."
+            }
+            Write-Host "::endgroup::"
+
+            Write-Host "::group::smoke $target/$backend"
+            & ./scripts/smoke-release.ps1 `
+              -Target $target `
+              -Backend $backend `
+              -ArchivePath $archivePath `
+              -Version $version `
+              -ScratchDir (Join-Path $env:RUNNER_TEMP "oscan-release-smoke/$target-$backend")
+            Write-Host "::endgroup::"
+
+            $archiveName = Split-Path -Path $archivePath -Leaf
+            if ($produced -contains $archiveName) {
+              throw "Two $target packages claim the same archive name '$archiveName'."
+            }
+            $produced += $archiveName
+            Copy-Item -LiteralPath $archivePath -Destination (Join-Path $uploadDir $archiveName) -Force
+          }
+
+          $expected = $env:RELEASE_ARCHIVES.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          if ($produced.Count -eq 0) {
+            throw "No packages were produced for $target."
+          }
+          $missing = @($expected | Where-Object { $produced -notcontains $_ })
+          if ($missing.Count -gt 0) {
+            throw "The release contract expects packages this job did not produce: $($missing -join ', ')."
+          }
+          $unexpected = @($produced | Where-Object { $expected -notcontains $_ })
+          if ($unexpected.Count -gt 0) {
+            throw "This job produced packages the release contract does not declare: $($unexpected -join ', ')."
+          }
+          Write-Host "Packaged and smoked: $($produced -join ', ')"
+          $LASTEXITCODE = 0
+
+      # One installer, for the recommended package. The MSI is cut from the
+      # staged bundle directory the assemble step above left in place, so it
+      # contains exactly what the verified archive contains.
+      - name: Build the recommended MSI installer
+        if: matrix.msi_backend != ''
         shell: pwsh
         run: |
-          $scratchDir = Join-Path $env:RUNNER_TEMP 'oscan-release-smoke-${{ matrix.target }}'
-          & ./scripts/smoke-release.ps1 `
-            -Target '${{ matrix.target }}' `
-            -ArchivePath '${{ steps.assemble.outputs.archive_path }}' `
-            -ScratchDir $scratchDir
+          $target = $env:RELEASE_TARGET
+          $backend = $env:RELEASE_MSI_BACKEND
+          $version = $env:RELEASE_VERSION
+          $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
+            ConvertFrom-Json -AsHashtable
+          $variant = $contract['variants'][$target]['backends'][$backend]
+          $bundleName = ([string]$variant['archive_root_template']).Replace('{version}', $version)
+          $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
+          $bundleDir = Join-Path (Join-Path $outputDir 'stage') $bundleName
+          if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+            throw "The staged $target/$backend bundle is missing at $bundleDir; the MSI must be built from the bundle that was packaged and smoked."
+          }
+          $uploadDir = Join-Path $env:GITHUB_WORKSPACE 'release-upload'
+          New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
+          $msiPath = Join-Path $uploadDir "$bundleName.msi"
+          & ./scripts/build-msi.ps1 -BundleDir $bundleDir -Version $version -OutputPath $msiPath
+          if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
+            throw "The MSI build produced no installer at $msiPath."
+          }
 
-      - name: Upload packaged artifact
+      - name: Upload packaged artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-release
-          path: ${{ steps.assemble.outputs.archive_path }}
-
-      - name: Build MSI installer (Windows only)
-        if: startsWith(matrix.target, 'windows')
-        id: msi
-        shell: pwsh
-        run: |
-          dotnet tool install --global wix
-          $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
-          $stageDir = Join-Path $outputDir 'stage'
-          $bundleDir = (Get-ChildItem $stageDir -Directory | Select-Object -First 1).FullName
-          $msiName = 'oscan-v${{ needs.prepare.outputs.version }}-${{ matrix.target }}.msi'
-          $msiPath = Join-Path $outputDir $msiName
-          & ./scripts/build-msi.ps1 `
-            -BundleDir $bundleDir `
-            -Version '${{ needs.prepare.outputs.version }}' `
-            -OutputPath $msiPath
-          "msi_path=$msiPath" >> $env:GITHUB_OUTPUT
-
-      - name: Upload MSI artifact (Windows only)
-        if: startsWith(matrix.target, 'windows')
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.target }}-msi
-          path: ${{ steps.msi.outputs.msi_path }}
+          path: release-upload/
+          if-no-files-found: error
 
   checksums:
     name: Compute release checksums
@@ -346,6 +470,10 @@ jobs:
           } | Sort-Object Name
           if (-not $files) {
             throw 'No packaged release assets were downloaded.'
+          }
+          $duplicates = $files | Group-Object Name | Where-Object { $_.Count -gt 1 }
+          if ($duplicates) {
+            throw "Duplicate release asset name(s): $(($duplicates.Name) -join ', ')."
           }
           & ./scripts/write-checksums.ps1 -OutputPath upload/SHA256SUMS @($files.FullName)
 
@@ -375,6 +503,10 @@ jobs:
           set -euo pipefail
           mkdir -p upload
           find release-assets -type f \( -name '*.zip' -o -name '*.msi' -o -name '*.tar.gz' -o -name '*.tar.xz' -o -name 'SHA256SUMS' \) -exec cp {} upload/ \;
+          if [ -z "$(ls -A upload)" ]; then
+            echo "no release assets were collected" >&2
+            exit 1
+          fi
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2

@@ -181,7 +181,7 @@ function Assert-OracleBackendAvailable {
     $compilerPath = (Resolve-Path -LiteralPath $Compiler).Path
     $help = Invoke-OracleProcess -FilePath $compilerPath -Arguments @("--help") -WorkingDirectory (Get-Location).Path
     if ("$($help.Stdout)`n$($help.Stderr)" -notmatch [regex]::Escape($BackendOption)) {
-        throw "backend '$Backend' was selected, but this compiler does not advertise $BackendOption. The differential oracle is opt-in; omit -Backend until the native backend is available."
+        throw "backend '$Backend' was selected, but this compiler does not advertise $BackendOption. The differential oracle is opt-in; omit -Backend until the requested backend is available."
     }
 }
 

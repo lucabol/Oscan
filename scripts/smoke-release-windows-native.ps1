@@ -42,10 +42,10 @@ try {
     if ($NativeSmokeMode -eq "hosted") {
         $nativeArgs += "--libc"
     }
-    $nativeArgs += @("--backend", "native", $SampleSource, "-o", $NativeOutput)
+    $nativeArgs += @("--backend", "cranelift", $SampleSource, "-o", $NativeOutput)
     & $OscanCommand @nativeArgs 2> $NativeLog
     if ($LASTEXITCODE -ne 0) {
-        throw "Packaged --backend native smoke compile failed:`n$((Get-Content $NativeLog -Raw))"
+        throw "Packaged --backend cranelift smoke compile failed:`n$((Get-Content $NativeLog -Raw))"
     }
 } finally {
     $env:PATH = $savedPath

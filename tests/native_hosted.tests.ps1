@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Oscan,
 
-    [ValidateSet("native", "llvm")]
-    [string]$Backend = "native"
+    [ValidateSet("cranelift", "llvm")]
+    [string]$Backend = "cranelift"
 )
 
 $ErrorActionPreference = "Stop"

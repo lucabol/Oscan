@@ -1,13 +1,31 @@
 #!/usr/bin/env sh
+# Variant-aware release smoke test (POSIX shell port of smoke-release.ps1).
+#
+# Every published artifact is one (target, backend) pair, so --backend is
+# mandatory here too. The package layout/metadata assertions are delegated to
+# 'release_tools.py verify-package-layout', which the PowerShell smoke test
+# also runs, so both check identical facts about the same contract; what
+# stays here is the behaviour that needs the packaged compiler itself.
 set -eu
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 TARGET=""
+BACKEND=""
 ARCHIVE_PATH=""
+VERSION=""
 SCRATCH_DIR=""
 CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
+
+usage() {
+    echo "usage: $0 --target <linux-x86_64|macos-x86_64> --backend <llvm|cranelift|c> --archive <path> [--version <version>] [--scratch-dir <path>] [--contract <path>]" >&2
+}
+
+fail() {
+    echo "$1" >&2
+    exit 1
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -15,8 +33,16 @@ while [ "$#" -gt 0 ]; do
             TARGET="$2"
             shift 2
             ;;
+        --backend)
+            BACKEND="$2"
+            shift 2
+            ;;
         --archive)
             ARCHIVE_PATH="$2"
+            shift 2
+            ;;
+        --version)
+            VERSION="$2"
             shift 2
             ;;
         --scratch-dir)
@@ -28,44 +54,77 @@ while [ "$#" -gt 0 ]; do
             shift 2
             ;;
         *)
-            echo "usage: $0 --target <linux-x86_64|macos-x86_64> --archive <path> [--scratch-dir <path>] [--contract <path>]" >&2
+            usage
             exit 1
             ;;
     esac
 done
 
-[ -n "$TARGET" ] || { echo "missing --target" >&2; exit 1; }
-[ -n "$ARCHIVE_PATH" ] || { echo "missing --archive" >&2; exit 1; }
+[ -n "$TARGET" ] || { echo "missing --target" >&2; usage; exit 1; }
+[ -n "$BACKEND" ] || { echo "missing --backend (llvm|cranelift|c)" >&2; usage; exit 1; }
+[ -n "$ARCHIVE_PATH" ] || { echo "missing --archive" >&2; usage; exit 1; }
+case "$BACKEND" in
+    llvm|cranelift|c) ;;
+    native)
+        fail "'native' is a deprecated CLI alias for the cranelift backend and is never a package label; pass --backend cranelift"
+        ;;
+    *)
+        fail "unknown backend '$BACKEND' (expected llvm, cranelift or c)"
+        ;;
+esac
+case "$TARGET" in
+    windows-*)
+        fail "$0 cannot install a Windows package; run scripts/smoke-release.ps1 for $TARGET"
+        ;;
+esac
+[ -f "$ARCHIVE_PATH" ] || fail "--archive must name a packaged release archive file, not '$ARCHIVE_PATH'"
+ARCHIVE_PATH="$(CDPATH= cd -- "$(dirname -- "$ARCHIVE_PATH")" && pwd)/$(basename -- "$ARCHIVE_PATH")"
 
 if [ -z "$SCRATCH_DIR" ]; then
-    SCRATCH_DIR="$REPO_ROOT/target/release-smoke/$TARGET"
+    SCRATCH_DIR="$REPO_ROOT/target/release-smoke/$TARGET-$BACKEND"
 fi
 
+PYTHON="$(command -v python3 || command -v python || true)"
+[ -n "$PYTHON" ] || fail "no Python interpreter found on PATH (tried python3, python); the release smoke test needs one to verify the package layout"
+
+# Resolve exactly the facts this variant promises, from the contract.
 eval "$(
-    python3 - "$CONTRACT_PATH" "$TARGET" <<'PY'
+    "$PYTHON" - "$CONTRACT_PATH" "$TARGET" "$BACKEND" <<'PY'
 import json
 import shlex
 import sys
 
-contract_path, target = sys.argv[1], sys.argv[2]
+contract_path, target, backend = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(contract_path, encoding="utf-8") as handle:
     contract = json.load(handle)
 
-spec = contract.get("bundled_targets", {}).get(target)
-if spec is None:
-    spec = contract.get("binary_only_targets", {}).get(target)
-if spec is None:
+if contract.get("schema_version") != 2:
+    raise SystemExit(
+        f"release contract {contract_path} is not schema 2 "
+        f"(got {contract.get('schema_version')!r})"
+    )
+target_spec = contract["variants"].get(target)
+if target_spec is None:
     raise SystemExit(f"release contract does not define target '{target}'")
+variant = target_spec["backends"].get(backend)
+if variant is None:
+    known = ", ".join(sorted(target_spec["backends"]))
+    raise SystemExit(
+        f"release contract does not define backend '{backend}' for target '{target}' "
+        f"(known: {known})"
+    )
+
 
 def emit(name: str, value: str) -> None:
     print(f"{name}={shlex.quote(value)}")
 
-emit("BUNDLE_KIND", spec["bundle_kind"])
-emit("ARCHIVE_FORMAT", spec["archive_format"])
-emit("NOTE_FILE", spec.get("note_file", ""))
-emit("REQUIRES_HOST_COMPILER", "1" if spec.get("requires_host_compiler") else "0")
-emit("NATIVE_RUNTIME_MODES", ",".join(spec["native_runtime_modes"]))
-emit("NATIVE_SMOKE_MODE", spec.get("native_smoke_mode") or "")
+
+emit("ARCHIVE_FORMAT", target_spec["archive_format"])
+emit("BINARY_NAME", target_spec["binary_name"])
+emit("BACKEND_KIND", contract["backends"][backend]["kind"])
+emit("COMPONENTS", ",".join(variant["components"]))
+emit("RUNTIME_PROFILES", ",".join(variant["runtime_profiles"]))
+emit("REQUIRES_HOST_COMPILER", "1" if variant.get("requires_host_compiler") else "0")
 PY
 )"
 
@@ -73,26 +132,118 @@ case "$ARCHIVE_FORMAT" in
     zip) EXPECTED_SUFFIX=".zip" ;;
     tar.gz) EXPECTED_SUFFIX=".tar.gz" ;;
     tar.xz) EXPECTED_SUFFIX=".tar.xz" ;;
-    *)
-        echo "unsupported archive format '$ARCHIVE_FORMAT' for $TARGET" >&2
-        exit 1
-        ;;
+    *) fail "unsupported archive format '$ARCHIVE_FORMAT' for $TARGET" ;;
 esac
-
 case "$ARCHIVE_PATH" in
     *"$EXPECTED_SUFFIX") ;;
-    *)
-        echo "archive '$ARCHIVE_PATH' does not match contract format '$EXPECTED_SUFFIX' for $TARGET" >&2
-        exit 1
-        ;;
+    *) fail "archive '$ARCHIVE_PATH' does not match the contract format '$EXPECTED_SUFFIX' for $TARGET" ;;
 esac
+
+if [ "$BACKEND_KIND" = "object" ]; then
+    IS_OBJECT_PACKAGE=1
+else
+    IS_OBJECT_PACKAGE=0
+fi
 
 rm -rf "$SCRATCH_DIR"
 mkdir -p "$SCRATCH_DIR/extract"
+SCRATCH_DIR="$(CDPATH= cd -- "$SCRATCH_DIR" && pwd)"
+
+# Every override that could make a packaged compiler behave like a
+# development checkout. OSCAN_RUNTIME_ARCHIVE_DIR is deliberately included:
+# an object package must find its runtime archives at the fixed
+# executable-relative location it ships them in.
+SCRUBBED="-u OSCAN_NO_TOOLCHAIN -u OSCAN_CC -u OSCAN_TOOLCHAIN_DIR -u OSCAN_LLVM_LIB \
+-u OSCAN_LLVM_DIR -u OSCAN_NATIVE_LINKER -u OSCAN_NATIVE_LINKER_FLAVOR \
+-u OSCAN_NATIVE_ASSET_CACHE_DIR -u OSCAN_RUNTIME_ARCHIVE_DIR -u OSCAN_ARCHIVE_CC \
+-u OSCAN_ARCHIVE_AR -u CC -u CXX -u LD"
+
+# Host tool names are shadowed with stubs that fail immediately: bundled
+# toolchain discovery walks the package directory and never PATH, so a
+# regression to a host compiler fails loudly here instead of passing because
+# the runner happens to have build-essential/Xcode CLT installed. Object
+# packages also shadow the host linkers, because their final link runs the
+# verified linker inside their own native-link sidecar by absolute path.
+BLOCK_DIR="$SCRATCH_DIR/blocked-host-tools"
+mkdir -p "$BLOCK_DIR"
+BLOCKED_TOOLS="cc gcc g++ clang clang++ x86_64-linux-musl-gcc"
+if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
+    BLOCKED_TOOLS="$BLOCKED_TOOLS ld ld.lld lld x86_64-linux-musl-ld"
+fi
+for NAME in $BLOCKED_TOOLS; do
+    printf '#!/bin/sh\nexit 127\n' > "$BLOCK_DIR/$NAME"
+    chmod +x "$BLOCK_DIR/$NAME"
+done
+
+SAMPLE_SOURCE="$SCRATCH_DIR/hello.osc"
+cat > "$SAMPLE_SOURCE" <<'EOF'
+fn! main() {
+    println("Hello, Release!");
+}
+EOF
+
+STATUS=0
+
+run_packaged() {
+    # run_packaged <log> <strict:0|1> -- <oscan args...>
+    _log="$1"
+    _strict="$2"
+    shift 3
+    STATUS=0
+    if [ "$_strict" -eq 1 ]; then
+        PATH="$BLOCK_DIR:$SAVED_PATH" env $SCRUBBED OSCAN_NO_TOOLCHAIN=1 \
+            "$OSCAN_COMMAND" "$@" >/dev/null 2>"$_log" || STATUS=$?
+    else
+        PATH="$BLOCK_DIR:$SAVED_PATH" env $SCRUBBED \
+            "$OSCAN_COMMAND" "$@" >/dev/null 2>"$_log" || STATUS=$?
+    fi
+}
+
+run_packaged_unblocked() {
+    # Same, but with the real PATH: the macOS C package legitimately needs
+    # the host Apple Command Line Tools.
+    _log="$1"
+    shift 2
+    STATUS=0
+    env $SCRUBBED "$OSCAN_COMMAND" "$@" >/dev/null 2>"$_log" || STATUS=$?
+}
+
+assert_matches() {
+    # assert_matches <log> <extended-regex> <what>
+    grep -Eq "$2" "$1" || {
+        echo "$3 did not report /$2/:" >&2
+        cat "$1" >&2
+        exit 1
+    }
+}
+
+assert_program_runs() {
+    # assert_program_runs <exe> <what>
+    [ -x "$1" ] || fail "$2 produced no executable at $1"
+    _actual="$("$1")"
+    [ "$_actual" = "Hello, Release!" ] || fail "$2 produced unexpected output: '$_actual'"
+}
+
+assert_refused() {
+    # assert_refused <log> <output-path> <what>; reads $STATUS from run_packaged
+    [ "$STATUS" -ne 0 ] || {
+        echo "$3 was accepted (exit 0) but must be refused:" >&2
+        cat "$1" >&2
+        exit 1
+    }
+    if grep -q "Compiling with " "$1"; then
+        echo "$3 fell back to a C compiler instead of refusing:" >&2
+        cat "$1" >&2
+        exit 1
+    fi
+    [ ! -e "$2" ] || fail "$3 was refused but still produced $2"
+}
+
+# --- extract -----------------------------------------------------------------
 
 case "$ARCHIVE_FORMAT" in
     zip)
-        python3 - "$ARCHIVE_PATH" "$SCRATCH_DIR/extract" <<'PY'
+        "$PYTHON" - "$ARCHIVE_PATH" "$SCRATCH_DIR/extract" <<'PY'
 import sys
 import zipfile
 
@@ -105,178 +256,216 @@ PY
         ;;
 esac
 
-BUNDLE_DIR="$(find "$SCRATCH_DIR/extract" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
-[ -n "$BUNDLE_DIR" ] || { echo "expected an extracted bundle directory" >&2; exit 1; }
+BUNDLE_COUNT="$(find "$SCRATCH_DIR/extract" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+[ "$BUNDLE_COUNT" = "1" ] || fail "expected exactly one extracted bundle directory, found $BUNDLE_COUNT"
+BUNDLE_DIR="$(find "$SCRATCH_DIR/extract" -mindepth 1 -maxdepth 1 -type d)"
+
+set -- "$SCRIPT_DIR/release_tools.py" verify-package-layout \
+    --target "$TARGET" --backend "$BACKEND" \
+    --root "$BUNDLE_DIR" --stage extracted \
+    --archive "$ARCHIVE_PATH" --contract "$CONTRACT_PATH"
+if [ -n "$VERSION" ]; then
+    set -- "$@" --version "$VERSION"
+fi
+"$PYTHON" "$@" || fail "extracted $TARGET/$BACKEND package does not match the release contract"
+
+# --- install -----------------------------------------------------------------
 
 INSTALL_DIR="$SCRATCH_DIR/install"
 BIN_DIR="$SCRATCH_DIR/bin"
 sh "$BUNDLE_DIR/install.sh" --source-dir "$BUNDLE_DIR" --install-dir "$INSTALL_DIR" --bin-dir "$BIN_DIR"
 
-[ -x "$INSTALL_DIR/oscan" ] || { echo "installed oscan binary not found" >&2; exit 1; }
-if [ "$BUNDLE_KIND" = "full" ] && [ ! -d "$INSTALL_DIR/toolchain" ]; then
-    echo "installed bundle is missing the sibling toolchain directory" >&2
-    exit 1
+OSCAN_COMMAND="$BIN_DIR/$BINARY_NAME"
+[ -x "$OSCAN_COMMAND" ] || OSCAN_COMMAND="$INSTALL_DIR/$BINARY_NAME"
+[ -x "$OSCAN_COMMAND" ] || fail "installed oscan command was not found under $BIN_DIR or $INSTALL_DIR"
+SAVED_PATH="$PATH"
+
+set -- "$SCRIPT_DIR/release_tools.py" verify-package-layout \
+    --target "$TARGET" --backend "$BACKEND" \
+    --root "$INSTALL_DIR" --stage installed --contract "$CONTRACT_PATH"
+if [ -n "$VERSION" ]; then
+    set -- "$@" --version "$VERSION"
 fi
-if [ -n "$NOTE_FILE" ] && [ ! -f "$INSTALL_DIR/$NOTE_FILE" ]; then
-    echo "installed bundle is missing the contract note file '$NOTE_FILE'" >&2
-    exit 1
+"$PYTHON" "$@" || fail "installed $TARGET/$BACKEND package does not match the release contract"
+
+# --- identity ----------------------------------------------------------------
+
+VERSION_LOG="$SCRATCH_DIR/version.txt"
+"$OSCAN_COMMAND" --version > "$VERSION_LOG" 2>&1 || {
+    cat "$VERSION_LOG" >&2
+    fail "packaged 'oscan --version' failed"
+}
+if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
+    EXPECTED_TOOLCHAIN_FREE="yes"
+else
+    EXPECTED_TOOLCHAIN_FREE="no"
 fi
-if [ -n "$NATIVE_RUNTIME_MODES" ]; then
-    for SOURCE_NAME in osc_native_shim.c osc_runtime.h; do
-        [ -f "$INSTALL_DIR/native-runtime/$SOURCE_NAME" ] || {
-            echo "installed bundle is missing native runtime source '$SOURCE_NAME'" >&2
-            exit 1
+assert_matches "$VERSION_LOG" "^backends: $BACKEND\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^default-backend: $BACKEND\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^distribution: $BACKEND\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^toolchain-free: $EXPECTED_TOOLCHAIN_FREE\$" "packaged 'oscan --version'"
+if [ -n "$VERSION" ]; then
+    grep -qF "$VERSION" "$VERSION_LOG" || {
+        cat "$VERSION_LOG" >&2
+        fail "packaged 'oscan --version' does not carry release version '$VERSION'"
+    }
+fi
+
+# --- behaviour ---------------------------------------------------------------
+
+if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
+    # 1. The default backend: a distribution build defaults to the one
+    #    backend it ships, deterministically and without probing.
+    DEFAULT_OUTPUT="$SCRATCH_DIR/hello-default"
+    DEFAULT_LOG="$SCRATCH_DIR/default.stderr.txt"
+    run_packaged "$DEFAULT_LOG" 1 -- --verbose "$SAMPLE_SOURCE" -o "$DEFAULT_OUTPUT"
+    [ "$STATUS" -eq 0 ] || {
+        cat "$DEFAULT_LOG" >&2
+        fail "packaged $BACKEND default-backend compile failed"
+    }
+    assert_matches "$DEFAULT_LOG" "^\[verbose\] $BACKEND backend target:" \
+        "packaged $BACKEND default compile"
+    assert_matches "$DEFAULT_LOG" "^\[verbose\] native-link assets: sidecar \(" \
+        "packaged $BACKEND default compile"
+    if [ "$BACKEND" = "llvm" ]; then
+        assert_matches "$DEFAULT_LOG" \
+            "^\[verbose\] LLVM code generator: .+ \(LLVM [0-9]+\.[0-9]+\.[0-9]+, targets: " \
+            "packaged llvm default compile"
+    fi
+    assert_program_runs "$DEFAULT_OUTPUT" "packaged $BACKEND default compile"
+
+    # 2. The same backend named explicitly.
+    EXPLICIT_OUTPUT="$SCRATCH_DIR/hello-explicit"
+    EXPLICIT_LOG="$SCRATCH_DIR/explicit.stderr.txt"
+    run_packaged "$EXPLICIT_LOG" 1 -- --verbose --backend "$BACKEND" "$SAMPLE_SOURCE" -o "$EXPLICIT_OUTPUT"
+    [ "$STATUS" -eq 0 ] || {
+        cat "$EXPLICIT_LOG" >&2
+        fail "packaged '--backend $BACKEND' compile failed"
+    }
+    assert_matches "$EXPLICIT_LOG" "^\[verbose\] $BACKEND backend target:" \
+        "packaged '--backend $BACKEND' compile"
+    assert_program_runs "$EXPLICIT_OUTPUT" "packaged '--backend $BACKEND' compile"
+
+    # 3. Cranelift keeps accepting its deprecated spelling, with exactly one
+    #    warning — the alias is a compatibility shim, never a package label.
+    if [ "$BACKEND" = "cranelift" ]; then
+        ALIAS_OUTPUT="$SCRATCH_DIR/hello-alias"
+        ALIAS_LOG="$SCRATCH_DIR/alias.stderr.txt"
+        run_packaged "$ALIAS_LOG" 1 -- --backend native "$SAMPLE_SOURCE" -o "$ALIAS_OUTPUT"
+        [ "$STATUS" -eq 0 ] || {
+            cat "$ALIAS_LOG" >&2
+            fail "packaged '--backend native' alias compile failed"
         }
-    done
-    RUNTIME_ARCHIVE_DIR="$INSTALL_DIR/build/runtime-archives/$TARGET"
-    OLD_IFS=$IFS
-    IFS=,
-    for MODE in $NATIVE_RUNTIME_MODES; do
-        for SUFFIX in .a .json; do
-            [ -f "$RUNTIME_ARCHIVE_DIR/libosc_runtime_${MODE}${SUFFIX}" ] || {
-                echo "installed bundle is missing native runtime asset libosc_runtime_${MODE}${SUFFIX}" >&2
-                exit 1
-            }
-        done
-    done
-    IFS=$OLD_IFS
-fi
-
-cat > "$SCRATCH_DIR/hello.osc" <<'EOF'
-fn! main() {
-    println("Hello, Release!");
-}
-EOF
-
-OSCAN_COMMAND="$BIN_DIR/oscan"
-[ -x "$OSCAN_COMMAND" ] || OSCAN_COMMAND="$INSTALL_DIR/oscan"
-COMPILE_LOG="$SCRATCH_DIR/compile.stderr.txt"
-OUTPUT_EXE="$SCRATCH_DIR/hello"
-
-if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
-    if ! "$OSCAN_COMMAND" --backend c --libc "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
-        cat "$COMPILE_LOG" >&2
-        exit 1
+        assert_matches "$ALIAS_LOG" \
+            "'--backend native' is deprecated; use '--backend cranelift'" \
+            "packaged '--backend native' alias"
+        assert_program_runs "$ALIAS_OUTPUT" "packaged '--backend native' alias compile"
     fi
-else
-    if ! "$OSCAN_COMMAND" --backend c "$SCRATCH_DIR/hello.osc" -o "$OUTPUT_EXE" 2>"$COMPILE_LOG"; then
-        cat "$COMPILE_LOG" >&2
-        exit 1
-    fi
-fi
 
-if [ "$BUNDLE_KIND" = "full" ]; then
-    EXPECTED_COMPILER_SOURCE="bundled"
-else
-    EXPECTED_COMPILER_SOURCE="host"
-fi
-
-COMPILE_TEXT="$(cat "$COMPILE_LOG")"
-printf '%s' "$COMPILE_TEXT" | grep -qi "$EXPECTED_COMPILER_SOURCE" || {
-    echo "expected $EXPECTED_COMPILER_SOURCE compiler detection during release smoke test" >&2
-    echo "$COMPILE_TEXT" >&2
-    exit 1
-}
-
-ACTUAL="$("$OUTPUT_EXE")"
-[ "$ACTUAL" = "Hello, Release!" ] || {
-    echo "unexpected smoke test output: $ACTUAL" >&2
-    exit 1
-}
-
-BUNDLED_LLVM=""
-for candidate in \
-    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22.1" \
-    "$INSTALL_DIR/toolchain/bin/libLLVM.so.22" \
-    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22.1" \
-    "$INSTALL_DIR/toolchain/lib/libLLVM.so.22" \
-    "$INSTALL_DIR/toolchain/bin/libLLVM-22.so" \
-    "$INSTALL_DIR/toolchain/lib/libLLVM-22.so"; do
-    if [ -f "$candidate" ]; then
-        BUNDLED_LLVM="$candidate"
-        break
-    fi
-done
-
-if [ -n "$BUNDLED_LLVM" ] && [ -n "$NATIVE_RUNTIME_MODES" ]; then
-    DEFAULT_OUTPUT_EXE="$SCRATCH_DIR/hello-default"
-    DEFAULT_COMPILE_LOG="$SCRATCH_DIR/default.stderr.txt"
-    # Unset every override so the packaged bundle has to find its own LLVM
-    # code generator next to the installed executable.
-    if ! env -u OSCAN_LLVM_LIB -u OSCAN_LLVM_DIR -u OSCAN_TOOLCHAIN_DIR \
-        OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
-        "$OSCAN_COMMAND" --verbose "$SCRATCH_DIR/hello.osc" \
-        -o "$DEFAULT_OUTPUT_EXE" 2>"$DEFAULT_COMPILE_LOG"; then
-        cat "$DEFAULT_COMPILE_LOG" >&2
-        exit 1
-    fi
-    grep -q '^\[verbose\] llvm backend target:' "$DEFAULT_COMPILE_LOG" || {
-        echo "packaged bundle did not select LLVM as its implicit default" >&2
-        cat "$DEFAULT_COMPILE_LOG" >&2
-        exit 1
-    }
-    grep -qE '^\[verbose\] LLVM code generator: .* \(LLVM [0-9]+\.[0-9]+\.[0-9]+, targets: ' \
-        "$DEFAULT_COMPILE_LOG" || {
-        echo "packaged LLVM smoke did not load the bundle's own LLVM code generator" >&2
-        cat "$DEFAULT_COMPILE_LOG" >&2
-        exit 1
-    }
-    DEFAULT_ACTUAL="$("$DEFAULT_OUTPUT_EXE")"
-    [ "$DEFAULT_ACTUAL" = "Hello, Release!" ] || {
-        echo "unexpected packaged LLVM smoke output: $DEFAULT_ACTUAL" >&2
-        exit 1
-    }
-fi
-
-if [ -n "$NATIVE_RUNTIME_MODES" ]; then
-    NATIVE_OUTPUT_EXE="$SCRATCH_DIR/hello-native"
-    NATIVE_COMPILE_LOG="$SCRATCH_DIR/native.stderr.txt"
-    if [ "$NATIVE_SMOKE_MODE" = "hosted" ]; then
-        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
-            "$OSCAN_COMMAND" --libc --backend native "$SCRATCH_DIR/hello.osc" \
-            -o "$NATIVE_OUTPUT_EXE" 2>"$NATIVE_COMPILE_LOG"; then
-            cat "$NATIVE_COMPILE_LOG" >&2
-            exit 1
-        fi
+    # 4. Everything this package does not contain is refused by name.
+    if [ "$BACKEND" = "llvm" ]; then
+        OTHER_OBJECT_BACKEND="cranelift"
     else
-        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
-            "$OSCAN_COMMAND" --backend native "$SCRATCH_DIR/hello.osc" \
-            -o "$NATIVE_OUTPUT_EXE" 2>"$NATIVE_COMPILE_LOG"; then
-            cat "$NATIVE_COMPILE_LOG" >&2
-            exit 1
-        fi
+        OTHER_OBJECT_BACKEND="llvm"
     fi
 
-    if [ "$TARGET" = "linux-x86_64" ] && [ "$NATIVE_SMOKE_MODE" = "freestanding" ]; then
-        cat > "$SCRATCH_DIR/tls-link.osc" <<'EOF'
-fn! main() {
-    let conn: Result<i32, str> = tls_connect("localhost", 443);
-    match conn {
-        Result::Ok(fd) => { tls_close(fd); },
-        Result::Err(_) => { },
-    };
-    tls_cleanup();
-}
-EOF
-        TLS_LINK_LOG="$SCRATCH_DIR/tls-link.stderr.txt"
-        if ! OSCAN_RUNTIME_ARCHIVE_DIR="$RUNTIME_ARCHIVE_DIR" \
-            "$OSCAN_COMMAND" --backend native "$SCRATCH_DIR/tls-link.osc" \
-            -o "$SCRATCH_DIR/tls-link" 2>"$TLS_LINK_LOG"; then
-            cat "$TLS_LINK_LOG" >&2
-            exit 1
-        fi
-        grep -qi embedded "$TLS_LINK_LOG" || {
-            echo "packaged Linux native TLS smoke did not use the embedded linker" >&2
-            cat "$TLS_LINK_LOG" >&2
-            exit 1
-        }
+    REFUSED_OUTPUT="$SCRATCH_DIR/refused-c"
+    REFUSED_LOG="$SCRATCH_DIR/refused-backend-c.stderr.txt"
+    run_packaged "$REFUSED_LOG" 1 -- --backend c "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+    assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" "'--backend c' in the $TARGET/$BACKEND package"
+    assert_matches "$REFUSED_LOG" "the c backend is not included in this compiler build" \
+        "'--backend c' refusal"
+    assert_matches "$REFUSED_LOG" "this build includes: $BACKEND" "'--backend c' refusal"
+    assert_matches "$REFUSED_LOG" "archive name ends in '-c'" "'--backend c' refusal"
+
+    REFUSED_OUTPUT="$SCRATCH_DIR/refused-other"
+    REFUSED_LOG="$SCRATCH_DIR/refused-other-backend.stderr.txt"
+    run_packaged "$REFUSED_LOG" 1 -- --backend "$OTHER_OBJECT_BACKEND" "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+    assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" \
+        "'--backend $OTHER_OBJECT_BACKEND' in the $TARGET/$BACKEND package"
+    assert_matches "$REFUSED_LOG" \
+        "the $OTHER_OBJECT_BACKEND backend is not included in this compiler build" \
+        "'--backend $OTHER_OBJECT_BACKEND' refusal"
+    assert_matches "$REFUSED_LOG" "archive name ends in '-$OTHER_OBJECT_BACKEND'" \
+        "'--backend $OTHER_OBJECT_BACKEND' refusal"
+
+    REFUSED_OUTPUT="$SCRATCH_DIR/refused-libc"
+    REFUSED_LOG="$SCRATCH_DIR/refused-libc.stderr.txt"
+    run_packaged "$REFUSED_LOG" 1 -- --libc "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+    assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" "'--libc' in the $TARGET/$BACKEND package"
+    assert_matches "$REFUSED_LOG" "does not include the C backend" "'--libc' refusal"
+    assert_matches "$REFUSED_LOG" "refuses --libc" "'--libc' refusal"
+    assert_matches "$REFUSED_LOG" "install a package that includes the C backend" "'--libc' refusal"
+
+    EXTRA_C_SOURCE="$SCRATCH_DIR/extra.c"
+    printf 'int oscan_smoke_extra(void) { return 0; }\n' > "$EXTRA_C_SOURCE"
+    REFUSED_OUTPUT="$SCRATCH_DIR/refused-extra"
+    REFUSED_LOG="$SCRATCH_DIR/refused-extra-c.stderr.txt"
+    run_packaged "$REFUSED_LOG" 1 -- --extra-c "$EXTRA_C_SOURCE" "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+    assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" "'--extra-c' in the $TARGET/$BACKEND package"
+    assert_matches "$REFUSED_LOG" "does not include the C backend" "'--extra-c' refusal"
+    assert_matches "$REFUSED_LOG" "refuses --extra-c" "'--extra-c' refusal"
+
+    REFUSED_OUTPUT="$SCRATCH_DIR/refused-output.c"
+    REFUSED_LOG="$SCRATCH_DIR/refused-c-output.stderr.txt"
+    run_packaged "$REFUSED_LOG" 1 -- "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+    assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" \
+        "C source output in the $TARGET/$BACKEND package"
+    assert_matches "$REFUSED_LOG" "the c backend is not included in this compiler build" \
+        "C source output refusal"
+else
+    # A C package is the portability package: it emits C and needs a C
+    # compiler for it. Linux bundles its own; macOS uses the host Apple
+    # Command Line Tools.
+    if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
+        EXPECTED_COMPILER_SOURCE="host"
+    else
+        EXPECTED_COMPILER_SOURCE="bundled"
     fi
 
-    NATIVE_ACTUAL="$("$NATIVE_OUTPUT_EXE")"
-    [ "$NATIVE_ACTUAL" = "Hello, Release!" ] || {
-        echo "unexpected packaged native smoke output: $NATIVE_ACTUAL" >&2
-        exit 1
+    DEFAULT_OUTPUT="$SCRATCH_DIR/hello-default"
+    DEFAULT_LOG="$SCRATCH_DIR/default.stderr.txt"
+    EXPLICIT_OUTPUT="$SCRATCH_DIR/hello-explicit"
+    EXPLICIT_LOG="$SCRATCH_DIR/explicit.stderr.txt"
+    if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
+        run_packaged_unblocked "$DEFAULT_LOG" -- --verbose --libc "$SAMPLE_SOURCE" -o "$DEFAULT_OUTPUT"
+    else
+        run_packaged "$DEFAULT_LOG" 0 -- --verbose "$SAMPLE_SOURCE" -o "$DEFAULT_OUTPUT"
+    fi
+    [ "$STATUS" -eq 0 ] || {
+        cat "$DEFAULT_LOG" >&2
+        fail "packaged c default-backend compile failed"
     }
+    assert_matches "$DEFAULT_LOG" "Compiling with .+ \($EXPECTED_COMPILER_SOURCE" \
+        "packaged c default compile"
+    assert_program_runs "$DEFAULT_OUTPUT" "packaged c default compile"
+
+    if [ "$REQUIRES_HOST_COMPILER" = "1" ]; then
+        run_packaged_unblocked "$EXPLICIT_LOG" -- --backend c --libc "$SAMPLE_SOURCE" -o "$EXPLICIT_OUTPUT"
+    else
+        run_packaged "$EXPLICIT_LOG" 0 -- --backend c "$SAMPLE_SOURCE" -o "$EXPLICIT_OUTPUT"
+    fi
+    [ "$STATUS" -eq 0 ] || {
+        cat "$EXPLICIT_LOG" >&2
+        fail "packaged '--backend c' compile failed"
+    }
+    assert_matches "$EXPLICIT_LOG" "Compiling with .+ \($EXPECTED_COMPILER_SOURCE" \
+        "packaged '--backend c' compile"
+    assert_program_runs "$EXPLICIT_OUTPUT" "packaged '--backend c' compile"
+
+    for MISSING in llvm cranelift; do
+        REFUSED_OUTPUT="$SCRATCH_DIR/refused-$MISSING"
+        REFUSED_LOG="$SCRATCH_DIR/refused-$MISSING.stderr.txt"
+        run_packaged "$REFUSED_LOG" 0 -- --backend "$MISSING" "$SAMPLE_SOURCE" -o "$REFUSED_OUTPUT"
+        assert_refused "$REFUSED_LOG" "$REFUSED_OUTPUT" \
+            "'--backend $MISSING' in the $TARGET/$BACKEND package"
+        assert_matches "$REFUSED_LOG" \
+            "the $MISSING backend is not included in this compiler build" \
+            "'--backend $MISSING' refusal"
+        assert_matches "$REFUSED_LOG" "this build includes: c" "'--backend $MISSING' refusal"
+        assert_matches "$REFUSED_LOG" "archive name ends in '-$MISSING'" \
+            "'--backend $MISSING' refusal"
+    done
 fi
 
-echo "Release smoke test passed for $ARCHIVE_PATH"
+echo "Release smoke test passed for $TARGET/$BACKEND ($ARCHIVE_PATH)"

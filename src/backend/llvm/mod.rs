@@ -98,7 +98,7 @@ impl LlvmBackend {
         }
         Err(compile_error(format!(
             "the LLVM backend cannot target {target}: Oscan's packaged LLVM code generator ({}) \
-             has no {} back end (it provides: {}). Use --backend native for this target, or a \
+             has no {} back end (it provides: {}). Use --backend cranelift for this target, or a \
              release whose packaged code generator includes it.",
             self.provider.path().display(),
             target_arch(target).as_str(),
@@ -282,7 +282,7 @@ fn audit_freestanding_symbols(bytes: &[u8]) -> Result<(), CompileError> {
     Err(compile_error(format!(
         "the LLVM optimizer produced references to libc symbols the freestanding runtime does not \
          provide ({}); this is an Oscan code-generation bug, not a program error — please report \
-         it. Use --libc for a hosted build, or --backend native, as a workaround.",
+         it. Use --libc for a hosted build, or --backend cranelift, as a workaround.",
         found.join(", ")
     )))
 }

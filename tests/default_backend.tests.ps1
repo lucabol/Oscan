@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Oscan,
 
-    [ValidateSet("llvm", "native")]
+    [ValidateSet("llvm", "cranelift")]
     [string]$ExpectedBackend = "llvm",
 
     [ValidateSet("embedded", "bundled", "host", "override", "any")]
