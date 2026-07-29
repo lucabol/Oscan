@@ -34,8 +34,8 @@ The easiest way to get started is to download a prebuilt Oscan package from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases). Every artifact is
 one (platform, backend) package: Windows and Linux publish `llvm`, `cranelift`
 and `c` archives; macOS publishes `c`. See the
-[README's artifact table](../README.md#option-1-github-releases-recommended-for-most-users)
-for the full matrix and what each package contains.
+[release package matrix](technical-details.md#release-packages) for the full
+list and what each package contains.
 
 **Windows x86_64:**
 

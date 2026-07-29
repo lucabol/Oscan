@@ -353,6 +353,9 @@ class InstallerDocumentationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         self.guide = (REPO_ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
+        self.technical = (
+            REPO_ROOT / "docs" / "technical-details.md"
+        ).read_text(encoding="utf-8")
         self.spec = (REPO_ROOT / "docs" / "spec" / "oscan-spec.md").read_text(
             encoding="utf-8"
         )
@@ -361,45 +364,45 @@ class InstallerDocumentationTests(unittest.TestCase):
         for backend in ("llvm", "cranelift", "c"):
             self.assertIn(f"install-latest.ps1 -Backend {backend}", self.readme)
 
-    def test_the_readme_lists_the_exact_release_archive_names(self) -> None:
+    def test_technical_details_list_the_exact_release_archive_names(self) -> None:
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
         for target, spec in contract["variants"].items():
             for backend in spec["backends"]:
                 name = f"oscan-vX.Y.Z-{target}-{backend}"
-                self.assertIn(name, self.readme, f"{target}/{backend} is undocumented")
+                self.assertIn(
+                    name, self.technical, f"{target}/{backend} is undocumented"
+                )
 
-    def test_the_readme_makes_no_full_bundle_claim(self) -> None:
-        self.assertNotRegex(self.readme, r"-full\.(zip|tar\.[gx]z)")
-        self.assertNotIn("x86_64-full", self.readme)
+    def test_the_package_docs_make_no_full_bundle_claim(self) -> None:
+        self.assertNotRegex(self.technical, r"-full\.(zip|tar\.[gx]z)")
+        self.assertNotIn("x86_64-full", self.technical)
 
-    def test_the_readme_names_the_single_recommended_msi(self) -> None:
-        self.assertIn("oscan-vX.Y.Z-windows-x86_64-llvm.msi", self.readme)
-        self.assertNotIn("oscan-vX.Y.Z-windows-x86_64.msi", self.readme)
+    def test_the_package_docs_name_the_single_recommended_msi(self) -> None:
+        self.assertIn("oscan-vX.Y.Z-windows-x86_64-llvm.msi", self.technical)
+        self.assertNotIn("oscan-vX.Y.Z-windows-x86_64.msi", self.technical)
 
     def test_checksum_commands_verify_exactly_the_downloaded_asset(self) -> None:
         # A bare `sha256sum -c SHA256SUMS` checks every listed asset,
         # including ones the reader never downloaded, so the docs must
         # filter to the canonical file name first.
         for name, text in (
-            ("README.md", self.readme),
             ("docs/guide.md", self.guide),
             ("docs/spec/oscan-spec.md", self.spec),
         ):
             with self.subTest(doc=name):
                 self.assertNotRegex(text, r"sha256sum -c SHA256SUMS")
                 self.assertNotRegex(text, r"shasum -a 256 -c SHA256SUMS")
-        for text in (self.readme, self.guide, self.spec):
+        for text in (self.guide, self.spec):
             self.assertRegex(text, r"grep -E .*SHA256SUMS.*\| sha256sum -c -")
         # The archive must keep its published name so the entry matches.
-        self.assertIn("keeping the downloaded file's original name", self.readme)
+        self.assertIn("keeping its original file name", self.guide)
 
     def test_macos_checksum_command_is_filtered_too(self) -> None:
-        for text in (self.readme, self.spec):
+        for text in (self.guide, self.spec):
             self.assertRegex(text, r"grep -E .*SHA256SUMS.*\| shasum -a 256 -c -")
 
     def test_msi_and_archive_uninstall_paths_are_documented_separately(self) -> None:
         for name, text in (
-            ("README.md", self.readme),
             ("docs/guide.md", self.guide),
             ("docs/spec/oscan-spec.md", self.spec),
         ):
@@ -412,7 +415,7 @@ class InstallerDocumentationTests(unittest.TestCase):
 
     def test_the_provider_search_roots_include_the_sidecar(self) -> None:
         for name, text in (
-            ("README.md", self.readme),
+            ("docs/technical-details.md", self.technical),
             ("docs/guide.md", self.guide),
             ("docs/spec/oscan-spec.md", self.spec),
         ):
@@ -422,7 +425,7 @@ class InstallerDocumentationTests(unittest.TestCase):
 
     def test_sidecar_and_embedded_modes_are_distinguished(self) -> None:
         for name, text in (
-            ("README.md", self.readme),
+            ("docs/technical-details.md", self.technical),
             ("docs/guide.md", self.guide),
             ("docs/spec/oscan-spec.md", self.spec),
         ):
@@ -430,6 +433,16 @@ class InstallerDocumentationTests(unittest.TestCase):
                 self.assertIn("OSCAN_EMBED_ASSETS_DIR", text)
                 self.assertIn("used in place", text)
         self.assertIn("The binary embeds nothing", self.guide)
+
+    def test_readme_keeps_implementation_details_out_of_the_quick_start(self) -> None:
+        self.assertIn("docs/technical-details.md", self.readme)
+        for detail in (
+            "OSCAN_LLVM_LIB",
+            "OSCAN_EMBED_ASSETS_DIR",
+            "<exe-dir>/native-link",
+            "sample-backend-matrix.ps1",
+        ):
+            self.assertNotIn(detail, self.readme)
 
 
 if __name__ == "__main__":  # pragma: no cover
