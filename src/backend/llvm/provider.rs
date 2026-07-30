@@ -1,7 +1,11 @@
-//! In-process LLVM code generator: a small, audited, dynamically-loaded
-//! binding to the bundled `libLLVM` C API.
+//! In-process LLVM code generator: a small, audited binding to LLVM's C API.
 //!
-//! # Why a dynamic binding rather than `llvm-sys`
+//! Ordinary development builds dynamically load packaged LLVM so a plain
+//! `cargo build` needs no SDK. The `static-llvm` release profile resolves the
+//! same function-pointer table against LLVM static libraries and needs no
+//! provider DLL.
+//!
+//! # Why a hand-written binding rather than `llvm-sys`
 //!
 //! `llvm-sys` requires a full LLVM SDK (headers, static libraries, and a
 //! working `llvm-config`) to be present *at Oscan build time*. Oscan must
@@ -9,8 +13,8 @@
 //! installed at all, and its releases must carry the code generator as a
 //! packaged artifact rather than depending on whatever the user happens
 //! to have installed. So this module loads exactly the handful of
-//! documented, ABI-stable LLVM-C entry points it needs, from a shared
-//! library resolved along an explicit, executable-relative search path.
+//! documented, ABI-stable LLVM-C entry points it needs, from either a shared
+//! library or the executable itself.
 //!
 //! # What is *not* here
 //!
@@ -28,6 +32,8 @@
 //!    `<exe dir>/native-link/...` (a schema-v2 package's verified sidecar,
 //!    where Windows shares one `libLLVM-22.dll` between this code
 //!    generator and `ld.lld.exe`), and `<exe dir>` itself.
+//!
+//! Static builds bypass this search path entirely.
 //!
 //! A candidate inside the sidecar directory is only used once the sidecar
 //! manifest has verified it (see
@@ -47,6 +53,8 @@
 //! probed, not assumed: [`ProviderCapabilities`] records which target
 //! initializers the loaded library actually exports, and the backend
 //! refuses a target the packaged library cannot emit for.
+
+#![cfg_attr(feature = "static-llvm", allow(dead_code))]
 
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -396,11 +404,125 @@ struct Api {
     emit_to_memory_buffer: FnTargetMachineEmitToMemoryBuffer,
 }
 
+#[cfg(feature = "static-llvm")]
+#[allow(non_snake_case)]
+mod static_api {
+    use super::*;
+
+    unsafe extern "C" {
+        fn LLVMGetVersion(major: *mut c_uint, minor: *mut c_uint, patch: *mut c_uint);
+        fn LLVMContextCreate() -> LlvmContextRef;
+        fn LLVMContextDispose(context: LlvmContextRef);
+        fn LLVMCreateMemoryBufferWithMemoryRange(
+            input_data: *const c_char,
+            input_data_length: usize,
+            buffer_name: *const c_char,
+            requires_null_terminator: c_int,
+        ) -> LlvmMemoryBufferRef;
+        fn LLVMDisposeMemoryBuffer(buffer: LlvmMemoryBufferRef);
+        fn LLVMGetBufferStart(buffer: LlvmMemoryBufferRef) -> *const c_char;
+        fn LLVMGetBufferSize(buffer: LlvmMemoryBufferRef) -> usize;
+        fn LLVMParseIRInContext(
+            context: LlvmContextRef,
+            buffer: LlvmMemoryBufferRef,
+            module: *mut LlvmModuleRef,
+            message: *mut *mut c_char,
+        ) -> c_int;
+        fn LLVMDisposeModule(module: LlvmModuleRef);
+        fn LLVMDisposeMessage(message: *mut c_char);
+        fn LLVMVerifyModule(
+            module: LlvmModuleRef,
+            action: c_int,
+            message: *mut *mut c_char,
+        ) -> c_int;
+        fn LLVMGetTargetFromTriple(
+            triple: *const c_char,
+            target: *mut LlvmTargetRef,
+            message: *mut *mut c_char,
+        ) -> c_int;
+        fn LLVMCreateTargetMachine(
+            target: LlvmTargetRef,
+            triple: *const c_char,
+            cpu: *const c_char,
+            features: *const c_char,
+            level: c_int,
+            relocation: c_int,
+            code_model: c_int,
+        ) -> LlvmTargetMachineRef;
+        fn LLVMDisposeTargetMachine(machine: LlvmTargetMachineRef);
+        fn LLVMCreateTargetDataLayout(machine: LlvmTargetMachineRef) -> LlvmTargetDataRef;
+        fn LLVMCopyStringRepOfTargetData(data: LlvmTargetDataRef) -> *mut c_char;
+        fn LLVMDisposeTargetData(data: LlvmTargetDataRef);
+        fn LLVMSetTarget(module: LlvmModuleRef, triple: *const c_char);
+        fn LLVMSetModuleDataLayout(module: LlvmModuleRef, data: LlvmTargetDataRef);
+        fn LLVMCreatePassBuilderOptions() -> LlvmPassBuilderOptionsRef;
+        fn LLVMDisposePassBuilderOptions(options: LlvmPassBuilderOptionsRef);
+        fn LLVMRunPasses(
+            module: LlvmModuleRef,
+            passes: *const c_char,
+            machine: LlvmTargetMachineRef,
+            options: LlvmPassBuilderOptionsRef,
+        ) -> LlvmErrorRef;
+        fn LLVMGetErrorMessage(error: LlvmErrorRef) -> *mut c_char;
+        fn LLVMDisposeErrorMessage(message: *mut c_char);
+        fn LLVMTargetMachineEmitToMemoryBuffer(
+            machine: LlvmTargetMachineRef,
+            module: LlvmModuleRef,
+            file_type: c_int,
+            message: *mut *mut c_char,
+            buffer: *mut LlvmMemoryBufferRef,
+        ) -> c_int;
+        fn LLVMInitializeX86TargetInfo();
+        fn LLVMInitializeX86Target();
+        fn LLVMInitializeX86TargetMC();
+        fn LLVMInitializeX86AsmParser();
+        fn LLVMInitializeX86AsmPrinter();
+    }
+
+    pub fn api() -> Api {
+        Api {
+            get_version: LLVMGetVersion,
+            context_create: LLVMContextCreate,
+            context_dispose: LLVMContextDispose,
+            create_memory_buffer: LLVMCreateMemoryBufferWithMemoryRange,
+            dispose_memory_buffer: LLVMDisposeMemoryBuffer,
+            get_buffer_start: LLVMGetBufferStart,
+            get_buffer_size: LLVMGetBufferSize,
+            parse_ir: LLVMParseIRInContext,
+            dispose_module: LLVMDisposeModule,
+            dispose_message: LLVMDisposeMessage,
+            verify_module: LLVMVerifyModule,
+            get_target_from_triple: LLVMGetTargetFromTriple,
+            create_target_machine: LLVMCreateTargetMachine,
+            dispose_target_machine: LLVMDisposeTargetMachine,
+            create_target_data_layout: LLVMCreateTargetDataLayout,
+            copy_string_rep_of_target_data: LLVMCopyStringRepOfTargetData,
+            dispose_target_data: LLVMDisposeTargetData,
+            set_target: LLVMSetTarget,
+            set_module_data_layout: LLVMSetModuleDataLayout,
+            create_pass_builder_options: LLVMCreatePassBuilderOptions,
+            dispose_pass_builder_options: LLVMDisposePassBuilderOptions,
+            run_passes: LLVMRunPasses,
+            get_error_message: LLVMGetErrorMessage,
+            dispose_error_message: LLVMDisposeErrorMessage,
+            emit_to_memory_buffer: LLVMTargetMachineEmitToMemoryBuffer,
+        }
+    }
+
+    pub unsafe fn initialize_x86() {
+        LLVMInitializeX86TargetInfo();
+        LLVMInitializeX86Target();
+        LLVMInitializeX86TargetMC();
+        LLVMInitializeX86AsmParser();
+        LLVMInitializeX86AsmPrinter();
+    }
+}
+
 /// A loaded, validated LLVM code generator.
 pub struct LlvmProvider {
     /// Kept alive for the provider's lifetime: every function pointer in
     /// `api` points into this module's image.
-    _library: sys::Library,
+    _library: Option<sys::Library>,
     api: Api,
     path: PathBuf,
     version: (u32, u32, u32),
@@ -410,34 +532,42 @@ pub struct LlvmProvider {
 impl LlvmProvider {
     /// Locate, load, and validate the packaged LLVM code generator.
     pub fn load() -> Result<Self, String> {
-        let candidates = search_candidates();
-        if candidates.is_empty() {
-            return Err(no_provider_error());
+        #[cfg(feature = "static-llvm")]
+        {
+            return Self::load_static();
         }
-        let mut failures = Vec::new();
-        for candidate in &candidates {
-            // A candidate inside the executable-relative native-link
-            // sidecar directory (Windows stores one `libLLVM-22.dll` there
-            // and shares it between this code generator and `ld.lld.exe`)
-            // is only ever loaded when the sidecar manifest declares it and
-            // its SHA-256 matches. Anything else there is not "packaged",
-            // it merely sits in a packaged directory.
-            if let Err(reason) =
-                crate::backend::native_assets::sidecar::require_verified_if_inside(candidate)
-            {
-                failures.push(format!("  {}: {reason}", candidate.display()));
-                continue;
+
+        #[cfg(not(feature = "static-llvm"))]
+        {
+            let candidates = search_candidates();
+            if candidates.is_empty() {
+                return Err(no_provider_error());
             }
-            match Self::load_from(candidate) {
-                Ok(provider) => return Ok(provider),
-                Err(reason) => failures.push(format!("  {}: {reason}", candidate.display())),
+            let mut failures = Vec::new();
+            for candidate in &candidates {
+                // A candidate inside the executable-relative native-link
+                // sidecar directory (Windows stores one `libLLVM-22.dll` there
+                // and shares it between this code generator and `ld.lld.exe`)
+                // is only ever loaded when the sidecar manifest declares it and
+                // its SHA-256 matches. Anything else there is not "packaged",
+                // it merely sits in a packaged directory.
+                if let Err(reason) =
+                    crate::backend::native_assets::sidecar::require_verified_if_inside(candidate)
+                {
+                    failures.push(format!("  {}: {reason}", candidate.display()));
+                    continue;
+                }
+                match Self::load_from(candidate) {
+                    Ok(provider) => return Ok(provider),
+                    Err(reason) => failures.push(format!("  {}: {reason}", candidate.display())),
+                }
             }
+            Err(format!(
+                "{}\ntried:\n{}",
+                no_provider_error(),
+                failures.join("\n")
+            ))
         }
-        Err(format!(
-            "{}\ntried:\n{}",
-            no_provider_error(),
-            failures.join("\n")
-        ))
     }
 
     /// Load a specific library file. Public so tests (and
@@ -605,11 +735,44 @@ impl LlvmProvider {
         initialize_targets(&library, capabilities);
 
         Ok(LlvmProvider {
-            _library: library,
+            _library: Some(library),
             api,
             path: path.to_path_buf(),
             version,
             capabilities,
+        })
+    }
+
+    #[cfg(feature = "static-llvm")]
+    fn load_static() -> Result<Self, String> {
+        let api = static_api::api();
+        let mut version = (0u32, 0u32, 0u32);
+        unsafe {
+            (api.get_version)(&mut version.0, &mut version.1, &mut version.2);
+        }
+        if version.0 != REQUIRED_LLVM_MAJOR {
+            return Err(format!(
+                "the statically linked provider reports LLVM {}.{}.{}, but Oscan \
+                 requires LLVM major {}",
+                version.0, version.1, version.2, REQUIRED_LLVM_MAJOR
+            ));
+        }
+        unsafe {
+            static_api::initialize_x86();
+        }
+        Ok(Self {
+            _library: None,
+            api,
+            path: PathBuf::from(format!(
+                "statically-linked-llvm-{}.{}.{}",
+                version.0, version.1, version.2
+            )),
+            version,
+            capabilities: ProviderCapabilities {
+                x86: true,
+                aarch64: false,
+                riscv: false,
+            },
         })
     }
 
@@ -995,7 +1158,7 @@ impl<'a> TargetMachine<'a> {
 impl Drop for TargetMachine<'_> {
     fn drop(&mut self) {
         // SAFETY: `raw` is a live target machine this wrapper owns.
-        unsafe { (self.provider.api.dispose_target_machine)(self.raw) }
+        unsafe { (self.provider.api.dispose_target_machine)(self.raw) };
     }
 }
 
@@ -1007,7 +1170,7 @@ struct TargetData<'a> {
 impl Drop for TargetData<'_> {
     fn drop(&mut self) {
         // SAFETY: `raw` is a live target data handle this wrapper owns.
-        unsafe { (self.provider.api.dispose_target_data)(self.raw) }
+        unsafe { (self.provider.api.dispose_target_data)(self.raw) };
     }
 }
 

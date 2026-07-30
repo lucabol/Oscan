@@ -638,6 +638,7 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
     )
 ))]
 #[cfg(feature = "backend-llvm")]
+#[cfg(not(feature = "static-llvm"))]
 #[test]
 fn unavailable_explicit_llvm_never_falls_back() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))

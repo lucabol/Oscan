@@ -13,6 +13,8 @@ fn main() {
     stamp_git_version();
     stamp_distribution_backend();
     generate_native_link_assets();
+    configure_inprocess_toolchain();
+    generate_inprocess_link_assets();
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +179,178 @@ pub static EMBEDDED_ASSETS: &[EmbeddedAsset] = &[];
 pub static EMBEDDED_ASSET_MANIFEST_JSON: &str = "";
 "#
     .to_string()
+}
+
+fn configure_inprocess_toolchain() {
+    println!("cargo:rerun-if-env-changed=OSCAN_INPROCESS_TOOLCHAIN_DIR");
+    let enabled = std::env::var_os("CARGO_FEATURE_INPROCESS_LLD").is_some()
+        || std::env::var_os("CARGO_FEATURE_STATIC_LLVM").is_some();
+    if !enabled {
+        return;
+    }
+
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
+        || std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("x86_64")
+        || std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
+    {
+        panic!(
+            "inprocess-lld/static-llvm currently support only the \
+             x86_64-pc-windows-msvc compiler target"
+        );
+    }
+
+    let root = std::env::var_os("OSCAN_INPROCESS_TOOLCHAIN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            panic!(
+                "OSCAN_INPROCESS_TOOLCHAIN_DIR must point to the prepared static \
+                 LLVM/LLD bridge when inprocess-lld or static-llvm is enabled"
+            )
+        });
+    let lib_dir = root.join("lib");
+    let libraries_path = root.join("llvm-libraries.txt");
+    let system_libraries_path = root.join("system-libraries.txt");
+    for path in [&lib_dir, &libraries_path, &system_libraries_path] {
+        if !path.exists() {
+            panic!(
+                "prepared in-process toolchain is incomplete: {} is missing",
+                path.display()
+            );
+        }
+    }
+
+    println!("cargo:rerun-if-changed={}", root.display());
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    if std::env::var_os("CARGO_FEATURE_INPROCESS_LLD").is_some() {
+        for library in ["oscan_lld_bridge", "lldMinGW", "lldCOFF", "lldCommon"] {
+            println!("cargo:rustc-link-lib=static={library}");
+        }
+    }
+    for library in read_link_library_list(&libraries_path) {
+        println!("cargo:rustc-link-lib=static={library}");
+    }
+    for library in read_link_library_list(&system_libraries_path) {
+        println!("cargo:rustc-link-lib={library}");
+    }
+}
+
+fn read_link_library_list(path: &Path) -> Vec<String> {
+    let contents = std::fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            line.strip_suffix(".lib")
+                .or_else(|| line.strip_suffix(".a"))
+                .unwrap_or(line)
+                .to_string()
+        })
+        .collect()
+}
+
+fn generate_inprocess_link_assets() {
+    println!("cargo:rerun-if-env-changed=OSCAN_INPROCESS_ASSETS_DIR");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is not set"));
+    let out_path = out_dir.join("inprocess_link_assets.rs");
+    let enabled = std::env::var_os("CARGO_FEATURE_INPROCESS_LLD").is_some();
+    let Some(asset_dir) = std::env::var_os("OSCAN_INPROCESS_ASSETS_DIR").map(PathBuf::from) else {
+        if enabled {
+            panic!(
+                "OSCAN_INPROCESS_ASSETS_DIR must point to prepared runtime and \
+                 import-library bytes when inprocess-lld is enabled"
+            );
+        }
+        std::fs::write(&out_path, empty_inprocess_assets_module())
+            .unwrap_or_else(|err| panic!("failed to write {}: {err}", out_path.display()));
+        return;
+    };
+
+    let manifest_path = asset_dir.join("inprocess-link-assets.json");
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    let manifest_json = std::fs::read_to_string(&manifest_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+    let root = json_mini::parse(&manifest_json)
+        .unwrap_or_else(|err| panic!("invalid {}: {err}", manifest_path.display()));
+    let target = expect_str(&root, "target")
+        .unwrap_or_else(|err| panic!("invalid {}: {err}", manifest_path.display()));
+    if target != "windows-x86_64" {
+        panic!(
+            "{} targets '{target}', but the in-process linker currently supports \
+             only windows-x86_64",
+            manifest_path.display()
+        );
+    }
+    let assets = root
+        .get("assets")
+        .and_then(json_mini::Value::as_array)
+        .unwrap_or_else(|| panic!("{} has no assets array", manifest_path.display()));
+
+    let mut entries = String::new();
+    for (index, value) in assets.iter().enumerate() {
+        let role =
+            expect_str(value, "role").unwrap_or_else(|err| panic!("invalid asset {index}: {err}"));
+        let name =
+            expect_str(value, "name").unwrap_or_else(|err| panic!("invalid asset {index}: {err}"));
+        let install_subpath = expect_str(value, "install_subpath")
+            .unwrap_or_else(|err| panic!("invalid asset {index}: {err}"));
+        let sha256 = expect_str(value, "sha256")
+            .unwrap_or_else(|err| panic!("invalid asset {index}: {err}"));
+        let profile = value
+            .get("profile")
+            .and_then(json_mini::Value::as_str)
+            .map(|value| format!("Some({value:?})"))
+            .unwrap_or_else(|| "None".to_string());
+        let path = asset_dir.join(install_subpath);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let bytes = std::fs::read(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        let actual_sha256 = hex_encode(&Sha256::digest(&bytes));
+        if actual_sha256 != sha256 {
+            panic!(
+                "in-process asset {} digest mismatch: manifest has {}, actual is {}",
+                path.display(),
+                sha256,
+                actual_sha256
+            );
+        }
+        let path_literal = format!("{:?}", path.to_string_lossy());
+        entries.push_str(&format!(
+            "    InProcessAsset {{ role: {role:?}, name: {name:?}, profile: {profile}, \
+             sha256: {sha256:?}, bytes: include_bytes!({path_literal}) }},\n"
+        ));
+    }
+
+    let generated = format!(
+        "#[allow(dead_code)]\n\
+         #[derive(Debug, Clone, Copy)]\n\
+         pub struct InProcessAsset {{\n\
+         \x20   pub role: &'static str,\n\
+         \x20   pub name: &'static str,\n\
+         \x20   pub profile: Option<&'static str>,\n\
+         \x20   pub sha256: &'static str,\n\
+         \x20   pub bytes: &'static [u8],\n\
+         }}\n\
+         pub const TARGET: &str = {target:?};\n\
+         pub static ASSETS: &[InProcessAsset] = &[\n{entries}];\n"
+    );
+    std::fs::write(&out_path, generated)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", out_path.display()));
+}
+
+fn empty_inprocess_assets_module() -> &'static str {
+    "#[allow(dead_code)]\n\
+     #[derive(Debug, Clone, Copy)]\n\
+     pub struct InProcessAsset {\n\
+     \x20   pub role: &'static str,\n\
+     \x20   pub name: &'static str,\n\
+     \x20   pub profile: Option<&'static str>,\n\
+     \x20   pub sha256: &'static str,\n\
+     \x20   pub bytes: &'static [u8],\n\
+     }\n\
+     pub const TARGET: &str = \"\";\n\
+     pub static ASSETS: &[InProcessAsset] = &[];\n"
 }
 
 struct ManifestAsset {

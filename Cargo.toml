@@ -18,6 +18,8 @@ backend-cranelift = [
     "dep:cranelift-object",
 ]
 backend-llvm = []
+inprocess-lld = []
+static-llvm = ["backend-llvm"]
 
 [dependencies]
 # Cranelift AOT native backend (src/backend/). Pinned in lockstep (all

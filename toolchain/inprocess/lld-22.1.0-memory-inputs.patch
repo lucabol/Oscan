@@ -1,0 +1,195 @@
+diff --git a/lld/COFF/Driver.cpp b/lld/COFF/Driver.cpp
+index b63df6ec15d4..c262af92f8cf 100644
+--- a/lld/COFF/Driver.cpp
++++ b/lld/COFF/Driver.cpp
+@@ -18,6 +18,7 @@
+ #include "SymbolTable.h"
+ #include "Symbols.h"
+ #include "Writer.h"
++#include "lld/COFF/MemoryInput.h"
+ #include "lld/Common/Args.h"
+ #include "lld/Common/CommonLinkerContext.h"
+ #include "lld/Common/Filesystem.h"
+@@ -25,6 +26,7 @@
+ #include "lld/Common/Version.h"
+ #include "llvm/ADT/IntrusiveRefCntPtr.h"
++#include "llvm/ADT/StringMap.h"
+ #include "llvm/ADT/StringSwitch.h"
+ #include "llvm/BinaryFormat/Magic.h"
+ #include "llvm/Config/llvm-config.h"
+ #include "llvm/LTO/LTO.h"
+@@ -42,6 +44,7 @@
+ #include "llvm/Support/TarWriter.h"
+ #include "llvm/Support/TargetSelect.h"
+ #include "llvm/Support/TimeProfiler.h"
++#include "llvm-c/Target.h"
+ #include "llvm/Support/VirtualFileSystem.h"
+ #include "llvm/Support/raw_ostream.h"
+ #include "llvm/TargetParser/Triple.h"
+@@ -82,5 +84,22 @@ uint64_t coff::errCount(COFFLinkerContext &ctx) { return ctx.e.errorCount; }
+ 
+ namespace lld::coff {
+ 
++static StringMap<ArrayRef<uint8_t>> memoryInputs;
++
++void setMemoryInputs(ArrayRef<MemoryInput> inputs) {
++  memoryInputs.clear();
++  for (const MemoryInput &input : inputs)
++    memoryInputs[input.name] = input.data;
++}
++
++void clearMemoryInputs() { memoryInputs.clear(); }
++
++static std::optional<ArrayRef<uint8_t>> findMemoryInput(StringRef path) {
++  auto input = memoryInputs.find(path);
++  if (input == memoryInputs.end())
++    return std::nullopt;
++  return input->second;
++}
++
+ bool link(ArrayRef<const char *> args, llvm::raw_ostream &stdoutOS,
+           llvm::raw_ostream &stderrOS, bool exitEarly, bool disableOutput) {
+@@ -364,5 +383,21 @@ void LinkerDriver::handleReproFile(StringRef path, InputOpt inputOpt) {
+ }
+ 
+ void LinkerDriver::enqueuePath(StringRef path, bool lazy, InputOpt inputOpt) {
++  if (std::optional<ArrayRef<uint8_t>> input = findMemoryInput(path)) {
++    std::string pathStr(path);
++    StringRef contents(reinterpret_cast<const char *>(input->data()),
++                       input->size());
++    auto buffer = std::make_shared<std::unique_ptr<MemoryBuffer>>(
++        MemoryBuffer::getMemBuffer(contents, pathStr,
++                                   /*RequiresNullTerminator=*/false));
++    enqueueTask([=]() mutable {
++      llvm::TimeTraceScope timeScope("Memory file: ", pathStr);
++      handleReproFile(pathStr, inputOpt);
++      ctx.driver.addBuffer(std::move(*buffer),
++                           inputOpt == InputOpt::WholeArchive, lazy);
++    });
++    return;
++  }
++
+   auto future = std::make_shared<std::future<MBErrPair>>(
+       createFutureForFile(std::string(path), ctx.config.prefetchInputs));
+@@ -1559,10 +1594,10 @@ void LinkerDriver::linkerMain(ArrayRef<const char *> argsArr) {
+   Configuration *config = &ctx.config;
+ 
+   // Needed for LTO.
+-  InitializeAllTargetInfos();
+-  InitializeAllTargets();
+-  InitializeAllTargetMCs();
+-  InitializeAllAsmParsers();
+-  InitializeAllAsmPrinters();
++  LLVMInitializeX86TargetInfo();
++  LLVMInitializeX86Target();
++  LLVMInitializeX86TargetMC();
++  LLVMInitializeX86AsmParser();
++  LLVMInitializeX86AsmPrinter();
+ 
+   // If the first command line argument is "/lib", link.exe acts like lib.exe.
+diff --git a/lld/include/lld/COFF/MemoryInput.h b/lld/include/lld/COFF/MemoryInput.h
+new file mode 100644
+index 000000000000..b070ad7d3b6f
+--- /dev/null
++++ b/lld/include/lld/COFF/MemoryInput.h
+@@ -0,0 +1,31 @@
++//===- MemoryInput.h - Borrowed in-memory COFF inputs ------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLD_COFF_MEMORY_INPUT_H
++#define LLD_COFF_MEMORY_INPUT_H
++
++#include "llvm/ADT/ArrayRef.h"
++#include "llvm/ADT/StringRef.h"
++#include <cstdint>
++
++namespace lld::coff {
++
++struct MemoryInput {
++  llvm::StringRef name;
++  llvm::ArrayRef<uint8_t> data;
++};
++
++// Inputs are borrowed and must remain alive until lldMain returns. The caller
++// must serialize calls because this registry deliberately outlives the MinGW
++// driver context that is destroyed before dispatching to the COFF driver.
++void setMemoryInputs(llvm::ArrayRef<MemoryInput> inputs);
++void clearMemoryInputs();
++
++} // namespace lld::coff
++
++#endif
+diff --git a/lld/COFF/CMakeLists.txt b/lld/COFF/CMakeLists.txt
+index 62f10e9e2f1b..55958f079cf1 100644
+--- a/lld/COFF/CMakeLists.txt
++++ b/lld/COFF/CMakeLists.txt
+@@ -42,7 +42,6 @@ add_lld_library(lldCOFF
+   Support
+   TargetParser
+   WindowsDriver
+-  WindowsManifest
+ 
+   LINK_LIBS
+   lldCommon
+diff --git a/lld/COFF/DriverUtils.cpp b/lld/COFF/DriverUtils.cpp
+index 42c7f9394b9b..e30987878c90 100644
+--- a/lld/COFF/DriverUtils.cpp
++++ b/lld/COFF/DriverUtils.cpp
+@@ -31,7 +31,6 @@
+ #include "llvm/Support/Process.h"
+ #include "llvm/Support/Program.h"
+ #include "llvm/Support/raw_ostream.h"
+-#include "llvm/WindowsManifest/WindowsManifestMerger.h"
+ #include <memory>
+ #include <optional>
+ 
+@@ -462,24 +461,9 @@ std::string LinkerDriver::createDefaultXml() {
+ 
+ std::string
+ LinkerDriver::createManifestXmlWithInternalMt(StringRef defaultXml) {
+-  std::unique_ptr<MemoryBuffer> defaultXmlCopy =
+-      MemoryBuffer::getMemBufferCopy(defaultXml);
+-
+-  windows_manifest::WindowsManifestMerger merger;
+-  if (auto e = merger.merge(*defaultXmlCopy))
+-    Fatal(ctx) << "internal manifest tool failed on default xml: "
+-               << toString(std::move(e));
+-
+-  for (StringRef filename : ctx.config.manifestInput) {
+-    std::unique_ptr<MemoryBuffer> manifest =
+-        check(MemoryBuffer::getFile(filename));
+-    // Call takeBuffer to include in /reproduce: output if applicable.
+-    if (auto e = merger.merge(takeBuffer(std::move(manifest))))
+-      Fatal(ctx) << "internal manifest tool failed on file " << filename << ": "
+-                 << toString(std::move(e));
+-  }
+-
+-  return std::string(merger.getMergedManifest()->getBuffer());
++  (void)defaultXml;
++  Fatal(ctx) << "user-supplied manifests are disabled in the in-process linker";
++  return {};
+ }
+ 
+ std::string
+@@ -521,13 +505,9 @@ LinkerDriver::createManifestXmlWithExternalMt(StringRef defaultXml) {
+ 
+ std::string LinkerDriver::createManifestXml() {
+   std::string defaultXml = createDefaultXml();
+-  if (ctx.config.manifestInput.empty())
+-    return defaultXml;
+-
+-  if (windows_manifest::isAvailable())
+-    return createManifestXmlWithInternalMt(defaultXml);
+-
+-  return createManifestXmlWithExternalMt(defaultXml);
++  if (!ctx.config.manifestInput.empty())
++    Fatal(ctx) << "user-supplied manifests are disabled in the in-process linker";
++  return defaultXml;
+ }
+ 
+ std::unique_ptr<WritableMemoryBuffer>

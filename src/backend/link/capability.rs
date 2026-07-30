@@ -140,6 +140,22 @@ pub(super) fn freestanding_profile(object_path: &Path) -> FreestandingProfile {
     }))
 }
 
+#[cfg(feature = "inprocess-lld")]
+pub(super) fn freestanding_profile_from_bytes(
+    object_name: &str,
+    data: &[u8],
+) -> Result<FreestandingProfile, String> {
+    let file = object::File::parse(data)
+        .map_err(|error| format!("failed to parse object '{object_name}': {error}"))?;
+    Ok(profile_for_undefined_symbols(
+        object::Object::symbols(&file).filter_map(|symbol| {
+            object::ObjectSymbol::is_undefined(&symbol)
+                .then(|| object::ObjectSymbol::name(&symbol).ok())
+                .flatten()
+        }),
+    ))
+}
+
 fn profile_for_undefined_symbols<'a>(
     symbols: impl IntoIterator<Item = &'a str>,
 ) -> FreestandingProfile {
