@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = ROOT.parent
 BUILD = ROOT / ".build"
 EXE_SUFFIX = ".exe" if os.name == "nt" else ""
-LANGUAGES = ("oscan", "rust", "typescript", "csharp")
+LANGUAGES = ("oscan", "rust", "typescript", "csharp", "common-lisp")
 NPM = "npm.cmd" if os.name == "nt" else "npm"
 
 
@@ -190,12 +190,33 @@ def native_aot_rid() -> str:
     return f"{os_name}-{architecture}"
 
 
+def sbcl_path() -> str:
+    override = os.environ.get("BUILDGRAPH_SBCL")
+    if override:
+        return override
+
+    discovered = shutil.which("sbcl")
+    if discovered:
+        return discovered
+
+    if os.name == "nt":
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        installed = Path(program_files) / "Steel Bank Common Lisp" / "sbcl.exe"
+        if installed.exists():
+            return str(installed)
+
+    raise RuntimeError(
+        "SBCL is required for Common Lisp; install it or set BUILDGRAPH_SBCL"
+    )
+
+
 def artifact_path(language: str) -> Path:
     paths = {
         "oscan": BUILD / "oscan" / f"buildgraph{EXE_SUFFIX}",
         "rust": BUILD / "rust-target" / "release" / f"buildgraph{EXE_SUFFIX}",
         "typescript": BUILD / "typescript" / "main.js",
         "csharp": BUILD / "csharp" / f"BuildGraph{EXE_SUFFIX}",
+        "common-lisp": BUILD / "common-lisp" / f"buildgraph{EXE_SUFFIX}",
     }
     return paths[language]
 
@@ -279,6 +300,22 @@ def build(language: str) -> None:
                 "quiet",
             ]
         )
+    elif language == "common-lisp":
+        artifact = artifact_path(language)
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.unlink(missing_ok=True)
+        run(
+            [
+                sbcl_path(),
+                "--noinform",
+                "--no-sysinit",
+                "--no-userinit",
+                "--disable-debugger",
+                "--load",
+                str(ROOT / "common-lisp" / "build.lisp"),
+                "--quit",
+            ]
+        )
     else:
         raise ValueError(f"unknown language: {language}")
 
@@ -288,7 +325,7 @@ def build(language: str) -> None:
 
 def command_for(language: str) -> list[str]:
     artifact = artifact_path(language)
-    if language in {"oscan", "rust"}:
+    if language in {"oscan", "rust", "common-lisp"}:
         return [str(artifact)]
     if language == "typescript":
         return ["node", str(artifact)]
@@ -432,6 +469,7 @@ def source_path(language: str) -> Path:
         "rust": ROOT / "rust" / "src" / "main.rs",
         "typescript": ROOT / "typescript" / "src" / "main.ts",
         "csharp": ROOT / "csharp" / "Program.cs",
+        "common-lisp": ROOT / "common-lisp" / "main.lisp",
     }[language]
 
 

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "oscan", "rust", "typescript", "csharp")]
+    [ValidateSet("all", "oscan", "rust", "typescript", "csharp", "common-lisp")]
     [string]$Language = "all",
     [int]$Tasks = 1000,
     [int]$Iterations = 10,
@@ -28,4 +28,3 @@ python @arguments
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-

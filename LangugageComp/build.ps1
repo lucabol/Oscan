@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("all", "oscan", "rust", "typescript", "csharp")]
+    [ValidateSet("all", "oscan", "rust", "typescript", "csharp", "common-lisp")]
     [string]$Language = "all"
 )
 
@@ -8,4 +8,3 @@ python "$PSScriptRoot\harness\suite.py" build --language $Language
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-
