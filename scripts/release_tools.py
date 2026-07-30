@@ -61,6 +61,7 @@ PACKAGE_METADATA_NAME = "oscan-package.json"
 PROVIDER_PROVENANCE_NAME = "llvm-provider-provenance.json"
 NATIVE_LINK_DIR_NAME = "native-link"
 NATIVE_LINK_MANIFEST_NAME = "native-link-assets.json"
+INPROCESS_LINK_MANIFEST_NAME = "inprocess-link-assets.json"
 
 
 def fail(message: str) -> "NoReturn":
@@ -4608,6 +4609,140 @@ def prepare_embed_assets_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def prepare_inprocess_link_assets(
+    target: str,
+    toolchain_dir: Path,
+    toolchain_manifest_path: Path,
+    runtime_archive_dir: Path,
+    output_dir: Path,
+) -> dict:
+    """Stage only the bytes consumed by the in-process linker."""
+    if target != "windows-x86_64":
+        fail(
+            "prepare-inprocess-link-assets currently supports only "
+            f"windows-x86_64, not '{target}'"
+        )
+    if not toolchain_dir.is_dir():
+        fail(f"toolchain directory not found: {toolchain_dir}")
+    if not runtime_archive_dir.is_dir():
+        fail(f"runtime archive directory not found: {runtime_archive_dir}")
+
+    toolchain_manifest = load_manifest(toolchain_manifest_path)
+    if toolchain_manifest["target"] != target:
+        fail(
+            f"toolchain manifest {toolchain_manifest_path} identifies target "
+            f"'{toolchain_manifest['target']}', expected '{target}'"
+        )
+
+    ensure_clean_dir(output_dir)
+    entries = []
+    for profile in FREESTANDING_PROFILES:
+        archive_name = f"libosc_runtime_{profile}.a"
+        source = runtime_archive_dir / archive_name
+        if not source.is_file():
+            fail(
+                f"runtime archive '{profile}' not found: {source}; build all "
+                "freestanding profiles before staging the strict compiler"
+            )
+        sidecar = source.with_suffix(".json")
+        if not sidecar.is_file():
+            fail(f"runtime archive provenance manifest not found: {sidecar}")
+        runtime_manifest = json.loads(sidecar.read_text(encoding="utf-8"))
+        expected_sha256 = compute_digest(source, "sha256")
+        runtime_toolchain = runtime_manifest.get("toolchain", {})
+        if (
+            runtime_manifest.get("schema_version") != 2
+            or runtime_manifest.get("target") != target
+            or runtime_manifest.get("mode") != profile
+            or runtime_manifest.get("requires_libc") is not False
+            or runtime_manifest.get("sha256") != expected_sha256
+            or runtime_toolchain.get("vendor")
+            != toolchain_manifest["toolchain"]["vendor"]
+            or runtime_toolchain.get("version")
+            != toolchain_manifest["toolchain"]["version"]
+        ):
+            fail(
+                f"runtime archive provenance in {sidecar} does not match the "
+                f"strict {target}/{profile} toolchain"
+            )
+        destination = output_dir / "runtime" / archive_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        entries.append(
+            {
+                "role": "runtime_archive",
+                "profile": profile,
+                "name": archive_name,
+                "install_subpath": destination.relative_to(output_dir).as_posix(),
+                "size": destination.stat().st_size,
+                "sha256": expected_sha256,
+            }
+        )
+
+    asset_spec = EMBED_ASSET_SPECS[target]
+    for spec in asset_spec["import_libs"]:
+        staged = _stage_embed_asset(toolchain_dir, output_dir, spec)
+        entries.append(
+            {
+                "role": "import_lib",
+                "name": spec["name"],
+                "lib": spec["lib"],
+                "install_subpath": Path(spec["install_subpath"]).as_posix(),
+                "size": staged["size"],
+                "sha256": staged["sha256"],
+            }
+        )
+    builtins_spec = asset_spec["compiler_builtins"]
+    staged = _stage_embed_asset(toolchain_dir, output_dir, builtins_spec)
+    entries.append(
+        {
+            "role": "compiler_builtins",
+            "name": builtins_spec["name"],
+            "install_subpath": Path(builtins_spec["install_subpath"]).as_posix(),
+            "size": staged["size"],
+            "sha256": staged["sha256"],
+        }
+    )
+
+    out_manifest = {
+        "schema_version": 1,
+        "target": target,
+        "toolchain": {
+            "vendor": toolchain_manifest["toolchain"]["vendor"],
+            "version": toolchain_manifest["toolchain"]["version"],
+        },
+        "assets": entries,
+    }
+    manifest_path = output_dir / INPROCESS_LINK_MANIFEST_NAME
+    manifest_path.write_text(
+        json.dumps(out_manifest, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return out_manifest
+
+
+def prepare_inprocess_link_assets_command(args: argparse.Namespace) -> int:
+    target = args.target
+    toolchain_dir = Path(args.toolchain_dir).resolve()
+    toolchain_manifest_path = (
+        Path(args.toolchain_manifest).resolve()
+        if args.toolchain_manifest
+        else REPO_ROOT / "packaging" / "toolchains" / f"{target}.json"
+    )
+    runtime_archive_dir = Path(args.runtime_archive_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    prepare_inprocess_link_assets(
+        target,
+        toolchain_dir,
+        toolchain_manifest_path,
+        runtime_archive_dir,
+        output_dir,
+    )
+    print(str(output_dir / INPROCESS_LINK_MANIFEST_NAME))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Oscan release asset helpers")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -4865,6 +5000,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="staging output directory (defaults to packaging/prebuilt/<target>)",
     )
     prepare_embed.set_defaults(func=prepare_embed_assets_command)
+
+    prepare_inprocess = subparsers.add_parser(
+        "prepare-inprocess-link-assets",
+        help=(
+            "stage runtime archives/import libraries/compiler-builtins for a "
+            "strict no-extraction in-process linker build"
+        ),
+    )
+    prepare_inprocess.add_argument("--target", required=True)
+    prepare_inprocess.add_argument("--toolchain-dir", required=True)
+    prepare_inprocess.add_argument("--toolchain-manifest", default=None)
+    prepare_inprocess.add_argument("--runtime-archive-dir", required=True)
+    prepare_inprocess.add_argument("--output-dir", required=True)
+    prepare_inprocess.set_defaults(func=prepare_inprocess_link_assets_command)
 
     return parser
 

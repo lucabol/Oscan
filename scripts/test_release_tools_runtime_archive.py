@@ -1009,6 +1009,58 @@ class PrepareEmbedAssetsTests(RepositoryScratchTests):
             ),
         )
 
+    def test_inprocess_assets_exclude_linker_executables_and_runtime_dlls(self):
+        toolchain_dir = self.scratch / "toolchain"
+        self._write_fake_toolchain_dir(toolchain_dir)
+        manifest_path = self.scratch / "windows-x86_64.json"
+        self._write_fake_toolchain_manifest(manifest_path)
+        runtime_dir = self.scratch / "runtime"
+        runtime_dir.mkdir()
+        for profile in rt.FREESTANDING_PROFILES:
+            archive = runtime_dir / f"libosc_runtime_{profile}.a"
+            archive.write_bytes(f"runtime-{profile}".encode())
+            archive.with_suffix(".json").write_text(
+                rt.json.dumps(
+                    {
+                        "schema_version": 2,
+                        "target": "windows-x86_64",
+                        "mode": profile,
+                        "requires_libc": False,
+                        "sha256": rt.compute_digest(archive, "sha256"),
+                        "toolchain": {
+                            "vendor": "llvm-mingw",
+                            "version": "20260324",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+        output_dir = self.scratch / "inprocess"
+
+        manifest = rt.prepare_inprocess_link_assets(
+            "windows-x86_64",
+            toolchain_dir,
+            manifest_path,
+            runtime_dir,
+            output_dir,
+        )
+
+        roles = [asset["role"] for asset in manifest["assets"]]
+        self.assertEqual(roles.count("runtime_archive"), 3)
+        self.assertEqual(roles.count("import_lib"), 6)
+        self.assertEqual(roles.count("compiler_builtins"), 1)
+        staged = {
+            path.relative_to(output_dir).as_posix()
+            for path in output_dir.rglob("*")
+            if path.is_file()
+        }
+        self.assertIn("inprocess-link-assets.json", staged)
+        self.assertNotIn("bin/ld.lld.exe", staged)
+        self.assertFalse(any(path.endswith(".dll") for path in staged))
+        for asset in manifest["assets"]:
+            path = output_dir / asset["install_subpath"]
+            self.assertEqual(asset["sha256"], rt.compute_digest(path, "sha256"))
+
     def test_linux_stages_only_the_static_linker(self):
         toolchain_dir = self.scratch / "toolchain-linux"
         linker = toolchain_dir / "bin" / "x86_64-linux-musl-ld"

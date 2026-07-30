@@ -1721,3 +1721,61 @@ In `.github/workflows/release.yml`, the Linux matrix entry must:
 | macOS native target | No `NativeTarget` variant exists; out of scope entirely. |
 | Hosted `--libc` mode direct-link | Keeps the diagnosed external C-toolchain driver path. |
 | Multi-target asset bundling (one binary embeds linkers for N targets) | Explicitly deferred (§11.1). Acceptable follow-up if user demand warrants. |
+
+---
+
+## 15. Strict no-extraction profile (Windows x86-64)
+
+The optional `inprocess-lld` profile removes the linker executable, linker DLLs,
+runtime-archive directory, generated-object temporary file, and linker
+subprocess. It is intentionally separate from the verified-cache design above:
+ordinary packages keep the portable extraction path, while strict packages
+trade target coverage and build simplicity for a single executable.
+
+The implementation has four boundaries:
+
+1. `toolchain/inprocess/lld-22.1.0-memory-inputs.patch` adds borrowed virtual
+   COFF inputs to LLD and limits target initialization to X86. Thin archives are
+   refused by Oscan before LLD can follow external members.
+2. `toolchain/inprocess/oscan_lld_bridge.cpp` exposes a narrow C ABI, captures
+   diagnostics, serializes calls, and propagates LLD's `canRunAgain` result.
+3. `build.rs` embeds the three runtime profiles, six Win32 import libraries,
+   and compiler-builtins from `inprocess-link-assets.json`; it links the
+   prepared static LLVM/LLD libraries.
+4. `src/backend/link/inprocess.rs` passes the generated object bytes and every
+   archive directly to LLD. Only the requested final executable is file-backed.
+
+`static-llvm` uses the same LLVM-C function-pointer table as the packaged
+provider, but resolves it against libraries linked into `oscan.exe`. A strict
+LLVM compiler therefore needs neither `libLLVM-22.dll` nor an LLVM sidecar.
+
+Build the pinned components with:
+
+```powershell
+.\scripts\build-inprocess-toolchain.ps1 `
+  -LlvmSdk C:\path\to\clang+llvm-22.1.0-x86_64-pc-windows-msvc `
+  -LlvmSource C:\path\to\llvm-project-22.1.0.src `
+  -OutputDir C:\path\to\static-toolchain
+
+python scripts\release_tools.py prepare-inprocess-link-assets `
+  --target windows-x86_64 `
+  --toolchain-dir C:\path\to\llvm-mingw `
+  --runtime-archive-dir build\strict\runtime-archives\windows-x86_64 `
+  --output-dir build\strict\inprocess-assets\windows-x86_64
+```
+
+Then build a Cranelift distribution with
+`--no-default-features --features backend-cranelift,inprocess-lld`, or an LLVM
+distribution with
+`--no-default-features --features backend-llvm,inprocess-lld,static-llvm`.
+Set `OSCAN_INPROCESS_TOOLCHAIN_DIR`, `OSCAN_INPROCESS_ASSETS_DIR`, and
+`RUSTFLAGS="-C target-feature=+crt-static"` for both builds.
+
+Current strict-profile limits are deliberate and reported as errors:
+
+- Windows x86-64 freestanding output only;
+- no `--libc`, `--extra-c`, or C compiler flags;
+- named `--extra-lib` inputs are refused (use an explicit archive path);
+- user-supplied manifest merging is disabled in the patched LLD;
+- a non-reentrant/fatal LLD result terminates the compiler process rather than
+  risking continued execution after linker memory corruption.

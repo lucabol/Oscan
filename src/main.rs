@@ -1316,118 +1316,211 @@ fn run_object_backend(
         }
     }
 
-    let temp_dir = match create_native_scratch_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("error creating temp directory: {e}");
+    #[cfg(feature = "inprocess-lld")]
+    {
+        if compile_output.generated_extern_shim_c.is_some() {
+            eprintln!(
+                "error: generated C extern shims are incompatible with the strict \
+                 no-subprocess compiler"
+            );
             process::exit(1);
         }
-    };
-    let obj_path = temp_dir
-        .path()
-        .join(format!("program{}", native_target.obj_suffix()));
-    if let Err(e) = backend::link::write_object_file(&compile_output.object_bytes, &obj_path) {
-        eprintln!("error: {e}");
-        // `process::exit` skips `Drop`, so the `TempDir` guard must be
-        // dropped explicitly first to still clean up (Finding 3).
-        drop(temp_dir);
-        process::exit(1);
-    }
-    let generated_shim_path = compile_output
-        .generated_extern_shim_c
-        .as_ref()
-        .map(|source| {
-            let path = temp_dir.path().join("oscan_native_extern_shims.c");
-            fs::write(&path, source).map_err(|e| {
-                format!(
-                    "error writing generated native extern shim '{}': {e}",
-                    path.display()
-                )
-            })?;
-            Ok::<String, String>(path.to_string_lossy().into_owned())
-        })
-        .transpose();
-    let generated_shim_path = match generated_shim_path {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("{e}");
-            drop(temp_dir);
-            process::exit(1);
-        }
-    };
-    let mut native_extra_c_files = extra_c_files.to_vec();
-    if let Some(path) = generated_shim_path {
-        native_extra_c_files.push(path);
-    }
-    let link_options = backend::link::NativeLinkOptions {
-        runtime_mode,
-        show_warnings,
-        allow_elevated_native_link,
-        extra_c_files: &native_extra_c_files,
-        extra_cflags,
-        extra_objects: extra_obj_files,
-        extra_libs: extra_lib_files,
-    };
+        let link_options = backend::link::NativeLinkOptions {
+            runtime_mode,
+            show_warnings,
+            allow_elevated_native_link,
+            extra_c_files,
+            extra_cflags,
+            extra_objects: extra_obj_files,
+            extra_libs: extra_lib_files,
+        };
 
-    if run_mode {
-        let exe_path = temp_dir
-            .path()
-            .join(format!("program{}", native_target.exe_suffix()));
-        if let Err(e) =
-            backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options)
-        {
-            eprintln!("error: {e}");
-            drop(temp_dir);
-            process::exit(1);
-        }
-        eprintln!("\n=== Running {} ===\n", source_path);
-        // Keep the `TempDir` guard alive through the run itself — the
-        // compiled executable lives inside it.
-        let status = Command::new(&exe_path).args(program_args).status();
-        drop(temp_dir);
-        match status {
-            Ok(exit_status) => {
-                if !exit_status.success() {
-                    process::exit(exit_status.code().unwrap_or(1));
+        if run_mode {
+            let temp_dir = match create_native_scratch_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    eprintln!("error creating temp directory: {e}");
+                    process::exit(1);
                 }
-            }
-            Err(e) => {
-                eprintln!("error running program: {e}");
+            };
+            let exe_path = temp_dir
+                .path()
+                .join(format!("program{}", native_target.exe_suffix()));
+            if let Err(e) = backend::link::link_executable_from_bytes(
+                &compile_output.object_bytes,
+                &exe_path,
+                native_target,
+                &link_options,
+            ) {
+                eprintln!("error: {e}");
+                drop(temp_dir);
                 process::exit(1);
             }
+            eprintln!("\n=== Running {} ===\n", source_path);
+            let status = Command::new(&exe_path).args(program_args).status();
+            drop(temp_dir);
+            match status {
+                Ok(exit_status) if exit_status.success() => {}
+                Ok(exit_status) => process::exit(exit_status.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("error running program: {e}");
+                    process::exit(1);
+                }
+            }
+            return;
         }
+
+        let exe_path = match output_path.as_ref() {
+            Some(p) => {
+                let pb = PathBuf::from(p);
+                if pb.extension().is_none() {
+                    pb.with_extension(native_target.exe_suffix().trim_start_matches('.'))
+                } else {
+                    pb
+                }
+            }
+            None => {
+                let stem = Path::new(source_path)
+                    .file_stem()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                    .to_os_string();
+                let mut pb = PathBuf::from(stem);
+                let suffix = native_target.exe_suffix().trim_start_matches('.');
+                if !suffix.is_empty() {
+                    pb.set_extension(suffix);
+                }
+                pb
+            }
+        };
+        if let Err(e) = backend::link::link_executable_from_bytes(
+            &compile_output.object_bytes,
+            &exe_path,
+            native_target,
+            &link_options,
+        ) {
+            eprintln!("error: {e}");
+            process::exit(1);
+        }
+        eprintln!("Compiled {}", exe_path.display());
         return;
     }
 
-    let exe_path = match output_path {
-        Some(p) => {
-            let pb = PathBuf::from(p);
-            if pb.extension().is_none() {
-                pb.with_extension(native_target.exe_suffix().trim_start_matches('.'))
-            } else {
+    #[cfg(not(feature = "inprocess-lld"))]
+    {
+        let temp_dir = match create_native_scratch_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("error creating temp directory: {e}");
+                process::exit(1);
+            }
+        };
+        let obj_path = temp_dir
+            .path()
+            .join(format!("program{}", native_target.obj_suffix()));
+        if let Err(e) = backend::link::write_object_file(&compile_output.object_bytes, &obj_path) {
+            eprintln!("error: {e}");
+            // `process::exit` skips `Drop`, so the `TempDir` guard must be
+            // dropped explicitly first to still clean up (Finding 3).
+            drop(temp_dir);
+            process::exit(1);
+        }
+        let generated_shim_path = compile_output
+            .generated_extern_shim_c
+            .as_ref()
+            .map(|source| {
+                let path = temp_dir.path().join("oscan_native_extern_shims.c");
+                fs::write(&path, source).map_err(|e| {
+                    format!(
+                        "error writing generated native extern shim '{}': {e}",
+                        path.display()
+                    )
+                })?;
+                Ok::<String, String>(path.to_string_lossy().into_owned())
+            })
+            .transpose();
+        let generated_shim_path = match generated_shim_path {
+            Ok(path) => path,
+            Err(e) => {
+                eprintln!("{e}");
+                drop(temp_dir);
+                process::exit(1);
+            }
+        };
+        let mut native_extra_c_files = extra_c_files.to_vec();
+        if let Some(path) = generated_shim_path {
+            native_extra_c_files.push(path);
+        }
+        let link_options = backend::link::NativeLinkOptions {
+            runtime_mode,
+            show_warnings,
+            allow_elevated_native_link,
+            extra_c_files: &native_extra_c_files,
+            extra_cflags,
+            extra_objects: extra_obj_files,
+            extra_libs: extra_lib_files,
+        };
+
+        if run_mode {
+            let exe_path = temp_dir
+                .path()
+                .join(format!("program{}", native_target.exe_suffix()));
+            if let Err(e) =
+                backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options)
+            {
+                eprintln!("error: {e}");
+                drop(temp_dir);
+                process::exit(1);
+            }
+            eprintln!("\n=== Running {} ===\n", source_path);
+            // Keep the `TempDir` guard alive through the run itself — the
+            // compiled executable lives inside it.
+            let status = Command::new(&exe_path).args(program_args).status();
+            drop(temp_dir);
+            match status {
+                Ok(exit_status) => {
+                    if !exit_status.success() {
+                        process::exit(exit_status.code().unwrap_or(1));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error running program: {e}");
+                    process::exit(1);
+                }
+            }
+            return;
+        }
+
+        let exe_path = match output_path {
+            Some(p) => {
+                let pb = PathBuf::from(p);
+                if pb.extension().is_none() {
+                    pb.with_extension(native_target.exe_suffix().trim_start_matches('.'))
+                } else {
+                    pb
+                }
+            }
+            None => {
+                let stem = Path::new(source_path)
+                    .file_stem()
+                    .unwrap_or_else(|| std::ffi::OsStr::new("output"))
+                    .to_os_string();
+                let mut pb = PathBuf::from(stem);
+                let suffix = native_target.exe_suffix().trim_start_matches('.');
+                if !suffix.is_empty() {
+                    pb.set_extension(suffix);
+                }
                 pb
             }
+        };
+        let result =
+            backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options);
+        drop(temp_dir);
+        if let Err(e) = result {
+            eprintln!("error: {e}");
+            process::exit(1);
         }
-        None => {
-            let stem = Path::new(source_path)
-                .file_stem()
-                .unwrap_or_else(|| std::ffi::OsStr::new("output"))
-                .to_os_string();
-            let mut pb = PathBuf::from(stem);
-            let suffix = native_target.exe_suffix().trim_start_matches('.');
-            if !suffix.is_empty() {
-                pb.set_extension(suffix);
-            }
-            pb
-        }
-    };
-    let result = backend::link::link_executable(&obj_path, &exe_path, native_target, &link_options);
-    drop(temp_dir);
-    if let Err(e) = result {
-        eprintln!("error: {e}");
-        process::exit(1);
+        eprintln!("Compiled {}", exe_path.display());
     }
-    eprintln!("Compiled {}", exe_path.display());
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2503,7 +2596,7 @@ fn compile_with_gcc_or_clang(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     freestanding: bool,
-    source: CompilerSource,
+    _source: CompilerSource,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2537,19 +2630,12 @@ fn compile_with_gcc_or_clang(
             .arg("-fdata-sections")
             .arg("-s"); // strip symbols
         if cfg!(windows) {
-            // Windows: link core Win32, sockets, GDI windowing, and TLS support.
+            // The freestanding runtime supplies mainCRTStartup/atexit, so every
+            // GCC/Clang route must omit its startup objects, including an
+            // OSCAN_CC override.
             command
-                .arg("-lkernel32")
-                .arg("-lws2_32")
-                .arg("-luser32")
-                .arg("-lgdi32")
-                .arg("-lsecur32")
-                .arg("-lcrypt32");
-            if source == CompilerSource::Bundled {
-                command
-                    .arg("-nostartfiles")
-                    .arg("-Wl,--gc-sections,--build-id=none");
-            }
+                .arg("-nostartfiles")
+                .arg("-Wl,--gc-sections,--build-id=none");
         } else {
             // Unix: fully standalone, no system libraries
             command
@@ -2562,6 +2648,17 @@ fn compile_with_gcc_or_clang(
             command.arg(format!("-I{}", dir.display()));
         }
         command.arg("-o").arg(exe_file);
+        if cfg!(windows) {
+            // Keep import libraries after the generated translation unit:
+            // GNU ld resolves archives left-to-right (LLD is more permissive).
+            command
+                .arg("-lkernel32")
+                .arg("-lws2_32")
+                .arg("-luser32")
+                .arg("-lgdi32")
+                .arg("-lsecur32")
+                .arg("-lcrypt32");
+        }
         // Link libbearssl.a AFTER source file — linker processes left-to-right,
         // so the archive must come after the object that references its symbols.
         if !cfg!(windows) {

@@ -89,7 +89,7 @@ impl PackageLayout {
             .expect("write sidecar manifest");
     }
 
-    #[cfg(feature = "backend-llvm")]
+    #[cfg(all(feature = "backend-llvm", not(feature = "static-llvm")))]
     fn stage(&self, install_subpath: &str, contents: &[u8]) {
         let path = self.sidecar().join(install_subpath);
         if let Some(parent) = path.parent() {
@@ -99,7 +99,7 @@ impl PackageLayout {
     }
 
     /// Run the packaged copy of the compiler with a scrubbed environment.
-    #[cfg(feature = "backend-llvm")]
+    #[cfg(all(feature = "backend-llvm", not(feature = "static-llvm")))]
     fn run(&self, args: &[&str]) -> std::process::Output {
         scrubbed(&mut Command::new(&self.exe))
             .args(args)
@@ -116,7 +116,7 @@ impl Drop for PackageLayout {
 }
 
 /// A `libLLVM` file name this platform's provider search looks for.
-#[cfg(feature = "backend-llvm")]
+#[cfg(all(feature = "backend-llvm", not(feature = "static-llvm")))]
 fn provider_library_name() -> &'static str {
     if cfg!(windows) {
         "libLLVM-22.dll"
@@ -129,7 +129,7 @@ fn provider_library_name() -> &'static str {
 /// (Windows shares one `libLLVM-22.dll` between the code generator and
 /// `ld.lld.exe`), but a corrupt sidecar manifest must make that candidate
 /// a named failure rather than something the compiler loads anyway.
-#[cfg(feature = "backend-llvm")]
+#[cfg(all(feature = "backend-llvm", not(feature = "static-llvm")))]
 #[test]
 fn a_corrupt_sidecar_manifest_never_yields_a_provider_candidate() {
     let package = PackageLayout::new("corrupt-manifest");
@@ -164,7 +164,7 @@ fn a_corrupt_sidecar_manifest_never_yields_a_provider_candidate() {
 /// A file sitting inside the sidecar directory that the manifest does not
 /// declare is never loaded, even though it has exactly the name the
 /// provider search looks for.
-#[cfg(feature = "backend-llvm")]
+#[cfg(all(feature = "backend-llvm", not(feature = "static-llvm")))]
 #[test]
 fn an_undeclared_file_in_the_sidecar_is_never_loaded() {
     let package = PackageLayout::new("undeclared");

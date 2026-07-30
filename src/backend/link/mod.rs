@@ -173,6 +173,8 @@
 mod archive;
 mod capability;
 mod driver;
+#[cfg(feature = "inprocess-lld")]
+mod inprocess;
 pub mod plan;
 
 mod execute;
@@ -524,6 +526,22 @@ pub fn link_executable(
         (Err(reason), LinkerFlavor::ElfDirect) => Err(driver::no_silent_fallback_error(&reason)),
         (result, _) => result,
     }
+}
+
+#[cfg(feature = "inprocess-lld")]
+pub fn link_executable_from_bytes(
+    object_bytes: &[u8],
+    output_path: &Path,
+    target: NativeTarget,
+    options: &NativeLinkOptions<'_>,
+) -> Result<(), String> {
+    inprocess::link_executable(
+        target,
+        options.runtime_mode,
+        object_bytes,
+        output_path,
+        options,
+    )
 }
 
 /// Build a [`LinkPlan`] for the [`LinkerFlavor::MingwDirect`] flavor: the
