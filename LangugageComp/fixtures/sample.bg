@@ -1,0 +1,8 @@
+# name | duration | comma-separated dependencies
+fetch   | 3 |
+parse   | 5 | fetch
+lint    | 4 | fetch
+compile | 8 | parse
+test    | 6 | compile, lint
+package | 2 | test
+

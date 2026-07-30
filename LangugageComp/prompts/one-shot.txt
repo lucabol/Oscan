@@ -1,0 +1,75 @@
+Generate exactly one complete source file implementing BuildGraph in
+{{LANGUAGE}}. Return source code only: no Markdown fence, prose, tests, build
+manifest, or additional files. Use only the language's standard library and
+the fixed project scaffold. Do not use external packages, network access,
+subprocesses, FFI, or generated code.
+
+BuildGraph is a deterministic command-line dependency graph analyzer.
+
+Commands:
+  buildgraph analyze <file>
+  buildgraph affected <file> <task>
+  buildgraph --help
+
+Exit 0 on success, 2 for invalid CLI usage, 3 when the input file cannot be
+read, and 4 for an invalid graph or unknown queried task. Diagnostics go to
+stderr with fixed prefixes "usage error:", "io error:", or "input error:".
+Successful output goes to stdout. Emit UTF-8 with LF line endings.
+
+Each nonblank, noncomment input line has:
+  name | duration | dependency-1, dependency-2
+
+Rules:
+- Trim whitespace around lines, fields, and dependency items.
+- Ignore a full line whose first nonwhitespace character is #.
+- Require exactly three | separated fields.
+- Identifiers are 1-32 ASCII characters, begin with A-Z or a-z, and then use
+  only ASCII letters, digits, underscore, or hyphen.
+- Duration contains only decimal digits and is in 1..2147483647.
+- An empty third field means no dependencies.
+- Reject empty dependency items, duplicate tasks, duplicate dependencies,
+  unknown dependencies, self-dependencies, malformed records, and cycles.
+- Accept LF and CRLF. Require at least one task.
+- Validate records in source order, then dependency lists in source order.
+
+Task declaration index is the universal tie-break. Stable topological sorting
+always selects the earliest-declared currently-ready task. Critical duration is
+the checked signed 64-bit sum on the longest dependency path. If critical paths
+tie, compare their complete declaration-index sequences lexicographically and
+choose the smaller sequence. "affected" includes the queried task and every
+direct or indirect dependent, printed in stable topological order.
+
+analyze output:
+tasks: <count>
+order: <comma-separated task names>
+critical-duration: <duration>
+critical-path: <task names separated by " -> ">
+
+affected output:
+affected: <comma-separated task names>
+
+Help output:
+BuildGraph - deterministic dependency graph analyzer
+
+usage:
+  buildgraph analyze <file>
+  buildgraph affected <file> <task>
+  buildgraph --help
+
+Use these exact diagnostics:
+usage error: expected 'analyze <file>' or 'affected <file> <task>'
+io error: unable to read '<path>'
+input error: line <n>: expected exactly three '|' separated fields
+input error: line <n>: invalid task identifier '<value>'
+input error: line <n>: invalid duration '<value>'
+input error: line <n>: duplicate task '<name>'
+input error: no tasks
+input error: line <n>: empty dependency for task '<name>'
+input error: line <n>: invalid dependency identifier '<value>'
+input error: line <n>: task '<name>' depends on itself
+input error: line <n>: duplicate dependency '<dependency>' for task '<name>'
+input error: line <n>: unknown dependency '<dependency>' for task '<name>'
+input error: cycle detected
+input error: critical duration overflow
+input error: unknown task '<name>'
+

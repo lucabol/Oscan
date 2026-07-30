@@ -1,0 +1,542 @@
+// BuildGraph — deterministic dependency graph analyzer.
+// This implementation intentionally uses only Oscan builtins.
+
+struct Graph {
+    names: [str],
+    durations: [i64],
+    edge_from: [i32],
+    edge_to: [i32],
+    indegree: [i32],
+}
+
+struct Critical {
+    duration: i64,
+    path: [i32],
+}
+
+struct ParseOutcome {
+    graph: Graph,
+    error: str,
+}
+
+struct CriticalOutcome {
+    critical: Critical,
+    error: str,
+}
+
+fn is_ascii_alpha(c: i32) -> bool {
+    (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+}
+
+fn is_ascii_digit(c: i32) -> bool {
+    c >= 48 and c <= 57
+}
+
+fn max_i64_value() -> i64 {
+    let high: i64 = 2147483647 as i64;
+    high * (high + high + 2 as i64) + high + high + 1 as i64
+}
+
+fn! is_identifier(value: str) -> bool {
+    let chars: [i32] = str_to_chars(value);
+    let count: i32 = len(chars);
+    if count == 0 or count > 32 {
+        return false;
+    };
+    if not is_ascii_alpha(chars[0]) {
+        return false;
+    };
+
+    let mut i: i32 = 1;
+    while i < count {
+        let c: i32 = chars[i];
+        if not is_ascii_alpha(c) and not is_ascii_digit(c) and c != 95 and c != 45 {
+            return false;
+        };
+        i += 1;
+    };
+    true
+}
+
+fn! is_decimal(value: str) -> bool {
+    let chars: [i32] = str_to_chars(value);
+    if len(chars) == 0 {
+        return false;
+    };
+    for c in chars {
+        if not is_ascii_digit(c) {
+            return false;
+        };
+    };
+    true
+}
+
+fn! line_message(line: i32, message: str) -> str {
+    "line {line}: {message}"
+}
+
+fn! invalid_value_message(kind: str, value: str) -> str {
+    "{kind} '{value}'"
+}
+
+fn! empty_graph() -> Graph {
+    Graph {
+        names: [],
+        durations: [],
+        edge_from: [],
+        edge_to: [],
+        indegree: [],
+    }
+}
+
+fn! parse_failure(message: str) -> ParseOutcome {
+    ParseOutcome { graph: empty_graph(), error: message }
+}
+
+fn! parse_graph(text: str) -> ParseOutcome {
+    let mut names: [str] = [];
+    let mut durations: [i64] = [];
+    let mut dependency_specs: [str] = [];
+    let mut line_numbers: [i32] = [];
+    let mut indexes: map_str_i32 = map_str_i32_new();
+    let lines: [str] = str_split(text, "\n");
+
+    let mut line_index: i32 = 0;
+    while line_index < len(lines) {
+        let line_number: i32 = line_index + 1;
+        let line: str = str_trim(lines[line_index]);
+        line_index += 1;
+
+        if str_len(line) == 0 or str_starts_with(line, "#") {
+            continue;
+        };
+
+        let fields: [str] = str_split(line, "|");
+        if len(fields) != 3 {
+            let detail: str = line_message(
+                line_number,
+                "expected exactly three '|' separated fields"
+            );
+            return parse_failure(detail);
+        };
+
+        let name: str = str_trim(fields[0]);
+        let duration_text: str = str_trim(fields[1]);
+        let dependency_spec: str = str_trim(fields[2]);
+
+        if not is_identifier(name) {
+            let invalid: str = invalid_value_message("invalid task identifier", name);
+            return parse_failure(line_message(line_number, invalid));
+        };
+        if not is_decimal(duration_text) {
+            let invalid: str = invalid_value_message("invalid duration", duration_text);
+            return parse_failure(line_message(line_number, invalid));
+        };
+
+        let mut duration: i64 = 0 as i64;
+        match parse_i64(duration_text) {
+            Result::Ok(value) => {
+                duration = value;
+            },
+            Result::Err(_) => {
+                let invalid: str = invalid_value_message("invalid duration", duration_text);
+                return parse_failure(line_message(line_number, invalid));
+            },
+        };
+        if duration < 1 as i64 or duration > 2147483647 as i64 {
+            let invalid: str = invalid_value_message("invalid duration", duration_text);
+            return parse_failure(line_message(line_number, invalid));
+        };
+        if map_str_i32_has(indexes, name) {
+            let duplicate: str = "duplicate task '{name}'";
+            return parse_failure(line_message(line_number, duplicate));
+        };
+
+        let task_index: i32 = len(names);
+        map_str_i32_set(indexes, name, task_index);
+        push(names, name);
+        push(durations, duration);
+        push(dependency_specs, dependency_spec);
+        push(line_numbers, line_number);
+    };
+
+    if len(names) == 0 {
+        return parse_failure("no tasks");
+    };
+
+    let mut edge_from: [i32] = [];
+    let mut edge_to: [i32] = [];
+    let mut indegree: [i32] = [];
+    for ignored_name in names {
+        push(indegree, 0);
+    };
+
+    let mut task_index: i32 = 0;
+    while task_index < len(names) {
+        let dependency_spec: str = dependency_specs[task_index];
+        if str_len(dependency_spec) > 0 {
+            let task_name: str = names[task_index];
+            let task_line: i32 = line_numbers[task_index];
+            let dependencies: [str] = str_split(dependency_spec, ",");
+            let mut seen: map_str_i32 = map_str_i32_new();
+
+            for raw_dependency in dependencies {
+                let dependency: str = str_trim(raw_dependency);
+                if str_len(dependency) == 0 {
+                    let detail: str = "empty dependency for task '{task_name}'";
+                    return parse_failure(line_message(task_line, detail));
+                };
+                if not is_identifier(dependency) {
+                    let invalid: str =
+                        invalid_value_message("invalid dependency identifier", dependency);
+                    return parse_failure(line_message(task_line, invalid));
+                };
+                if str_eq(dependency, task_name) {
+                    let detail: str = "task '{task_name}' depends on itself";
+                    return parse_failure(line_message(task_line, detail));
+                };
+                if map_str_i32_has(seen, dependency) {
+                    let detail: str =
+                        "duplicate dependency '{dependency}' for task '{task_name}'";
+                    return parse_failure(line_message(task_line, detail));
+                };
+                map_str_i32_set(seen, dependency, 1);
+                if not map_str_i32_has(indexes, dependency) {
+                    let detail: str =
+                        "unknown dependency '{dependency}' for task '{task_name}'";
+                    return parse_failure(line_message(task_line, detail));
+                };
+
+                push(edge_from, map_str_i32_get(indexes, dependency));
+                push(edge_to, task_index);
+                indegree[task_index] += 1;
+            };
+        };
+        task_index += 1;
+    };
+
+    ParseOutcome {
+        graph: Graph {
+            names: names,
+            durations: durations,
+            edge_from: edge_from,
+            edge_to: edge_to,
+            indegree: indegree,
+        },
+        error: "",
+    }
+}
+
+fn! stable_topological_order(graph: Graph) -> Result<[i32], str> {
+    let count: i32 = len(graph.names);
+    let mut indegree: [i32] = [];
+    let mut processed: [i32] = [];
+    for value in graph.indegree {
+        push(indegree, value);
+        push(processed, 0);
+    };
+
+    let mut order: [i32] = [];
+    while len(order) < count {
+        let mut selected: i32 = -1;
+        let mut i: i32 = 0;
+        while i < count {
+            if processed[i] == 0 and indegree[i] == 0 {
+                selected = i;
+                break;
+            };
+            i += 1;
+        };
+        if selected < 0 {
+            return Result::Err("cycle detected");
+        };
+
+        processed[selected] = 1;
+        push(order, selected);
+        let mut edge: i32 = 0;
+        while edge < len(graph.edge_from) {
+            if graph.edge_from[edge] == selected {
+                let dependent: i32 = graph.edge_to[edge];
+                indegree[dependent] -= 1;
+            };
+            edge += 1;
+        };
+    };
+
+    Result::Ok(order)
+}
+
+fn! build_path(previous: [i32], end: i32) -> [i32] {
+    let mut reversed: [i32] = [];
+    let mut current: i32 = end;
+    while current >= 0 {
+        push(reversed, current);
+        current = previous[current];
+    };
+
+    let mut path: [i32] = [];
+    let mut i: i32 = len(reversed) - 1;
+    while i >= 0 {
+        push(path, reversed[i]);
+        i -= 1;
+    };
+    path
+}
+
+fn compare_paths(left: [i32], right: [i32]) -> i32 {
+    let common: i32 = min_i32(len(left), len(right));
+    let mut i: i32 = 0;
+    while i < common {
+        if left[i] < right[i] {
+            return -1;
+        };
+        if left[i] > right[i] {
+            return 1;
+        };
+        i += 1;
+    };
+    if len(left) < len(right) {
+        -1
+    } else if len(left) > len(right) {
+        1
+    } else {
+        0
+    }
+}
+
+fn! candidate_path_is_earlier(
+    previous: [i32],
+    candidate_end: i32,
+    current_end: i32
+) -> bool {
+    if current_end < 0 {
+        return true;
+    };
+    let candidate_path: [i32] = build_path(previous, candidate_end);
+    let current_path: [i32] = build_path(previous, current_end);
+    compare_paths(candidate_path, current_path) < 0
+}
+
+fn! critical_failure(message: str) -> CriticalOutcome {
+    CriticalOutcome {
+        critical: Critical { duration: 0 as i64, path: [] },
+        error: message,
+    }
+}
+
+fn! critical_path(graph: Graph, order: [i32]) -> CriticalOutcome {
+    let mut distance: [i64] = [];
+    let mut previous: [i32] = [];
+    for ignored_name in graph.names {
+        push(distance, 0 as i64);
+        push(previous, -1);
+    };
+
+    for task_index in order {
+        let task_duration: i64 = graph.durations[task_index];
+        let mut best_distance: i64 = task_duration;
+        let mut best_previous: i32 = -1;
+
+        let mut edge: i32 = 0;
+        while edge < len(graph.edge_from) {
+            if graph.edge_to[edge] == task_index {
+                let dependency: i32 = graph.edge_from[edge];
+                if distance[dependency] > max_i64_value() - task_duration {
+                    return critical_failure("critical duration overflow");
+                };
+                let candidate: i64 = distance[dependency] + task_duration;
+                if candidate > best_distance or (
+                    candidate == best_distance and
+                    candidate_path_is_earlier(previous, dependency, best_previous)
+                ) {
+                    best_distance = candidate;
+                    best_previous = dependency;
+                };
+            };
+            edge += 1;
+        };
+
+        distance[task_index] = best_distance;
+        previous[task_index] = best_previous;
+    };
+
+    let mut best_end: i32 = order[0];
+    let mut position: i32 = 1;
+    while position < len(order) {
+        let task_index: i32 = order[position];
+        if distance[task_index] > distance[best_end] {
+            best_end = task_index;
+        } else if distance[task_index] == distance[best_end] {
+            let candidate: [i32] = build_path(previous, task_index);
+            let current: [i32] = build_path(previous, best_end);
+            if compare_paths(candidate, current) < 0 {
+                best_end = task_index;
+            };
+        };
+        position += 1;
+    };
+
+    let path: [i32] = build_path(previous, best_end);
+    CriticalOutcome {
+        critical: Critical { duration: distance[best_end], path: path },
+        error: "",
+    }
+}
+
+fn! analyze(graph: Graph) -> Result<i32, str> {
+    let order: [i32] = try stable_topological_order(graph);
+    let critical_outcome: CriticalOutcome = critical_path(graph, order);
+    if str_len(critical_outcome.error) > 0 {
+        return Result::Err(critical_outcome.error);
+    };
+    let critical: Critical = critical_outcome.critical;
+    let mut order_names: [str] = [];
+    let mut path_names: [str] = [];
+
+    for index in order {
+        push(order_names, graph.names[index]);
+    };
+    for index in critical.path {
+        push(path_names, graph.names[index]);
+    };
+
+    let count: i32 = len(graph.names);
+    let order_text: str = str_join(order_names, ", ");
+    let duration: i64 = critical.duration;
+    let path_text: str = str_join(path_names, " -> ");
+    println("tasks: {count}");
+    println("order: {order_text}");
+    println("critical-duration: {duration}");
+    println("critical-path: {path_text}");
+    Result::Ok(0)
+}
+
+fn! affected(graph: Graph, task_name: str) -> Result<i32, str> {
+    let mut query: i32 = -1;
+    let mut i: i32 = 0;
+    while i < len(graph.names) {
+        if str_eq(graph.names[i], task_name) {
+            query = i;
+            break;
+        };
+        i += 1;
+    };
+    if query < 0 {
+        let detail: str = "unknown task '{task_name}'";
+        return Result::Err(detail);
+    };
+
+    let order: [i32] = try stable_topological_order(graph);
+    let mut marked: [i32] = [];
+    for ignored_name in graph.names {
+        push(marked, 0);
+    };
+
+    for task_index in order {
+        let mut is_affected: i32 = 0;
+        if task_index == query {
+            is_affected = 1;
+        } else {
+            let mut edge: i32 = 0;
+            while edge < len(graph.edge_from) {
+                if graph.edge_to[edge] == task_index and
+                    marked[graph.edge_from[edge]] == 1 {
+                    is_affected = 1;
+                    break;
+                };
+                edge += 1;
+            };
+        };
+        marked[task_index] = is_affected;
+    };
+
+    let mut names: [str] = [];
+    for task_index in order {
+        if marked[task_index] == 1 {
+            push(names, graph.names[task_index]);
+        };
+    };
+    let output: str = str_join(names, ", ");
+    println("affected: {output}");
+    Result::Ok(0)
+}
+
+fn! print_help() {
+    println("BuildGraph - deterministic dependency graph analyzer");
+    println("");
+    println("usage:");
+    println("  buildgraph analyze <file>");
+    println("  buildgraph affected <file> <task>");
+    println("  buildgraph --help");
+}
+
+fn! fail(prefix: str, message: str, code: i32) {
+    write_str(2, prefix);
+    write_str(2, ": ");
+    write_str(2, message);
+    write_str(2, "\n");
+    exit(code);
+}
+
+fn! main() {
+    let argc: i32 = arg_count();
+    if argc == 2 {
+        let single: str = arg_get(1);
+        if str_eq(single, "--help") or str_eq(single, "-h") {
+            print_help();
+            return;
+        };
+    };
+
+    if argc != 3 and argc != 4 {
+        fail(
+            "usage error",
+            "expected 'analyze <file>' or 'affected <file> <task>'",
+            2
+        );
+        return;
+    };
+
+    let command: str = arg_get(1);
+    let path: str = arg_get(2);
+    if (argc == 3 and not str_eq(command, "analyze")) or
+        (argc == 4 and not str_eq(command, "affected")) {
+        fail(
+            "usage error",
+            "expected 'analyze <file>' or 'affected <file> <task>'",
+            2
+        );
+        return;
+    };
+
+    let mut text: str = "";
+    match read_file(path) {
+        Result::Ok(value) => {
+            text = value;
+        },
+        Result::Err(_) => {
+            let detail: str = "unable to read '{path}'";
+            fail("io error", detail, 3);
+            return;
+        },
+    };
+
+    let parsed: ParseOutcome = parse_graph(text);
+    if str_len(parsed.error) > 0 {
+        fail("input error", parsed.error, 4);
+        return;
+    };
+    let graph: Graph = parsed.graph;
+
+    let result: Result<i32, str> = if str_eq(command, "analyze") {
+        analyze(graph)
+    } else {
+        affected(graph, arg_get(3))
+    };
+    match result {
+        Result::Ok(_) => {},
+        Result::Err(message) => {
+            fail("input error", message, 4);
+        },
+    };
+}
