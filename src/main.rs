@@ -1894,6 +1894,33 @@ fn compiler_can_execute(cmd: &str) -> bool {
     }
 }
 
+fn target_uses_msvc_abi(target: &str) -> bool {
+    target
+        .trim()
+        .rsplit('-')
+        .next()
+        .map(|abi| abi.eq_ignore_ascii_case("msvc"))
+        .unwrap_or(false)
+}
+
+fn compiler_uses_msvc_abi(cmd: &str) -> bool {
+    Command::new(cmd)
+        .arg("-dumpmachine")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| target_uses_msvc_abi(&String::from_utf8_lossy(&output.stdout)))
+        .unwrap_or(false)
+}
+
+fn windows_freestanding_link_args(msvc_abi: bool) -> &'static [&'static str] {
+    if msvc_abi {
+        &[]
+    } else {
+        &["-nostartfiles", "-Wl,--gc-sections,--build-id=none"]
+    }
+}
+
 pub(crate) fn find_toolchain_dir() -> Option<PathBuf> {
     let exe = env::current_exe().ok();
     let explicit = env_var_nonempty("OSCAN_TOOLCHAIN_DIR").map(PathBuf::from);
@@ -2630,12 +2657,14 @@ fn compile_with_gcc_or_clang(
             .arg("-fdata-sections")
             .arg("-s"); // strip symbols
         if cfg!(windows) {
-            // The freestanding runtime supplies mainCRTStartup/atexit, so every
-            // GCC/Clang route must omit its startup objects, including an
-            // OSCAN_CC override.
-            command
-                .arg("-nostartfiles")
-                .arg("-Wl,--gc-sections,--build-id=none");
+            // GNU-target compilers must omit MinGW startup objects because the
+            // runtime supplies mainCRTStartup/atexit. MSVC-targeting Clang uses
+            // lld-link instead: GNU ld flags are ignored there, while
+            // -nostartfiles also removes the static __chkstk/_fltused helpers.
+            let msvc_abi = compiler_uses_msvc_abi(cmd);
+            for arg in windows_freestanding_link_args(msvc_abi) {
+                command.arg(arg);
+            }
         } else {
             // Unix: fully standalone, no system libraries
             command
@@ -3179,6 +3208,17 @@ mod tests {
         assert_eq!(compiler_source_label(CompilerSource::Override), "override");
         assert_eq!(compiler_source_label(CompilerSource::Bundled), "bundled");
         assert_eq!(compiler_source_label(CompilerSource::Host), "host");
+    }
+
+    #[test]
+    fn windows_freestanding_link_args_follow_compiler_abi() {
+        assert!(target_uses_msvc_abi("x86_64-pc-windows-msvc"));
+        assert!(!target_uses_msvc_abi("x86_64-w64-windows-gnu"));
+        assert!(windows_freestanding_link_args(true).is_empty());
+        assert_eq!(
+            windows_freestanding_link_args(false),
+            &["-nostartfiles", "-Wl,--gc-sections,--build-id=none"]
+        );
     }
 
     // --- Finding 3: unpredictable, private native-backend scratch dir. ---
