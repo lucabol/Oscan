@@ -1,7 +1,7 @@
 # LangugageComp
 
 An isolated, executable comparison of the same medium-complexity BuildGraph CLI
-implemented in Oscan, Rust, TypeScript, and C#.
+implemented in Oscan, Rust, TypeScript, C#, and Common Lisp.
 
 The directory name intentionally preserves the requested `LangugageComp`
 spelling. Source, dependencies, compiler targets, executables, temporary test
@@ -18,6 +18,7 @@ files, and benchmark inputs remain below this directory.
 | `rust/src/main.rs` | Dependency-free Rust implementation |
 | `typescript/src/main.ts` | TypeScript implementation; TypeScript is a build-only dev dependency |
 | `csharp/Program.cs` | Dependency-free C# implementation published with Native AOT |
+| `common-lisp/main.lisp` | Dependency-free Common Lisp implementation saved as an SBCL executable image |
 | `fixtures/sample.bg` | Example graph |
 | `harness/suite.py` | Isolated builder, shared executable test oracle, and benchmark |
 | `prompts/one-shot.txt` | Self-contained prompt template for future one-shot model runs |
@@ -32,6 +33,7 @@ language-local build directories.
 - Rust/Cargo
 - Node.js and npm
 - .NET 9 SDK and the platform's Native AOT toolchain (Visual Studio C++ workload on Windows)
+- SBCL 2.6+
 - GCC for Oscan's C backend
 
 `global.json` pins the C# publish to the .NET 9.0.316 SDK used for the recorded
@@ -58,7 +60,8 @@ python .\harness\suite.py build
 python .\harness\suite.py test
 ```
 
-Select one implementation with `--language oscan|rust|typescript|csharp`.
+Select one implementation with
+`--language oscan|rust|typescript|csharp|common-lisp`.
 `test` runs the same executable-level cases against every selected language,
 including CLI behavior, malformed records, deterministic validation, cycle
 detection, stable ordering, critical-path ties, affected-task closure, CRLF,
@@ -71,6 +74,7 @@ Example after building on Windows:
 .\.build\rust-target\release\buildgraph.exe affected .\fixtures\sample.bg parse
 node .\.build\typescript\main.js analyze .\fixtures\sample.bg
 .\.build\csharp\BuildGraph.exe analyze .\fixtures\sample.bg
+.\.build\common-lisp\buildgraph.exe analyze .\fixtures\sample.bg
 ```
 
 On Linux/macOS, use `/` path separators and omit `.exe`:
@@ -80,6 +84,7 @@ On Linux/macOS, use `/` path separators and omit `.exe`:
 ./.build/rust-target/release/buildgraph affected ./fixtures/sample.bg parse
 node ./.build/typescript/main.js analyze ./fixtures/sample.bg
 ./.build/csharp/BuildGraph analyze ./fixtures/sample.bg
+./.build/common-lisp/buildgraph analyze ./fixtures/sample.bg
 ```
 
 ## Reference benchmark
@@ -94,7 +99,9 @@ bytes. The subtraction is diagnostic rather than an in-process algorithm
 benchmark: process scheduling, file I/O, and runtime startup still introduce
 noise. Node runtime requirements are not folded into the TypeScript artifact
 byte column. C# is published as a self-contained Native AOT executable, so its
-executable includes the required trimmed .NET runtime code.
+executable includes the required trimmed .NET runtime code. Common Lisp is an
+SBCL executable image and includes the Lisp runtime. The official Windows SBCL
+2.6.7 build lacks zstd support, so the recorded image is uncompressed.
 
 These measurements characterize the reviewed reference implementations and
 their toolchains. They do **not** measure one-shot LLM success. Use
