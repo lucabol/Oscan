@@ -42,7 +42,7 @@ wide DAG.
 | Rust | 335 | 10,935 | 193,536 |
 | TypeScript | 357 | 10,687 | 9,958 |
 | C# Native AOT | 381 | 11,448 | 1,546,240 |
-| Common Lisp (SBCL) | 358 | 14,977 | 39,522,400 |
+| Common Lisp (SBCL) | 358 | 14,977 | 39,456,848 |
 
 The TypeScript value is only the emitted JavaScript and excludes Node.js, so it
 is not a self-contained deployment-size figure. The C# value is the
@@ -52,7 +52,7 @@ Lisp runtime; the official Windows SBCL build used here cannot create compressed
 cores because it lacks zstd support.
 
 Among self-contained executables, Oscan is 6.75 times smaller than Rust, 53.93
-times smaller than C# Native AOT, and 1,378.43 times smaller than Common Lisp.
+times smaller than C# Native AOT, and 1,376.15 times smaller than Common Lisp.
 Oscan source is 2-43% larger in bytes than each baseline source.
 
 The collection refactor reduced the Oscan implementation from 542 lines and
@@ -67,17 +67,17 @@ invocations after five warmups.
 
 | Language | Analyze median | Analyze min-max | `--help` median | Approximate difference |
 |---|---:|---:|---:|---:|
-| Oscan | 21.239 ms | 17.479-64.160 ms | 17.343 ms | 3.896 ms |
-| Rust | 37.820 ms | 29.498-49.425 ms | 27.522 ms | 10.298 ms |
-| TypeScript | 87.384 ms | 78.847-138.055 ms | 72.590 ms | 14.794 ms |
-| C# Native AOT | 35.016 ms | 29.585-54.204 ms | 33.148 ms | 1.868 ms |
-| Common Lisp (SBCL) | 73.429 ms | 67.826-819.723 ms | 53.271 ms | 20.158 ms |
+| Oscan | 25.515 ms | 20.897-67.269 ms | 17.509 ms | 8.006 ms |
+| Rust | 32.158 ms | 25.307-55.243 ms | 28.382 ms | 3.776 ms |
+| TypeScript | 101.637 ms | 92.452-124.876 ms | 81.953 ms | 19.684 ms |
+| C# Native AOT | 39.492 ms | 32.360-56.614 ms | 36.734 ms | 2.758 ms |
+| Common Lisp (SBCL) | 86.305 ms | 75.805-774.949 ms | 63.028 ms | 23.277 ms |
 
 These are process-level measurements on one Windows host, not in-process
 algorithm timings. The difference subtracts independently measured medians and
-is diagnostic only. Oscan had the lowest latest recorded process median: Rust
-was 1.78 times, C# Native AOT 1.65 times, Common Lisp 3.46 times, and
-TypeScript/Node 4.11 times Oscan. The ranking changed from the prior run, so it
+is diagnostic only. Oscan had the lowest process median in this rerun: Rust was
+1.26 times, C# Native AOT 1.55 times, Common Lisp 3.38 times, and TypeScript/Node
+3.98 times Oscan. The ranking changed from the prior run, so it
 should not be treated as an isolated algorithm-speed result.
 
 ## C# correction impact
@@ -85,10 +85,10 @@ should not be treated as an isolated algorithm-speed result.
 | C# mode | Invocation | Primary artifact | Analyze median | Startup median |
 |---|---|---:|---:|---:|
 | Framework-dependent, **invalidated** | `dotnet BuildGraph.dll` | 17,920 B | 92.715 ms | 79.220 ms |
-| Native AOT, corrected, current rerun | `BuildGraph.exe` | 1,546,240 B | 35.016 ms | 33.148 ms |
+| Native AOT, corrected, current rerun | `BuildGraph.exe` | 1,546,240 B | 39.492 ms | 36.734 ms |
 
-The current process median is 62.23% below the old value and the startup
-median is 58.16% below it, while the honest self-contained artifact is 86.29
+The current process median is 57.41% below the old value and the startup
+median is 53.63% below it, while the honest self-contained artifact is 86.29
 times larger than the old application-only DLL. The timing comparison is
 descriptive, not a causal estimate of AOT alone: the invalid run used 20
 iterations, two warmups, and a .NET 10 RC SDK, while this run used 50
@@ -98,10 +98,10 @@ iterations, five warmups, and the pinned .NET 9 SDK.
 
 These results establish semantic parity and characterize five reviewed
 reference implementations. They show that Oscan produced by far the smallest
-self-contained artifact and the lowest latest recorded process median, but also
+self-contained artifact and the lowest process median in this rerun, but also
 the largest source. The collection API narrowed that source gap. Common Lisp
 adds a distinct tradeoff: source length close to TypeScript, cold startup below
-Node in its recorded run, and a much larger runtime image. None of these results
+Node in this run, and a much larger runtime image. None of these results
 establishes that an LLM is more likely to generate correct Oscan. See
 `EXPERIMENT_REPORT.md` for the complete analysis and the required repeated
 one-shot protocol.
