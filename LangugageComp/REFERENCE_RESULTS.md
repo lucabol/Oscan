@@ -1,4 +1,4 @@
-# Corrected reference implementation results
+# Five-language reference implementation results
 
 Measured 2026-07-30 on:
 
@@ -11,9 +11,10 @@ Measured 2026-07-30 on:
 - Node.js 22.14.0 and TypeScript 5.9.3
 - .NET SDK 9.0.316 and Microsoft.DotNet.ILCompiler 9.0.18
 - C# published for `win-x64` as self-contained Native AOT
+- SBCL 2.6.7 with an uncompressed executable image
 
-The previous C# row used a framework-dependent DLL launched by `dotnet`. It has
-been invalidated and replaced throughout this file.
+The original C# row used a framework-dependent DLL launched by `dotnet`. It
+remains invalidated and has been replaced throughout this file.
 
 ## Correctness
 
@@ -25,7 +26,8 @@ Every implementation passed all 47 shared executable cases:
 | Rust | 47 | 47 |
 | TypeScript | 47 | 47 |
 | C# Native AOT | 47 | 47 |
-| **Combined** | **188** | **188** |
+| Common Lisp (SBCL) | 47 | 47 |
+| **Combined** | **235** | **235** |
 
 The suite covers CLI and exit behavior, parsing, validation order, duplicate
 and missing dependencies, cycles, stable topological ties, critical-path ties,
@@ -40,13 +42,18 @@ wide DAG.
 | Rust | 335 | 10,935 | 193,536 |
 | TypeScript | 357 | 10,687 | 9,958 |
 | C# Native AOT | 381 | 11,448 | 1,546,240 |
+| Common Lisp (SBCL) | 358 | 14,977 | 39,522,400 |
 
 The TypeScript value is only the emitted JavaScript and excludes Node.js, so it
 is not a self-contained deployment-size figure. The C# value is the
 self-contained Native AOT executable and excludes an optional 8,015,872-byte
-PDB. The Oscan executable is 6.75 times smaller than Rust's and 53.93 times
-smaller than C# Native AOT's. Oscan source is 33-43% larger in bytes than each
-baseline source.
+PDB. The Common Lisp value is the directly executable SBCL image, including the
+Lisp runtime; the official Windows SBCL build used here cannot create compressed
+cores because it lacks zstd support.
+
+Among self-contained executables, Oscan is 6.75 times smaller than Rust, 53.93
+times smaller than C# Native AOT, and 1,378.43 times smaller than Common Lisp.
+Oscan source is 2-43% larger in bytes than each baseline source.
 
 The collection refactor reduced the Oscan implementation from 542 lines and
 16,229 bytes to 486 lines and 15,236 bytes: 56 fewer lines (10.33%) and 993
@@ -64,13 +71,14 @@ invocations after five warmups.
 | Rust | 37.820 ms | 29.498-49.425 ms | 27.522 ms | 10.298 ms |
 | TypeScript | 87.384 ms | 78.847-138.055 ms | 72.590 ms | 14.794 ms |
 | C# Native AOT | 35.016 ms | 29.585-54.204 ms | 33.148 ms | 1.868 ms |
+| Common Lisp (SBCL) | 73.429 ms | 67.826-819.723 ms | 53.271 ms | 20.158 ms |
 
 These are process-level measurements on one Windows host, not in-process
 algorithm timings. The difference subtracts independently measured medians and
-is diagnostic only. Oscan had the lowest process median in this rerun: Rust was
-1.78 times, C# Native AOT 1.65 times, and TypeScript/Node 4.11 times Oscan.
-The ranking changed from the prior run, so it should not be treated as an
-isolated algorithm-speed result.
+is diagnostic only. Oscan had the lowest latest recorded process median: Rust
+was 1.78 times, C# Native AOT 1.65 times, Common Lisp 3.46 times, and
+TypeScript/Node 4.11 times Oscan. The ranking changed from the prior run, so it
+should not be treated as an isolated algorithm-speed result.
 
 ## C# correction impact
 
@@ -83,15 +91,17 @@ The current process median is 62.23% below the old value and the startup
 median is 58.16% below it, while the honest self-contained artifact is 86.29
 times larger than the old application-only DLL. The timing comparison is
 descriptive, not a causal estimate of AOT alone: the invalid run used 20
-iterations, two warmups, and a .NET 10 RC SDK, while the corrected run used 50
+iterations, two warmups, and a .NET 10 RC SDK, while this run used 50
 iterations, five warmups, and the pinned .NET 9 SDK.
 
 ## Interpretation
 
-These results establish semantic parity and characterize four reviewed
-reference implementations. They show that Oscan produced the smallest
-self-contained native artifact and the lowest process median in this rerun, but
-also the largest source. The collection API narrowed that source gap. They do
-not establish that an LLM is more likely to generate correct Oscan. See
+These results establish semantic parity and characterize five reviewed
+reference implementations. They show that Oscan produced by far the smallest
+self-contained artifact and the lowest latest recorded process median, but also
+the largest source. The collection API narrowed that source gap. Common Lisp
+adds a distinct tradeoff: source length close to TypeScript, cold startup below
+Node in its recorded run, and a much larger runtime image. None of these results
+establishes that an LLM is more likely to generate correct Oscan. See
 `EXPERIMENT_REPORT.md` for the complete analysis and the required repeated
 one-shot protocol.

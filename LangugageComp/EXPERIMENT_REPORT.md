@@ -1,8 +1,8 @@
-# Corrected BuildGraph language experiment
+# Corrected BuildGraph five-language experiment
 
 **Research date:** 2026-07-30  
-**Repository base revision:** [`7291ebea65083da2c419e6466f802e0351bcac43`](https://github.com/lucabol/Oscan/tree/7291ebea65083da2c419e6466f802e0351bcac43); measurements include the collection-API working-tree changes described below<br>
-**Compared implementations:** Oscan, Rust, TypeScript/Node.js, and C# .NET 9 Native AOT  
+**Repository base revision:** [`35fc3ab`](https://github.com/lucabol/Oscan/tree/35fc3ab); measurements include the collection-API changes described below<br>
+**Compared implementations:** Oscan, Rust, TypeScript/Node.js, C# .NET 9 Native AOT, and Common Lisp on SBCL 2.6.7
 **Correction:** all earlier framework-dependent C# size and timing results are invalidated
 
 ## Executive conclusion
@@ -10,20 +10,21 @@
 The corrected experiment establishes three useful facts and one important
 non-result:
 
-1. **The four reviewed reference implementations are behaviorally equivalent
-   under the current oracle.** Each passed all 47 executable cases, for 188/188
+1. **The five reviewed reference implementations are behaviorally equivalent
+   under the current oracle.** Each passed all 47 executable cases, for 235/235
    language-case checks.
 2. **Oscan has the strongest self-contained native artifact-size result.** Its
    28,672-byte executable is 6.75 times smaller than Rust's 193,536-byte
    executable and 53.93 times smaller than C# Native AOT's 1,546,240-byte
-   executable. TypeScript's 9,958-byte JavaScript file is smaller as an
+   executable. It is 1,378.43 times smaller than Common Lisp's 39,522,400-byte
+   SBCL image. TypeScript's 9,958-byte JavaScript file is smaller as an
    application payload, but that number excludes Node.js and is therefore not a
    self-contained deployment comparison.
-3. **Oscan had the lowest cold process median in this rerun.** The 1,000-task
+3. **Oscan had the lowest latest recorded cold-process median.** The 1,000-task
    analysis medians were 21.239 ms for Oscan, 37.820 ms for Rust, 35.016 ms for
-   C# Native AOT, and 87.384 ms for TypeScript. These process-level results
-   differ materially from the prior run and should not be read as isolated
-   algorithm speed.
+   C# Native AOT, 73.429 ms for Common Lisp, and 87.384 ms for TypeScript. These
+   process-level results differ materially across runs and should not be read
+   as isolated algorithm speed.
 4. **The experiment does not measure whether an LLM writes Oscan more
    successfully.** These programs were produced and repaired interactively
    using repository access, compiler feedback, tests, and multiple edits. No
@@ -32,10 +33,12 @@ non-result:
 
 The defensible conclusion is narrow: **for this reviewed BuildGraph
 implementation and toolchain, Oscan combines the smallest self-contained native
-artifact with the lowest process median in this rerun, but it still requires the
-largest source file. The new collection API reduced that file by 56 lines and
-993 bytes without changing the algorithm. There is not yet evidence that Oscan
-is superior to Rust, TypeScript, or C# when programmed by an LLM.**
+artifact with a low cold-process median, but it requires the largest source
+file. The new collection API reduced that file by 56 lines and 993 bytes without
+changing the algorithm. Common Lisp offers source length close to TypeScript and
+beat Node's latest recorded cold-process median, at the cost of a 39.5 MB runtime
+image. There is not yet evidence that Oscan is superior to Rust, TypeScript, C#,
+or Common Lisp when programmed by an LLM.**
 
 ## 1. Why the C# experiment had to be redone
 
@@ -50,13 +53,13 @@ The correction makes C# explicitly Native AOT:
 - [`csharp/BuildGraph.csproj`](csharp/BuildGraph.csproj#L1-L13) targets `net9.0`
   and sets both `PublishAot` and `SelfContained` to `true`.
 - [`global.json`](global.json) pins SDK 9.0.316 for this recorded experiment.
-- [`harness/suite.py`](harness/suite.py#L259-L281) invokes
+- [`harness/suite.py`](harness/suite.py#L280-L302) invokes
   `dotnet publish -c Release -r win-x64 --self-contained true`.
-- [`harness/suite.py`](harness/suite.py#L289-L297) runs `BuildGraph.exe`
+- [`harness/suite.py`](harness/suite.py#L326-L334) runs `BuildGraph.exe`
   directly, with no `dotnet` host in the measured command.
 - The harness deletes the old C# publish directory before each publish, so a
   stale DLL cannot satisfy the artifact check
-  ([`harness/suite.py`](harness/suite.py#L259-L286)).
+  ([`harness/suite.py`](harness/suite.py#L280-L323)).
 
 This matches Microsoft's Native AOT contract: Native AOT publishing creates a
 self-contained, runtime-specific native application; it does not use a JIT at
@@ -94,6 +97,25 @@ warmups, and a .NET 10 RC SDK, while the corrected run used 50 iterations, five
 warmups, and the pinned .NET 9 SDK. The size correction is the omitted
 self-contained deployment cost, not a regression in equivalent artifacts.
 
+### Common Lisp deployment mode
+
+The Common Lisp application logic is in
+[`common-lisp/main.lisp`](common-lisp/main.lisp). The fixed scaffold in
+[`common-lisp/build.lisp`](common-lisp/build.lisp) uses
+`sb-ext:save-lisp-and-die` with `:executable t` to save a directly runnable SBCL
+image. `:save-runtime-options t` prevents SBCL's startup option parser from
+claiming the application's `--help` flag. The harness invokes that image
+directly rather than launching `sbcl main.lisp`.
+
+The official Windows SBCL 2.6.7 binary used here was not built with zstd
+support, so its attempt to save a compressed core failed. The recorded
+39,522,400-byte artifact is therefore an uncompressed image that includes the
+Lisp runtime. It still ran with `PATH` reduced to the Windows system directory,
+so the measurement does not omit a separately installed SBCL runtime. The SBCL
+manual documents executable image creation, runtime-option saving, and optional
+compression in
+[`save-lisp-and-die`](https://www.sbcl.org/manual/#Saving-a-Core-Image).
+
 ## 2. What was implemented
 
 BuildGraph is a deterministic command-line dependency-graph analyzer. It:
@@ -118,10 +140,11 @@ The same application is implemented in:
 | Rust | [`rust/src/main.rs`](rust/src/main.rs) |
 | TypeScript | [`typescript/src/main.ts`](typescript/src/main.ts) |
 | C# | [`csharp/Program.cs`](csharp/Program.cs) |
+| Common Lisp | [`common-lisp/main.lisp`](common-lisp/main.lisp) |
 
 No implementation uses an application package dependency. Build products,
-temporary inputs, the isolated Oscan compiler checkout, and TypeScript tooling
-remain below `LangugageComp`, as documented in
+temporary inputs, the isolated Oscan compiler checkout, TypeScript tooling, and
+the saved SBCL image remain below `LangugageComp`, as documented in
 [`README.md`](README.md#L1-L42).
 
 ## 3. Experimental method
@@ -135,8 +158,8 @@ The Python harness executes the compiled command for each language and compares:
 - exact stderr;
 - timeout behavior.
 
-The runner is external to all four implementations
-([`harness/suite.py`](harness/suite.py#L304-L426)). The 47 cases are defined
+The runner is external to all five implementations
+([`harness/suite.py`](harness/suite.py#L341-L463)). The 47 cases are defined
 once in [`harness/cases.py`](harness/cases.py#L60-L355), rather than duplicated
 inside language-specific unit tests.
 
@@ -170,10 +193,11 @@ The shared harness builds:
 - Rust with `cargo build --release`;
 - TypeScript with its fixed compiler dependency into `main.js`, executed by
   Node.js;
-- C# with .NET 9 Native AOT for `win-x64`, executed directly.
+- C# with .NET 9 Native AOT for `win-x64`, executed directly;
+- Common Lisp with SBCL `save-lisp-and-die`, executed directly.
 
 Exact build and command selection are centralized in
-[`harness/suite.py`](harness/suite.py#L203-L297). This avoids accidentally
+[`harness/suite.py`](harness/suite.py#L224-L335). This avoids accidentally
 testing one command and benchmarking another.
 
 The primary artifact means:
@@ -181,13 +205,14 @@ The primary artifact means:
 - Oscan: deployed executable;
 - Rust: release executable;
 - TypeScript: emitted JavaScript only, explicitly excluding Node.js;
-- C#: self-contained Native AOT executable, excluding the optional PDB.
+- C#: self-contained Native AOT executable, excluding the optional PDB;
+- Common Lisp: uncompressed SBCL executable image, including the Lisp runtime.
 
 Because Node.js was not copied and measured, the TypeScript artifact-size value
 is an application payload metric, not a deployment-size metric. The C# Native
 AOT executable contains the required trimmed runtime code, as Microsoft
-documents. Those values must not be ranked as though they had identical
-boundaries.
+documents. The Common Lisp image likewise includes its runtime. Those values
+must not be ranked as though they had identical boundaries.
 
 ### 3.3 Timing method
 
@@ -200,7 +225,7 @@ The benchmark creates a 1,000-task dependency chain and measures:
 Elapsed time is measured around each child process with
 `time.perf_counter`; stdout is discarded, stderr is captured, and nonzero exit
 status fails the run
-([`harness/suite.py`](harness/suite.py#L438-L548)).
+([`harness/suite.py`](harness/suite.py#L476-L586)).
 
 The `analyze` median is the main operational measurement. The report also shows
 `analyze median - help median` as an approximate diagnostic, but the
@@ -221,6 +246,7 @@ runtime initialization, and antivirus activity remain mixed together.
 | TypeScript | 5.9.3 |
 | .NET SDK | 9.0.316 |
 | Native AOT compiler package | Microsoft.DotNet.ILCompiler 9.0.18 |
+| Common Lisp | SBCL 2.6.7 |
 | GCC visible to Oscan build | 15.2.0 |
 | C# RID | `win-x64` |
 
@@ -236,7 +262,8 @@ Results are host-specific. They are not cross-platform estimates.
 | Rust | 47 | 47 | 100% |
 | TypeScript | 47 | 47 | 100% |
 | C# Native AOT | 47 | 47 | 100% |
-| **Combined** | **188** | **188** | **100%** |
+| Common Lisp (SBCL) | 47 | 47 | 100% |
+| **Combined** | **235** | **235** | **100%** |
 
 This result confirms semantic parity under the current oracle. It does not
 distinguish language quality because these are repaired reference
@@ -250,27 +277,32 @@ implementations, not unedited model samples.
 | Rust | 335 | 10,935 | 193,536 B | Release executable |
 | TypeScript | 357 | 10,687 | 9,958 B | JavaScript only; Node excluded |
 | C# Native AOT | 381 | 11,448 | 1,546,240 B | Self-contained executable |
+| Common Lisp (SBCL) | 358 | 14,977 | 39,522,400 B | Self-contained SBCL image |
 
 C# also emitted an 8,015,872-byte optional PDB. The complete publish directory
 was 9,562,112 bytes with that debug file, but the executable runs without it.
+The SBCL image has no required runtime sidecar.
 
 Normalized to Oscan:
 
 | Comparison | Result |
 |---|---:|
-| Oscan artifact / Rust artifact | 0.146x |
-| Oscan artifact / C# Native AOT artifact | 0.0182x |
-| Oscan artifact / TypeScript JS payload | 2.828x |
+| Oscan artifact / Rust artifact | 0.148x |
+| Oscan artifact / C# Native AOT artifact | 0.0185x |
+| Oscan artifact / Common Lisp artifact | 0.000725x |
+| Oscan artifact / TypeScript JS payload | 2.879x |
 | Oscan source bytes / Rust source bytes | 1.393x |
 | Oscan source bytes / TypeScript source bytes | 1.426x |
 | Oscan source bytes / C# source bytes | 1.331x |
+| Oscan source bytes / Common Lisp source bytes | 1.017x |
 
 Oscan's artifact result is excellent among the self-contained/native outputs.
 Its source-size result points in the opposite direction: this reference
-implementation is 33-43% larger in bytes and 28-45% longer in physical lines
-than the three baselines. Source length is not maintainability or generation
-difficulty, but it gives no support to a claim that this task is more concise in
-Oscan.
+implementation is 2-43% larger in bytes than all four baselines and has the
+largest physical line count. Common Lisp is 1.7% smaller than Oscan by source
+bytes, while its 358 lines are close to TypeScript's 357. Source length is not
+maintainability or generation difficulty, but it gives no support to a claim
+that this task is more concise in Oscan.
 
 #### Collection API impact
 
@@ -294,11 +326,13 @@ broader collection primitives and their runtime guard paths are now linked.
 | Rust | 37.820 ms | 29.498-49.425 ms | 27.522 ms | 10.298 ms |
 | TypeScript | 87.384 ms | 78.847-138.055 ms | 72.590 ms | 14.794 ms |
 | C# Native AOT | 35.016 ms | 29.585-54.204 ms | 33.148 ms | 1.868 ms |
+| Common Lisp (SBCL) | 73.429 ms | 67.826-819.723 ms | 53.271 ms | 20.158 ms |
 
 Interpretation:
 
 - Oscan had the lowest analysis median: 43.8% below Rust and 39.3% below C#
-  Native AOT in this run.
+  Native AOT in the latest recorded measurements.
+- Oscan's median was 71.1% below Common Lisp's.
 - Oscan's analysis median was 75.7% below TypeScript/Node's; TypeScript was
   4.11 times Oscan.
 - Oscan also had the lowest `--help` median, but this is still a whole-process
@@ -313,13 +347,14 @@ Interpretation:
 
 | Parameter | Finding | Does it show Oscan superiority? |
 |---|---|---|
-| Reference functional correctness | Four-way tie at 47/47 | No; it establishes feasibility and parity |
+| Reference functional correctness | Five-way tie at 47/47 | No; it establishes feasibility and parity |
 | Source concision | Oscan is largest by lines and bytes | No |
-| Self-contained native artifact | Oscan is 6.75x smaller than Rust and 53.93x smaller than C# AOT | Yes, narrowly for this build |
-| Cold analysis process time | Oscan 21.239 ms, Rust 37.820 ms | Oscan led this rerun; cross-run stability is weak |
+| Self-contained artifact | Oscan is 6.75x smaller than Rust, 53.93x smaller than C# AOT, and 1,378.43x smaller than SBCL | Yes, narrowly for this build |
+| Cold analysis process time | Oscan has the lowest latest recorded median, but cross-run stability is weak | No robust Oscan-versus-Rust conclusion |
 | Cold time vs C# AOT | Oscan is 39.3% lower | Yes, on this host and workload |
+| Cold time vs Common Lisp | Oscan is 71.1% lower | Yes, on this host and workload |
 | Cold time vs TypeScript/Node | Oscan is 75.7% lower | Yes, on this host and workload |
-| Required runtime accounting | Oscan and C# are represented by deployed executables; Node is omitted | TypeScript size ranking is unresolved |
+| Required runtime accounting | Oscan, C#, and Common Lisp include their runtimes; Node is omitted | TypeScript size ranking is unresolved |
 | One-shot build@1 | Not measured | No conclusion |
 | One-shot all-tests pass@1 | Not measured | No conclusion |
 | Model output tokens, cost, latency | Not measured | No conclusion |
@@ -338,8 +373,8 @@ answer different questions.
   diagnostics, graph algorithms, checked 64-bit totals, and stress cases
   without an application dependency.
 - The C backend produced a very small executable.
-- Cold process behavior led the measured Rust, C# AOT, and Node invocations in
-  this rerun.
+- Cold process behavior led the latest recorded Rust, C# AOT, SBCL, and Node
+  invocations, although the Oscan-versus-Rust ordering is not stable across runs.
 
 ### Unsupported claims
 
@@ -350,7 +385,7 @@ answer different questions.
 - That the result generalizes beyond BuildGraph, Windows x64, this compiler
   revision, or these reference implementations.
 
-The observed Oscan source remains longer than the baseline sources, although
+The observed Oscan source remains longer than all four baseline sources, although
 collection primitives reduced it by 10.33% in lines and 6.12% in bytes. Several
 issues were repaired with compiler and test feedback during implementation.
 That history is evidence that this run is not a one-shot sample, not evidence
@@ -443,6 +478,7 @@ multiple attempts as pass@k changes the user workflow and inference budget.
 | Independent median subtraction | The "difference" is not isolated algorithm time |
 | Node omitted from size | TypeScript deployment size cannot be ranked fairly |
 | Optional PDB omitted | Correct for runtime deployment, but full debug-output size is larger |
+| Uncompressed SBCL image | Official Windows SBCL lacked zstd; another SBCL build could change size and startup |
 | Physical source size | Includes formatting/comments and is not a maintainability metric |
 | No build time or peak memory | Operational comparison is incomplete |
 | No model outputs | No build@1, pass@1, token, cost, or failure taxonomy exists |
@@ -457,28 +493,32 @@ From `LangugageComp` on a machine with the documented toolchains:
   -Json .\.build\benchmark-results.json
 ```
 
-The first command rebuilds all four implementations and executes 188
+The first command rebuilds all five implementations and executes 235
 language-case checks. The second uses those exact artifacts for the 50-sample
-benchmark. To rerun C# alone:
+benchmark. To rerun Common Lisp alone:
 
 ```powershell
-python .\harness\suite.py test --language csharp `
-  --json .\.build\test-results-csharp-aot.json
-python .\harness\suite.py benchmark --language csharp --tasks 1000 `
+python .\harness\suite.py test --language common-lisp `
+  --json .\.build\test-results-common-lisp.json
+python .\harness\suite.py benchmark --language common-lisp --tasks 1000 `
   --warmup 5 --iterations 50 --no-build `
-  --json .\.build\benchmark-results-csharp-aot.json
+  --json .\.build\benchmark-results-common-lisp.json
 ```
 
 ## 11. Final answer
 
 The Native AOT correction is decisive for C#: the old 17.9 KB / 92.7 ms row was
-not a valid native deployment comparison. The current C# result is a 1.55 MB self-contained executable with a 34.3 ms
+not a valid native deployment comparison. The current C# result is a 1.55 MB
+self-contained executable with a 35.0 ms
 median process time.
 
 Under the corrected reference experiment, Oscan's strongest advantages are
-deployed native size and cold process behavior in this rerun. All three baseline
-sources remain shorter, but the collection refactor narrowed Oscan's source gap.
-All four references are equally correct under the 47-case oracle.
+deployed native size and cold process behavior versus C# AOT, SBCL, and Node.
+Its timing relationship with Rust is not stable across the two recorded runs,
+and all four baseline sources are shorter. Common Lisp is more concise than
+Oscan and starts faster than Node in this run, but its uncompressed 39.5 MB SBCL
+image is by far the largest artifact. All five references are equally correct
+under the 47-case oracle.
 
 Therefore, **Oscan is operationally attractive for this application, but this
 experiment does not show that Oscan is superior when used by an LLM**. That
@@ -493,6 +533,8 @@ independent, unedited one-shot pass@1 across pinned frontier models.
 - [`harness/cases.py`](harness/cases.py)
 - [`harness/suite.py`](harness/suite.py)
 - [`csharp/BuildGraph.csproj`](csharp/BuildGraph.csproj)
+- [`common-lisp/main.lisp`](common-lisp/main.lisp)
+- [`common-lisp/build.lisp`](common-lisp/build.lisp)
 - [`global.json`](global.json)
 - [`REFERENCE_RESULTS.md`](REFERENCE_RESULTS.md)
 - [`prompts/one-shot.txt`](prompts/one-shot.txt)
@@ -500,6 +542,7 @@ independent, unedited one-shot pass@1 across pinned frontier models.
 ### External methodology and toolchain
 
 - Microsoft, [Native AOT deployment overview](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
+- Steel Bank Common Lisp, [SBCL User Manual](https://www.sbcl.org/manual/)
 - Chen et al., [Evaluating Large Language Models Trained on Code](https://arxiv.org/abs/2107.03374)
 - OpenAI, [HumanEval evaluation harness](https://github.com/openai/human-eval)
 - Liu et al., [Is Your Code Generated by ChatGPT Really Correct?](https://arxiv.org/abs/2305.01210)
