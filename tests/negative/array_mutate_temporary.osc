@@ -1,0 +1,5 @@
+// EXPECT ERROR: temporary arrays cannot be mutation targets.
+
+fn! main() {
+    array_sort_i32([2, 1]);
+}

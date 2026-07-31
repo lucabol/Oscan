@@ -1,0 +1,5 @@
+true 1 1 1.0 true
+true 3 2 2.0 i32
+true 3 4 3.0 i64
+true 4 4 5.0 f64
+true 4 4 4.0 five

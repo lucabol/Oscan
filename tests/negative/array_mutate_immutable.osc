@@ -1,0 +1,6 @@
+// EXPECT ERROR: mutating collection calls require mutable bindings.
+
+fn! main() {
+    let values: [i32] = [1, 2];
+    array_reverse(values);
+}

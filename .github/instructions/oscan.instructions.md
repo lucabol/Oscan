@@ -43,6 +43,9 @@ These are the features that most often trip up code-generation models.
 ### Arrays
 - `[i32]` = dynamic array, `[i32; 5]` = fixed-size.
 - Free functions, not methods: `push(arr, val)`, `len(arr)`, `pop(arr)`.
+- Collection intrinsics use `array_*`; typed families use `bool`, `i32`, `i64`, `f64`, or `str` suffixes.
+- Every mutator requires an array rooted in a `let mut` binding. Resizing operations require dynamic arrays.
+- Higher-order callbacks are named functions; there are no closures.
 
 ### Ranges
 - `for i in 0..n { };` — exclusive upper bound.
@@ -63,7 +66,7 @@ These are the features that most often trip up code-generation models.
 
 ### Type casts
 - `as` keyword: `x as i64`. Only 8 casts (4 pairs, both directions): i32↔i64, i32↔f64, i64↔f64, handle↔i64.
-- No implicit coercions ever. No null. No exceptions.
+- No implicit value coercions. Pure function pointers may coerce to impure pointer slots. No null. No exceptions.
 
 ### Parameters
 - Always immutable and passed by value.
@@ -84,6 +87,8 @@ These are the features that most often trip up code-generation models.
 - `--extra-cflags <flag>` to pass extra flags to the C compiler (repeatable).
 
 ### Function pointers
+- `fn(...) -> R` is a pure function pointer; `fn!(...) -> R` is impure.
+- Pure pointers coerce to impure pointer slots, but not the reverse.
 - `let f: fn(i32) -> i32 = add;` — only user-defined fns, not builtins.
 
 ### Comments
@@ -604,7 +609,7 @@ fn! main() {
 }
 ```
 
-## Built-in Functions (238 functions, 21 categories)
+## Built-in Functions (328 functions, 21 categories)
 
 ### I/O
 
@@ -817,6 +822,96 @@ fn map_i32_i32_len(m: map_i32_i32) -> i32
 ### Array
 
 ```
+fn! array_clone(array: [T]) -> [T]
+fn! array_repeat(value: T, count: i32) -> [T]
+fn! array_reverse(array: [T])
+fn! array_fill(array: [T], value: T)
+fn! array_swap(array: [T], left: i32, right: i32)
+fn! array_clear(array: [T])
+fn! array_extend(destination: [T], source: [T])
+fn! array_insert(array: [T], index: i32, value: T)
+fn! array_remove_at(array: [T], index: i32) -> T
+fn! array_slice(array: [T], start: i32, end: i32) -> [T]
+fn array_contains_bool(array: [bool], value: bool) -> bool
+fn array_contains_i32(array: [i32], value: i32) -> bool
+fn array_contains_i64(array: [i64], value: i64) -> bool
+fn array_contains_f64(array: [f64], value: f64) -> bool
+fn array_contains_str(array: [str], value: str) -> bool
+fn array_index_of_bool(array: [bool], value: bool) -> i32
+fn array_index_of_i32(array: [i32], value: i32) -> i32
+fn array_index_of_i64(array: [i64], value: i64) -> i32
+fn array_index_of_f64(array: [f64], value: f64) -> i32
+fn array_index_of_str(array: [str], value: str) -> i32
+fn array_last_index_of_bool(array: [bool], value: bool) -> i32
+fn array_last_index_of_i32(array: [i32], value: i32) -> i32
+fn array_last_index_of_i64(array: [i64], value: i64) -> i32
+fn array_last_index_of_f64(array: [f64], value: f64) -> i32
+fn array_last_index_of_str(array: [str], value: str) -> i32
+fn array_count_bool(array: [bool], value: bool) -> i32
+fn array_count_i32(array: [i32], value: i32) -> i32
+fn array_count_i64(array: [i64], value: i64) -> i32
+fn array_count_f64(array: [f64], value: f64) -> i32
+fn array_count_str(array: [str], value: str) -> i32
+fn array_compare_bool(left: [bool], right: [bool]) -> i32
+fn array_compare_i32(left: [i32], right: [i32]) -> i32
+fn array_compare_i64(left: [i64], right: [i64]) -> i32
+fn array_compare_f64(left: [f64], right: [f64]) -> i32
+fn array_compare_str(left: [str], right: [str]) -> i32
+fn! array_sort_bool(array: [bool])
+fn! array_sort_i32(array: [i32])
+fn! array_sort_i64(array: [i64])
+fn! array_sort_f64(array: [f64])
+fn! array_sort_str(array: [str])
+fn array_any_bool(array: [bool], predicate: fn(bool) -> bool) -> bool
+fn array_any_i32(array: [i32], predicate: fn(i32) -> bool) -> bool
+fn array_any_i64(array: [i64], predicate: fn(i64) -> bool) -> bool
+fn array_any_f64(array: [f64], predicate: fn(f64) -> bool) -> bool
+fn array_any_str(array: [str], predicate: fn(str) -> bool) -> bool
+fn array_all_bool(array: [bool], predicate: fn(bool) -> bool) -> bool
+fn array_all_i32(array: [i32], predicate: fn(i32) -> bool) -> bool
+fn array_all_i64(array: [i64], predicate: fn(i64) -> bool) -> bool
+fn array_all_f64(array: [f64], predicate: fn(f64) -> bool) -> bool
+fn array_all_str(array: [str], predicate: fn(str) -> bool) -> bool
+fn! array_filter_bool(array: [bool], predicate: fn(bool) -> bool) -> [bool]
+fn! array_filter_i32(array: [i32], predicate: fn(i32) -> bool) -> [i32]
+fn! array_filter_i64(array: [i64], predicate: fn(i64) -> bool) -> [i64]
+fn! array_filter_f64(array: [f64], predicate: fn(f64) -> bool) -> [f64]
+fn! array_filter_str(array: [str], predicate: fn(str) -> bool) -> [str]
+fn array_fold_bool(array: [bool], initial: bool, step: fn(bool, bool) -> bool) -> bool
+fn array_fold_i32(array: [i32], initial: i32, step: fn(i32, i32) -> i32) -> i32
+fn array_fold_i64(array: [i64], initial: i64, step: fn(i64, i64) -> i64) -> i64
+fn array_fold_f64(array: [f64], initial: f64, step: fn(f64, f64) -> f64) -> f64
+fn array_fold_str(array: [str], initial: str, step: fn(str, str) -> str) -> str
+fn! array_for_each_bool(array: [bool], visit: fn!(bool) -> unit)
+fn! array_for_each_i32(array: [i32], visit: fn!(i32) -> unit)
+fn! array_for_each_i64(array: [i64], visit: fn!(i64) -> unit)
+fn! array_for_each_f64(array: [f64], visit: fn!(f64) -> unit)
+fn! array_for_each_str(array: [str], visit: fn!(str) -> unit)
+fn! array_map_bool_to_bool(array: [bool], transform: fn(bool) -> bool) -> [bool]
+fn! array_map_bool_to_i32(array: [bool], transform: fn(bool) -> i32) -> [i32]
+fn! array_map_bool_to_i64(array: [bool], transform: fn(bool) -> i64) -> [i64]
+fn! array_map_bool_to_f64(array: [bool], transform: fn(bool) -> f64) -> [f64]
+fn! array_map_bool_to_str(array: [bool], transform: fn(bool) -> str) -> [str]
+fn! array_map_i32_to_bool(array: [i32], transform: fn(i32) -> bool) -> [bool]
+fn! array_map_i32_to_i32(array: [i32], transform: fn(i32) -> i32) -> [i32]
+fn! array_map_i32_to_i64(array: [i32], transform: fn(i32) -> i64) -> [i64]
+fn! array_map_i32_to_f64(array: [i32], transform: fn(i32) -> f64) -> [f64]
+fn! array_map_i32_to_str(array: [i32], transform: fn(i32) -> str) -> [str]
+fn! array_map_i64_to_bool(array: [i64], transform: fn(i64) -> bool) -> [bool]
+fn! array_map_i64_to_i32(array: [i64], transform: fn(i64) -> i32) -> [i32]
+fn! array_map_i64_to_i64(array: [i64], transform: fn(i64) -> i64) -> [i64]
+fn! array_map_i64_to_f64(array: [i64], transform: fn(i64) -> f64) -> [f64]
+fn! array_map_i64_to_str(array: [i64], transform: fn(i64) -> str) -> [str]
+fn! array_map_f64_to_bool(array: [f64], transform: fn(f64) -> bool) -> [bool]
+fn! array_map_f64_to_i32(array: [f64], transform: fn(f64) -> i32) -> [i32]
+fn! array_map_f64_to_i64(array: [f64], transform: fn(f64) -> i64) -> [i64]
+fn! array_map_f64_to_f64(array: [f64], transform: fn(f64) -> f64) -> [f64]
+fn! array_map_f64_to_str(array: [f64], transform: fn(f64) -> str) -> [str]
+fn! array_map_str_to_bool(array: [str], transform: fn(str) -> bool) -> [bool]
+fn! array_map_str_to_i32(array: [str], transform: fn(str) -> i32) -> [i32]
+fn! array_map_str_to_i64(array: [str], transform: fn(str) -> i64) -> [i64]
+fn! array_map_str_to_f64(array: [str], transform: fn(str) -> f64) -> [f64]
+fn! array_map_str_to_str(array: [str], transform: fn(str) -> str) -> [str]
 fn! sort_i32(arr: [i32])
 fn! sort_i64(arr: [i64])
 fn! sort_str(arr: [str])

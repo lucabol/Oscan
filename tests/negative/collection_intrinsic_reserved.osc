@@ -1,0 +1,5 @@
+fn array_reverse(values: [i32]) {
+}
+
+fn! main() {
+}

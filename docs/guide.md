@@ -191,7 +191,9 @@ let z: f64 = x as f64;    // i32 → f64
 let w: i32 = 3.9 as i32;  // f64 → i32 (truncates to 3)
 ```
 
-Allowed pairs: `i32↔i64`, `i32↔f64`, `i64↔f64`, `handle↔i64`. No implicit coercions ever.
+Allowed pairs: `i32↔i64`, `i32↔f64`, `i64↔f64`, `handle↔i64`.
+There are no implicit value coercions. The sole effect-subtyping rule is that
+a pure `fn(...) -> R` pointer can be used where `fn!(...) -> R` is expected.
 
 ---
 
@@ -286,7 +288,10 @@ fn process(arr: [i32]) {
 
 ### Function Pointers
 
-Functions can be passed as values using function pointer types. The syntax for a function pointer type is `fn(param_types) -> return_type`.
+Functions can be passed as values using effect-aware function pointer types:
+
+- `fn(param_types) -> return_type` points to a pure function.
+- `fn!(param_types) -> return_type` points to an impure function.
 
 ```
 fn ascending(a: i32, b: i32) -> bool { a < b }
@@ -330,7 +335,9 @@ fn! main() {
 **Notes:**
 - Only user-defined functions (`fn` and `fn!`) can be used as function pointer values. Builtin and `extern` functions cannot.
 - Functions are not closures — they capture no variables.
-- Type checking is structural: any function matching the signature is accepted.
+- Type checking is structural and includes the purity effect.
+- A pure `fn` pointer can be used where `fn!` is expected. An impure pointer cannot be used where `fn` is expected.
+- A pure function cannot call through an impure `fn!` pointer.
 
 ---
 
@@ -668,6 +675,56 @@ for i in 0..len(arr) {
 };
 ```
 
+### Collection Functions
+
+Collection intrinsics are global free functions; no import or method syntax is
+needed. Generic structural operations work for every element type:
+
+| Function | Result / effect |
+|----------|-----------------|
+| `array_clone(array)` | Shallow clone; preserves fixed or dynamic shape |
+| `array_repeat(value, count)` | New dynamic array containing `count` copies |
+| `array_reverse(array)` | Reverse in place |
+| `array_fill(array, value)` | Fill in place |
+| `array_swap(array, a, b)` | Swap checked indices |
+| `array_clear(array)` | Clear a dynamic array |
+| `array_extend(destination, source)` | Append to a dynamic destination |
+| `array_insert(array, index, value)` | Insert into a dynamic array |
+| `array_remove_at(array, index)` | Remove and return an element |
+| `array_slice(array, start, end)` | New dynamic half-open slice `[start, end)` |
+
+Search, comparison, and sorting use concrete suffixes: `bool`, `i32`, `i64`,
+`f64`, and `str`. Each suffix provides `array_contains_T`,
+`array_index_of_T`, `array_last_index_of_T`, `array_count_T`,
+`array_compare_T`, and `array_sort_T`. Comparisons are lexicographic and
+return exactly `-1`, `0`, or `1`. The old `sort_i32`, `sort_i64`,
+`sort_f64`, and `sort_str` names remain aliases.
+
+Higher-order functions take named function pointers:
+
+| Family | Callback |
+|--------|----------|
+| `array_any_T`, `array_all_T` | `fn(T) -> bool` |
+| `array_filter_T` | `fn(T) -> bool` |
+| `array_fold_T` | `fn(T, T) -> T`, called as `(accumulator, element)` |
+| `array_for_each_T` | `fn!(T) -> unit` |
+| `array_map_S_to_D` | `fn(S) -> D`; all 25 core type combinations exist |
+
+`any` and `all` short-circuit. Map and filter preserve order and return dynamic
+arrays; fold is left-to-right; for-each visits in index order. Allocating and
+mutating operations are `fn!`; searches, comparisons, any, all, and fold are
+pure.
+
+Every mutating collection call, including `push`, `pop`, and sorting, requires
+an argument rooted in a mutable binding declared with `let mut`. Clear,
+extend destinations, insert, remove, push, and pop require dynamic arrays;
+non-resizing operations accept fixed or dynamic arrays. Invalid indices,
+ranges, counts, or allocations panic.
+
+For `f64` collection operations, ordinary numbers sort before NaNs, all NaNs
+compare equal, and `-0.0` equals `0.0`. The same relation is used by searching,
+counting, comparison, and sorting.
+
 ---
 
 ## Strings
@@ -861,17 +918,11 @@ See the **Strings** section above for the complete string function tables.
 | `str_from_f64(n: f64) -> str`      | `f64` to string (allocates) |
 | `str_from_bool(b: bool) -> str`    | Bool to string (pure) |
 
-### Array Functions (Pure)
+### Array Functions
 
-| Function                   | Description                |
-|----------------------------|----------------------------|
-| `len(arr) -> i32`          | Array length               |
-
-### Array Functions (Impure)
-
-| Function                   | Description                |
-|----------------------------|----------------------------|
-| `push(arr, elem)`          | Append to dynamic array    |
+See **Arrays → Collection Functions** above for the structural, typed, and
+higher-order families, and [the generated built-in reference](builtins.md) for
+every concrete signature.
 
 ### Whole-File I/O (Impure)
 

@@ -57,6 +57,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{BinOp, UnaryOp};
+use crate::collection::{CollectionIntrinsic, CollectionOp};
 use crate::error::CompileError;
 use crate::ir as oir;
 use crate::token::Span;
@@ -948,7 +949,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             })
     }
 
-    fn call_runtime_scalar(&mut self, symbol: &'static str, args: &[LValue], ret: LType) -> LValue {
+    fn call_runtime_scalar(&mut self, symbol: &str, args: &[LValue], ret: LType) -> LValue {
         let arg_types: Vec<LType> = args.iter().map(|v| self.b.value_type(*v)).collect();
         let func = self.runtime_func(symbol, arg_types, Some(ret));
         self.b
@@ -957,7 +958,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     }
 
     /// Like `call_runtime_scalar`, but for a `void`-returning runtime call.
-    fn call_runtime_void(&mut self, symbol: &'static str, args: &[LValue]) {
+    fn call_runtime_void(&mut self, symbol: &str, args: &[LValue]) {
         let arg_types: Vec<LType> = args.iter().map(|v| self.b.value_type(*v)).collect();
         let func = self.runtime_func(symbol, arg_types, None);
         self.b.call(func, args);
@@ -1303,6 +1304,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         elem_ty: &BcType,
         value: Option<LValue>,
     ) {
+        if !elem_ty.is_arena_safe() {
+            self.call_runtime_void("osc_array_check_arena_store", &[self.arena_value, arr_ptr]);
+        }
         let elem_ptr = self.array_elem_ptr(arr_ptr, idx);
         self.write_at(elem_ptr, 0, elem_ty, value);
     }
@@ -1468,6 +1472,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     }
 
     fn store_place_value(&mut self, place: &'a oir::Place, value: Option<LValue>) -> CResult<()> {
+        let final_ty = self.place_final_type(place)?;
         let binding = self
             .lookup(&place.name)
             .unwrap_or_else(|| panic!("internal error: unknown place root '{}'", place.name));
@@ -1494,6 +1499,15 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     if is_last {
                         self.array_write(addr, idx_val, &elem_ty, value);
                         return Ok(());
+                    }
+                    let has_later_index = place.accessors[i + 1..]
+                        .iter()
+                        .any(|accessor| matches!(accessor, oir::PlaceAccessor::Index(_)));
+                    if !has_later_index && !final_ty.is_arena_safe() {
+                        self.call_runtime_void(
+                            "osc_array_check_arena_store",
+                            &[self.arena_value, addr],
+                        );
                     }
                     addr = self.array_elem_ptr(addr, idx_val);
                     ty = elem_ty;
@@ -1882,10 +1896,14 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     ) -> CResult<Option<LValue>> {
         let name: &str = match callee {
             oir::Callee::Named(n) | oir::Callee::Var(n) => n.as_str(),
+            oir::Callee::Collection(_) => "<collection>",
         };
         let mut a: Vec<Option<LValue>> = Vec::with_capacity(args.len());
         for arg in args {
             a.push(self.lower_expr(arg)?);
+        }
+        if let oir::Callee::Collection(intrinsic) = callee {
+            return self.lower_collection_call(*intrinsic, args, &a, span);
         }
         let arena = self.arena_value;
         macro_rules! v {
@@ -2250,6 +2268,9 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
             "push" => {
                 let elem_ty = array_elem_ty_of(&args[0].ty());
                 let addr = self.value_source_addr(&elem_ty, a[1]);
+                if !elem_ty.is_arena_safe() {
+                    self.call_runtime_void("osc_array_check_arena_store", &[arena, v!(0)]);
+                }
                 self.call_runtime_void("osc_array_push", &[arena, v!(0), addr]);
                 None
             }
@@ -2712,6 +2733,358 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
         })
     }
 
+    fn lower_collection_call(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        args: &[oir::Expr],
+        values: &[Option<LValue>],
+        span: Span,
+    ) -> CResult<Option<LValue>> {
+        if intrinsic.is_higher_order() {
+            return self.lower_collection_higher_order(intrinsic, args, values, span);
+        }
+
+        let arena = self.arena_value;
+        let symbol = intrinsic.runtime_symbol().unwrap();
+        let value = |index: usize| values[index].expect("collection argument has a value");
+        Ok(match intrinsic.op {
+            CollectionOp::Clone => {
+                Some(self.call_runtime_scalar(&symbol, &[arena, value(0)], LType::Ptr))
+            }
+            CollectionOp::Repeat => {
+                let elem_ty = args[0].ty();
+                let elem_size = layout_of(&elem_ty, self.program()).size;
+                let elem_size = self.b.iconst(LType::I32, elem_size as i64);
+                let source = self.value_source_addr(&elem_ty, values[0]);
+                Some(self.call_runtime_scalar(
+                    &symbol,
+                    &[arena, elem_size, source, value(1)],
+                    LType::Ptr,
+                ))
+            }
+            CollectionOp::Reverse | CollectionOp::Clear | CollectionOp::Sort => {
+                self.call_runtime_void(&symbol, &[value(0)]);
+                None
+            }
+            CollectionOp::Fill => {
+                let elem_ty = self.array_elem_ty(&args[0].ty(), span)?;
+                let source = self.value_source_addr(&elem_ty, values[1]);
+                if !elem_ty.is_arena_safe() {
+                    self.call_runtime_void("osc_array_check_arena_store", &[arena, value(0)]);
+                }
+                self.call_runtime_void(&symbol, &[value(0), source]);
+                None
+            }
+            CollectionOp::Swap => {
+                self.call_runtime_void(&symbol, &[value(0), value(1), value(2)]);
+                None
+            }
+            CollectionOp::Extend => {
+                let elem_ty = self.array_elem_ty(&args[0].ty(), span)?;
+                if !elem_ty.is_arena_safe() {
+                    self.call_runtime_void("osc_array_check_arena_store", &[arena, value(0)]);
+                }
+                self.call_runtime_void(&symbol, &[arena, value(0), value(1)]);
+                None
+            }
+            CollectionOp::Insert => {
+                let elem_ty = self.array_elem_ty(&args[0].ty(), span)?;
+                let source = self.value_source_addr(&elem_ty, values[2]);
+                if !elem_ty.is_arena_safe() {
+                    self.call_runtime_void("osc_array_check_arena_store", &[arena, value(0)]);
+                }
+                self.call_runtime_void(&symbol, &[arena, value(0), value(1), source]);
+                None
+            }
+            CollectionOp::RemoveAt => {
+                let elem_ty = self.array_elem_ty(&args[0].ty(), span)?;
+                let layout = layout_of(&elem_ty, self.program());
+                let output = self.arena_alloc(layout.size.max(1));
+                self.call_runtime_void(&symbol, &[value(0), value(1), output]);
+                self.read_at(output, 0, &elem_ty)
+            }
+            CollectionOp::Slice => Some(self.call_runtime_scalar(
+                &symbol,
+                &[arena, value(0), value(1), value(2)],
+                LType::Ptr,
+            )),
+            CollectionOp::Contains
+            | CollectionOp::IndexOf
+            | CollectionOp::LastIndexOf
+            | CollectionOp::Count => {
+                let elem_ty = intrinsic.source.unwrap().bc_type();
+                let source = self.value_source_addr(&elem_ty, values[1]);
+                let ret = if intrinsic.op == CollectionOp::Contains {
+                    LType::I8
+                } else {
+                    LType::I32
+                };
+                Some(self.call_runtime_scalar(&symbol, &[value(0), source], ret))
+            }
+            CollectionOp::Compare => {
+                Some(self.call_runtime_scalar(&symbol, &[value(0), value(1)], LType::I32))
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    fn call_collection_callback(
+        &mut self,
+        callback_ty: &BcType,
+        callback: LValue,
+        args: &[LValue],
+    ) -> Option<LValue> {
+        let (params, ret) = match callback_ty {
+            BcType::FnPtr(params, ret, _) => (params, ret.as_ref()),
+            _ => panic!("internal error: collection callback is not a function pointer"),
+        };
+        let mut sig = LSig::default();
+        sig.push_param(LType::Ptr);
+        for param in params {
+            if let Some(ty) = Repr::of(param, self.program()).lir_type() {
+                sig.push_param(ty);
+            }
+        }
+        sig.ret = Repr::of(ret, self.program()).lir_type();
+        let mut call_args = Vec::with_capacity(args.len() + 1);
+        call_args.push(self.arena_value);
+        call_args.extend_from_slice(args);
+        self.b.call_indirect(&sig, callback, &call_args)
+    }
+
+    fn lower_collection_higher_order(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        _args: &[oir::Expr],
+        values: &[Option<LValue>],
+        span: Span,
+    ) -> CResult<Option<LValue>> {
+        let source_ty = intrinsic.source.unwrap().bc_type();
+        let array = values[0].expect("collection array has a value");
+        let callback_index = intrinsic.callback_index().unwrap();
+        let callback = values[callback_index].expect("collection callback has a value");
+        let callback_ty = intrinsic.callback_type().unwrap();
+        let len = self.array_len(array);
+
+        match intrinsic.op {
+            CollectionOp::Any | CollectionOp::All => {
+                let default = if intrinsic.op == CollectionOp::All {
+                    1
+                } else {
+                    0
+                };
+                let decisive = if intrinsic.op == CollectionOp::All {
+                    0
+                } else {
+                    1
+                };
+                let result_var = self.fresh_var(Some(LType::I8));
+                let default_value = self.b.iconst(LType::I8, default);
+                self.b.def_var(result_var, default_value);
+
+                let header = self.b.create_block();
+                let body = self.b.create_block();
+                let decisive_block = self.b.create_block();
+                let incr = self.b.create_block();
+                let exit = self.b.create_block();
+                let ivar = self.fresh_var(Some(LType::I32));
+                let zero = self.b.iconst(LType::I32, 0);
+                self.b.def_var(ivar, zero);
+                self.b.jump(header, &[]);
+
+                self.goto(header);
+                let index = self.b.use_var(ivar);
+                let condition = self.b.icmp(IntCmp::Slt, index, len);
+                self.b.brif(condition, body, &[], exit, &[]);
+
+                self.goto(body);
+                let element = self
+                    .array_read(array, index, &source_ty)
+                    .expect("core array element has a value");
+                let predicate = self
+                    .call_collection_callback(&callback_ty, callback, &[element])
+                    .expect("predicate callback returns bool");
+                if intrinsic.op == CollectionOp::Any {
+                    self.b.brif(predicate, decisive_block, &[], incr, &[]);
+                } else {
+                    self.b.brif(predicate, incr, &[], decisive_block, &[]);
+                }
+
+                self.goto(decisive_block);
+                let decisive_value = self.b.iconst(LType::I8, decisive);
+                self.b.def_var(result_var, decisive_value);
+                self.b.jump(exit, &[]);
+
+                self.goto(incr);
+                let current = self.b.use_var(ivar);
+                let one = self.b.iconst(LType::I32, 1);
+                let next = self.b.iadd(current, one);
+                self.b.def_var(ivar, next);
+                self.b.jump(header, &[]);
+
+                self.b.seal_block(header);
+                self.b.seal_block(body);
+                self.b.seal_block(decisive_block);
+                self.b.seal_block(incr);
+                self.goto(exit);
+                self.b.seal_block(exit);
+                Ok(Some(self.b.use_var(result_var)))
+            }
+            CollectionOp::Filter => {
+                let elem_size = layout_of(&source_ty, self.program()).size;
+                let elem_size = self.b.iconst(LType::I32, elem_size as i64);
+                let result = self.call_runtime_scalar(
+                    "osc_array_new",
+                    &[self.arena_value, elem_size, len],
+                    LType::Ptr,
+                );
+
+                let header = self.b.create_block();
+                let body = self.b.create_block();
+                let push = self.b.create_block();
+                let incr = self.b.create_block();
+                let exit = self.b.create_block();
+                let ivar = self.fresh_var(Some(LType::I32));
+                let zero = self.b.iconst(LType::I32, 0);
+                self.b.def_var(ivar, zero);
+                self.b.jump(header, &[]);
+
+                self.goto(header);
+                let index = self.b.use_var(ivar);
+                let condition = self.b.icmp(IntCmp::Slt, index, len);
+                self.b.brif(condition, body, &[], exit, &[]);
+
+                self.goto(body);
+                let element = self
+                    .array_read(array, index, &source_ty)
+                    .expect("core array element has a value");
+                let predicate = self
+                    .call_collection_callback(&callback_ty, callback, &[element])
+                    .expect("predicate callback returns bool");
+                self.b.brif(predicate, push, &[], incr, &[]);
+
+                self.goto(push);
+                let source = self.value_source_addr(&source_ty, Some(element));
+                self.call_runtime_void("osc_array_push", &[self.arena_value, result, source]);
+                self.b.jump(incr, &[]);
+
+                self.goto(incr);
+                let current = self.b.use_var(ivar);
+                let one = self.b.iconst(LType::I32, 1);
+                let next = self.b.iadd(current, one);
+                self.b.def_var(ivar, next);
+                self.b.jump(header, &[]);
+
+                self.b.seal_block(header);
+                self.b.seal_block(body);
+                self.b.seal_block(push);
+                self.b.seal_block(incr);
+                self.goto(exit);
+                self.b.seal_block(exit);
+                Ok(Some(result))
+            }
+            CollectionOp::Map | CollectionOp::Fold | CollectionOp::ForEach => {
+                let result_array = if intrinsic.op == CollectionOp::Map {
+                    let target_ty = intrinsic.target.unwrap().bc_type();
+                    let elem_size = layout_of(&target_ty, self.program()).size;
+                    let elem_size = self.b.iconst(LType::I32, elem_size as i64);
+                    Some(self.call_runtime_scalar(
+                        "osc_array_new",
+                        &[self.arena_value, elem_size, len],
+                        LType::Ptr,
+                    ))
+                } else {
+                    None
+                };
+                let fold_var = if intrinsic.op == CollectionOp::Fold {
+                    let repr = Repr::of(&source_ty, self.program())
+                        .lir_type()
+                        .expect("core fold type has a representation");
+                    let var = self.fresh_var(Some(repr));
+                    self.b.def_var(var, values[1].expect("fold initial value"));
+                    Some(var)
+                } else {
+                    None
+                };
+
+                let header = self.b.create_block();
+                let body = self.b.create_block();
+                let incr = self.b.create_block();
+                let exit = self.b.create_block();
+                let ivar = self.fresh_var(Some(LType::I32));
+                let zero = self.b.iconst(LType::I32, 0);
+                self.b.def_var(ivar, zero);
+                self.b.jump(header, &[]);
+
+                self.goto(header);
+                let index = self.b.use_var(ivar);
+                let condition = self.b.icmp(IntCmp::Slt, index, len);
+                self.b.brif(condition, body, &[], exit, &[]);
+
+                self.goto(body);
+                let element = self
+                    .array_read(array, index, &source_ty)
+                    .expect("core array element has a value");
+                match intrinsic.op {
+                    CollectionOp::Map => {
+                        let mapped = self
+                            .call_collection_callback(&callback_ty, callback, &[element])
+                            .expect("map callback returns a value");
+                        let target_ty = intrinsic.target.unwrap().bc_type();
+                        let source = self.value_source_addr(&target_ty, Some(mapped));
+                        self.call_runtime_void(
+                            "osc_array_push",
+                            &[self.arena_value, result_array.unwrap(), source],
+                        );
+                    }
+                    CollectionOp::Fold => {
+                        let accumulator = self.b.use_var(fold_var.unwrap());
+                        let folded = self
+                            .call_collection_callback(
+                                &callback_ty,
+                                callback,
+                                &[accumulator, element],
+                            )
+                            .expect("fold callback returns a value");
+                        self.b.def_var(fold_var.unwrap(), folded);
+                    }
+                    CollectionOp::ForEach => {
+                        self.call_collection_callback(&callback_ty, callback, &[element]);
+                    }
+                    _ => unreachable!(),
+                }
+                self.b.jump(incr, &[]);
+
+                self.goto(incr);
+                let current = self.b.use_var(ivar);
+                let one = self.b.iconst(LType::I32, 1);
+                let next = self.b.iadd(current, one);
+                self.b.def_var(ivar, next);
+                self.b.jump(header, &[]);
+
+                self.b.seal_block(header);
+                self.b.seal_block(body);
+                self.b.seal_block(incr);
+                self.goto(exit);
+                self.b.seal_block(exit);
+
+                Ok(match intrinsic.op {
+                    CollectionOp::Map => result_array,
+                    CollectionOp::Fold => Some(self.b.use_var(fold_var.unwrap())),
+                    CollectionOp::ForEach => None,
+                    _ => unreachable!(),
+                })
+            }
+            _ => Err(unsupported(
+                span,
+                format!(
+                    "higher-order collection operation '{}'",
+                    intrinsic.canonical_name()
+                ),
+            )),
+        }
+    }
+
     fn lower_user_or_extern_call(
         &mut self,
         callee: &oir::Callee,
@@ -2728,7 +3101,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     panic!("internal error: unknown function-pointer variable '{name}'")
                 });
                 let (param_tys, ret_ty) = match &binding.ty {
-                    BcType::FnPtr(p, r) => (p.clone(), (**r).clone()),
+                    BcType::FnPtr(p, r, _) => (p.clone(), (**r).clone()),
                     other => panic!("internal error: '{name}' used as a call target has non-fn-ptr type '{other}'"),
                 };
                 let fn_addr = self.b.use_var(binding.var);
@@ -2768,6 +3141,7 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                     ))
                 }
             }
+            oir::Callee::Collection(_) => unreachable!(),
         }
     }
 

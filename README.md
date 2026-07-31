@@ -17,7 +17,7 @@ It is designed to be approachable for people and reliable for AI coding tools.
   surprise control flow.
 - **Safe by design:** bounds checks, overflow checks, no null pointers, and no
   manual memory management. See the [safety guide](docs/safety.md).
-- **Batteries included:** 238 built-in functions for strings, files, math,
+- **Batteries included:** 328 built-in functions for strings, files, math,
   collections, networking, graphics, TLS, and more.
 - **Standalone programs:** produce native executables, including freestanding
   programs that do not depend on libc on supported targets.
@@ -212,7 +212,7 @@ Browse the full [examples directory](examples).
 
 <!-- BEGIN BUILTIN TABLE -->
 
-**238 built-in functions** across 21 categories: I/O, String, Conversion, Character, Math, Bitwise, File I/O, Filesystem, Path, Socket, HashMap, Array, Date/Time, System, Environment, Terminal, Process, Graphics, TrueType, Image, TLS.
+**328 built-in functions** across 21 categories: I/O, String, Conversion, Character, Math, Bitwise, File I/O, Filesystem, Path, Socket, HashMap, Array, Date/Time, System, Environment, Terminal, Process, Graphics, TrueType, Image, TLS.
 
 See the [full built-in function reference](docs/builtins.md) for signatures and descriptions.
 

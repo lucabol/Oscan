@@ -42,6 +42,7 @@ use std::collections::HashMap;
 
 use crate::ast::BinOp;
 use crate::ast::UnaryOp;
+use crate::collection::CollectionIntrinsic;
 use crate::token::Span;
 pub use crate::types::{BcType, ConstInfo, EnumInfo, FunctionInfo, StructInfo};
 
@@ -244,6 +245,8 @@ pub enum Callee {
     /// Indirect call through a local variable, parameter, or top-level
     /// constant holding a function-pointer value.
     Var(String),
+    /// Compiler-recognized collection operation, resolved once during lowering.
+    Collection(CollectionIntrinsic),
 }
 
 pub enum Expr {
@@ -530,7 +533,7 @@ fn verify_type(program: &Program, ty: &BcType, errors: &mut Vec<String>, ctx: &s
             verify_type(program, ok, errors, ctx);
             verify_type(program, err, errors, ctx);
         }
-        BcType::FnPtr(params, ret) => {
+        BcType::FnPtr(params, ret, _) => {
             for p in params {
                 verify_type(program, p, errors, ctx);
             }
@@ -731,15 +734,10 @@ fn verify_expr(
                     verify_expr(program, eb, loop_depth, errors, ctx);
                     let then_ty = then_block.ty();
                     let else_ty = eb.ty();
-                    if then_ty != else_ty {
+                    if !then_ty.is_compatible_with(ty) || !else_ty.is_compatible_with(ty) {
                         errors.push(format!(
                             "internal error in '{}': if/else branch type mismatch: {} vs {}",
                             ctx, then_ty, else_ty
-                        ));
-                    } else if *ty != then_ty {
-                        errors.push(format!(
-                            "internal error in '{}': if cached type {} does not match branch type {}",
-                            ctx, ty, then_ty
                         ));
                     }
                 }
@@ -763,7 +761,7 @@ fn verify_expr(
             for arm in arms {
                 verify_expr(program, &arm.body, loop_depth, errors, ctx);
                 let arm_ty = arm.body.ty();
-                if arm_ty != *ty {
+                if !arm_ty.is_compatible_with(ty) {
                     errors.push(format!(
                         "internal error in '{}': match arm cached type {} does not match match's cached type {}",
                         ctx, arm_ty, ty

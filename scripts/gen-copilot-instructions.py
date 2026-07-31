@@ -12,10 +12,11 @@ Usage:
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from collections import OrderedDict
+
+from builtin_metadata import extract_builtin_records
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -58,14 +59,6 @@ EXAMPLE_FILES = [
 BEGIN_MARKER = "<!-- BEGIN OSCAN INSTRUCTIONS -->"
 END_MARKER = "<!-- END OSCAN INSTRUCTIONS -->"
 
-BUILTIN_RE = re.compile(
-    r'// @builtin'
-    r'\s+category="(?P<cat>[^"]+)"'
-    r'\s+name="(?P<name>[^"]+)"'
-    r'\s+sig="(?P<sig>[^"]+)"'
-    r'\s+desc="(?P<desc>[^"]+)"'
-)
-
 # ---------------------------------------------------------------------------
 # Static content: Critical Differences & Anti-Patterns
 # ---------------------------------------------------------------------------
@@ -106,6 +99,9 @@ These are the features that most often trip up code-generation models.
 ### Arrays
 - `[i32]` = dynamic array, `[i32; 5]` = fixed-size.
 - Free functions, not methods: `push(arr, val)`, `len(arr)`, `pop(arr)`.
+- Collection intrinsics use `array_*`; typed families use `bool`, `i32`, `i64`, `f64`, or `str` suffixes.
+- Every mutator requires an array rooted in a `let mut` binding. Resizing operations require dynamic arrays.
+- Higher-order callbacks are named functions; there are no closures.
 
 ### Ranges
 - `for i in 0..n { };` — exclusive upper bound.
@@ -126,7 +122,7 @@ These are the features that most often trip up code-generation models.
 
 ### Type casts
 - `as` keyword: `x as i64`. Only 8 casts (4 pairs, both directions): i32↔i64, i32↔f64, i64↔f64, handle↔i64.
-- No implicit coercions ever. No null. No exceptions.
+- No implicit value coercions. Pure function pointers may coerce to impure pointer slots. No null. No exceptions.
 
 ### Parameters
 - Always immutable and passed by value.
@@ -147,6 +143,8 @@ These are the features that most often trip up code-generation models.
 - `--extra-cflags <flag>` to pass extra flags to the C compiler (repeatable).
 
 ### Function pointers
+- `fn(...) -> R` is a pure function pointer; `fn!(...) -> R` is impure.
+- Pure pointers coerce to impure pointer slots, but not the reverse.
 - `let f: fn(i32) -> i32 = add;` — only user-defined fns, not builtins.
 
 ### Comments
@@ -187,16 +185,14 @@ def find_repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def extract_builtins(semantic_path: Path) -> OrderedDict:
+def extract_builtins(source_paths: list[Path]) -> OrderedDict:
     """Parse @builtin comments and return {category: [(name, sig), ...]}."""
-    text = semantic_path.read_text(encoding="utf-8")
     groups: dict[str, list[tuple[str, str]]] = {}
 
-    for m in BUILTIN_RE.finditer(text):
-        cat = m.group("cat")
-        name = m.group("name")
-        sig = m.group("sig")
-        groups.setdefault(cat, []).append((name, sig))
+    for record in extract_builtin_records(source_paths):
+        groups.setdefault(record.category, []).append(
+            (record.name, record.signature)
+        )
 
     ordered = OrderedDict()
     for cat in CATEGORY_ORDER:
@@ -293,16 +289,17 @@ def main():
     args = parser.parse_args()
 
     root = find_repo_root()
-    semantic_path = root / "src" / "semantic.rs"
+    source_paths = [root / "src" / "collection.rs", root / "src" / "semantic.rs"]
     examples_dir = root / "examples"
     instructions_dir = root / ".github" / "instructions"
     instructions_path = instructions_dir / "oscan.instructions.md"
 
-    if not semantic_path.exists():
-        print(f"ERROR: {semantic_path} not found", file=sys.stderr)
-        sys.exit(1)
+    for source_path in source_paths:
+        if not source_path.exists():
+            print(f"ERROR: {source_path} not found", file=sys.stderr)
+            sys.exit(1)
 
-    groups = extract_builtins(semantic_path)
+    groups = extract_builtins(source_paths)
     if not groups:
         print("ERROR: No @builtin annotations found in semantic.rs", file=sys.stderr)
         sys.exit(1)

@@ -255,6 +255,10 @@ static osc_arena_block *osc_arena_block_new(size_t capacity)
 {
 #ifdef OSC_FREESTANDING
     /* Single mmap: [osc_arena_block struct | data ...] */
+    if (capacity > (size_t)-1 - sizeof(osc_arena_block) -
+                       (OSC_PAGE_SIZE - 1)) {
+        OSC_PANIC("arena allocation size overflow");
+    }
     size_t total = OSC_PAGE_ROUND(sizeof(osc_arena_block) + capacity);
     void *mem = l_mmap(0, total,
                        L_PROT_READ | L_PROT_WRITE,
@@ -325,10 +329,13 @@ void *osc_arena_alloc(osc_arena *arena, size_t size)
     }
 
     /* 8-byte alignment */
+    if (size > (size_t)-1 - 7u) {
+        OSC_PANIC("arena allocation size overflow");
+    }
     aligned = (size + 7u) & ~(size_t)7u;
 
     /* Fast path: current block has room */
-    if (arena->current->used + aligned <= arena->current->capacity) {
+    if (aligned <= arena->current->capacity - arena->current->used) {
         ptr = arena->current->data + arena->current->used;
         arena->current->used += aligned;
         return ptr;
@@ -558,9 +565,46 @@ osc_array *osc_array_new(osc_arena *arena, int32_t elem_size,
     arr->elem_size = elem_size;
     arr->len       = 0;
     arr->capacity  = initial_capacity > 0 ? initial_capacity : 4;
+    arr->owner     = arena;
+    if ((size_t)arr->capacity > (size_t)-1 / (size_t)arr->elem_size) {
+        OSC_PANIC("array capacity overflow");
+    }
     arr->data      = osc_arena_alloc(arena, (size_t)arr->capacity *
                                            (size_t)arr->elem_size);
     return arr;
+}
+
+static void osc_array_reserve(osc_array *arr, int32_t required)
+{
+    int32_t new_cap;
+    void *new_data;
+
+    if (!arr) OSC_PANIC("array is NULL");
+    if (!arr->owner) OSC_PANIC("array owner arena is NULL");
+    if (required < 0) OSC_PANIC("array capacity overflow");
+    if (required <= arr->capacity) return;
+
+    new_cap = arr->capacity;
+    while (new_cap < required) {
+        if (new_cap > INT32_MAX / 2) {
+            new_cap = required;
+            break;
+        }
+        new_cap *= 2;
+    }
+    if (new_cap < required ||
+        (size_t)new_cap > (size_t)-1 / (size_t)arr->elem_size) {
+        OSC_PANIC("array capacity overflow");
+    }
+
+    new_data = osc_arena_alloc(arr->owner,
+        (size_t)new_cap * (size_t)arr->elem_size);
+    if (arr->len > 0) {
+        memcpy(new_data, arr->data,
+            (size_t)arr->len * (size_t)arr->elem_size);
+    }
+    arr->data = new_data;
+    arr->capacity = new_cap;
 }
 
 void *osc_array_get(osc_array *arr, int32_t index)
@@ -588,23 +632,13 @@ void osc_array_set(osc_array *arr, int32_t index, void *value)
 
 void osc_array_push(osc_arena *arena, osc_array *arr, void *value)
 {
+    (void)arena;
     if (!arr) {
         OSC_PANIC("array is NULL");
     }
-    if (arr->len >= arr->capacity) {
-        int32_t  new_cap  = arr->capacity * 2;
-        void    *new_data;
-
-        if (new_cap < arr->capacity) {
-            OSC_PANIC("array capacity overflow");
-        }
-        new_data = osc_arena_alloc(arena, (size_t)new_cap *
-                                         (size_t)arr->elem_size);
-        memcpy(new_data, arr->data, (size_t)arr->len *
-                                    (size_t)arr->elem_size);
-        arr->data     = new_data;
-        arr->capacity = new_cap;
-    }
+    if (!value) OSC_PANIC("array value is NULL");
+    if (arr->len == INT32_MAX) OSC_PANIC("array length overflow");
+    osc_array_reserve(arr, arr->len + 1);
     memcpy((uint8_t *)arr->data + (size_t)arr->len * (size_t)arr->elem_size,
            value, (size_t)arr->elem_size);
     arr->len++;
@@ -628,6 +662,184 @@ int32_t osc_array_len(osc_array *arr)
         OSC_PANIC("array is NULL");
     }
     return arr->len;
+}
+
+void osc_array_check_arena_store(osc_arena *arena, osc_array *arr)
+{
+    if (!arena) OSC_PANIC("arena is NULL");
+    if (!arr) OSC_PANIC("array is NULL");
+    if (!arr->owner) OSC_PANIC("array owner arena is NULL");
+    if (arena != arr->owner) {
+        OSC_PANIC("arena-backed value cannot be stored in an array owned by another arena");
+    }
+}
+
+osc_array *osc_array_clone(osc_arena *arena, osc_array *arr)
+{
+    osc_array *result;
+    if (!arr) OSC_PANIC("array is NULL");
+    result = osc_array_new(arena, arr->elem_size, arr->len);
+    if (arr->len > 0) {
+        memcpy(result->data, arr->data,
+            (size_t)arr->len * (size_t)arr->elem_size);
+    }
+    result->len = arr->len;
+    return result;
+}
+
+osc_array *osc_array_repeat(osc_arena *arena, int32_t elem_size,
+                            const void *value, int32_t count)
+{
+    osc_array *result;
+    int32_t i;
+    if (!value) OSC_PANIC("array value is NULL");
+    if (count < 0) OSC_PANIC("array repeat count must be >= 0");
+    result = osc_array_new(arena, elem_size, count);
+    for (i = 0; i < count; i++) {
+        memcpy((uint8_t *)result->data + (size_t)i * (size_t)elem_size,
+            value, (size_t)elem_size);
+    }
+    result->len = count;
+    return result;
+}
+
+void osc_array_swap(osc_array *arr, int32_t left, int32_t right)
+{
+    uint8_t *a;
+    uint8_t *b;
+    int32_t i;
+    if (!arr) OSC_PANIC("array is NULL");
+    if (left < 0 || left >= arr->len || right < 0 || right >= arr->len) {
+        OSC_PANIC("array index out of bounds");
+    }
+    if (left == right) return;
+    a = (uint8_t *)arr->data + (size_t)left * (size_t)arr->elem_size;
+    b = (uint8_t *)arr->data + (size_t)right * (size_t)arr->elem_size;
+    for (i = 0; i < arr->elem_size; i++) {
+        uint8_t tmp = a[i];
+        a[i] = b[i];
+        b[i] = tmp;
+    }
+}
+
+void osc_array_reverse(osc_array *arr)
+{
+    int32_t left;
+    int32_t right;
+    if (!arr) OSC_PANIC("array is NULL");
+    left = 0;
+    right = arr->len - 1;
+    while (left < right) {
+        osc_array_swap(arr, left, right);
+        left++;
+        right--;
+    }
+}
+
+void osc_array_fill(osc_array *arr, const void *value)
+{
+    int32_t i;
+    if (!arr) OSC_PANIC("array is NULL");
+    if (!value) OSC_PANIC("array value is NULL");
+    for (i = 0; i < arr->len; i++) {
+        memcpy((uint8_t *)arr->data + (size_t)i * (size_t)arr->elem_size,
+            value, (size_t)arr->elem_size);
+    }
+}
+
+void osc_array_clear(osc_array *arr)
+{
+    if (!arr) OSC_PANIC("array is NULL");
+    arr->len = 0;
+}
+
+void osc_array_extend(osc_arena *arena, osc_array *destination,
+                      osc_array *source)
+{
+    int32_t source_len;
+    (void)arena;
+    if (!destination || !source) OSC_PANIC("array is NULL");
+    if (destination->elem_size != source->elem_size) {
+        OSC_PANIC("array element size mismatch");
+    }
+    source_len = source->len;
+    if (source_len == 0) return;
+    if (destination->len > INT32_MAX - source_len) {
+        OSC_PANIC("array length overflow");
+    }
+    osc_array_reserve(destination, destination->len + source_len);
+    memcpy((uint8_t *)destination->data +
+               (size_t)destination->len * (size_t)destination->elem_size,
+           source->data,
+           (size_t)source_len * (size_t)source->elem_size);
+    destination->len += source_len;
+}
+
+void osc_array_insert(osc_arena *arena, osc_array *arr, int32_t index,
+                      const void *value)
+{
+    uint8_t *data;
+    void *value_copy;
+    size_t elem_size;
+    int32_t i;
+    (void)arena;
+    if (!arr) OSC_PANIC("array is NULL");
+    if (!value) OSC_PANIC("array value is NULL");
+    if (index < 0 || index > arr->len) OSC_PANIC("array index out of bounds");
+    if (arr->len == INT32_MAX) OSC_PANIC("array length overflow");
+    if (!arr->owner) OSC_PANIC("array owner arena is NULL");
+    value_copy = osc_arena_alloc(arr->owner, (size_t)arr->elem_size);
+    memcpy(value_copy, value, (size_t)arr->elem_size);
+    osc_array_reserve(arr, arr->len + 1);
+    data = (uint8_t *)arr->data;
+    elem_size = (size_t)arr->elem_size;
+    for (i = arr->len; i > index; i--) {
+        memcpy(data + (size_t)i * elem_size,
+               data + (size_t)(i - 1) * elem_size,
+               elem_size);
+    }
+    memcpy(data + (size_t)index * elem_size, value_copy, elem_size);
+    arr->len++;
+}
+
+void osc_array_remove_at(osc_array *arr, int32_t index, void *out_value)
+{
+    uint8_t *data;
+    size_t elem_size;
+    int32_t i;
+    if (!arr) OSC_PANIC("array is NULL");
+    if (!out_value) OSC_PANIC("array output is NULL");
+    if (index < 0 || index >= arr->len) OSC_PANIC("array index out of bounds");
+    data = (uint8_t *)arr->data;
+    elem_size = (size_t)arr->elem_size;
+    memcpy(out_value, data + (size_t)index * elem_size, elem_size);
+    for (i = index; i + 1 < arr->len; i++) {
+        memcpy(data + (size_t)i * elem_size,
+               data + (size_t)(i + 1) * elem_size,
+               elem_size);
+    }
+    arr->len--;
+}
+
+osc_array *osc_array_slice(osc_arena *arena, osc_array *arr,
+                           int32_t start, int32_t end)
+{
+    osc_array *result;
+    int32_t count;
+    if (!arr) OSC_PANIC("array is NULL");
+    if (start < 0 || end < start || end > arr->len) {
+        OSC_PANIC("array slice out of bounds");
+    }
+    count = end - start;
+    result = osc_array_new(arena, arr->elem_size, count);
+    if (count > 0) {
+        memcpy(result->data,
+               (uint8_t *)arr->data +
+                   (size_t)start * (size_t)arr->elem_size,
+               (size_t)count * (size_t)arr->elem_size);
+    }
+    result->len = count;
+    return result;
 }
 
 /* ================================================================== */
@@ -3217,64 +3429,10 @@ osc_str osc_str_from_i64_hex(osc_arena *arena, int64_t n)
 }
 
 /* ================================================================== */
-/*  Tier 11: Array sort (shellsort — no function pointers)             */
+/*  Tier 11: Typed array operations                                    */
 /* ================================================================== */
 
-void osc_sort_i32(osc_array *arr)
-{
-    int32_t *d;
-    int32_t n, gap, i, j;
-    int32_t tmp;
-    if (!arr) OSC_PANIC("sort_i32: array is NULL");
-    d = (int32_t *)arr->data;
-    n = arr->len;
-    for (gap = n / 2; gap > 0; gap /= 2) {
-        for (i = gap; i < n; i++) {
-            tmp = d[i];
-            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
-                d[j] = d[j - gap];
-            d[j] = tmp;
-        }
-    }
-}
-
-void osc_sort_i64(osc_array *arr)
-{
-    int64_t *d;
-    int32_t n, gap, i, j;
-    int64_t tmp;
-    if (!arr) OSC_PANIC("sort_i64: array is NULL");
-    d = (int64_t *)arr->data;
-    n = arr->len;
-    for (gap = n / 2; gap > 0; gap /= 2) {
-        for (i = gap; i < n; i++) {
-            tmp = d[i];
-            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
-                d[j] = d[j - gap];
-            d[j] = tmp;
-        }
-    }
-}
-
-void osc_sort_f64(osc_array *arr)
-{
-    double *d;
-    int32_t n, gap, i, j;
-    double tmp;
-    if (!arr) OSC_PANIC("sort_f64: array is NULL");
-    d = (double *)arr->data;
-    n = arr->len;
-    for (gap = n / 2; gap > 0; gap /= 2) {
-        for (i = gap; i < n; i++) {
-            tmp = d[i];
-            for (j = i; j >= gap && d[j - gap] > tmp; j -= gap)
-                d[j] = d[j - gap];
-            d[j] = tmp;
-        }
-    }
-}
-
-static int osc_str_cmp(osc_str a, osc_str b)
+static int osc_array_cmp_str_value(osc_str a, osc_str b)
 {
     int32_t min_len = a.len < b.len ? a.len : b.len;
     int32_t i;
@@ -3287,23 +3445,128 @@ static int osc_str_cmp(osc_str a, osc_str b)
     return 0;
 }
 
-void osc_sort_str(osc_array *arr)
+static int osc_array_cmp_bool(uint8_t a, uint8_t b)
 {
-    osc_str *d;
-    int32_t n, gap, i, j;
-    osc_str tmp;
-    if (!arr) OSC_PANIC("sort_str: array is NULL");
-    d = (osc_str *)arr->data;
-    n = arr->len;
-    for (gap = n / 2; gap > 0; gap /= 2) {
-        for (i = gap; i < n; i++) {
-            tmp = d[i];
-            for (j = i; j >= gap && osc_str_cmp(d[j - gap], tmp) > 0; j -= gap)
-                d[j] = d[j - gap];
-            d[j] = tmp;
-        }
-    }
+    return a < b ? -1 : (a > b ? 1 : 0);
 }
+
+static int osc_array_cmp_i32(int32_t a, int32_t b)
+{
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static int osc_array_cmp_i64(int64_t a, int64_t b)
+{
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+static int osc_array_cmp_f64(double a, double b)
+{
+    uint8_t a_nan = a != a;
+    uint8_t b_nan = b != b;
+    if (a_nan && b_nan) return 0;
+    if (a_nan) return 1;
+    if (b_nan) return -1;
+    return a < b ? -1 : (a > b ? 1 : 0);
+}
+
+#define OSC_DEFINE_ARRAY_TYPED(suffix, type, compare_value) \
+uint8_t osc_array_contains_##suffix(osc_array *arr, const void *value) \
+{ \
+    return osc_array_index_of_##suffix(arr, value) >= 0; \
+} \
+int32_t osc_array_index_of_##suffix(osc_array *arr, const void *value) \
+{ \
+    type *data; \
+    type needle; \
+    int32_t i; \
+    if (!arr || !value) OSC_PANIC("array is NULL"); \
+    if (arr->elem_size != (int32_t)sizeof(type)) OSC_PANIC("array element size mismatch"); \
+    data = (type *)arr->data; \
+    needle = *(const type *)value; \
+    for (i = 0; i < arr->len; i++) { \
+        if (compare_value(data[i], needle) == 0) return i; \
+    } \
+    return -1; \
+} \
+int32_t osc_array_last_index_of_##suffix(osc_array *arr, const void *value) \
+{ \
+    type *data; \
+    type needle; \
+    int32_t i; \
+    if (!arr || !value) OSC_PANIC("array is NULL"); \
+    if (arr->elem_size != (int32_t)sizeof(type)) OSC_PANIC("array element size mismatch"); \
+    data = (type *)arr->data; \
+    needle = *(const type *)value; \
+    for (i = arr->len - 1; i >= 0; i--) { \
+        if (compare_value(data[i], needle) == 0) return i; \
+    } \
+    return -1; \
+} \
+int32_t osc_array_count_##suffix(osc_array *arr, const void *value) \
+{ \
+    type *data; \
+    type needle; \
+    int32_t i; \
+    int32_t count = 0; \
+    if (!arr || !value) OSC_PANIC("array is NULL"); \
+    if (arr->elem_size != (int32_t)sizeof(type)) OSC_PANIC("array element size mismatch"); \
+    data = (type *)arr->data; \
+    needle = *(const type *)value; \
+    for (i = 0; i < arr->len; i++) { \
+        if (compare_value(data[i], needle) == 0) count++; \
+    } \
+    return count; \
+} \
+int32_t osc_array_compare_##suffix(osc_array *left, osc_array *right) \
+{ \
+    type *left_data; \
+    type *right_data; \
+    int32_t common; \
+    int32_t i; \
+    int cmp; \
+    if (!left || !right) OSC_PANIC("array is NULL"); \
+    if (left->elem_size != (int32_t)sizeof(type) || \
+        right->elem_size != (int32_t)sizeof(type)) OSC_PANIC("array element size mismatch"); \
+    left_data = (type *)left->data; \
+    right_data = (type *)right->data; \
+    common = left->len < right->len ? left->len : right->len; \
+    for (i = 0; i < common; i++) { \
+        cmp = compare_value(left_data[i], right_data[i]); \
+        if (cmp != 0) return cmp; \
+    } \
+    return left->len < right->len ? -1 : (left->len > right->len ? 1 : 0); \
+} \
+void osc_array_sort_##suffix(osc_array *arr) \
+{ \
+    type *data; \
+    int32_t gap, i, j; \
+    type value; \
+    if (!arr) OSC_PANIC("array is NULL"); \
+    if (arr->elem_size != (int32_t)sizeof(type)) OSC_PANIC("array element size mismatch"); \
+    data = (type *)arr->data; \
+    for (gap = arr->len / 2; gap > 0; gap /= 2) { \
+        for (i = gap; i < arr->len; i++) { \
+            value = data[i]; \
+            for (j = i; j >= gap && compare_value(data[j - gap], value) > 0; j -= gap) \
+                data[j] = data[j - gap]; \
+            data[j] = value; \
+        } \
+    } \
+}
+
+OSC_DEFINE_ARRAY_TYPED(bool, uint8_t, osc_array_cmp_bool)
+OSC_DEFINE_ARRAY_TYPED(i32, int32_t, osc_array_cmp_i32)
+OSC_DEFINE_ARRAY_TYPED(i64, int64_t, osc_array_cmp_i64)
+OSC_DEFINE_ARRAY_TYPED(f64, double, osc_array_cmp_f64)
+OSC_DEFINE_ARRAY_TYPED(str, osc_str, osc_array_cmp_str_value)
+
+#undef OSC_DEFINE_ARRAY_TYPED
+
+void osc_sort_i32(osc_array *arr) { osc_array_sort_i32(arr); }
+void osc_sort_i64(osc_array *arr) { osc_array_sort_i64(arr); }
+void osc_sort_f64(osc_array *arr) { osc_array_sort_f64(arr); }
+void osc_sort_str(osc_array *arr) { osc_array_sort_str(arr); }
 
 /* ================================================================== */
 /*  Hash map (string→string, open addressing, FNV-1a)                  */

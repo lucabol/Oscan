@@ -1,0 +1,185 @@
+// Collection structural, typed, ordering, and higher-order operations.
+
+fn bool_true(value: bool) -> bool { value }
+fn i32_positive(value: i32) -> bool { value > 0 }
+fn i64_positive(value: i64) -> bool { value > 0 as i64 }
+fn f64_positive(value: f64) -> bool { value > 0.0 }
+fn str_nonempty(value: str) -> bool { str_len(value) > 0 }
+
+fn bool_or(left: bool, right: bool) -> bool { left or right }
+fn i32_add(left: i32, right: i32) -> i32 { left + right }
+fn i64_add(left: i64, right: i64) -> i64 { left + right }
+fn f64_add(left: f64, right: f64) -> f64 { left + right }
+fn str_last_nonempty(previous: str, value: str) -> str {
+    if str_len(value) > 0 { value } else { previous }
+}
+
+fn make_nan(value: f64) -> f64 { value / value }
+
+fn! visit_bool(value: bool) { print_bool(value); print(" "); }
+fn! visit_i32(value: i32) { print_i32(value); print(" "); }
+fn! visit_i64(value: i64) { print_i64(value); print(" "); }
+fn! visit_f64(value: f64) { print_f64(value); print(" "); }
+fn! visit_str(value: str) { print(value); print(" "); }
+
+fn! main() {
+    let mut fixed: [i32; 3] = [3, 1, 2];
+    let fixed_copy: [i32; 3] = array_clone(fixed);
+    array_sort_i32(fixed);
+    print("fixed: ");
+    print_i32(fixed[0]); print(" ");
+    print_i32(fixed[1]); print(" ");
+    print_i32(fixed[2]); print(" ");
+    print("| clone=");
+    print_i32(fixed_copy[0]);
+    println("");
+
+    let mut values: [i32] = [3, 1, 2];
+    array_reverse(values);
+    array_swap(values, 0, 2);
+    array_fill(values, 4);
+    let values_copy: [i32] = array_clone(values);
+    let mut repeated: [i32] = array_repeat(7, 3);
+    array_insert(repeated, 1, 9);
+    let removed: i32 = array_remove_at(repeated, 2);
+    let sliced: [i32] = array_slice(values_copy, 0, 2);
+    array_extend(repeated, sliced);
+    print("structural: removed=");
+    print_i32(removed);
+    print(" values=");
+    for value in repeated { print_i32(value); print(" "); };
+    let mut cleared: [i32] = array_clone(repeated);
+    array_clear(cleared);
+    print("clear=");
+    print_i32(len(cleared));
+    println("");
+
+    let mut bools: [bool] = [true, false, true];
+    let bool_other: [bool] = [true, true];
+    print("bool typed: ");
+    print_bool(array_contains_bool(bools, true));
+    print(" ");
+    print_i32(array_index_of_bool(bools, true));
+    print(" ");
+    print_i32(array_last_index_of_bool(bools, true));
+    print(" ");
+    print_i32(array_count_bool(bools, true));
+    print(" ");
+    print_i32(array_compare_bool(bools, bool_other));
+    print(" | ");
+    array_sort_bool(bools);
+    for value in bools { print_bool(value); print(" "); };
+    println("");
+
+    let mut integers: [i32] = [3, 1, 2, 1];
+    let integer_other: [i32] = [3, 1, 2, 2];
+    print("i32 typed: ");
+    print_bool(array_contains_i32(integers, 1));
+    print(" ");
+    print_i32(array_index_of_i32(integers, 1));
+    print(" ");
+    print_i32(array_last_index_of_i32(integers, 1));
+    print(" ");
+    print_i32(array_count_i32(integers, 1));
+    print(" ");
+    print_i32(array_compare_i32(integers, integer_other));
+    print(" | ");
+    array_sort_i32(integers);
+    for value in integers { print_i32(value); print(" "); };
+    println("");
+
+    let mut wide: [i64] = [3 as i64, 1 as i64, 2 as i64, 1 as i64];
+    let wide_other: [i64] = [3 as i64, 1 as i64, 2 as i64, 2 as i64];
+    print("i64 typed: ");
+    print_bool(array_contains_i64(wide, 1 as i64));
+    print(" ");
+    print_i32(array_index_of_i64(wide, 1 as i64));
+    print(" ");
+    print_i32(array_last_index_of_i64(wide, 1 as i64));
+    print(" ");
+    print_i32(array_count_i64(wide, 1 as i64));
+    print(" ");
+    print_i32(array_compare_i64(wide, wide_other));
+    print(" | ");
+    array_sort_i64(wide);
+    for value in wide { print_i64(value); print(" "); };
+    println("");
+
+    let nan: f64 = make_nan(0.0);
+    let mut floats: [f64] = [nan, -0.0, 2.0, 0.0, nan, -1.0];
+    let zeros: [f64] = [0.0];
+    let negative_zeros: [f64] = [-0.0];
+    print("f64 typed: ");
+    print_i32(array_index_of_f64(floats, nan));
+    print(" ");
+    print_i32(array_last_index_of_f64(floats, nan));
+    print(" ");
+    print_i32(array_count_f64(floats, nan));
+    print(" ");
+    print_i32(array_count_f64(floats, 0.0));
+    print(" ");
+    print_i32(array_compare_f64(zeros, negative_zeros));
+    print(" | ");
+    array_sort_f64(floats);
+    print_bool(floats[0] == -1.0);
+    print(" ");
+    print_bool(floats[4] != floats[4]);
+    println("");
+
+    let mut words: [str] = ["beta", "alpha", "beta"];
+    let word_other: [str] = ["beta", "beta"];
+    print("str typed: ");
+    print_bool(array_contains_str(words, "beta"));
+    print(" ");
+    print_i32(array_index_of_str(words, "beta"));
+    print(" ");
+    print_i32(array_last_index_of_str(words, "beta"));
+    print(" ");
+    print_i32(array_count_str(words, "beta"));
+    print(" ");
+    print_i32(array_compare_str(words, word_other));
+    print(" | ");
+    array_sort_str(words);
+    for value in words { print(value); print(" "); };
+    println("");
+
+    let bool_filtered: [bool] = array_filter_bool(bools, bool_true);
+    let integer_filtered: [i32] = array_filter_i32(integers, i32_positive);
+    let wide_filtered: [i64] = array_filter_i64(wide, i64_positive);
+    let float_filtered: [f64] = array_filter_f64([-1.0, 2.0], f64_positive);
+    let word_filtered: [str] = array_filter_str(["", "a", "b"], str_nonempty);
+    print("hof: ");
+    print_bool(array_any_bool(bools, bool_true));
+    print_bool(array_all_bool(bools, bool_true));
+    print_i32(len(bool_filtered));
+    print_bool(array_fold_bool(bools, false, bool_or));
+    print(" ");
+    print_bool(array_any_i32(integers, i32_positive));
+    print_bool(array_all_i32(integers, i32_positive));
+    print_i32(len(integer_filtered));
+    print_i32(array_fold_i32(integers, 0, i32_add));
+    print(" ");
+    print_bool(array_any_i64(wide, i64_positive));
+    print_bool(array_all_i64(wide, i64_positive));
+    print_i32(len(wide_filtered));
+    print_i64(array_fold_i64(wide, 0 as i64, i64_add));
+    print(" ");
+    print_bool(array_any_f64([-1.0, 2.0], f64_positive));
+    print_bool(array_all_f64([-1.0, 2.0], f64_positive));
+    print_i32(len(float_filtered));
+    print_f64(array_fold_f64([-1.0, 2.0], 0.0, f64_add));
+    print(" ");
+    print_bool(array_any_str(["", "a", "b"], str_nonempty));
+    print_bool(array_all_str(["", "a", "b"], str_nonempty));
+    print_i32(len(word_filtered));
+    print(array_fold_str(["", "a", "b"], "", str_last_nonempty));
+    println("");
+
+    print("for each: ");
+    array_for_each_bool([false, true], visit_bool);
+    array_for_each_i32([1, 2], visit_i32);
+    array_for_each_i64([3 as i64, 4 as i64], visit_i64);
+    array_for_each_f64([5.0, 6.0], visit_f64);
+    array_for_each_str(["x", "y"], visit_str);
+    println("");
+}

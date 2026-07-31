@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
+use crate::collection::{array_element_type, CollectionIntrinsic, CollectionOp};
 use crate::error::CompileError;
 use crate::token::Span;
 use crate::types::*;
@@ -2032,6 +2033,7 @@ impl SemanticAnalyzer {
                 self.enums.insert(e.name.clone(), EnumInfo { variants });
             }
             TopDecl::Fn(f) => {
+                Self::reject_reserved_collection_name(&f.name, f.span)?;
                 let mut params = Vec::new();
                 for p in &f.params {
                     params.push((p.name.clone(), self.resolve_type(&p.ty)?));
@@ -2057,6 +2059,7 @@ impl SemanticAnalyzer {
                 );
             }
             TopDecl::Let(l) => {
+                Self::reject_reserved_collection_name(&l.name, l.span)?;
                 let ty = self.resolve_type(&l.ty)?;
                 if self.constants.contains_key(&l.name) {
                     return Err(CompileError::new(
@@ -2068,6 +2071,7 @@ impl SemanticAnalyzer {
             }
             TopDecl::Extern(eb) => {
                 for ef in &eb.decls {
+                    Self::reject_reserved_collection_name(&ef.name, ef.span)?;
                     let mut params = Vec::new();
                     for p in &ef.params {
                         params.push((p.name.clone(), self.resolve_type(&p.ty)?));
@@ -2111,7 +2115,7 @@ impl SemanticAnalyzer {
                 self.scopes.push(HashMap::new());
                 let actual = self.check_expr(&l.value, Some(&expected))?;
                 self.scopes.pop();
-                if actual != expected {
+                if !Self::types_compatible(&actual, &expected) {
                     return Err(CompileError::new(
                         l.span,
                         format!(
@@ -2139,6 +2143,7 @@ impl SemanticAnalyzer {
         // Function scope for parameters
         self.scopes.push(HashMap::new());
         for p in &func.params {
+            Self::reject_reserved_collection_name(&p.name, p.span)?;
             let ty = self.resolve_type(&p.ty)?;
             // Parameters go into the function scope directly (no anti-shadow check
             // against global scope — anti-shadowing is within-function only)
@@ -2154,7 +2159,7 @@ impl SemanticAnalyzer {
 
         let body_ty = self.check_block(&func.body, Some(&return_type))?;
 
-        if body_ty != return_type {
+        if !Self::types_compatible(&body_ty, &return_type) {
             return Err(CompileError::new(
                 func.span,
                 format!(
@@ -2371,7 +2376,7 @@ impl SemanticAnalyzer {
             Stmt::Let(ls) => {
                 let expected = self.resolve_type(&ls.ty)?;
                 let actual = self.check_expr(&ls.value, Some(&expected))?;
-                if actual != expected {
+                if !Self::types_compatible(&actual, &expected) {
                     return Err(CompileError::new(
                         ls.span,
                         format!("let '{}': expected {}, got {}", ls.name, expected, actual),
@@ -2428,7 +2433,7 @@ impl SemanticAnalyzer {
                 }
 
                 let val_ty = self.check_expr(&a.value, Some(&ty))?;
-                if val_ty != ty {
+                if !Self::types_compatible(&val_ty, &ty) {
                     return Err(CompileError::new(
                         a.span,
                         format!("assignment type mismatch: expected {}, got {}", ty, val_ty),
@@ -2579,7 +2584,7 @@ impl SemanticAnalyzer {
                 match &r.value {
                     Some(expr) => {
                         let ty = self.check_expr(expr, Some(&fn_ret))?;
-                        if ty != fn_ret {
+                        if !Self::types_compatible(&ty, &fn_ret) {
                             return Err(CompileError::new(
                                 r.span,
                                 format!("return type mismatch: expected {}, got {}", fn_ret, ty),
@@ -2704,7 +2709,7 @@ impl SemanticAnalyzer {
                     let param_types: Vec<BcType> =
                         fi.params.iter().map(|(_, t)| t.clone()).collect();
                     let ret_type = fi.return_type.clone();
-                    return Ok(BcType::FnPtr(param_types, Box::new(ret_type)));
+                    return Ok(BcType::FnPtr(param_types, Box::new(ret_type), fi.is_pure));
                 }
                 Err(CompileError::new(
                     *span,
@@ -2914,13 +2919,12 @@ impl SemanticAnalyzer {
                 let then_ty = self.check_block(then_block, expected)?;
                 if let Some(else_expr) = else_branch {
                     let else_ty = self.check_expr(else_expr, expected)?;
-                    if then_ty != else_ty {
-                        return Err(CompileError::new(
+                    Self::join_compatible_types(&then_ty, &else_ty, expected).ok_or_else(|| {
+                        CompileError::new(
                             *span,
                             format!("if/else type mismatch: {} vs {}", then_ty, else_ty),
-                        ));
-                    }
-                    Ok(then_ty)
+                        )
+                    })
                 } else {
                     if then_ty != BcType::Unit {
                         return Err(CompileError::new(
@@ -2946,7 +2950,7 @@ impl SemanticAnalyzer {
                 match call_ty {
                     BcType::Result(ok_ty, err_ty) => match &self.current_fn_return_type {
                         Some(BcType::Result(_, fn_err)) => {
-                            if *err_ty != **fn_err {
+                            if !Self::types_compatible(&err_ty, fn_err) {
                                 return Err(CompileError::new(
                                     *span,
                                     format!("try error type mismatch: {} vs {}", err_ty, fn_err),
@@ -3029,7 +3033,7 @@ impl SemanticAnalyzer {
                             )
                         })?;
                     let actual = self.check_expr(&fi.value, Some(expected_field_ty))?;
-                    if actual != *expected_field_ty {
+                    if !Self::types_compatible(&actual, expected_field_ty) {
                         return Err(CompileError::new(
                             fi.span,
                             format!(
@@ -3091,7 +3095,7 @@ impl SemanticAnalyzer {
                 }
                 for (arg, expected_ty) in args.iter().zip(var_info.1.iter()) {
                     let actual = self.check_expr(arg, Some(expected_ty))?;
-                    if actual != *expected_ty {
+                    if !Self::types_compatible(&actual, expected_ty) {
                         return Err(CompileError::new(
                             arg.span(),
                             format!("expected {}, got {}", expected_ty, actual),
@@ -3130,7 +3134,13 @@ impl SemanticAnalyzer {
                     _ => return Err(CompileError::new(*span, "expected function name")),
                 };
 
-                if name == "push" || name == "pop" {
+                let collection_is_impure = CollectionIntrinsic::resolve_with_alias(name)
+                    .is_some_and(|intrinsic| !intrinsic.is_pure());
+                let indirect_is_impure = self
+                    .lookup_var(name)
+                    .is_some_and(|binding| matches!(binding.ty, BcType::FnPtr(_, _, false)));
+
+                if name == "push" || name == "pop" || collection_is_impure || indirect_is_impure {
                     return Err(CompileError::new(
                         *span,
                         format!(
@@ -3265,6 +3275,10 @@ impl SemanticAnalyzer {
             _ => return Err(CompileError::new(span, "expected function name")),
         };
 
+        if let Some(intrinsic) = CollectionIntrinsic::resolve_with_alias(&name) {
+            return self.check_collection_call(intrinsic, &name, args, span);
+        }
+
         // Special: len(arr)
         if name == "len" {
             if args.len() != 1 {
@@ -3287,6 +3301,7 @@ impl SemanticAnalyzer {
             if args.len() != 2 {
                 return Err(CompileError::new(span, "push() takes 2 arguments"));
             }
+            self.require_mutable_collection_target("push", &args[0])?;
             let arr_ty = self.check_expr(&args[0], None)?;
             let elem_ty = match &arr_ty {
                 BcType::Array(e) => (**e).clone(),
@@ -3298,7 +3313,7 @@ impl SemanticAnalyzer {
                 }
             };
             let val_ty = self.check_expr(&args[1], Some(&elem_ty))?;
-            if val_ty != elem_ty {
+            if !Self::types_compatible(&val_ty, &elem_ty) {
                 return Err(CompileError::new(
                     args[1].span(),
                     format!(
@@ -3317,6 +3332,7 @@ impl SemanticAnalyzer {
             if args.len() != 1 {
                 return Err(CompileError::new(span, "pop() takes 1 argument"));
             }
+            self.require_mutable_collection_target("pop", &args[0])?;
             let arr_ty = self.check_expr(&args[0], None)?;
             match &arr_ty {
                 BcType::Array(elem) => Ok((**elem).clone()),
@@ -3328,9 +3344,10 @@ impl SemanticAnalyzer {
         } else {
             // Check if callee is a local variable with FnPtr type
             if let Some(info) = self.lookup_var(&name) {
-                if let BcType::FnPtr(param_types, ret_type) = &info.ty {
+                if let BcType::FnPtr(param_types, ret_type, is_pure) = &info.ty {
                     let param_types = param_types.clone();
                     let ret_type = (**ret_type).clone();
+                    let is_pure = *is_pure;
                     if args.len() != param_types.len() {
                         return Err(CompileError::new(
                             span,
@@ -3344,7 +3361,7 @@ impl SemanticAnalyzer {
                     }
                     for (i, (arg, expected_ty)) in args.iter().zip(param_types.iter()).enumerate() {
                         let actual = self.check_expr(arg, Some(expected_ty))?;
-                        if actual != *expected_ty {
+                        if !Self::types_compatible(&actual, expected_ty) {
                             return Err(CompileError::new(
                                 arg.span(),
                                 format!(
@@ -3356,6 +3373,15 @@ impl SemanticAnalyzer {
                                 ),
                             ));
                         }
+                    }
+                    if self.in_pure_fn && !is_pure {
+                        return Err(CompileError::new(
+                            span,
+                            format!(
+                                "pure function cannot call impure function pointer '{}'",
+                                name
+                            ),
+                        ));
                     }
                     return Ok(ret_type);
                 } else {
@@ -3394,7 +3420,7 @@ impl SemanticAnalyzer {
 
             for (i, (arg, (_, expected_ty))) in args.iter().zip(func.params.iter()).enumerate() {
                 let actual = self.check_expr(arg, Some(expected_ty))?;
-                if actual != *expected_ty {
+                if !Self::types_compatible(&actual, expected_ty) {
                     return Err(CompileError::new(
                         arg.span(),
                         format!(
@@ -3409,6 +3435,234 @@ impl SemanticAnalyzer {
             }
 
             Ok(func.return_type.clone())
+        }
+    }
+
+    fn check_collection_call(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        called_name: &str,
+        args: &[Expr],
+        span: Span,
+    ) -> Result<BcType, CompileError> {
+        if args.len() != intrinsic.arity() {
+            return Err(CompileError::new(
+                span,
+                format!(
+                    "'{}' expects {} args, got {}",
+                    called_name,
+                    intrinsic.arity(),
+                    args.len()
+                ),
+            ));
+        }
+        if self.in_pure_fn && !intrinsic.is_pure() {
+            return Err(CompileError::new(
+                span,
+                format!(
+                    "pure function cannot call impure function '{}'",
+                    called_name
+                ),
+            ));
+        }
+        if intrinsic.is_mutating() {
+            self.require_mutable_collection_target(called_name, &args[0])?;
+        }
+
+        if intrinsic.op == CollectionOp::Repeat {
+            let elem_ty = self.check_expr(&args[0], None)?;
+            self.check_collection_arg(&args[1], &BcType::I32, called_name, 2)?;
+            return Ok(BcType::Array(Box::new(elem_ty)));
+        }
+
+        let expected_source = intrinsic.source.map(|source| source.bc_type());
+        let expected_array = expected_source
+            .as_ref()
+            .map(|source| BcType::Array(Box::new(source.clone())));
+        let first_ty = self.check_expr(&args[0], expected_array.as_ref())?;
+        let elem_ty = array_element_type(&first_ty).ok_or_else(|| {
+            CompileError::new(
+                args[0].span(),
+                format!("{}() expects an array, got {}", called_name, first_ty),
+            )
+        })?;
+
+        if intrinsic.requires_dynamic_array() && !matches!(first_ty, BcType::Array(_)) {
+            return Err(CompileError::new(
+                args[0].span(),
+                format!(
+                    "{}() expects a dynamic array, got {}",
+                    called_name, first_ty
+                ),
+            ));
+        }
+        if let Some(expected) = expected_source.as_ref() {
+            if elem_ty != *expected {
+                return Err(CompileError::new(
+                    args[0].span(),
+                    format!(
+                        "{}() expects an array of {}, got {}",
+                        called_name, expected, first_ty
+                    ),
+                ));
+            }
+        }
+
+        match intrinsic.op {
+            CollectionOp::Clone => Ok(first_ty),
+            CollectionOp::Reverse | CollectionOp::Clear | CollectionOp::Sort => Ok(BcType::Unit),
+            CollectionOp::Fill => {
+                self.check_collection_arg(&args[1], &elem_ty, called_name, 2)?;
+                Ok(BcType::Unit)
+            }
+            CollectionOp::Swap => {
+                self.check_collection_arg(&args[1], &BcType::I32, called_name, 2)?;
+                self.check_collection_arg(&args[2], &BcType::I32, called_name, 3)?;
+                Ok(BcType::Unit)
+            }
+            CollectionOp::Extend => {
+                let source_ty =
+                    self.check_expr(&args[1], Some(&BcType::Array(Box::new(elem_ty.clone()))))?;
+                let source_elem = array_element_type(&source_ty).ok_or_else(|| {
+                    CompileError::new(
+                        args[1].span(),
+                        format!(
+                            "{}() source must be an array, got {}",
+                            called_name, source_ty
+                        ),
+                    )
+                })?;
+                if !Self::types_compatible(&source_elem, &elem_ty) {
+                    return Err(CompileError::new(
+                        args[1].span(),
+                        format!(
+                            "{}() source element type mismatch: expected {}, got {}",
+                            called_name, elem_ty, source_elem
+                        ),
+                    ));
+                }
+                Ok(BcType::Unit)
+            }
+            CollectionOp::Insert => {
+                self.check_collection_arg(&args[1], &BcType::I32, called_name, 2)?;
+                self.check_collection_arg(&args[2], &elem_ty, called_name, 3)?;
+                Ok(BcType::Unit)
+            }
+            CollectionOp::RemoveAt => {
+                self.check_collection_arg(&args[1], &BcType::I32, called_name, 2)?;
+                Ok(elem_ty)
+            }
+            CollectionOp::Slice => {
+                self.check_collection_arg(&args[1], &BcType::I32, called_name, 2)?;
+                self.check_collection_arg(&args[2], &BcType::I32, called_name, 3)?;
+                Ok(BcType::Array(Box::new(elem_ty)))
+            }
+            CollectionOp::Contains
+            | CollectionOp::IndexOf
+            | CollectionOp::LastIndexOf
+            | CollectionOp::Count => {
+                self.check_collection_arg(&args[1], &elem_ty, called_name, 2)?;
+                Ok(match intrinsic.op {
+                    CollectionOp::Contains => BcType::Bool,
+                    _ => BcType::I32,
+                })
+            }
+            CollectionOp::Compare => {
+                let other_ty =
+                    self.check_expr(&args[1], Some(&BcType::Array(Box::new(elem_ty.clone()))))?;
+                if array_element_type(&other_ty).as_ref() != Some(&elem_ty) {
+                    return Err(CompileError::new(
+                        args[1].span(),
+                        format!(
+                            "{}() expects arrays with matching element types",
+                            called_name
+                        ),
+                    ));
+                }
+                Ok(BcType::I32)
+            }
+            CollectionOp::Any
+            | CollectionOp::All
+            | CollectionOp::Map
+            | CollectionOp::Filter
+            | CollectionOp::ForEach => {
+                let callback = intrinsic.callback_type().unwrap();
+                self.check_collection_arg(&args[1], &callback, called_name, 2)?;
+                Ok(match intrinsic.op {
+                    CollectionOp::Any | CollectionOp::All => BcType::Bool,
+                    CollectionOp::Map => {
+                        BcType::Array(Box::new(intrinsic.target.unwrap().bc_type()))
+                    }
+                    CollectionOp::Filter => BcType::Array(Box::new(elem_ty)),
+                    CollectionOp::ForEach => BcType::Unit,
+                    _ => unreachable!(),
+                })
+            }
+            CollectionOp::Fold => {
+                self.check_collection_arg(&args[1], &elem_ty, called_name, 2)?;
+                let callback = intrinsic.callback_type().unwrap();
+                self.check_collection_arg(&args[2], &callback, called_name, 3)?;
+                Ok(elem_ty)
+            }
+            CollectionOp::Repeat => unreachable!(),
+        }
+    }
+
+    fn check_collection_arg(
+        &mut self,
+        arg: &Expr,
+        expected: &BcType,
+        called_name: &str,
+        position: usize,
+    ) -> Result<(), CompileError> {
+        let actual = self.check_expr(arg, Some(expected))?;
+        if Self::types_compatible(&actual, expected) {
+            return Ok(());
+        }
+        Err(CompileError::new(
+            arg.span(),
+            format!(
+                "arg {} of '{}': expected {}, got {}",
+                position, called_name, expected, actual
+            ),
+        ))
+    }
+
+    fn require_mutable_collection_target(
+        &self,
+        called_name: &str,
+        expr: &Expr,
+    ) -> Result<(), CompileError> {
+        fn base_name(expr: &Expr) -> Option<&str> {
+            match expr {
+                Expr::Ident(name, _) => Some(name),
+                Expr::FieldAccess { expr, .. } | Expr::Index { expr, .. } => base_name(expr),
+                _ => None,
+            }
+        }
+
+        let name = base_name(expr).ok_or_else(|| {
+            CompileError::new(
+                expr.span(),
+                format!("{}() requires a mutable array binding", called_name),
+            )
+        })?;
+        let binding = self.lookup_var(name).ok_or_else(|| {
+            CompileError::new(
+                expr.span(),
+                format!("{}() requires a mutable array binding", called_name),
+            )
+        })?;
+        if binding.is_mut {
+            Ok(())
+        } else {
+            Err(CompileError::new(
+                expr.span(),
+                format!(
+                    "{}() cannot mutate immutable binding '{}'; declare it with 'let mut'",
+                    called_name, name
+                ),
+            ))
         }
     }
 
@@ -3432,13 +3686,13 @@ impl SemanticAnalyzer {
                 let result_ty = self.infer_result_type(expected);
                 let val_ty = if let Some(BcType::Result(ok_ty, _)) = &result_ty {
                     let actual = self.check_expr(&args[0], Some(ok_ty))?;
-                    if actual != **ok_ty {
+                    if !Self::types_compatible(&actual, ok_ty) {
                         return Err(CompileError::new(
                             args[0].span(),
                             format!("Result::Ok: expected {}, got {}", ok_ty, actual),
                         ));
                     }
-                    actual
+                    (**ok_ty).clone()
                 } else {
                     self.check_expr(&args[0], None)?
                 };
@@ -3457,13 +3711,13 @@ impl SemanticAnalyzer {
                 let result_ty = self.infer_result_type(expected);
                 let err_val_ty = if let Some(BcType::Result(_, err_ty)) = &result_ty {
                     let actual = self.check_expr(&args[0], Some(err_ty))?;
-                    if actual != **err_ty {
+                    if !Self::types_compatible(&actual, err_ty) {
                         return Err(CompileError::new(
                             args[0].span(),
                             format!("Result::Err: expected {}, got {}", err_ty, actual),
                         ));
                     }
-                    actual
+                    (**err_ty).clone()
                 } else {
                     self.check_expr(&args[0], None)?
                 };
@@ -3556,19 +3810,17 @@ impl SemanticAnalyzer {
             }
         }
 
-        // All arms must have same type
-        if arm_types.len() > 1 {
-            for (i, ty) in arm_types.iter().enumerate().skip(1) {
-                if ty != &arm_types[0] {
-                    return Err(CompileError::new(
-                        arms[i].span,
-                        format!("match arm type mismatch: {} vs {}", arm_types[0], ty),
-                    ));
-                }
-            }
+        let mut result_ty = arm_types.first().cloned().unwrap_or(BcType::Unit);
+        for (i, ty) in arm_types.iter().enumerate().skip(1) {
+            result_ty = Self::join_compatible_types(&result_ty, ty, expected).ok_or_else(|| {
+                CompileError::new(
+                    arms[i].span,
+                    format!("match arm type mismatch: {} vs {}", result_ty, ty),
+                )
+            })?;
         }
 
-        Ok(arm_types.into_iter().next().unwrap_or(BcType::Unit))
+        Ok(result_ty)
     }
 
     fn check_pattern_compat(
@@ -3813,13 +4065,13 @@ impl SemanticAnalyzer {
                 let e = self.resolve_type(err)?;
                 Ok(BcType::Result(Box::new(o), Box::new(e)))
             }
-            Type::FnPtr(params, ret, _) => {
+            Type::FnPtr(params, ret, is_pure, _) => {
                 let mut param_types = Vec::new();
                 for p in params {
                     param_types.push(self.resolve_type(p)?);
                 }
                 let ret_type = self.resolve_type(ret)?;
-                Ok(BcType::FnPtr(param_types, Box::new(ret_type)))
+                Ok(BcType::FnPtr(param_types, Box::new(ret_type), *is_pure))
             }
         }
     }
@@ -3884,6 +4136,7 @@ impl SemanticAnalyzer {
         is_mut: bool,
         span: Span,
     ) -> Result<(), CompileError> {
+        Self::reject_reserved_collection_name(name, span)?;
         // Anti-shadowing: check ALL enclosing scopes
         for scope in &self.scopes {
             if scope.contains_key(name) {
@@ -3900,6 +4153,16 @@ impl SemanticAnalyzer {
             .last_mut()
             .unwrap()
             .insert(name.to_string(), BindingInfo { ty, is_mut });
+        Ok(())
+    }
+
+    fn reject_reserved_collection_name(name: &str, span: Span) -> Result<(), CompileError> {
+        if CollectionIntrinsic::resolve_with_alias(name).is_some() {
+            return Err(CompileError::new(
+                span,
+                format!("'{}' is reserved for a collection intrinsic", name),
+            ));
+        }
         Ok(())
     }
 
@@ -3946,19 +4209,21 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn types_compatible(actual: &BcType, expected: &BcType) -> bool {
+        actual.is_compatible_with(expected)
+    }
+
+    fn join_compatible_types(
+        left: &BcType,
+        right: &BcType,
+        expected: Option<&BcType>,
+    ) -> Option<BcType> {
+        left.compatible_join(right, expected)
+    }
+
     /// Returns true if a type is safe to escape from an arena block.
-    /// Only primitives (i32, i64, f64, bool, unit) are safe.
     fn is_arena_safe_type(ty: &BcType) -> bool {
-        matches!(
-            ty,
-            BcType::I32
-                | BcType::I64
-                | BcType::F64
-                | BcType::Bool
-                | BcType::Unit
-                | BcType::Handle
-                | BcType::FnPtr(_, _)
-        )
+        ty.is_arena_safe()
     }
 }
 
@@ -4136,6 +4401,222 @@ mod tests {
     }
 
     #[test]
+    fn test_function_pointer_effect_compatibility() {
+        expect_ok(
+            "
+            fn increment(value: i32) -> i32 { value + 1 }
+            fn! invoke(callback: fn!(i32) -> i32) -> i32 { callback(1) }
+            fn! main() { print_i32(invoke(increment)); }
+        ",
+        );
+        expect_err(
+            "
+            fn! increment(value: i32) -> i32 { value + 1 }
+            fn invoke(callback: fn(i32) -> i32) -> i32 { callback(1) }
+            fn! main() { print_i32(invoke(increment)); }
+        ",
+            "expected fn(i32) -> i32, got fn!(i32) -> i32",
+        );
+    }
+
+    #[test]
+    fn test_function_pointer_effect_compatibility_in_returns() {
+        expect_ok(
+            "
+            fn increment(value: i32) -> i32 { value + 1 }
+            fn tail_factory() -> fn!(i32) -> i32 { increment }
+            fn explicit_factory(flag: bool) -> fn!(i32) -> i32 {
+                if flag { return increment; };
+                increment
+            }
+            fn! main() {
+                let first: fn!(i32) -> i32 = tail_factory();
+                let second: fn!(i32) -> i32 = explicit_factory(true);
+                print_i32(first(1) + second(1));
+            }
+        ",
+        );
+    }
+
+    #[test]
+    fn test_function_pointer_effect_compatibility_in_contextual_expressions() {
+        expect_ok(
+            "
+            fn increment(value: i32) -> i32 { value + 1 }
+            fn! noisy_increment(value: i32) -> i32 { value + 1 }
+            fn! choose(flag: bool) -> fn!(i32) -> i32 {
+                if flag { increment } else { noisy_increment }
+            }
+            fn! choose_match(flag: bool) -> fn!(i32) -> i32 {
+                match flag {
+                    true => increment,
+                    false => noisy_increment,
+                }
+            }
+            fn! wrap() -> Result<fn!(i32) -> i32, str> {
+                Result::Ok(increment)
+            }
+            fn! main() {
+                let first: fn!(i32) -> i32 = choose(true);
+                let second: fn!(i32) -> i32 = choose_match(false);
+                let wrapped: Result<fn!(i32) -> i32, str> = wrap();
+                print_i32(first(1) + second(1));
+            }
+        ",
+        );
+    }
+
+    #[test]
+    fn test_pure_function_rejects_impure_indirect_call() {
+        expect_err(
+            "
+            fn invoke(callback: fn!(i32) -> i32) -> i32 { callback(1) }
+            fn! main() { }
+        ",
+            "pure function cannot call impure function pointer",
+        );
+    }
+
+    #[test]
+    fn test_collection_signatures_and_fixed_arrays() {
+        expect_ok(
+            r#"
+            fn positive(value: i32) -> bool { value > 0 }
+            fn to_str(value: i32) -> str {
+                if value > 0 { "yes" } else { "no" }
+            }
+            fn! main() {
+                let mut fixed: [i32; 3] = [3, 1, 2];
+                array_reverse(fixed);
+                array_sort_i32(fixed);
+                let mapped: [str] = array_map_i32_to_str(fixed, to_str);
+                let filtered: [i32] = array_filter_i32(fixed, positive);
+                print_i32(len(mapped) + len(filtered));
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_collection_mutation_requires_mutable_binding() {
+        expect_err(
+            "
+            fn! main() {
+                let values: [i32] = [1, 2];
+                array_reverse(values);
+            }
+        ",
+            "cannot mutate immutable binding 'values'",
+        );
+        expect_err(
+            "
+            fn! main() {
+                array_reverse([1, 2]);
+            }
+        ",
+            "requires a mutable array binding",
+        );
+        expect_err(
+            "
+            fn! main() {
+                let values: [i32] = [1, 2];
+                push(values, 3);
+            }
+        ",
+            "cannot mutate immutable binding 'values'",
+        );
+    }
+
+    #[test]
+    fn test_collection_resize_rejects_fixed_array() {
+        expect_err(
+            "
+            fn! main() {
+                let mut values: [i32; 2] = [1, 2];
+                array_clear(values);
+            }
+        ",
+            "expects a dynamic array",
+        );
+    }
+
+    #[test]
+    fn test_collection_aliases_share_mutability_checks() {
+        expect_err(
+            "
+            fn! main() {
+                let values: [i32] = [2, 1];
+                sort_i32(values);
+            }
+        ",
+            "cannot mutate immutable binding 'values'",
+        );
+    }
+
+    #[test]
+    fn test_collection_intrinsic_names_are_reserved() {
+        expect_err(
+            "
+            fn array_reverse(values: [i32]) { }
+            fn! main() { }
+        ",
+            "'array_reverse' is reserved for a collection intrinsic",
+        );
+        expect_err(
+            "
+            fn sort_i32(values: [i32]) { }
+            fn! main() { }
+        ",
+            "'sort_i32' is reserved for a collection intrinsic",
+        );
+        expect_err(
+            "
+            extern { fn! array_contains_i32(values: [i32], value: i32) -> bool; }
+            fn! main() { }
+        ",
+            "'array_contains_i32' is reserved for a collection intrinsic",
+        );
+        expect_err(
+            "
+            fn! main() {
+                let array_reverse: i32 = 1;
+            }
+        ",
+            "'array_reverse' is reserved for a collection intrinsic",
+        );
+        expect_err(
+            "
+            fn invoke(array_reverse: fn!([i32]) -> unit) { }
+            fn! main() { }
+        ",
+            "'array_reverse' is reserved for a collection intrinsic",
+        );
+    }
+
+    #[test]
+    fn test_collection_callback_effects() {
+        expect_err(
+            "
+            fn! transform(value: i32) -> i32 { value + 1 }
+            fn! main() {
+                let values: [i32] = [1, 2];
+                let mapped: [i32] = array_map_i32_to_i32(values, transform);
+            }
+        ",
+            "expected fn(i32) -> i32, got fn!(i32) -> i32",
+        );
+        expect_ok(
+            "
+            fn visit(value: i32) { }
+            fn! main() {
+                let values: [i32] = [1, 2];
+                array_for_each_i32(values, visit);
+            }
+        ",
+        );
+    }
+
+    #[test]
     fn test_interpolated_string_ok() {
         expect_ok(
             r#"
@@ -4160,6 +4641,33 @@ mod tests {
             }
         "#,
             "interpolated string expressions cannot call impure function 'next_id'",
+        );
+    }
+
+    #[test]
+    fn test_interpolated_string_rejects_impure_collection_call() {
+        expect_err(
+            r#"
+            fn! main() {
+                let mut values: [i32] = [1];
+                println("removed={array_remove_at(values, 0)}");
+            }
+        "#,
+            "interpolated string expressions cannot call impure function 'array_remove_at'",
+        );
+    }
+
+    #[test]
+    fn test_interpolated_string_rejects_impure_indirect_call() {
+        expect_err(
+            r#"
+            fn! increment(value: i32) -> i32 { value + 1 }
+            fn! main() {
+                let callback: fn!(i32) -> i32 = increment;
+                println("value={callback(1)}");
+            }
+        "#,
+            "interpolated string expressions cannot call impure function 'callback'",
         );
     }
 

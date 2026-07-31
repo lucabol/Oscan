@@ -145,7 +145,7 @@ fn native_extern_type_kind(ty: &BcType, program: &ir::Program) -> NativeExternTy
         // supplies the arena; until that exists, an `extern` signature
         // mentioning a function pointer is rejected rather than
         // mis-lowered.
-        BcType::FnPtr(_, _) => NativeExternTypeKind::Unsupported(
+        BcType::FnPtr(_, _, _) => NativeExternTypeKind::Unsupported(
             "an Oscan function value carries an implicit leading arena parameter, so it is not a C \
              callback; passing one across an extern boundary needs an explicit trampoline that \
              supplies the arena, which this backend does not generate",
@@ -188,7 +188,7 @@ fn c_type_for_generated_shim(ty: &BcType, program: &ir::Program) -> Result<Strin
         BcType::Result(_, _) => {
             return Err("Result is an aggregate C ABI value".to_string());
         }
-        BcType::FnPtr(_, _) => {
+        BcType::FnPtr(_, _, _) => {
             return Err(
                 "function pointer typedefs are not emitted into generated shim translation units"
                     .to_string(),
@@ -300,7 +300,7 @@ fn type_tag(ty: &BcType) -> String {
         BcType::Array(elem) => format!("arr_{}", type_tag(elem)),
         BcType::FixedArray(elem, n) => format!("arr_{}_{}", type_tag(elem), n),
         BcType::Result(ok, err) => format!("result_{}_{}", type_tag(ok), type_tag(err)),
-        BcType::FnPtr(params, ret) => {
+        BcType::FnPtr(params, ret, _) => {
             let params = params.iter().map(type_tag).collect::<Vec<_>>().join("_");
             format!("fnptr_{}_{}", params, type_tag(ret))
         }
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn function_pointer_externs_are_rejected_rather_than_treated_as_c_callbacks() {
         let program = empty_program();
-        let fn_ptr = BcType::FnPtr(vec![BcType::I32], Box::new(BcType::I32));
+        let fn_ptr = BcType::FnPtr(vec![BcType::I32], Box::new(BcType::I32), true);
 
         let param_error = classify(
             &program,
