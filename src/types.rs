@@ -21,7 +21,53 @@ pub enum BcType {
     Array(Box<BcType>),
     FixedArray(Box<BcType>, i64),
     Result(Box<BcType>, Box<BcType>),
-    FnPtr(Vec<BcType>, Box<BcType>),
+    FnPtr(Vec<BcType>, Box<BcType>, bool),
+}
+
+impl BcType {
+    pub fn is_compatible_with(&self, expected: &Self) -> bool {
+        if self == expected {
+            return true;
+        }
+        matches!(
+            (self, expected),
+            (
+                Self::FnPtr(actual_params, actual_ret, true),
+                Self::FnPtr(expected_params, expected_ret, false)
+            ) if actual_params == expected_params && actual_ret == expected_ret
+        )
+    }
+
+    pub fn compatible_join(&self, other: &Self, expected: Option<&Self>) -> Option<Self> {
+        if self == other {
+            return Some(self.clone());
+        }
+        if let Some(expected) = expected {
+            if self.is_compatible_with(expected) && other.is_compatible_with(expected) {
+                return Some(expected.clone());
+            }
+        }
+        if self.is_compatible_with(other) {
+            return Some(other.clone());
+        }
+        if other.is_compatible_with(self) {
+            return Some(self.clone());
+        }
+        None
+    }
+
+    pub fn is_arena_safe(&self) -> bool {
+        matches!(
+            self,
+            Self::I32
+                | Self::I64
+                | Self::F64
+                | Self::Bool
+                | Self::Unit
+                | Self::Handle
+                | Self::FnPtr(_, _, _)
+        )
+    }
 }
 
 impl fmt::Display for BcType {
@@ -45,8 +91,8 @@ impl fmt::Display for BcType {
             BcType::Array(elem) => write!(f, "[{elem}]"),
             BcType::FixedArray(elem, size) => write!(f, "[{elem}; {size}]"),
             BcType::Result(ok, err) => write!(f, "Result<{ok}, {err}>"),
-            BcType::FnPtr(params, ret) => {
-                write!(f, "fn(")?;
+            BcType::FnPtr(params, ret, is_pure) => {
+                write!(f, "{}(", if *is_pure { "fn" } else { "fn!" })?;
                 for (i, p) in params.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

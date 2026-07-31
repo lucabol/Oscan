@@ -413,8 +413,8 @@ pub enum Type {
     Result(Box<Type>, Box<Type>, Span),
     /// Named type (struct or enum reference)
     Named(String, Span),
-    /// Function pointer type: fn(param_types) -> ret_type
-    FnPtr(Vec<Type>, Box<Type>, Span),
+    /// Function pointer type: fn(param_types) -> ret_type or fn!(...) -> ret_type
+    FnPtr(Vec<Type>, Box<Type>, bool, Span),
 }
 
 impl Type {
@@ -425,7 +425,7 @@ impl Type {
             Type::DynamicArray(_, s) => *s,
             Type::Result(_, _, s) => *s,
             Type::Named(_, s) => *s,
-            Type::FnPtr(_, _, s) => *s,
+            Type::FnPtr(_, _, _, s) => *s,
         }
     }
 }

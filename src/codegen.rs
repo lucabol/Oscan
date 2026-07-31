@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinOp, UnaryOp};
+use crate::collection::{array_element_type, CollectionIntrinsic, CollectionOp, CoreType};
 use crate::ir;
 use crate::types::*;
 
@@ -20,6 +21,13 @@ pub struct CodeGenerator {
     fn_ptr_types: Vec<BcType>,
     freestanding: bool,
     embed_runtime: bool,
+}
+
+enum CTypeDecl {
+    Result(BcType, BcType),
+    Struct(String, Vec<(String, BcType)>),
+    Enum(String, Vec<(String, Vec<BcType>)>),
+    FnPtr(BcType),
 }
 
 impl CodeGenerator {
@@ -51,10 +59,7 @@ impl CodeGenerator {
         cg.collect_fn_ptr_types(program);
 
         cg.emit_includes();
-        cg.emit_result_typedefs();
-        cg.emit_struct_defs(program);
-        cg.emit_enum_defs(program);
-        cg.emit_fn_ptr_typedefs();
+        cg.emit_type_declarations(program);
         cg.emit_forward_decls(program);
         cg.emit_top_level_constants(program);
         cg.emit_function_defs(program);
@@ -84,14 +89,27 @@ impl CodeGenerator {
                 self.collect_result_types_from_bctype(ty, &mut seen);
             }
         }
-        // Also collect from function return types
-        for fi in self.functions.values() {
-            if let BcType::Result(ok, err) = &fi.return_type {
-                let key = ((**ok).clone(), (**err).clone());
-                if seen.insert(key.clone()) {
-                    self.result_types.push(key);
+        for e in &program.enum_defs {
+            for (_, payload) in &e.variants {
+                for ty in payload {
+                    self.collect_result_types_from_bctype(ty, &mut seen);
                 }
             }
+        }
+        for block in &program.extern_blocks {
+            for f in &block.decls {
+                for (_, ty) in &f.params {
+                    self.collect_result_types_from_bctype(ty, &mut seen);
+                }
+                self.collect_result_types_from_bctype(&f.return_type, &mut seen);
+            }
+        }
+        let functions: Vec<FunctionInfo> = self.functions.values().cloned().collect();
+        for fi in &functions {
+            for (_, ty) in &fi.params {
+                self.collect_result_types_from_bctype(ty, &mut seen);
+            }
+            self.collect_result_types_from_bctype(&fi.return_type, &mut seen);
         }
     }
 
@@ -100,13 +118,25 @@ impl CodeGenerator {
         ty: &BcType,
         seen: &mut HashSet<(BcType, BcType)>,
     ) {
-        if let BcType::Result(ok, err) = ty {
-            let key = ((**ok).clone(), (**err).clone());
-            if seen.insert(key.clone()) {
-                self.result_types.push(key);
+        match ty {
+            BcType::Result(ok, err) => {
+                let key = ((**ok).clone(), (**err).clone());
+                if seen.insert(key.clone()) {
+                    self.result_types.push(key);
+                }
+                self.collect_result_types_from_bctype(ok, seen);
+                self.collect_result_types_from_bctype(err, seen);
             }
-            self.collect_result_types_from_bctype(ok, seen);
-            self.collect_result_types_from_bctype(err, seen);
+            BcType::Array(elem) | BcType::FixedArray(elem, _) => {
+                self.collect_result_types_from_bctype(elem, seen);
+            }
+            BcType::FnPtr(params, ret, _) => {
+                for param in params {
+                    self.collect_result_types_from_bctype(param, seen);
+                }
+                self.collect_result_types_from_bctype(ret, seen);
+            }
+            _ => {}
         }
     }
 
@@ -142,21 +172,68 @@ impl CodeGenerator {
         let fns: Vec<FunctionInfo> = self.functions.values().cloned().collect();
         for fi in &fns {
             for (_, ty) in &fi.params {
-                self.collect_fn_ptr_from_bctype(ty, &mut seen);
+                self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
             }
-            self.collect_fn_ptr_from_bctype(&fi.return_type, &mut seen);
+            self.collect_fn_ptr_from_bctype_deep(&fi.return_type, &mut seen);
         }
-        // Collect from IR (let bindings inside functions)
         for f in &program.fn_defs {
             for (_, ty) in &f.params {
                 self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
             }
+            self.collect_fn_ptr_from_bctype_deep(&f.return_type, &mut seen);
             self.collect_fn_ptr_from_block(&f.body, &mut seen);
+        }
+        for c in &program.const_defs {
+            self.collect_fn_ptr_from_bctype_deep(&c.ty, &mut seen);
+        }
+        for s in &program.struct_defs {
+            for (_, ty) in &s.fields {
+                self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
+            }
+        }
+        for e in &program.enum_defs {
+            for (_, payload) in &e.variants {
+                for ty in payload {
+                    self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
+                }
+            }
+        }
+        for block in &program.extern_blocks {
+            for f in &block.decls {
+                for (_, ty) in &f.params {
+                    self.collect_fn_ptr_from_bctype_deep(ty, &mut seen);
+                }
+                self.collect_fn_ptr_from_bctype_deep(&f.return_type, &mut seen);
+            }
+        }
+        for source in CoreType::ALL {
+            for op in [
+                CollectionOp::Any,
+                CollectionOp::All,
+                CollectionOp::Filter,
+                CollectionOp::Fold,
+                CollectionOp::ForEach,
+            ] {
+                let intrinsic = CollectionIntrinsic {
+                    op,
+                    source: Some(source),
+                    target: None,
+                };
+                self.collect_fn_ptr_from_bctype(&intrinsic.callback_type().unwrap(), &mut seen);
+            }
+            for target in CoreType::ALL {
+                let intrinsic = CollectionIntrinsic {
+                    op: CollectionOp::Map,
+                    source: Some(source),
+                    target: Some(target),
+                };
+                self.collect_fn_ptr_from_bctype(&intrinsic.callback_type().unwrap(), &mut seen);
+            }
         }
     }
 
     fn collect_fn_ptr_from_bctype(&mut self, ty: &BcType, seen: &mut HashSet<String>) {
-        if let BcType::FnPtr(params, ret) = ty {
+        if let BcType::FnPtr(params, ret, _) = ty {
             let tag = self.type_tag(ty);
             if seen.insert(tag) {
                 self.fn_ptr_types.push(ty.clone());
@@ -170,7 +247,7 @@ impl CodeGenerator {
 
     fn collect_fn_ptr_from_bctype_deep(&mut self, ty: &BcType, seen: &mut HashSet<String>) {
         match ty {
-            BcType::FnPtr(params, ret) => {
+            BcType::FnPtr(params, ret, _) => {
                 self.collect_fn_ptr_from_bctype(ty, seen);
                 for p in params {
                     self.collect_fn_ptr_from_bctype_deep(p, seen);
@@ -200,26 +277,110 @@ impl CodeGenerator {
         }
     }
 
-    fn emit_fn_ptr_typedefs(&mut self) {
-        for ty in &self.fn_ptr_types.clone() {
-            if let BcType::FnPtr(params, ret) = ty {
-                let name = self.fn_ptr_typedef_name(ty);
-                let ret_c = self.type_to_c(ret);
-                let mut param_parts = vec!["osc_arena*".to_string()];
-                for p in params {
-                    param_parts.push(self.type_to_c(p));
-                }
-                self.line(&format!(
-                    "typedef {} (*{})({});",
-                    ret_c,
-                    name,
-                    param_parts.join(", ")
-                ));
+    fn emit_type_declarations(&mut self, program: &ir::Program) {
+        let mut pending = Vec::new();
+        for s in &program.struct_defs {
+            pending.push(CTypeDecl::Struct(s.name.clone(), s.fields.clone()));
+        }
+        for e in &program.enum_defs {
+            pending.push(CTypeDecl::Enum(e.name.clone(), e.variants.clone()));
+        }
+        let mut result_names = HashSet::new();
+        for (ok, err) in &self.result_types {
+            let name = self.result_type_name(ok, err);
+            if !Self::is_runtime_result_type(&name) && result_names.insert(name) {
+                pending.push(CTypeDecl::Result(ok.clone(), err.clone()));
             }
         }
-        if !self.fn_ptr_types.is_empty() {
-            self.blank();
+        for ty in &self.fn_ptr_types {
+            pending.push(CTypeDecl::FnPtr(ty.clone()));
         }
+
+        let mut available = HashSet::new();
+        while !pending.is_empty() {
+            let Some(index) = pending
+                .iter()
+                .position(|decl| self.type_decl_is_ready(decl, &available))
+            else {
+                let names = pending
+                    .iter()
+                    .map(|decl| self.type_decl_name(decl))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                panic!("internal error: cyclic C type declarations: {names}");
+            };
+            let decl = pending.remove(index);
+            let name = self.type_decl_name(&decl);
+            match decl {
+                CTypeDecl::Result(ok, err) => self.emit_result_typedef(&ok, &err),
+                CTypeDecl::Struct(name, fields) => self.emit_struct_def(&name, &fields),
+                CTypeDecl::Enum(name, variants) => self.emit_enum_def(&name, &variants),
+                CTypeDecl::FnPtr(ty) => self.emit_fn_ptr_typedef(&ty),
+            }
+            available.insert(name);
+        }
+    }
+
+    fn type_decl_is_ready(&self, decl: &CTypeDecl, available: &HashSet<String>) -> bool {
+        match decl {
+            CTypeDecl::Result(ok, err) => {
+                self.c_type_is_available(ok, available) && self.c_type_is_available(err, available)
+            }
+            CTypeDecl::Struct(_, fields) => fields
+                .iter()
+                .all(|(_, ty)| self.c_type_is_available(ty, available)),
+            CTypeDecl::Enum(_, variants) => variants.iter().all(|(_, payload)| {
+                payload
+                    .iter()
+                    .all(|ty| self.c_type_is_available(ty, available))
+            }),
+            CTypeDecl::FnPtr(BcType::FnPtr(params, ret, _)) => {
+                params
+                    .iter()
+                    .all(|ty| self.c_type_is_available(ty, available))
+                    && self.c_type_is_available(ret, available)
+            }
+            CTypeDecl::FnPtr(_) => false,
+        }
+    }
+
+    fn c_type_is_available(&self, ty: &BcType, available: &HashSet<String>) -> bool {
+        match ty {
+            BcType::Struct(name) | BcType::Enum(name) => available.contains(name),
+            BcType::Result(ok, err) => {
+                let name = self.result_type_name(ok, err);
+                Self::is_runtime_result_type(&name) || available.contains(&name)
+            }
+            BcType::FnPtr(_, _, _) => available.contains(&self.fn_ptr_typedef_name(ty)),
+            _ => true,
+        }
+    }
+
+    fn type_decl_name(&self, decl: &CTypeDecl) -> String {
+        match decl {
+            CTypeDecl::Result(ok, err) => self.result_type_name(ok, err),
+            CTypeDecl::Struct(name, _) | CTypeDecl::Enum(name, _) => name.clone(),
+            CTypeDecl::FnPtr(ty) => self.fn_ptr_typedef_name(ty),
+        }
+    }
+
+    fn emit_fn_ptr_typedef(&mut self, ty: &BcType) {
+        let BcType::FnPtr(params, ret, _) = ty else {
+            return;
+        };
+        let name = self.fn_ptr_typedef_name(ty);
+        let ret_c = self.type_to_c(ret);
+        let mut param_parts = vec!["osc_arena*".to_string()];
+        for param in params {
+            param_parts.push(self.type_to_c(param));
+        }
+        self.line(&format!(
+            "typedef {} (*{})({});",
+            ret_c,
+            name,
+            param_parts.join(", ")
+        ));
+        self.blank();
     }
 
     // -----------------------------------------------------------------------
@@ -242,6 +403,12 @@ impl CodeGenerator {
         let n = self.temp_counter;
         self.temp_counter += 1;
         format!("_tmp_{}", n)
+    }
+
+    fn materialize_array_expr(&mut self, expr: String) -> String {
+        let tmp = self.fresh_tmp();
+        self.line(&format!("osc_array* {} = {};", tmp, expr));
+        tmp
     }
 
     /// Mangle identifiers that clash with C keywords or standard type names.
@@ -343,29 +510,30 @@ impl CodeGenerator {
     // Result typedefs
     // -----------------------------------------------------------------------
 
-    fn emit_result_typedefs(&mut self) {
-        for (ok, err) in &self.result_types.clone() {
-            let name = self.result_type_name(ok, err);
-            if name == "osc_result_str_str"
-                || name == "osc_result_i32_str"
-                || name == "osc_result_i64_str"
-                || name == "osc_result_arr_i32_str"
-                || name == "osc_result_handle_str"
-            {
-                continue; // Already in runtime
-            }
-            let ok_c = self.type_to_c(ok);
-            let err_c = self.type_to_c(err);
-            let ok_c_field = if *ok == BcType::Unit {
-                "uint8_t".to_string()
-            } else {
-                ok_c
-            };
-            self.line(&format!(
-                "OSC_RESULT_DECL({}, {}, {});",
-                ok_c_field, err_c, name
-            ));
-        }
+    fn is_runtime_result_type(name: &str) -> bool {
+        matches!(
+            name,
+            "osc_result_str_str"
+                | "osc_result_i32_str"
+                | "osc_result_i64_str"
+                | "osc_result_arr_i32_str"
+                | "osc_result_handle_str"
+        )
+    }
+
+    fn emit_result_typedef(&mut self, ok: &BcType, err: &BcType) {
+        let name = self.result_type_name(ok, err);
+        let ok_c = self.type_to_c(ok);
+        let err_c = self.type_to_c(err);
+        let ok_c_field = if *ok == BcType::Unit {
+            "uint8_t".to_string()
+        } else {
+            ok_c
+        };
+        self.line(&format!(
+            "OSC_RESULT_DECL({}, {}, {});",
+            ok_c_field, err_c, name
+        ));
         self.blank();
     }
 
@@ -373,20 +541,14 @@ impl CodeGenerator {
     // Enum definitions
     // -----------------------------------------------------------------------
 
-    fn emit_enum_defs(&mut self, program: &ir::Program) {
-        for e in &program.enum_defs {
-            self.emit_enum_def(e);
-        }
-    }
-
-    fn emit_enum_def(&mut self, e: &ir::EnumDef) {
+    fn emit_enum_def(&mut self, name: &str, variants: &[(String, Vec<BcType>)]) {
         // Tag constants
-        for (i, (vname, _)) in e.variants.iter().enumerate() {
-            self.line(&format!("#define {}_TAG_{} {}", e.name, vname, i));
+        for (i, (vname, _)) in variants.iter().enumerate() {
+            self.line(&format!("#define {}_TAG_{} {}", name, vname, i));
         }
         self.blank();
 
-        let has_payload = e.variants.iter().any(|(_, tys)| !tys.is_empty());
+        let has_payload = variants.iter().any(|(_, tys)| !tys.is_empty());
 
         if has_payload {
             self.line(&format!("typedef struct {{"));
@@ -394,7 +556,7 @@ impl CodeGenerator {
             self.line("int tag;");
             self.line("union {");
             self.indent += 1;
-            for (vname, tys) in &e.variants {
+            for (vname, tys) in variants {
                 if !tys.is_empty() {
                     self.line(&format!("struct {{"));
                     self.indent += 1;
@@ -409,10 +571,10 @@ impl CodeGenerator {
             self.indent -= 1;
             self.line("} data;");
             self.indent -= 1;
-            self.line(&format!("}} {};", e.name));
+            self.line(&format!("}} {};", name));
         } else {
             // Simple int enum
-            self.line(&format!("typedef int {};", e.name));
+            self.line(&format!("typedef int {};", name));
         }
         self.blank();
     }
@@ -421,21 +583,15 @@ impl CodeGenerator {
     // Struct definitions
     // -----------------------------------------------------------------------
 
-    fn emit_struct_defs(&mut self, program: &ir::Program) {
-        for s in &program.struct_defs {
-            self.emit_struct_def(s);
-        }
-    }
-
-    fn emit_struct_def(&mut self, s: &ir::StructDef) {
+    fn emit_struct_def(&mut self, name: &str, fields: &[(String, BcType)]) {
         self.line(&format!("typedef struct {{"));
         self.indent += 1;
-        for (fname, fty) in &s.fields {
+        for (fname, fty) in fields {
             let ct = self.type_to_c(fty);
             self.line(&format!("{} {};", ct, fname));
         }
         self.indent -= 1;
-        self.line(&format!("}} {};", s.name));
+        self.line(&format!("}} {};", name));
         self.blank();
     }
 
@@ -628,9 +784,24 @@ impl CodeGenerator {
 
     /// Emit all deferred expressions in LIFO order.
     fn emit_deferred_calls(&mut self) {
-        for expr in self.deferred_exprs.clone().iter().rev() {
-            self.line(&format!("{};", expr));
+        for code in self.deferred_exprs.clone().iter().rev() {
+            self.line("{");
+            self.indent += 1;
+            self.out.push_str(code);
+            self.indent -= 1;
+            self.line("}");
         }
+    }
+
+    fn capture_deferred_expr(&mut self, expr: &ir::Expr) -> String {
+        let outer = std::mem::take(&mut self.out);
+        let value = self.emit_expr(expr);
+        if value != "(void)0" {
+            self.line(&format!("{};", value));
+        }
+        let captured = std::mem::take(&mut self.out);
+        self.out = outer;
+        captured
     }
 
     /// Emit deferred calls before a return statement.
@@ -807,7 +978,7 @@ impl CodeGenerator {
                 if a.target.accessors.is_empty() {
                     self.line(&format!("{} = {};", a.target.name, val));
                 } else {
-                    let target = self.emit_place(&a.target);
+                    let target = self.emit_place(&a.target, &a.value.ty());
                     self.line(&format!("{} = {};", target, val));
                 }
             }
@@ -824,7 +995,7 @@ impl CodeGenerator {
                 if ca.target.accessors.is_empty() {
                     self.line(&format!("{} {} {};", ca.target.name, c_op, val));
                 } else {
-                    let target = self.emit_place(&ca.target);
+                    let target = self.emit_place(&ca.target, &ca.value.ty());
                     self.line(&format!("{} {} {};", target, c_op, val));
                 }
             }
@@ -841,9 +1012,10 @@ impl CodeGenerator {
                 }
             }
             ir::Stmt::While(w) => {
-                let cond = self.emit_expr(&w.condition);
-                self.line(&format!("while ({}) {{", cond));
+                self.line("while (1) {");
                 self.indent += 1;
+                let cond = self.emit_expr(&w.condition);
+                self.line(&format!("if (!({})) break;", cond));
                 for s in &w.body.stmts {
                     self.emit_stmt(s);
                 }
@@ -941,15 +1113,15 @@ impl CodeGenerator {
                 }
             }
             ir::Stmt::Defer(d) => {
-                let c_code = self.emit_expr(&d.expr);
+                let c_code = self.capture_deferred_expr(&d.expr);
                 self.deferred_exprs.push(c_code);
             }
         }
     }
 
-    fn emit_place(&mut self, place: &ir::Place) -> String {
+    fn emit_place(&mut self, place: &ir::Place, stored_ty: &BcType) -> String {
         let mut s = place.name.clone();
-        for acc in &place.accessors {
+        for (accessor_index, acc) in place.accessors.iter().enumerate() {
             match acc {
                 ir::PlaceAccessor::Field(f) => {
                     s = format!("{}.{}", s, f);
@@ -963,6 +1135,13 @@ impl CodeGenerator {
                         _ => BcType::I32,
                     };
                     let elem_c = self.type_to_c(&elem_ty);
+                    let has_later_index = place.accessors[accessor_index + 1..]
+                        .iter()
+                        .any(|accessor| matches!(accessor, ir::PlaceAccessor::Index(_)));
+                    if !has_later_index && !stored_ty.is_arena_safe() {
+                        s = self.materialize_array_expr(s);
+                        self.line(&format!("osc_array_check_arena_store(_arena, {});", s));
+                    }
                     // Use a special marker — we handle array set in emit_stmt for Assign
                     s = format!("(*({}*)osc_array_get({}, {}))", elem_c, s, idx_c);
                 }
@@ -1154,6 +1333,22 @@ impl CodeGenerator {
 
     fn emit_binary_op(&mut self, op: BinOp, left: &ir::Expr, right: &ir::Expr) -> String {
         let lv = self.emit_expr(left);
+        if matches!(op, BinOp::And | BinOp::Or) {
+            let result = self.fresh_tmp();
+            self.line(&format!("uint8_t {} = {};", result, lv));
+            let guard = if op == BinOp::And {
+                result.clone()
+            } else {
+                format!("!{}", result)
+            };
+            self.line(&format!("if ({}) {{", guard));
+            self.indent += 1;
+            let rv = self.emit_expr(right);
+            self.line(&format!("{} = {};", result, rv));
+            self.indent -= 1;
+            self.line("}");
+            return result;
+        }
         let rv = self.emit_expr(right);
         let ty = left.ty();
 
@@ -1211,8 +1406,7 @@ impl CodeGenerator {
                 BcType::Str => format!("(osc_str_compare({}, {}) >= 0)", lv, rv),
                 _ => format!("{} >= {}", lv, rv),
             },
-            BinOp::And => format!("({} && {})", lv, rv),
-            BinOp::Or => format!("({} || {})", lv, rv),
+            BinOp::And | BinOp::Or => unreachable!(),
         }
     }
 
@@ -1279,10 +1473,17 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_call(&mut self, callee: &ir::Callee, args: &[ir::Expr]) -> String {
-        let mut arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
+        if let ir::Callee::Collection(intrinsic) = callee {
+            return self.emit_collection_call(*intrinsic, args);
+        }
         let name: &str = match callee {
             ir::Callee::Named(n) | ir::Callee::Var(n) => n.as_str(),
+            ir::Callee::Collection(_) => unreachable!(),
         };
+        if name == "push" {
+            return self.emit_array_push(args);
+        }
+        let mut arg_strs: Vec<String> = args.iter().map(|a| self.emit_expr(a)).collect();
 
         match name {
             "print" => format!("osc_print({})", arg_strs[0]),
@@ -1636,18 +1837,6 @@ impl CodeGenerator {
             }
             "map_i32_i32_len" => format!("osc_map_i32_i32_len({})", arg_strs[0]),
             "len" => format!("osc_array_len({})", arg_strs[0]),
-            "push" => {
-                // Need to get element type for the &val
-                let arr_ty = args[0].ty();
-                let elem_ty = match &arr_ty {
-                    BcType::Array(e) => (**e).clone(),
-                    _ => BcType::I32,
-                };
-                let elem_c = self.type_to_c(&elem_ty);
-                let tmp = self.fresh_tmp();
-                self.line(&format!("{} {} = {};", elem_c, tmp, arg_strs[1]));
-                format!("osc_array_push(_arena, {}, &{})", arg_strs[0], tmp)
-            }
             "pop" => {
                 let arr_ty = args[0].ty();
                 let elem_ty = match &arr_ty {
@@ -1729,7 +1918,305 @@ impl CodeGenerator {
                         format!("{}({})", cname, arg_strs.join(", "))
                     }
                 }
+                ir::Callee::Collection(_) => unreachable!(),
             },
+        }
+    }
+
+    fn emit_array_push(&mut self, args: &[ir::Expr]) -> String {
+        let array_expr = self.emit_expr(&args[0]);
+        let array = self.materialize_array_expr(array_expr);
+        let elem_ty = array_element_type(&args[0].ty()).unwrap_or(BcType::I32);
+        let value = self.emit_expr(&args[1]);
+        let value_tmp = self.fresh_tmp();
+        self.line(&format!(
+            "{} {} = {};",
+            self.type_to_c(&elem_ty),
+            value_tmp,
+            value
+        ));
+        if !elem_ty.is_arena_safe() {
+            self.line(&format!("osc_array_check_arena_store(_arena, {});", array));
+        }
+        format!("osc_array_push(_arena, {}, &{})", array, value_tmp)
+    }
+
+    fn emit_collection_call(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        args: &[ir::Expr],
+    ) -> String {
+        if intrinsic.is_higher_order() {
+            return self.emit_collection_higher_order(intrinsic, args);
+        }
+
+        let first = self.emit_expr(&args[0]);
+        let array = if intrinsic.op == CollectionOp::Repeat {
+            first
+        } else {
+            self.materialize_array_expr(first)
+        };
+        let symbol = intrinsic.runtime_symbol().unwrap();
+        match intrinsic.op {
+            CollectionOp::Clone => format!("{}(_arena, {})", symbol, array),
+            CollectionOp::Repeat => {
+                let value_ty = args[0].ty();
+                let value = array;
+                let value_tmp = self.fresh_tmp();
+                self.line(&format!(
+                    "{} {} = {};",
+                    self.type_to_c(&value_ty),
+                    value_tmp,
+                    value
+                ));
+                let count = self.emit_expr(&args[1]);
+                format!(
+                    "{}(_arena, {}, &{}, {})",
+                    symbol,
+                    self.c_sizeof(&value_ty),
+                    value_tmp,
+                    count
+                )
+            }
+            CollectionOp::Reverse | CollectionOp::Clear | CollectionOp::Sort => {
+                format!("{}({})", symbol, array)
+            }
+            CollectionOp::Fill => {
+                let elem_ty = array_element_type(&args[0].ty()).unwrap_or(BcType::Unit);
+                let value = self.emit_expr(&args[1]);
+                let value_tmp = self.fresh_tmp();
+                self.line(&format!(
+                    "{} {} = {};",
+                    self.type_to_c(&elem_ty),
+                    value_tmp,
+                    value
+                ));
+                if !elem_ty.is_arena_safe() {
+                    self.line(&format!("osc_array_check_arena_store(_arena, {});", array));
+                }
+                format!("{}({}, &{})", symbol, array, value_tmp)
+            }
+            CollectionOp::Swap => {
+                let left = self.emit_expr(&args[1]);
+                let right = self.emit_expr(&args[2]);
+                format!("{}({}, {}, {})", symbol, array, left, right)
+            }
+            CollectionOp::Extend => {
+                let source = self.emit_expr(&args[1]);
+                let elem_ty = array_element_type(&args[0].ty()).unwrap_or(BcType::Unit);
+                if !elem_ty.is_arena_safe() {
+                    self.line(&format!("osc_array_check_arena_store(_arena, {});", array));
+                }
+                format!("{}(_arena, {}, {})", symbol, array, source)
+            }
+            CollectionOp::Insert => {
+                let index = self.emit_expr(&args[1]);
+                let elem_ty = array_element_type(&args[0].ty()).unwrap_or(BcType::Unit);
+                let value = self.emit_expr(&args[2]);
+                let value_tmp = self.fresh_tmp();
+                self.line(&format!(
+                    "{} {} = {};",
+                    self.type_to_c(&elem_ty),
+                    value_tmp,
+                    value
+                ));
+                if !elem_ty.is_arena_safe() {
+                    self.line(&format!("osc_array_check_arena_store(_arena, {});", array));
+                }
+                format!("{}(_arena, {}, {}, &{})", symbol, array, index, value_tmp)
+            }
+            CollectionOp::RemoveAt => {
+                let index = self.emit_expr(&args[1]);
+                let elem_ty = array_element_type(&args[0].ty()).unwrap_or(BcType::Unit);
+                let result = self.fresh_tmp();
+                self.line(&format!("{} {};", self.type_to_c(&elem_ty), result));
+                self.line(&format!("{}({}, {}, &{});", symbol, array, index, result));
+                result
+            }
+            CollectionOp::Slice => {
+                let start = self.emit_expr(&args[1]);
+                let end = self.emit_expr(&args[2]);
+                format!("{}(_arena, {}, {}, {})", symbol, array, start, end)
+            }
+            CollectionOp::Contains
+            | CollectionOp::IndexOf
+            | CollectionOp::LastIndexOf
+            | CollectionOp::Count => {
+                let value_ty = intrinsic.source.unwrap().bc_type();
+                let value = self.emit_expr(&args[1]);
+                let value_tmp = self.fresh_tmp();
+                self.line(&format!(
+                    "{} {} = {};",
+                    self.type_to_c(&value_ty),
+                    value_tmp,
+                    value
+                ));
+                format!("{}({}, &{})", symbol, array, value_tmp)
+            }
+            CollectionOp::Compare => {
+                let right = self.emit_expr(&args[1]);
+                format!("{}({}, {})", symbol, array, right)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn emit_collection_higher_order(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        args: &[ir::Expr],
+    ) -> String {
+        let source_ty = intrinsic.source.unwrap().bc_type();
+        let source_c = self.type_to_c(&source_ty);
+        let array_value = self.emit_expr(&args[0]);
+        let array_tmp = self.fresh_tmp();
+        self.line(&format!("osc_array* {} = {};", array_tmp, array_value));
+
+        let initial = if intrinsic.op == CollectionOp::Fold {
+            let value = self.emit_expr(&args[1]);
+            let tmp = self.fresh_tmp();
+            self.line(&format!("{} {} = {};", source_c, tmp, value));
+            Some(tmp)
+        } else {
+            None
+        };
+
+        let callback_index = intrinsic.callback_index().unwrap();
+        let callback_value = self.emit_expr(&args[callback_index]);
+        let callback_ty = intrinsic.callback_type().unwrap();
+        let callback_tmp = self.fresh_tmp();
+        self.line(&format!(
+            "{} {} = {};",
+            self.type_to_c(&callback_ty),
+            callback_tmp,
+            callback_value
+        ));
+
+        let index = self.fresh_tmp();
+        let element = self.fresh_tmp();
+        let len = self.fresh_tmp();
+        self.line(&format!("int32_t {} = osc_array_len({});", len, array_tmp));
+
+        match intrinsic.op {
+            CollectionOp::Any | CollectionOp::All => {
+                let result = self.fresh_tmp();
+                let default = if intrinsic.op == CollectionOp::All {
+                    1
+                } else {
+                    0
+                };
+                self.line(&format!("uint8_t {} = {};", result, default));
+                self.line(&format!(
+                    "for (int32_t {} = 0; {} < {}; {}++) {{",
+                    index, index, len, index
+                ));
+                self.indent += 1;
+                self.line(&format!(
+                    "{} {} = *({}*)osc_array_get({}, {});",
+                    source_c, element, source_c, array_tmp, index
+                ));
+                let condition = format!("{}(_arena, {})", callback_tmp, element);
+                if intrinsic.op == CollectionOp::Any {
+                    self.line(&format!("if ({}) {{ {} = 1; break; }}", condition, result));
+                } else {
+                    self.line(&format!(
+                        "if (!({})) {{ {} = 0; break; }}",
+                        condition, result
+                    ));
+                }
+                self.indent -= 1;
+                self.line("}");
+                result
+            }
+            CollectionOp::Map => {
+                let target_ty = intrinsic.target.unwrap().bc_type();
+                let target_c = self.type_to_c(&target_ty);
+                let result = self.fresh_tmp();
+                self.line(&format!(
+                    "osc_array* {} = osc_array_new(_arena, {}, {});",
+                    result,
+                    self.c_sizeof(&target_ty),
+                    len
+                ));
+                self.line(&format!(
+                    "for (int32_t {} = 0; {} < {}; {}++) {{",
+                    index, index, len, index
+                ));
+                self.indent += 1;
+                self.line(&format!(
+                    "{} {} = *({}*)osc_array_get({}, {});",
+                    source_c, element, source_c, array_tmp, index
+                ));
+                let mapped = self.fresh_tmp();
+                self.line(&format!(
+                    "{} {} = {}(_arena, {});",
+                    target_c, mapped, callback_tmp, element
+                ));
+                self.line(&format!("osc_array_push(_arena, {}, &{});", result, mapped));
+                self.indent -= 1;
+                self.line("}");
+                result
+            }
+            CollectionOp::Filter => {
+                let result = self.fresh_tmp();
+                self.line(&format!(
+                    "osc_array* {} = osc_array_new(_arena, {}, {});",
+                    result,
+                    self.c_sizeof(&source_ty),
+                    len
+                ));
+                self.line(&format!(
+                    "for (int32_t {} = 0; {} < {}; {}++) {{",
+                    index, index, len, index
+                ));
+                self.indent += 1;
+                self.line(&format!(
+                    "{} {} = *({}*)osc_array_get({}, {});",
+                    source_c, element, source_c, array_tmp, index
+                ));
+                self.line(&format!(
+                    "if ({}(_arena, {})) osc_array_push(_arena, {}, &{});",
+                    callback_tmp, element, result, element
+                ));
+                self.indent -= 1;
+                self.line("}");
+                result
+            }
+            CollectionOp::Fold => {
+                let result = initial.unwrap();
+                self.line(&format!(
+                    "for (int32_t {} = 0; {} < {}; {}++) {{",
+                    index, index, len, index
+                ));
+                self.indent += 1;
+                self.line(&format!(
+                    "{} {} = *({}*)osc_array_get({}, {});",
+                    source_c, element, source_c, array_tmp, index
+                ));
+                self.line(&format!(
+                    "{} = {}(_arena, {}, {});",
+                    result, callback_tmp, result, element
+                ));
+                self.indent -= 1;
+                self.line("}");
+                result
+            }
+            CollectionOp::ForEach => {
+                self.line(&format!(
+                    "for (int32_t {} = 0; {} < {}; {}++) {{",
+                    index, index, len, index
+                ));
+                self.indent += 1;
+                self.line(&format!(
+                    "{} {} = *({}*)osc_array_get({}, {});",
+                    source_c, element, source_c, array_tmp, index
+                ));
+                self.line(&format!("{}(_arena, {});", callback_tmp, element));
+                self.indent -= 1;
+                self.line("}");
+                "(void)0".into()
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -1760,58 +2247,14 @@ impl CodeGenerator {
             }
             self.indent -= 1;
             if let Some(else_expr) = else_branch {
-                match else_expr {
-                    ir::Expr::If {
-                        condition: ec,
-                        then_block: et,
-                        else_branch: ee,
-                        ..
-                    } => {
-                        // else if
-                        let ec_c = self.emit_expr(ec);
-                        self.line(&format!("}} else if ({}) {{", ec_c));
-                        self.indent += 1;
-                        for s in &et.stmts {
-                            self.emit_stmt(s);
-                        }
-                        if let Some(tail) = &et.tail_expr {
-                            let v = self.emit_expr(tail);
-                            if v != "(void)0" {
-                                self.line(&format!("{};", v));
-                            }
-                        }
-                        self.indent -= 1;
-                        if let Some(ee) = ee {
-                            self.emit_else_unit(ee);
-                        }
-                        self.line("}");
-                    }
-                    ir::Expr::Block(blk) => {
-                        self.line("} else {");
-                        self.indent += 1;
-                        for s in &blk.stmts {
-                            self.emit_stmt(s);
-                        }
-                        if let Some(tail) = &blk.tail_expr {
-                            let v = self.emit_expr(tail);
-                            if v != "(void)0" {
-                                self.line(&format!("{};", v));
-                            }
-                        }
-                        self.indent -= 1;
-                        self.line("}");
-                    }
-                    _ => {
-                        self.line("} else {");
-                        self.indent += 1;
-                        let v = self.emit_expr(else_expr);
-                        if v != "(void)0" {
-                            self.line(&format!("{};", v));
-                        }
-                        self.indent -= 1;
-                        self.line("}");
-                    }
+                self.line("} else {");
+                self.indent += 1;
+                let v = self.emit_expr(else_expr);
+                if v != "(void)0" {
+                    self.line(&format!("{};", v));
                 }
+                self.indent -= 1;
+                self.line("}");
             } else {
                 self.line("}");
             }
@@ -1835,57 +2278,6 @@ impl CodeGenerator {
             }
             self.line("}");
             tmp
-        }
-    }
-
-    fn emit_else_unit(&mut self, expr: &ir::Expr) {
-        match expr {
-            ir::Expr::If {
-                condition,
-                then_block,
-                else_branch,
-                ..
-            } => {
-                let cond = self.emit_expr(condition);
-                self.line(&format!("}} else if ({}) {{", cond));
-                self.indent += 1;
-                for s in &then_block.stmts {
-                    self.emit_stmt(s);
-                }
-                if let Some(tail) = &then_block.tail_expr {
-                    let v = self.emit_expr(tail);
-                    if v != "(void)0" {
-                        self.line(&format!("{};", v));
-                    }
-                }
-                self.indent -= 1;
-                if let Some(ee) = else_branch {
-                    self.emit_else_unit(ee);
-                }
-            }
-            ir::Expr::Block(blk) => {
-                self.line("} else {");
-                self.indent += 1;
-                for s in &blk.stmts {
-                    self.emit_stmt(s);
-                }
-                if let Some(tail) = &blk.tail_expr {
-                    let v = self.emit_expr(tail);
-                    if v != "(void)0" {
-                        self.line(&format!("{};", v));
-                    }
-                }
-                self.indent -= 1;
-            }
-            _ => {
-                self.line("} else {");
-                self.indent += 1;
-                let v = self.emit_expr(expr);
-                if v != "(void)0" {
-                    self.line(&format!("{};", v));
-                }
-                self.indent -= 1;
-            }
         }
     }
 
@@ -2480,7 +2872,7 @@ impl CodeGenerator {
             BcType::Enum(name) => name.clone(),
             BcType::Array(_) | BcType::FixedArray(_, _) => "osc_array*".to_string(),
             BcType::Result(ok, err) => self.result_type_name(ok, err),
-            BcType::FnPtr(_, _) => self.fn_ptr_typedef_name(ty),
+            BcType::FnPtr(_, _, _) => self.fn_ptr_typedef_name(ty),
         }
     }
 
@@ -2508,7 +2900,7 @@ impl CodeGenerator {
             BcType::Array(e) => format!("arr_{}", self.type_tag(e)),
             BcType::FixedArray(e, n) => format!("arr_{}_{}", self.type_tag(e), n),
             BcType::Result(o, e) => format!("result_{}_{}", self.type_tag(o), self.type_tag(e)),
-            BcType::FnPtr(params, ret) => {
+            BcType::FnPtr(params, ret, _) => {
                 let p: Vec<String> = params.iter().map(|t| self.type_tag(t)).collect();
                 format!("fnptr_{}_{}", p.join("_"), self.type_tag(ret))
             }
@@ -2532,7 +2924,7 @@ impl CodeGenerator {
             BcType::Enum(name) => format!("sizeof({})", name),
             BcType::Array(_) | BcType::FixedArray(_, _) => "sizeof(osc_array*)".to_string(),
             BcType::Result(ok, err) => format!("sizeof({})", self.result_type_name(ok, err)),
-            BcType::FnPtr(_, _) => "sizeof(void*)".to_string(),
+            BcType::FnPtr(_, _, _) => "sizeof(void*)".to_string(),
             BcType::Unit => "1".to_string(),
             BcType::Handle => "sizeof(uintptr_t)".to_string(),
         }

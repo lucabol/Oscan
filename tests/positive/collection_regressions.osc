@@ -1,0 +1,111 @@
+// Regression coverage for collection expression contexts and generic values.
+
+fn positive(value: i32) -> bool { value > 0 }
+fn increment(value: i32) -> i32 { value + 1 }
+fn! noisy_increment(value: i32) -> i32 { value + 1 }
+
+fn callback_factory() -> fn!(i32) -> i32 { increment }
+
+fn explicit_callback_factory(use_first: bool) -> fn!(i32) -> i32 {
+    if use_first { return increment; };
+    increment
+}
+
+fn! conditional_callback(flag: bool) -> fn!(i32) -> i32 {
+    if flag { increment } else { noisy_increment }
+}
+
+fn! matched_callback(flag: bool) -> fn!(i32) -> i32 {
+    match flag {
+        true => increment,
+        false => noisy_increment,
+    }
+}
+
+fn! wrapped_callback() -> Result<fn!(i32) -> i32, str> {
+    Result::Ok(increment)
+}
+
+fn pure_wrapped_callback() -> Result<fn(i32) -> i32, str> {
+    Result::Ok(increment)
+}
+
+fn positive_result(value: i32) -> Result<bool, str> {
+    Result::Ok(value > 0)
+}
+
+fn result_callback_factory() -> fn(i32) -> Result<bool, str> {
+    positive_result
+}
+
+fn! visit_i32(value: i32) {
+    print_i32(value);
+    println("");
+}
+
+fn! main() {
+    let mut values: [i32] = [1, 2];
+    while array_any_i32(values, positive) {
+        let removed: i32 = array_remove_at(values, 0);
+    };
+    print_i32(len(values));
+    println("");
+
+    let mut guarded: [i32] = [7];
+    let skipped: bool = false and array_remove_at(guarded, 9) > 0;
+    print_bool(skipped);
+    println("");
+
+    let mut nested: [[i32]] = [[1, 2]];
+    array_fill(nested, []);
+    print_i32(len(nested[0]));
+    println("");
+
+    let mut results: [Result<i32, str>] = [];
+    array_insert(results, 0, Result::Ok(5));
+    match results[0] {
+        Result::Ok(value) => { print_i32(value); println(""); },
+        Result::Err(message) => println(message),
+    };
+
+    let first: fn!(i32) -> i32 = callback_factory();
+    let second: fn!(i32) -> i32 = explicit_callback_factory(true);
+    print_i32(first(4));
+    println("");
+    print_i32(second(5));
+    println("");
+
+    let third: fn!(i32) -> i32 = conditional_callback(false);
+    let fourth: fn!(i32) -> i32 = matched_callback(true);
+    print_i32(third(6));
+    println("");
+    print_i32(fourth(7));
+    println("");
+    let wrapped: Result<fn!(i32) -> i32, str> = wrapped_callback();
+    match wrapped {
+        Result::Ok(callback) => { print_i32(callback(8)); println(""); },
+        Result::Err(message) => println(message),
+    };
+    let pure_wrapped: Result<fn(i32) -> i32, str> = pure_wrapped_callback();
+    match pure_wrapped {
+        Result::Ok(callback) => { print_i32(callback(9)); println(""); },
+        Result::Err(message) => println(message),
+    };
+    let result_callback: fn(i32) -> Result<bool, str> = result_callback_factory();
+    let callback_result: Result<bool, str> = result_callback(1);
+    match callback_result {
+        Result::Ok(value) => { print_bool(value); println(""); },
+        Result::Err(message) => println(message),
+    };
+
+    let mut outer: [i32] = [1];
+    arena {
+        push(outer, 2);
+    };
+    print_i32(outer[1]);
+    println("");
+
+    defer array_for_each_i32(guarded, visit_i32);
+    print_i32(9);
+    println("");
+}

@@ -167,7 +167,7 @@ pub fn layout_of(ty: &BcType, program: &ir::Program) -> Layout {
         | BcType::MapI32I32
         | BcType::Array(_)
         | BcType::FixedArray(_, _)
-        | BcType::FnPtr(_, _) => Layout::scalar(POINTER_SIZE),
+        | BcType::FnPtr(_, _, _) => Layout::scalar(POINTER_SIZE),
         BcType::Struct(name) => struct_layout(name, program).1,
         BcType::Enum(name) => enum_layout(name, program).total,
         BcType::Result(ok, err) => result_layout(ok, err, program).total,

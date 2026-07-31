@@ -1,0 +1,79 @@
+// Exercise all 25 concrete source/destination map combinations.
+
+fn map_bool_bool(value: bool) -> bool { value }
+fn map_bool_i32(value: bool) -> i32 { if value { 1 } else { 0 } }
+fn map_bool_i64(value: bool) -> i64 { if value { 1 as i64 } else { 0 as i64 } }
+fn map_bool_f64(value: bool) -> f64 { if value { 1.0 } else { 0.0 } }
+fn map_bool_str(value: bool) -> str { if value { "true" } else { "false" } }
+
+fn map_i32_bool(value: i32) -> bool { value > 0 }
+fn map_i32_i32(value: i32) -> i32 { value + 1 }
+fn map_i32_i64(value: i32) -> i64 { value as i64 }
+fn map_i32_f64(value: i32) -> f64 { value as f64 }
+fn map_i32_str(value: i32) -> str { if value > 0 { "i32" } else { "zero" } }
+
+fn map_i64_bool(value: i64) -> bool { value > 0 as i64 }
+fn map_i64_i32(value: i64) -> i32 { value as i32 }
+fn map_i64_i64(value: i64) -> i64 { value + 1 as i64 }
+fn map_i64_f64(value: i64) -> f64 { value as f64 }
+fn map_i64_str(value: i64) -> str { if value > 0 as i64 { "i64" } else { "zero" } }
+
+fn map_f64_bool(value: f64) -> bool { value > 0.0 }
+fn map_f64_i32(value: f64) -> i32 { value as i32 }
+fn map_f64_i64(value: f64) -> i64 { value as i64 }
+fn map_f64_f64(value: f64) -> f64 { value + 1.0 }
+fn map_f64_str(value: f64) -> str { if value > 0.0 { "f64" } else { "zero" } }
+
+fn map_str_bool(value: str) -> bool { str_len(value) > 0 }
+fn map_str_i32(value: str) -> i32 { str_len(value) }
+fn map_str_i64(value: str) -> i64 { str_len(value) as i64 }
+fn map_str_f64(value: str) -> f64 { str_len(value) as f64 }
+fn map_str_str(value: str) -> str { value }
+
+fn! main() {
+    let bools: [bool] = [true];
+    let i32s: [i32] = [2];
+    let i64s: [i64] = [3 as i64];
+    let f64s: [f64] = [4.0];
+    let strs: [str] = ["five"];
+
+    let bb: [bool] = array_map_bool_to_bool(bools, map_bool_bool);
+    let bi: [i32] = array_map_bool_to_i32(bools, map_bool_i32);
+    let bl: [i64] = array_map_bool_to_i64(bools, map_bool_i64);
+    let bf: [f64] = array_map_bool_to_f64(bools, map_bool_f64);
+    let bs: [str] = array_map_bool_to_str(bools, map_bool_str);
+    print_bool(bb[0]); print(" "); print_i32(bi[0]); print(" ");
+    print_i64(bl[0]); print(" "); print_f64(bf[0]); print(" "); println(bs[0]);
+
+    let ib: [bool] = array_map_i32_to_bool(i32s, map_i32_bool);
+    let ii: [i32] = array_map_i32_to_i32(i32s, map_i32_i32);
+    let il: [i64] = array_map_i32_to_i64(i32s, map_i32_i64);
+    let iff: [f64] = array_map_i32_to_f64(i32s, map_i32_f64);
+    let iss: [str] = array_map_i32_to_str(i32s, map_i32_str);
+    print_bool(ib[0]); print(" "); print_i32(ii[0]); print(" ");
+    print_i64(il[0]); print(" "); print_f64(iff[0]); print(" "); println(iss[0]);
+
+    let lb: [bool] = array_map_i64_to_bool(i64s, map_i64_bool);
+    let li: [i32] = array_map_i64_to_i32(i64s, map_i64_i32);
+    let ll: [i64] = array_map_i64_to_i64(i64s, map_i64_i64);
+    let lf: [f64] = array_map_i64_to_f64(i64s, map_i64_f64);
+    let ls: [str] = array_map_i64_to_str(i64s, map_i64_str);
+    print_bool(lb[0]); print(" "); print_i32(li[0]); print(" ");
+    print_i64(ll[0]); print(" "); print_f64(lf[0]); print(" "); println(ls[0]);
+
+    let fb: [bool] = array_map_f64_to_bool(f64s, map_f64_bool);
+    let fi: [i32] = array_map_f64_to_i32(f64s, map_f64_i32);
+    let fl: [i64] = array_map_f64_to_i64(f64s, map_f64_i64);
+    let ff: [f64] = array_map_f64_to_f64(f64s, map_f64_f64);
+    let fs: [str] = array_map_f64_to_str(f64s, map_f64_str);
+    print_bool(fb[0]); print(" "); print_i32(fi[0]); print(" ");
+    print_i64(fl[0]); print(" "); print_f64(ff[0]); print(" "); println(fs[0]);
+
+    let sb: [bool] = array_map_str_to_bool(strs, map_str_bool);
+    let si: [i32] = array_map_str_to_i32(strs, map_str_i32);
+    let sl: [i64] = array_map_str_to_i64(strs, map_str_i64);
+    let sf: [f64] = array_map_str_to_f64(strs, map_str_f64);
+    let ss: [str] = array_map_str_to_str(strs, map_str_str);
+    print_bool(sb[0]); print(" "); print_i32(si[0]); print(" ");
+    print_i64(sl[0]); print(" "); print_f64(sf[0]); print(" "); println(ss[0]);
+}

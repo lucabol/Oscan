@@ -1,0 +1,9 @@
+fixed: 1 2 3 | clone=3
+structural: removed=7 values=7 9 7 4 4 clear=0
+bool typed: true 0 2 2 -1 | false true true 
+i32 typed: true 1 3 2 -1 | 1 1 2 3 
+i64 typed: true 1 3 2 -1 | 1 1 2 3 
+f64 typed: 0 4 2 2 0 | true true
+str typed: true 0 2 2 -1 | alpha beta beta 
+hof: truefalse2true truetrue47 truetrue47 truefalse11.0 truefalse2b
+for each: false true 1 2 3 4 5.0 6.0 x y 

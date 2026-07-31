@@ -315,6 +315,31 @@ static void test_checked_arith_i64(void)
 /*  Array tests                                                        */
 /* ================================================================== */
 
+static osc_array *array_from_values(osc_arena *arena, int32_t elem_size,
+                                    const void *values, int32_t count)
+{
+    osc_array *arr = osc_array_new(arena, elem_size, count);
+    const uint8_t *bytes = (const uint8_t *)values;
+    int32_t i;
+    for (i = 0; i < count; i++) {
+        osc_array_push(arena, arr, (void *)(bytes + (size_t)i * (size_t)elem_size));
+    }
+    return arr;
+}
+
+static int arena_owns_pointer(osc_arena *arena, const void *pointer)
+{
+    osc_arena_block *block = arena->head;
+    uintptr_t address = (uintptr_t)pointer;
+    while (block) {
+        uintptr_t start = (uintptr_t)block->data;
+        uintptr_t end = start + block->capacity;
+        if (address >= start && address < end) return 1;
+        block = block->next;
+    }
+    return 0;
+}
+
 static void test_array(void)
 {
     printf("\n[Array]\n");
@@ -362,6 +387,54 @@ static void test_array(void)
     }
     PASS();
 
+    TEST("growth retains the array's owner arena");
+    {
+        osc_arena *owner = osc_arena_create(128);
+        osc_arena *child = osc_arena_create(128);
+        osc_array *arr = osc_array_new(owner, (int32_t)sizeof(int32_t), 1);
+        int32_t first = 1;
+        int32_t second = 2;
+        osc_array_push(owner, arr, &first);
+        osc_array_push(child, arr, &second);
+        assert(arr->owner == owner);
+        assert(arena_owns_pointer(owner, arr->data));
+        assert(!arena_owns_pointer(child, arr->data));
+        osc_arena_destroy(child);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 1);
+        assert(*(int32_t *)osc_array_get(arr, 1) == 2);
+        osc_arena_destroy(owner);
+    }
+    PASS();
+
+    TEST("arena-backed elements cannot enter an outer array");
+    {
+        osc_arena *owner = osc_arena_create(128);
+        osc_arena *child = osc_arena_create(128);
+        osc_array *outer = osc_array_new(
+            owner, (int32_t)sizeof(osc_array *), 1);
+        (void)child;
+        (void)outer;
+        EXPECT_PANIC({
+            osc_array_check_arena_store(child, outer);
+        });
+        osc_arena_destroy(child);
+        osc_arena_destroy(owner);
+    }
+
+    if (sizeof(size_t) == 4) {
+        TEST("new rejects allocation-size overflow");
+        EXPECT_PANIC({
+            osc_array_new(
+                arena, INT32_MAX, INT32_MAX);
+        });
+
+        TEST("new rejects alignment-size overflow");
+        EXPECT_PANIC({
+            osc_array_new(
+                arena, 2, INT32_MAX);
+        });
+    }
+
     TEST("get out of bounds (negative)");
     {
         osc_array *arr = osc_array_new(arena, (int32_t)sizeof(int32_t), 4);
@@ -387,6 +460,195 @@ static void test_array(void)
         (void)nv;
         EXPECT_PANIC({ osc_array_set(arr, 5, &nv); });
     }
+
+    osc_arena_destroy(arena);
+}
+
+static void test_array_collections(void)
+{
+    printf("\n[Array Collections]\n");
+
+    osc_arena *arena = osc_arena_create(16384);
+
+    TEST("clone, repeat, reverse, fill, swap, and slice");
+    {
+        int32_t values[] = {1, 2, 3};
+        int32_t fill = 8;
+        int32_t repeated_value = 4;
+        osc_array *arr = array_from_values(
+            arena, (int32_t)sizeof(int32_t), values, 3);
+        osc_array *clone = osc_array_clone(arena, arr);
+        osc_array *repeated = osc_array_repeat(
+            arena, (int32_t)sizeof(int32_t), &repeated_value, 3);
+        osc_array *slice;
+
+        osc_array_swap(clone, 0, 2);
+        assert(*(int32_t *)osc_array_get(clone, 0) == 3);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 1);
+        osc_array_reverse(clone);
+        assert(*(int32_t *)osc_array_get(clone, 0) == 1);
+        osc_array_fill(clone, &fill);
+        assert(*(int32_t *)osc_array_get(clone, 0) == 8);
+        assert(*(int32_t *)osc_array_get(clone, 2) == 8);
+        assert(osc_array_len(repeated) == 3);
+        assert(*(int32_t *)osc_array_get(repeated, 2) == 4);
+
+        slice = osc_array_slice(arena, arr, 1, 3);
+        assert(osc_array_len(slice) == 2);
+        assert(*(int32_t *)osc_array_get(slice, 0) == 2);
+        assert(*(int32_t *)osc_array_get(slice, 1) == 3);
+    }
+    PASS();
+
+    TEST("insert aliases, remove, self-extend, and clear");
+    {
+        int32_t values[] = {1, 2, 3};
+        int32_t removed = 0;
+        osc_array *arr = array_from_values(
+            arena, (int32_t)sizeof(int32_t), values, 3);
+        const void *aliased_value = osc_array_get(arr, 1);
+
+        osc_array_insert(arena, arr, 0, aliased_value);
+        assert(osc_array_len(arr) == 4);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 2);
+        assert(*(int32_t *)osc_array_get(arr, 1) == 1);
+        osc_array_remove_at(arr, 2, &removed);
+        assert(removed == 2);
+        assert(osc_array_len(arr) == 3);
+        assert(*(int32_t *)osc_array_get(arr, 2) == 3);
+
+        osc_array_extend(arena, arr, arr);
+        assert(osc_array_len(arr) == 6);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 2);
+        assert(*(int32_t *)osc_array_get(arr, 3) == 2);
+        assert(*(int32_t *)osc_array_get(arr, 5) == 3);
+        osc_array_clear(arr);
+        assert(osc_array_len(arr) == 0);
+    }
+    PASS();
+
+    TEST("collection bounds checks");
+    {
+        int32_t value = 1;
+        osc_array *arr = osc_array_repeat(
+            arena, (int32_t)sizeof(int32_t), &value, 1);
+        (void)arr;
+        EXPECT_PANIC({ osc_array_swap(arr, 0, 1); });
+    }
+
+    TEST("negative repeat count");
+    {
+        int32_t value = 1;
+        (void)value;
+        EXPECT_PANIC({
+            osc_array_repeat(
+                arena, (int32_t)sizeof(int32_t), &value, -1);
+        });
+    }
+
+    TEST("invalid slice range");
+    {
+        int32_t value = 1;
+        osc_array *arr = osc_array_repeat(
+            arena, (int32_t)sizeof(int32_t), &value, 1);
+        (void)arr;
+        EXPECT_PANIC({ osc_array_slice(arena, arr, 1, 0); });
+    }
+
+    TEST("typed i32 search, comparison, and sort");
+    {
+        int32_t values[] = {3, 1, 2, 1};
+        int32_t other_values[] = {3, 1, 2, 2};
+        int32_t one = 1;
+        int32_t absent = 9;
+        osc_array *arr = array_from_values(
+            arena, (int32_t)sizeof(int32_t), values, 4);
+        osc_array *other = array_from_values(
+            arena, (int32_t)sizeof(int32_t), other_values, 4);
+
+        assert(osc_array_contains_i32(arr, &one));
+        assert(!osc_array_contains_i32(arr, &absent));
+        assert(osc_array_index_of_i32(arr, &one) == 1);
+        assert(osc_array_last_index_of_i32(arr, &one) == 3);
+        assert(osc_array_count_i32(arr, &one) == 2);
+        assert(osc_array_compare_i32(arr, other) == -1);
+        osc_array_sort_i32(arr);
+        assert(*(int32_t *)osc_array_get(arr, 0) == 1);
+        assert(*(int32_t *)osc_array_get(arr, 1) == 1);
+        assert(*(int32_t *)osc_array_get(arr, 3) == 3);
+    }
+    PASS();
+
+    TEST("typed bool, i64, and str operations");
+    {
+        uint8_t bool_values[] = {1, 0, 1};
+        uint8_t true_value = 1;
+        int64_t i64_values[] = {5, -1, -1};
+        int64_t minus_one = -1;
+        osc_str str_values[] = {
+            osc_str_from_cstr("beta"),
+            osc_str_from_cstr("alpha"),
+            osc_str_from_cstr("beta")
+        };
+        osc_str beta = osc_str_from_cstr("beta");
+        osc_array *bools = array_from_values(
+            arena, (int32_t)sizeof(uint8_t), bool_values, 3);
+        osc_array *i64s = array_from_values(
+            arena, (int32_t)sizeof(int64_t), i64_values, 3);
+        osc_array *strs = array_from_values(
+            arena, (int32_t)sizeof(osc_str), str_values, 3);
+
+        assert(osc_array_count_bool(bools, &true_value) == 2);
+        osc_array_sort_bool(bools);
+        assert(*(uint8_t *)osc_array_get(bools, 0) == 0);
+        assert(osc_array_index_of_i64(i64s, &minus_one) == 1);
+        assert(osc_array_last_index_of_i64(i64s, &minus_one) == 2);
+        osc_array_sort_i64(i64s);
+        assert(*(int64_t *)osc_array_get(i64s, 0) == -1);
+        assert(osc_array_count_str(strs, &beta) == 2);
+        osc_array_sort_str(strs);
+        {
+            osc_str first = *(osc_str *)osc_array_get(strs, 0);
+            assert(first.len == 5);
+            assert(memcmp(first.data, "alpha", 5) == 0);
+        }
+    }
+    PASS();
+
+    TEST("f64 NaNs and signed zeros use one total relation");
+    {
+        double values[] = {NAN, -0.0, 2.0, 0.0, NAN, -1.0};
+        double nan_value = NAN;
+        double zero = 0.0;
+        double zero_values[] = {0.0};
+        double neg_zero_values[] = {-0.0};
+        double nan_values[] = {NAN};
+        osc_array *arr = array_from_values(
+            arena, (int32_t)sizeof(double), values, 6);
+        osc_array *zeros = array_from_values(
+            arena, (int32_t)sizeof(double), zero_values, 1);
+        osc_array *neg_zeros = array_from_values(
+            arena, (int32_t)sizeof(double), neg_zero_values, 1);
+        osc_array *nans = array_from_values(
+            arena, (int32_t)sizeof(double), nan_values, 1);
+
+        assert(osc_array_index_of_f64(arr, &nan_value) == 0);
+        assert(osc_array_last_index_of_f64(arr, &nan_value) == 4);
+        assert(osc_array_count_f64(arr, &nan_value) == 2);
+        assert(osc_array_count_f64(arr, &zero) == 2);
+        assert(osc_array_compare_f64(zeros, neg_zeros) == 0);
+        assert(osc_array_compare_f64(zeros, nans) == -1);
+        assert(osc_array_compare_f64(nans, nans) == 0);
+
+        osc_array_sort_f64(arr);
+        assert(*(double *)osc_array_get(arr, 0) == -1.0);
+        assert(*(double *)osc_array_get(arr, 1) == 0.0);
+        assert(*(double *)osc_array_get(arr, 2) == 0.0);
+        assert(*(double *)osc_array_get(arr, 3) == 2.0);
+        assert(isnan(*(double *)osc_array_get(arr, 4)));
+        assert(isnan(*(double *)osc_array_get(arr, 5)));
+    }
+    PASS();
 
     osc_arena_destroy(arena);
 }
@@ -739,6 +1001,7 @@ int main(void)
     test_checked_arith_i32();
     test_checked_arith_i64();
     test_array();
+    test_array_collections();
     test_strings();
     test_type_casts();
     test_conversions();

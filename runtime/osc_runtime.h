@@ -78,6 +78,7 @@ typedef struct {
     int32_t  len;
     int32_t  capacity;
     int32_t  elem_size;
+    osc_arena *owner; /* growth stays in the arena that created the array */
 } osc_array;
 
 osc_array *osc_array_new(osc_arena *arena, int32_t elem_size,
@@ -87,6 +88,37 @@ void      osc_array_set(osc_array *arr, int32_t index, void *value);
 void      osc_array_push(osc_arena *arena, osc_array *arr, void *value);
 void     *osc_array_pop(osc_array *arr);
 int32_t   osc_array_len(osc_array *arr);
+void      osc_array_check_arena_store(osc_arena *arena, osc_array *arr);
+osc_array *osc_array_clone(osc_arena *arena, osc_array *arr);
+osc_array *osc_array_repeat(osc_arena *arena, int32_t elem_size,
+                            const void *value, int32_t count);
+void      osc_array_reverse(osc_array *arr);
+void      osc_array_fill(osc_array *arr, const void *value);
+void      osc_array_swap(osc_array *arr, int32_t left, int32_t right);
+void      osc_array_clear(osc_array *arr);
+void      osc_array_extend(osc_arena *arena, osc_array *destination,
+                           osc_array *source);
+void      osc_array_insert(osc_arena *arena, osc_array *arr, int32_t index,
+                           const void *value);
+void      osc_array_remove_at(osc_array *arr, int32_t index, void *out_value);
+osc_array *osc_array_slice(osc_arena *arena, osc_array *arr,
+                           int32_t start, int32_t end);
+
+#define OSC_ARRAY_TYPED_DECL(suffix) \
+    uint8_t osc_array_contains_##suffix(osc_array *arr, const void *value); \
+    int32_t osc_array_index_of_##suffix(osc_array *arr, const void *value); \
+    int32_t osc_array_last_index_of_##suffix(osc_array *arr, const void *value); \
+    int32_t osc_array_count_##suffix(osc_array *arr, const void *value); \
+    int32_t osc_array_compare_##suffix(osc_array *left, osc_array *right); \
+    void osc_array_sort_##suffix(osc_array *arr)
+
+OSC_ARRAY_TYPED_DECL(bool);
+OSC_ARRAY_TYPED_DECL(i32);
+OSC_ARRAY_TYPED_DECL(i64);
+OSC_ARRAY_TYPED_DECL(f64);
+OSC_ARRAY_TYPED_DECL(str);
+
+#undef OSC_ARRAY_TYPED_DECL
 
 /* ------------------------------------------------------------------ */
 /*  Result type (generic tagged union via macros)                      */

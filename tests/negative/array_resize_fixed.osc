@@ -1,0 +1,6 @@
+// EXPECT ERROR: resizing operations require a dynamic array.
+
+fn! main() {
+    let mut values: [i32; 2] = [1, 2];
+    array_clear(values);
+}

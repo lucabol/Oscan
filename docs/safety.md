@@ -196,7 +196,12 @@ let nan: f64 = 0.0 / 0.0;
 let bad: i32 = nan as i32;    // RUNTIME PANIC: "f64 to i32: NaN"
 ```
 
-Oscan has strict nominal typing with no implicit coercions. There is no `void*`, no raw pointer types, no type punning. Only six explicit casts are allowed, all type-safe. Narrowing casts (e.g., `i64` to `i32`) are checked at runtime and panic if the value doesn't fit.
+Oscan has strict nominal typing with no implicit value coercions. The only
+effect-subtyping rule permits a pure function pointer where an impure function
+pointer is expected. There is no `void*`, no raw pointer types, no type
+punning. Only eight explicit casts are allowed, all type-safe. Narrowing casts
+(e.g., `i64` to `i32`) are checked at runtime and panic if the value doesn't
+fit.
 
 ---
 

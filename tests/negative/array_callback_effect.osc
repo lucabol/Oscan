@@ -1,0 +1,8 @@
+// EXPECT ERROR: map callbacks must be pure.
+
+fn! transform(value: i32) -> i32 { value + 1 }
+
+fn! main() {
+    let values: [i32] = [1, 2];
+    let mapped: [i32] = array_map_i32_to_i32(values, transform);
+}

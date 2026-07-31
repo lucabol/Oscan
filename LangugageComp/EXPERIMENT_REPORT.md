@@ -1,7 +1,7 @@
 # Corrected BuildGraph language experiment
 
 **Research date:** 2026-07-30  
-**Repository revision:** [`c620ecb8ffaa28ce6e445db2d54474fcbbb24a90`](https://github.com/lucabol/Oscan/tree/c620ecb8ffaa28ce6e445db2d54474fcbbb24a90)  
+**Repository base revision:** [`7291ebea65083da2c419e6466f802e0351bcac43`](https://github.com/lucabol/Oscan/tree/7291ebea65083da2c419e6466f802e0351bcac43); measurements include the collection-API working-tree changes described below<br>
 **Compared implementations:** Oscan, Rust, TypeScript/Node.js, and C# .NET 9 Native AOT  
 **Correction:** all earlier framework-dependent C# size and timing results are invalidated
 
@@ -14,15 +14,16 @@ non-result:
    under the current oracle.** Each passed all 47 executable cases, for 188/188
    language-case checks.
 2. **Oscan has the strongest self-contained native artifact-size result.** Its
-   27,136-byte executable is 7.13 times smaller than Rust's 193,536-byte
-   executable and 56.98 times smaller than C# Native AOT's 1,546,240-byte
+   28,672-byte executable is 6.75 times smaller than Rust's 193,536-byte
+   executable and 53.93 times smaller than C# Native AOT's 1,546,240-byte
    executable. TypeScript's 9,958-byte JavaScript file is smaller as an
    application payload, but that number excludes Node.js and is therefore not a
    self-contained deployment comparison.
-3. **Oscan has near-Rust cold process time and materially lower cold process
-   time than C# Native AOT and TypeScript/Node on this host.** The 1,000-task
-   analysis medians were 21.820 ms for Oscan, 20.683 ms for Rust, 27.526 ms for
-   C# Native AOT, and 77.742 ms for TypeScript.
+3. **Oscan had the lowest cold process median in this rerun.** The 1,000-task
+   analysis medians were 21.239 ms for Oscan, 37.820 ms for Rust, 35.016 ms for
+   C# Native AOT, and 87.384 ms for TypeScript. These process-level results
+   differ materially from the prior run and should not be read as isolated
+   algorithm speed.
 4. **The experiment does not measure whether an LLM writes Oscan more
    successfully.** These programs were produced and repaired interactively
    using repository access, compiler feedback, tests, and multiple edits. No
@@ -31,9 +32,10 @@ non-result:
 
 The defensible conclusion is narrow: **for this reviewed BuildGraph
 implementation and toolchain, Oscan combines the smallest self-contained native
-artifact with process time close to Rust, but it requires the largest source
-file. There is not yet evidence that Oscan is superior to Rust, TypeScript, or
-C# when programmed by an LLM.**
+artifact with the lowest process median in this rerun, but it still requires the
+largest source file. The new collection API reduced that file by 56 lines and
+993 bytes without changing the algorithm. There is not yet evidence that Oscan
+is superior to Rust, TypeScript, or C# when programmed by an LLM.**
 
 ## 1. Why the C# experiment had to be redone
 
@@ -82,10 +84,10 @@ reported separately rather than silently added to runtime size.
 | C# mode | Measured command | Primary artifact | Analyze median | `--help` median |
 |---|---|---:|---:|---:|
 | Framework-dependent, **invalidated** | `dotnet BuildGraph.dll` | 17,920 B | 92.715 ms | 79.220 ms |
-| Native AOT, corrected | `BuildGraph.exe` | 1,546,240 B | 27.526 ms | 23.161 ms |
+| Native AOT, corrected, current rerun | `BuildGraph.exe` | 1,546,240 B | 35.016 ms | 33.148 ms |
 
-The corrected analysis median is 70.31% below the old value and the startup
-median is 70.76% below it. The honest self-contained executable is 86.29 times
+The current Native AOT analysis median is 62.23% below the old value and the
+startup median is 58.16% below it. The honest self-contained executable is 86.29 times
 larger than the old application-only DLL. The timing difference is descriptive,
 not a causal estimate of AOT alone: the invalid run used 20 iterations, two
 warmups, and a .NET 10 RC SDK, while the corrected run used 50 iterations, five
@@ -212,7 +214,7 @@ runtime initialization, and antivirus activity remain mixed together.
 |---|---|
 | OS | Microsoft Windows 11 Enterprise 10.0.26200, x64 |
 | CPU | Intel Core i9-13950HX |
-| Repository | `c620ecb8ffaa28ce6e445db2d54474fcbbb24a90` |
+| Repository base | `7291ebea65083da2c419e6466f802e0351bcac43` plus the measured collection-API working-tree changes |
 | Python | 3.13.14 |
 | Rust | rustc 1.94.1 |
 | Node.js | 22.14.0 |
@@ -244,8 +246,8 @@ implementations, not unedited model samples.
 
 | Language | Physical lines | Source bytes | Primary artifact | Artifact boundary |
 |---|---:|---:|---:|---|
-| Oscan | 542 | 16,229 | 27,136 B | Native executable |
-| Rust | 335 | 10,600 | 193,536 B | Release executable |
+| Oscan | 486 | 15,236 | 28,672 B | Native executable |
+| Rust | 335 | 10,935 | 193,536 B | Release executable |
 | TypeScript | 357 | 10,687 | 9,958 B | JavaScript only; Node excluded |
 | C# Native AOT | 381 | 11,448 | 1,546,240 B | Self-contained executable |
 
@@ -256,39 +258,54 @@ Normalized to Oscan:
 
 | Comparison | Result |
 |---|---:|
-| Oscan artifact / Rust artifact | 0.140x |
-| Oscan artifact / C# Native AOT artifact | 0.0175x |
-| Oscan artifact / TypeScript JS payload | 2.725x |
-| Oscan source bytes / Rust source bytes | 1.531x |
-| Oscan source bytes / TypeScript source bytes | 1.519x |
-| Oscan source bytes / C# source bytes | 1.418x |
+| Oscan artifact / Rust artifact | 0.146x |
+| Oscan artifact / C# Native AOT artifact | 0.0182x |
+| Oscan artifact / TypeScript JS payload | 2.828x |
+| Oscan source bytes / Rust source bytes | 1.393x |
+| Oscan source bytes / TypeScript source bytes | 1.426x |
+| Oscan source bytes / C# source bytes | 1.331x |
 
 Oscan's artifact result is excellent among the self-contained/native outputs.
 Its source-size result points in the opposite direction: this reference
-implementation is 42-53% larger in bytes and 42-62% longer in physical lines
+implementation is 33-43% larger in bytes and 28-45% longer in physical lines
 than the three baselines. Source length is not maintainability or generation
 difficulty, but it gives no support to a claim that this task is more concise in
 Oscan.
+
+#### Collection API impact
+
+| Oscan source | Physical lines | Source bytes |
+|---|---:|---:|
+| Before collection refactor | 542 | 16,229 |
+| After collection refactor | 486 | 15,236 |
+| Change | **-56 (-10.33%)** | **-993 (-6.12%)** |
+
+The refactor replaced manual copy/fill/reverse/search/comparison loops with
+`array_clone`, `array_repeat`, `array_reverse`, `array_all_i32`,
+`array_index_of_str`, and `array_compare_i32`. It did not change the BuildGraph
+algorithm or oracle. The executable grew by 1,536 bytes (5.66%) because the
+broader collection primitives and their runtime guard paths are now linked.
 
 ### 4.3 Cold process timing
 
 | Language | Analyze median | Analyze min-max | `--help` median | Approximate difference |
 |---|---:|---:|---:|---:|
-| Oscan | 21.820 ms | 16.390-35.205 ms | 14.444 ms | 7.376 ms |
-| Rust | 20.683 ms | 15.575-41.198 ms | 17.834 ms | 2.849 ms |
-| TypeScript | 77.742 ms | 73.899-111.086 ms | 61.843 ms | 15.899 ms |
-| C# Native AOT | 27.526 ms | 23.427-55.603 ms | 23.161 ms | 4.365 ms |
+| Oscan | 21.239 ms | 17.479-64.160 ms | 17.343 ms | 3.896 ms |
+| Rust | 37.820 ms | 29.498-49.425 ms | 27.522 ms | 10.298 ms |
+| TypeScript | 87.384 ms | 78.847-138.055 ms | 72.590 ms | 14.794 ms |
+| C# Native AOT | 35.016 ms | 29.585-54.204 ms | 33.148 ms | 1.868 ms |
 
 Interpretation:
 
-- Rust had the lowest analysis median. Oscan was 5.5% slower, a small
-  difference relative to the observed process-level ranges.
-- Oscan's analysis median was 20.7% lower than C# Native AOT's; equivalently,
-  C# was 1.26 times Oscan.
-- Oscan's analysis median was 71.9% lower than TypeScript/Node's; equivalently,
-  TypeScript was 3.56 times Oscan.
-- Oscan had the lowest `--help` median, but this is still a whole-process
+- Oscan had the lowest analysis median: 43.8% below Rust and 39.3% below C#
+  Native AOT in this run.
+- Oscan's analysis median was 75.7% below TypeScript/Node's; TypeScript was
+  4.11 times Oscan.
+- Oscan also had the lowest `--help` median, but this is still a whole-process
   measurement rather than pure loader time.
+- These rankings changed from the prior run. Fixed language order, background
+  host activity, and whole-process timing make small cross-run conclusions
+  especially unsafe.
 - The approximate difference column should not be used to rank the graph
   algorithm implementations.
 
@@ -298,10 +315,10 @@ Interpretation:
 |---|---|---|
 | Reference functional correctness | Four-way tie at 47/47 | No; it establishes feasibility and parity |
 | Source concision | Oscan is largest by lines and bytes | No |
-| Self-contained native artifact | Oscan is 7.13x smaller than Rust and 56.98x smaller than C# AOT | Yes, narrowly for this build |
-| Cold analysis process time | Rust 20.683 ms, Oscan 21.820 ms | No advantage over Rust; near parity |
-| Cold time vs C# AOT | Oscan is 20.7% lower | Yes, on this host and workload |
-| Cold time vs TypeScript/Node | Oscan is 71.9% lower | Yes, on this host and workload |
+| Self-contained native artifact | Oscan is 6.75x smaller than Rust and 53.93x smaller than C# AOT | Yes, narrowly for this build |
+| Cold analysis process time | Oscan 21.239 ms, Rust 37.820 ms | Oscan led this rerun; cross-run stability is weak |
+| Cold time vs C# AOT | Oscan is 39.3% lower | Yes, on this host and workload |
+| Cold time vs TypeScript/Node | Oscan is 75.7% lower | Yes, on this host and workload |
 | Required runtime accounting | Oscan and C# are represented by deployed executables; Node is omitted | TypeScript size ranking is unresolved |
 | One-shot build@1 | Not measured | No conclusion |
 | One-shot all-tests pass@1 | Not measured | No conclusion |
@@ -321,8 +338,8 @@ answer different questions.
   diagnostics, graph algorithms, checked 64-bit totals, and stress cases
   without an application dependency.
 - The C backend produced a very small executable.
-- Cold process behavior is in the same practical band as Rust for this small
-  CLI and better than the measured C# AOT and Node invocations.
+- Cold process behavior led the measured Rust, C# AOT, and Node invocations in
+  this rerun.
 
 ### Unsupported claims
 
@@ -333,10 +350,11 @@ answer different questions.
 - That the result generalizes beyond BuildGraph, Windows x64, this compiler
   revision, or these reference implementations.
 
-The observed Oscan source is substantially longer than the baseline sources,
-and several issues were repaired with compiler and test feedback during
-implementation. That history is evidence that this run is not a one-shot sample,
-not evidence for or against Oscan's eventual pass@1.
+The observed Oscan source remains longer than the baseline sources, although
+collection primitives reduced it by 10.33% in lines and 6.12% in bytes. Several
+issues were repaired with compiler and test feedback during implementation.
+That history is evidence that this run is not a one-shot sample, not evidence
+for or against Oscan's eventual pass@1.
 
 ## 7. Why reference parity is not an LLM experiment
 
@@ -454,13 +472,13 @@ python .\harness\suite.py benchmark --language csharp --tasks 1000 `
 ## 11. Final answer
 
 The Native AOT correction is decisive for C#: the old 17.9 KB / 92.7 ms row was
-not a valid native deployment comparison. The corrected C# result is a 1.55 MB
-self-contained executable with a 27.5 ms median process time.
+not a valid native deployment comparison. The current C# result is a 1.55 MB self-contained executable with a 34.3 ms
+median process time.
 
 Under the corrected reference experiment, Oscan's strongest advantages are
-deployed native size and cold process behavior versus C# AOT and Node. Rust is
-slightly faster, and all three baseline sources are shorter. All four references
-are equally correct under the 47-case oracle.
+deployed native size and cold process behavior in this rerun. All three baseline
+sources remain shorter, but the collection refactor narrowed Oscan's source gap.
+All four references are equally correct under the 47-case oracle.
 
 Therefore, **Oscan is operationally attractive for this application, but this
 experiment does not show that Oscan is superior when used by an LLM**. That

@@ -447,6 +447,7 @@ extern_fn_decl   = 'fn!' IDENT '(' param_list? ')' return_type? ';' ;
 type             = primitive_type
                  | array_type
                  | result_type
+                 | function_type
                  | named_type ;
 
 primitive_type   = 'i32' | 'i64' | 'f64' | 'bool' | 'str' | 'unit' ;
@@ -454,6 +455,7 @@ array_type       = '[' type ';' INT_LIT ']'     (* fixed-size *)
                  | '[' type ']' ;                 (* dynamic    *)
 named_type       = IDENT ;
 result_type      = 'Result' '<' type ',' type '>' ;
+function_type    = ('fn' | 'fn!') '(' type_list? ')' '->' type ;
 
 (* === Statements === *)
 
@@ -653,8 +655,29 @@ let xs: [i32] = [1, 2, 3];
 
 - `a[i]` — indexing. Bounds-checked at runtime; out-of-bounds is a runtime panic (program terminates with error message).
 - `len(a)` — returns `i32`, the number of elements.
-- `push(a, val)` — appends to dynamic array (mutates, requires `mut` binding). Available via micro-lib.
-- Fixed-size arrays do NOT support `push`.
+- `push(a, val)` and `pop(a)` — mutate dynamic arrays.
+- Generic `array_*` structural operations clone, repeat, reverse, fill, swap,
+  clear, extend, insert, remove, and slice arrays.
+- Typed `array_*_T` families search, count, lexicographically compare, sort,
+  and apply higher-order callbacks for `T` in `bool`, `i32`, `i64`, `f64`,
+  and `str`.
+- `array_map_S_to_D` exists for all 25 core source/destination combinations.
+
+All mutators require an array expression rooted in a mutable local or global
+binding. Parameters, constants, immutable bindings, and temporary arrays are
+not valid mutation targets. Clear, extend destinations, insert, remove, push,
+and pop require dynamic arrays. Clone, reverse, fill, swap, typed operations,
+and higher-order inputs accept fixed or dynamic arrays.
+
+Indices and lengths are `i32`. Slices are strict half-open ranges `[start,
+end)`. Invalid indices, ranges, negative repeat counts, capacity overflow, and
+allocation failure panic.
+
+Typed comparison returns exactly `-1`, `0`, or `1`. Boolean order is
+`false < true`; integers are numeric; strings are bytewise lexicographic. For
+`f64`, ordinary numbers precede NaNs, all NaNs compare equal, and signed zeros
+compare equal. Searches, counts, comparison, and sorting use this same
+relation.
 
 ### 3.5 Map Type
 
@@ -739,16 +762,21 @@ Function pointer types allow passing functions as values. The syntax is:
 
 ```
 fn(param_types) -> return_type
+fn!(param_types) -> return_type
 ```
 
 Examples:
 ```
 fn(i32, i32) -> bool    // comparator
+fn!(str) -> unit         // impure visitor
 fn(str) -> i32           // string → integer transform
 fn() -> unit             // no-arg, no-return callback
 ```
 
-- Function pointer types are structural: two `fn(i32, i32) -> bool` types from different declarations are the same type.
+- `fn(...)` pointers are pure; `fn!(...)` pointers are impure.
+- Function pointer types are structural: parameters, result, and purity must match.
+- A pure pointer may be used where an impure pointer is expected. The reverse conversion is rejected.
+- Calling an impure pointer from a pure function is rejected.
 - Only user-defined `fn` and `fn!` functions can be used as function pointer values. Builtin and extern functions cannot be taken as values.
 - Functions are not closures — they capture no variables from enclosing scopes.
 - Under the hood, function pointers compile to C function pointers. The implicit `_arena` parameter is included automatically.
@@ -768,7 +796,9 @@ The `as` keyword performs explicit type conversion. Only the following casts are
 | `handle` | `i64` | Opaque pointer to integer (lossless on 64-bit, narrowing on 32-bit) |
 | `i64` | `handle` | Integer to opaque pointer (lossless on 64-bit, widening on 32-bit) |
 
-All other casts are compile errors. There are NO implicit coercions whatsoever.
+All other casts are compile errors. There are no implicit value coercions.
+Function-pointer effects have one compatibility rule: a pure `fn(...) -> R`
+pointer may be used where an impure `fn!(...) -> R` pointer is expected.
 
 ### 3.9 Opaque Handle Type
 
@@ -1613,15 +1643,34 @@ fn bnot(a: i32) -> i32                     // Bitwise NOT (complement)
 
 **Note:** Shift functions use unsigned semantics to avoid C undefined behavior. All bitwise functions take `i32` operands only.
 
-### 10.4 Array Functions (3)
+### 10.4 Array Functions (93 canonical functions)
 
 ```
-fn len(arr: [i32]) -> i32                  // Array length (generic over element type in implementation)
-fn! push(arr: [i32], val: i32)             // Append to dynamic array (generic in implementation)
-fn! pop(arr: [i32]) -> i32                 // Remove and return last element (generic in implementation; panics if empty)
+fn len(arr: [T]) -> i32
+fn! push(arr: [T], val: T)
+fn! pop(arr: [T]) -> T
+
+fn! array_clone(arr: [T]) -> [T]
+fn! array_repeat(value: T, count: i32) -> [T]
+fn! array_reverse(arr: [T])
+fn! array_fill(arr: [T], value: T)
+fn! array_swap(arr: [T], left: i32, right: i32)
+fn! array_clear(arr: [T])
+fn! array_extend(destination: [T], source: [T])
+fn! array_insert(arr: [T], index: i32, value: T)
+fn! array_remove_at(arr: [T], index: i32) -> T
+fn! array_slice(arr: [T], start: i32, end: i32) -> [T]
 ```
 
-**Note:** `len`, `push`, and `pop` are compiler-special-cased to work with any element type `T`. They appear as if monomorphic in documentation but the compiler handles them generically. The LLM writes `len(my_array)`, `push(my_array, value)`, and `pop(my_array)` regardless of element type.
+For each core type `T`, the six typed primitive families are
+`array_contains_T`, `array_index_of_T`, `array_last_index_of_T`,
+`array_count_T`, `array_compare_T`, and `array_sort_T`. The five
+higher-order families are `array_any_T`, `array_all_T`, `array_filter_T`,
+`array_fold_T`, and `array_for_each_T`. `array_map_S_to_D` provides all 25
+core type combinations. See `docs/builtins.md` for every concrete signature.
+
+`len`, `push`, `pop`, and the ten structural functions are compiler-special
+cased over element type `T`; Oscan does not expose user-defined generics.
 
 ### 10.5 Conversion Functions (3)
 
@@ -1904,9 +1953,10 @@ fn! path_is_dir(path: str) -> bool           // Check if a path is a directory
 
 **Note:** `path_ext` is pure — it only inspects the string. `path_join` allocates a new string on the arena. `path_exists` and `path_is_dir` perform filesystem checks and are side-effecting.
 
-### 10.22 Tier 11: Array Sorting (4) — `fn!`
+### 10.22 Tier 11: Legacy Array Sorting Aliases (4) — `fn!`
 
-Sort builtins sort dynamic arrays in-place. All are `fn!` because they mutate the array.
+These compatibility names alias the canonical `array_sort_T` functions. They
+sort fixed or dynamic arrays in place and require mutable bindings.
 
 ```
 fn! sort_i32(arr: [i32])                     // Sort array of i32 in ascending order (in-place)
@@ -1929,7 +1979,8 @@ fn! main() {
 }
 ```
 
-**Note:** Sorting uses an in-place algorithm (Shell sort) with no additional heap allocation. There are separate functions per type because Oscan does not support user-defined generics.
+**Note:** Sorting uses an in-place algorithm (Shell sort) with no additional
+arena allocation. `array_sort_bool` is canonical but has no legacy alias.
 
 ### 10.23 Tier 12: Graphics Builtins (19) — `fn!` / `fn`
 

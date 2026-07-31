@@ -1,8 +1,8 @@
 mod ast;
 mod backend;
 mod c_name;
-#[cfg(feature = "backend-c")]
 mod codegen;
+mod collection;
 mod error;
 mod ir;
 mod lexer;

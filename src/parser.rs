@@ -395,7 +395,7 @@ impl Parser {
         let span = self.peek_span();
         match self.peek().clone() {
             TokenKind::LBracket => self.parse_array_type(),
-            TokenKind::Fn => self.parse_fn_ptr_type(),
+            TokenKind::Fn | TokenKind::FnBang => self.parse_fn_ptr_type(),
             TokenKind::Ident(name) => {
                 let name = name.clone();
                 match name.as_str() {
@@ -503,7 +503,17 @@ impl Parser {
 
     fn parse_fn_ptr_type(&mut self) -> Result<Type, CompileError> {
         let span = self.peek_span();
-        self.expect(&TokenKind::Fn)?;
+        let is_pure = match self.peek() {
+            TokenKind::Fn => true,
+            TokenKind::FnBang => false,
+            _ => {
+                return Err(CompileError::new(
+                    span,
+                    format!("expected function pointer type, found '{}'", self.peek()),
+                ));
+            }
+        };
+        self.advance();
         self.expect(&TokenKind::LParen)?;
         let mut param_types = Vec::new();
         while !self.at(&TokenKind::RParen) && !self.at_eof() {
@@ -519,7 +529,7 @@ impl Parser {
         } else {
             Type::Primitive(PrimitiveType::Unit, span)
         };
-        Ok(Type::FnPtr(param_types, Box::new(ret), span))
+        Ok(Type::FnPtr(param_types, Box::new(ret), is_pure, span))
     }
 
     // ─── Block ───────────────────────────────────────────────
@@ -1422,6 +1432,16 @@ mod tests {
             }
             _ => panic!("expected fn!"),
         }
+    }
+
+    #[test]
+    fn test_function_pointer_effects() {
+        let program = parse("fn apply(pure: fn(i32) -> bool, impure: fn!(str) -> unit) { }");
+        let TopDecl::Fn(function) = &program.decls[0] else {
+            panic!("expected function declaration");
+        };
+        assert!(matches!(function.params[0].ty, Type::FnPtr(_, _, true, _)));
+        assert!(matches!(function.params[1].ty, Type::FnPtr(_, _, false, _)));
     }
 
     #[test]

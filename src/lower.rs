@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 
 use crate::ast;
+use crate::collection::{array_element_type, CollectionIntrinsic, CollectionOp};
 use crate::ir;
 use crate::types::{BcType, SemanticInfo};
 
@@ -152,10 +153,10 @@ impl<'a> Lowering<'a> {
                 Box::new(self.resolve_type(ok)),
                 Box::new(self.resolve_type(err)),
             ),
-            ast::Type::FnPtr(params, ret, _) => {
+            ast::Type::FnPtr(params, ret, is_pure, _) => {
                 let param_types: Vec<BcType> =
                     params.iter().map(|p| self.resolve_type(p)).collect();
-                BcType::FnPtr(param_types, Box::new(self.resolve_type(ret)))
+                BcType::FnPtr(param_types, Box::new(self.resolve_type(ret)), *is_pure)
             }
         }
     }
@@ -166,8 +167,11 @@ impl<'a> Lowering<'a> {
     /// exactly (see module docs in `ir.rs` for why builtins still win by
     /// name at the backend layer regardless of this resolution).
     fn resolve_callee(&self, name: &str) -> ir::Callee {
+        if let Some(intrinsic) = CollectionIntrinsic::resolve_with_alias(name) {
+            return ir::Callee::Collection(intrinsic);
+        }
         if let Some(ty) = self.lookup_type(name) {
-            if let BcType::FnPtr(_, _) = ty {
+            if let BcType::FnPtr(_, _, _) = ty {
                 return ir::Callee::Var(name.to_string());
             }
         }
@@ -183,7 +187,32 @@ impl<'a> Lowering<'a> {
     /// argument resolves to that parameter's `Result<T, E>` type rather
     /// than the enclosing function's return type.
     fn param_types_for(&self, name: &str) -> Option<Vec<BcType>> {
-        if let Some(BcType::FnPtr(params, _)) = self.lookup_type(name) {
+        if let Some(intrinsic) = CollectionIntrinsic::resolve_with_alias(name) {
+            if let Some(source) = intrinsic.source {
+                let source_ty = source.bc_type();
+                let array_ty = BcType::Array(Box::new(source_ty.clone()));
+                return Some(match intrinsic.op {
+                    CollectionOp::Contains
+                    | CollectionOp::IndexOf
+                    | CollectionOp::LastIndexOf
+                    | CollectionOp::Count => vec![array_ty, source_ty],
+                    CollectionOp::Compare => vec![array_ty.clone(), array_ty],
+                    CollectionOp::Sort => vec![array_ty],
+                    CollectionOp::Any
+                    | CollectionOp::All
+                    | CollectionOp::Map
+                    | CollectionOp::Filter
+                    | CollectionOp::ForEach => {
+                        vec![array_ty, intrinsic.callback_type().unwrap()]
+                    }
+                    CollectionOp::Fold => {
+                        vec![array_ty, source_ty, intrinsic.callback_type().unwrap()]
+                    }
+                    _ => return None,
+                });
+            }
+        }
+        if let Some(BcType::FnPtr(params, _, _)) = self.lookup_type(name) {
             return Some(params);
         }
         self.info
@@ -220,10 +249,96 @@ impl<'a> Lowering<'a> {
         self.expected_result_type = saved.1;
     }
 
+    fn lower_expr_with_expected(&mut self, expr: &ast::Expr, expected: &BcType) -> ir::Expr {
+        let saved = self.push_expected_type(expected);
+        let lowered = self.lower_expr(expr);
+        self.pop_expected_type(saved);
+        lowered
+    }
+
+    fn lower_generic_collection_args(
+        &mut self,
+        intrinsic: CollectionIntrinsic,
+        args: &[ast::Expr],
+    ) -> Vec<ir::Expr> {
+        let mut lowered = Vec::with_capacity(args.len());
+        match intrinsic.op {
+            CollectionOp::Repeat => {
+                lowered.push(self.lower_expr(&args[0]));
+                lowered.push(self.lower_expr_with_expected(&args[1], &BcType::I32));
+            }
+            CollectionOp::Clone | CollectionOp::Reverse | CollectionOp::Clear => {
+                lowered.push(self.lower_expr(&args[0]));
+            }
+            CollectionOp::Fill => {
+                let array = self.lower_expr(&args[0]);
+                let elem_ty = array_element_type(&array.ty()).unwrap_or(BcType::Unit);
+                lowered.push(array);
+                lowered.push(self.lower_expr_with_expected(&args[1], &elem_ty));
+            }
+            CollectionOp::Swap => {
+                lowered.push(self.lower_expr(&args[0]));
+                lowered.push(self.lower_expr_with_expected(&args[1], &BcType::I32));
+                lowered.push(self.lower_expr_with_expected(&args[2], &BcType::I32));
+            }
+            CollectionOp::Extend => {
+                let destination = self.lower_expr(&args[0]);
+                let elem_ty = array_element_type(&destination.ty()).unwrap_or(BcType::Unit);
+                let source_ty = BcType::Array(Box::new(elem_ty));
+                lowered.push(destination);
+                lowered.push(self.lower_expr_with_expected(&args[1], &source_ty));
+            }
+            CollectionOp::Insert => {
+                let array = self.lower_expr(&args[0]);
+                let elem_ty = array_element_type(&array.ty()).unwrap_or(BcType::Unit);
+                lowered.push(array);
+                lowered.push(self.lower_expr_with_expected(&args[1], &BcType::I32));
+                lowered.push(self.lower_expr_with_expected(&args[2], &elem_ty));
+            }
+            CollectionOp::RemoveAt => {
+                lowered.push(self.lower_expr(&args[0]));
+                lowered.push(self.lower_expr_with_expected(&args[1], &BcType::I32));
+            }
+            CollectionOp::Slice => {
+                lowered.push(self.lower_expr(&args[0]));
+                lowered.push(self.lower_expr_with_expected(&args[1], &BcType::I32));
+                lowered.push(self.lower_expr_with_expected(&args[2], &BcType::I32));
+            }
+            _ => unreachable!("typed collection intrinsic has no generic argument lowering"),
+        }
+        lowered
+    }
+
     /// The result type of calling `name`, mirroring the old codegen's
     /// `type_of(Expr::Call)` exactly (including the `len`/`push` special
     /// cases, which are never registered in `functions`).
-    fn call_result_type(&self, name: &str) -> BcType {
+    fn call_result_type(&self, name: &str, args: &[ir::Expr]) -> BcType {
+        if let Some(intrinsic) = CollectionIntrinsic::resolve_with_alias(name) {
+            let first_ty = args.first().map(ir::Expr::ty).unwrap_or(BcType::Unit);
+            let elem_ty = array_element_type(&first_ty).unwrap_or(BcType::Unit);
+            return match intrinsic.op {
+                CollectionOp::Clone => first_ty,
+                CollectionOp::Repeat => BcType::Array(Box::new(
+                    args.first().map(ir::Expr::ty).unwrap_or(BcType::Unit),
+                )),
+                CollectionOp::RemoveAt | CollectionOp::Fold => elem_ty,
+                CollectionOp::Slice | CollectionOp::Filter => BcType::Array(Box::new(elem_ty)),
+                CollectionOp::Map => BcType::Array(Box::new(intrinsic.target.unwrap().bc_type())),
+                CollectionOp::Contains | CollectionOp::Any | CollectionOp::All => BcType::Bool,
+                CollectionOp::IndexOf
+                | CollectionOp::LastIndexOf
+                | CollectionOp::Count
+                | CollectionOp::Compare => BcType::I32,
+                CollectionOp::Reverse
+                | CollectionOp::Fill
+                | CollectionOp::Swap
+                | CollectionOp::Clear
+                | CollectionOp::Extend
+                | CollectionOp::Insert
+                | CollectionOp::Sort
+                | CollectionOp::ForEach => BcType::Unit,
+            };
+        }
         if name == "len" {
             return BcType::I32;
         }
@@ -231,7 +346,7 @@ impl<'a> Lowering<'a> {
             return BcType::Unit;
         }
         if let Some(ty) = self.lookup_type(name) {
-            if let BcType::FnPtr(_, ret) = ty {
+            if let BcType::FnPtr(_, ret, _) = ty {
                 return *ret;
             }
         }
@@ -594,7 +709,7 @@ impl<'a> Lowering<'a> {
                         fi.params.iter().map(|(_, t)| t.clone()).collect();
                     (
                         ir::IdentKind::FnRef,
-                        BcType::FnPtr(param_types, Box::new(fi.return_type.clone())),
+                        BcType::FnPtr(param_types, Box::new(fi.return_type.clone()), fi.is_pure),
                     )
                 } else {
                     (ir::IdentKind::Value, BcType::Unit)
@@ -671,22 +786,24 @@ impl<'a> Lowering<'a> {
                 // `Result::Ok`/`Result::Err` (or an empty/fixed array
                 // literal) passed directly as an argument resolves against
                 // the parameter's type rather than any ambient context.
-                let param_types = self.param_types_for(&name);
-                let lowered_args: Vec<ir::Expr> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| match param_types.as_ref().and_then(|p| p.get(i)) {
-                        Some(param_ty) => {
-                            let saved = self.push_expected_type(param_ty);
-                            let lowered = self.lower_expr(a);
-                            self.pop_expected_type(saved);
-                            lowered
-                        }
-                        None => self.lower_expr(a),
-                    })
-                    .collect();
+                let collection = CollectionIntrinsic::resolve_with_alias(&name);
+                let lowered_args = match collection {
+                    Some(intrinsic) if intrinsic.source.is_none() => {
+                        self.lower_generic_collection_args(intrinsic, args)
+                    }
+                    _ => {
+                        let param_types = self.param_types_for(&name);
+                        args.iter()
+                            .enumerate()
+                            .map(|(i, a)| match param_types.as_ref().and_then(|p| p.get(i)) {
+                                Some(param_ty) => self.lower_expr_with_expected(a, param_ty),
+                                None => self.lower_expr(a),
+                            })
+                            .collect()
+                    }
+                };
                 let callee_ir = self.resolve_callee(&name);
-                let ty = self.call_result_type(&name);
+                let ty = self.call_result_type(&name, &lowered_args);
                 ir::Expr::Call {
                     callee: callee_ir,
                     args: lowered_args,
@@ -758,11 +875,15 @@ impl<'a> Lowering<'a> {
                 let then_b = self.lower_block(then_block);
                 self.pop_scope();
                 let else_b = else_branch.as_ref().map(|e| Box::new(self.lower_expr(e)));
-                let ty = if else_b.is_some() {
-                    then_b.ty()
-                } else {
-                    BcType::Unit
-                };
+                let ty = else_b
+                    .as_ref()
+                    .map(|else_expr| {
+                        then_b
+                            .ty()
+                            .compatible_join(&else_expr.ty(), None)
+                            .expect("semantic analysis accepted incompatible if branches")
+                    })
+                    .unwrap_or(BcType::Unit);
                 ir::Expr::If {
                     condition: Box::new(cond),
                     then_block: then_b,
@@ -784,8 +905,12 @@ impl<'a> Lowering<'a> {
                     .map(|a| self.lower_match_arm(&scrut_ty, a))
                     .collect();
                 let ty = lowered_arms
-                    .first()
-                    .map(|a| a.body.ty())
+                    .iter()
+                    .map(|arm| arm.body.ty())
+                    .reduce(|left, right| {
+                        left.compatible_join(&right, None)
+                            .expect("semantic analysis accepted incompatible match arms")
+                    })
                     .unwrap_or(BcType::Unit);
                 ir::Expr::Match {
                     scrutinee: Box::new(scrut),
@@ -1304,5 +1429,59 @@ mod tests {
         );
         let value = let_value(main_stmt(&prog, 0));
         assert_eq!(value.ty(), BcType::Array(Box::new(BcType::I32)));
+    }
+
+    #[test]
+    fn generic_collection_values_keep_contextual_element_types() {
+        let prog = lower_source(
+            r#"
+                fn! main() {
+                    let mut nested: [[i32]] = [[1]];
+                    array_fill(nested, []);
+                    array_extend(nested, []);
+                    let mut results: [Result<i32, str>] = [];
+                    array_insert(results, 0, Result::Ok(7));
+                }
+                "#,
+        );
+
+        let fill = match main_stmt(&prog, 1) {
+            ir::Stmt::Expr(es) => &es.expr,
+            _ => panic!("expected array_fill expression"),
+        };
+        match fill {
+            ir::Expr::Call { args, .. } => {
+                assert_eq!(args[1].ty(), BcType::Array(Box::new(BcType::I32)));
+            }
+            _ => panic!("expected array_fill call"),
+        }
+
+        let extend = match main_stmt(&prog, 2) {
+            ir::Stmt::Expr(es) => &es.expr,
+            _ => panic!("expected array_extend expression"),
+        };
+        match extend {
+            ir::Expr::Call { args, .. } => {
+                assert_eq!(
+                    args[1].ty(),
+                    BcType::Array(Box::new(BcType::Array(Box::new(BcType::I32))))
+                );
+            }
+            _ => panic!("expected array_extend call"),
+        }
+
+        let insert = match main_stmt(&prog, 4) {
+            ir::Stmt::Expr(es) => &es.expr,
+            _ => panic!("expected array_insert expression"),
+        };
+        match insert {
+            ir::Expr::Call { args, .. } => {
+                assert_eq!(
+                    args[2].ty(),
+                    BcType::Result(Box::new(BcType::I32), Box::new(BcType::Str))
+                );
+            }
+            _ => panic!("expected array_insert call"),
+        }
     }
 }
