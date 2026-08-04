@@ -23,6 +23,9 @@ use cranelift_codegen::settings::{self, Configurable};
 #[cfg(feature = "backend-cranelift")]
 use target_lexicon::Triple;
 
+#[cfg(feature = "backend-cranelift")]
+use super::OptimizationProfile;
+
 /// A native compilation target an object backend knows how to select.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeTarget {
@@ -192,10 +195,8 @@ fn env_arch() -> &'static str {
 ///   documented simplification, not a silent correctness gap: pathological
 ///   functions with many kilobytes of scalar locals on Windows could in
 ///   principle skip a guard page.
-/// * `opt_level` is `speed_and_size` rather than plain `speed`: Cranelift
-///   documents it as "like speed, but also perform transformations aimed
-///   at reducing code size" with no downside versus `speed`, so it is
-///   strictly the better release default whenever both are available.
+/// * `opt_level` follows `optimization`: the default size profile uses
+///   `speed_and_size`, while the speed profile requests plain `speed`.
 ///   As of cranelift-codegen 0.133, `Speed` and `SpeedAndSize` are in fact
 ///   handled identically by the x86-64 backend and its optimizer passes
 ///   (only `OptLevel::None` takes a different, unoptimized path) — verified
@@ -207,11 +208,20 @@ fn env_arch() -> &'static str {
 ///   `SpeedAndSize`-specific size optimization is picked up automatically
 ///   without another change here.
 #[cfg(feature = "backend-cranelift")]
-pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
+pub fn build_isa(
+    target: NativeTarget,
+    optimization: OptimizationProfile,
+) -> Result<Arc<dyn TargetIsa>, String> {
     let triple = target.triple();
     let mut flag_builder = settings::builder();
     flag_builder
-        .set("opt_level", "speed_and_size")
+        .set(
+            "opt_level",
+            match optimization {
+                OptimizationProfile::Size => "speed_and_size",
+                OptimizationProfile::Speed => "speed",
+            },
+        )
         .map_err(|e| format!("internal error configuring Cranelift settings: {e}"))?;
     flag_builder
         .set("is_pic", "false")
@@ -240,33 +250,36 @@ pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
 mod tests {
     use super::*;
 
-    /// Locks in the size-oriented ISA settings `build_isa` configures — a
-    /// regression here would silently regress release native-backend
-    /// binary size (e.g. reverting to `opt_level = "speed"`, or turning PIC
-    /// or stack probes back on) without any compile error to catch it.
+    /// Locks in the profile mapping and the fixed object-model settings.
     #[cfg(feature = "backend-cranelift")]
     #[test]
-    fn build_isa_uses_size_oriented_release_settings() {
+    fn build_isa_uses_profile_and_fixed_object_settings() {
         use cranelift_codegen::settings::OptLevel;
 
-        for target in [
-            NativeTarget::WindowsX64,
-            NativeTarget::LinuxX64,
-            NativeTarget::LinuxAarch64,
-            NativeTarget::LinuxRiscv64,
+        for (optimization, expected) in [
+            (OptimizationProfile::Size, OptLevel::SpeedAndSize),
+            (OptimizationProfile::Speed, OptLevel::Speed),
         ] {
-            let isa = build_isa(target).expect("every built-in target must configure an ISA");
-            let flags = isa.flags();
-            assert_eq!(
-                flags.opt_level(),
-                OptLevel::SpeedAndSize,
-                "{target} must use the speed_and_size opt level"
-            );
-            assert!(!flags.is_pic(), "{target} must not enable PIC");
-            assert!(
-                !flags.enable_probestack(),
-                "{target} must not enable stack probes"
-            );
+            for target in [
+                NativeTarget::WindowsX64,
+                NativeTarget::LinuxX64,
+                NativeTarget::LinuxAarch64,
+                NativeTarget::LinuxRiscv64,
+            ] {
+                let isa = build_isa(target, optimization)
+                    .expect("every built-in target must configure an ISA");
+                let flags = isa.flags();
+                assert_eq!(
+                    flags.opt_level(),
+                    expected,
+                    "{target} must honor the {optimization} profile"
+                );
+                assert!(!flags.is_pic(), "{target} must not enable PIC");
+                assert!(
+                    !flags.enable_probestack(),
+                    "{target} must not enable stack probes"
+                );
+            }
         }
     }
 

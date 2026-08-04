@@ -24,6 +24,7 @@ use super::lir::{
     LirBody, LirBuilder, LirError, LirModule,
 };
 use super::target::{self, NativeTarget};
+use super::OptimizationProfile;
 
 /// The flags used for every plain scalar/pointer load and store this
 /// backend emits. Not `trusted()`: Oscan values can indeed be read at
@@ -125,6 +126,7 @@ impl ModuleState {
         let cl_sig = cl_signature(self.module_ref(), sig);
         let cl_linkage = match linkage {
             LLinkage::Export => Linkage::Export,
+            LLinkage::Local => Linkage::Local,
             LLinkage::Import => Linkage::Import,
         };
         let id = self
@@ -215,8 +217,8 @@ pub struct CraneliftLir {
 }
 
 impl CraneliftLir {
-    pub fn new(target: NativeTarget) -> Result<Self, String> {
-        let isa = target::build_isa(target)?;
+    pub fn new(target: NativeTarget, optimization: OptimizationProfile) -> Result<Self, String> {
+        let isa = target::build_isa(target, optimization)?;
         let builder = ObjectBuilder::new(
             isa,
             "oscan_program",

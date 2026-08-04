@@ -470,11 +470,12 @@ override was hiding a real bug rather than working around an unfixable one.
 
 ### LLVM backend release contract
 
-The LLVM backend performs parse, verify, `default<Oz>`, and TargetMachine
-object emission in-process. It does not generate C or invoke Clang, `llvm-as`,
-`opt`, or `llc`. Development and Linux release builds dynamically load
-exact-major LLVM 22 through the C API; the Windows LLVM release links the same
-API statically.
+The LLVM backend performs parse, verify, `default<Oz>` (the default size
+profile) or `default<O3>` (the speed profile), and TargetMachine object
+emission in-process. It does not generate C or invoke Clang, `llvm-as`, `opt`,
+or `llc`. Development and Linux release builds dynamically load exact-major
+LLVM 22 through the C API; the Windows LLVM release links the same API
+statically.
 
 Both the Windows and the Linux `llvm` package must contain a compatible
 provider:

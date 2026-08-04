@@ -14,7 +14,7 @@
 //! compiles.
 
 #[cfg(any(feature = "backend-llvm", feature = "backend-cranelift"))]
-use object::Object;
+use object::{Object, ObjectSymbol};
 use std::fs;
 use std::path::Path;
 use std::process::{self, Command};
@@ -144,6 +144,8 @@ fn long_help_flag_prints_usage_and_succeeds() {
     if cfg!(any(feature = "backend-llvm", feature = "backend-cranelift")) {
         assert!(stdout.contains("--allow-elevated-native-link"));
         assert!(stdout.contains("Trusted CI/release only"));
+        assert!(stdout.contains("--opt-level size|speed"));
+        assert!(stdout.contains("size (default) or speed"));
     }
 }
 
@@ -173,6 +175,10 @@ fn help_only_advertises_flags_this_build_can_honor() {
         usage.contains("[--extra-c <file.c>]"),
         !toolchain_free_build()
     );
+    assert_eq!(
+        usage.contains("[--opt-level size|speed]"),
+        cfg!(any(feature = "backend-llvm", feature = "backend-cranelift"))
+    );
     assert!(usage.contains("[--extra-obj <file.o|.obj>]"));
 
     if toolchain_free_build() {
@@ -201,6 +207,7 @@ fn help_only_advertises_flags_this_build_can_honor() {
                 "a toolchain-free build must not advertise {absent}: {stdout}"
             );
         }
+
         assert!(
             stdout.contains("this build includes no C backend"),
             "{stdout}"
@@ -237,6 +244,42 @@ fn help_only_advertises_flags_this_build_can_honor() {
         assert!(!stdout.contains("--native-target"), "{stdout}");
         assert!(!stdout.contains("OSCAN_NATIVE_LINKER"), "{stdout}");
     }
+}
+
+#[test]
+fn invalid_optimization_levels_are_rejected_before_compilation() {
+    let missing = oscan_command()
+        .arg("--opt-level")
+        .output()
+        .expect("failed to validate a missing optimization level");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr)
+        .contains("--opt-level requires an argument (size, speed)"));
+
+    let unknown = oscan_command()
+        .args(["--opt-level", "fast"])
+        .output()
+        .expect("failed to validate an unknown optimization level");
+    assert!(!unknown.status.success());
+    assert!(String::from_utf8_lossy(&unknown.stderr)
+        .contains("unknown optimization level 'fast' (supported: size, speed)"));
+}
+
+#[cfg(feature = "backend-c")]
+#[test]
+fn c_backend_rejects_an_explicit_object_optimization_level() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output = oscan_command()
+        .arg(&source)
+        .args(["--backend", "c", "--opt-level", "speed", "--emit-c"])
+        .output()
+        .expect("failed to validate the C optimization-level rejection");
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("--opt-level is only supported with --backend llvm or --backend cranelift"));
 }
 
 #[test]
@@ -582,6 +625,64 @@ fn default_backend_emits_an_object_on_supported_hosts() {
     fs::remove_file(&output_path).expect("failed to remove object output");
     let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
     assert_eq!(object.kind(), object::ObjectKind::Relocatable);
+}
+
+#[cfg(any(
+    all(target_os = "windows", target_arch = "x86_64"),
+    all(
+        target_os = "linux",
+        any(
+            target_arch = "x86_64",
+            target_arch = "aarch64",
+            target_arch = "riscv64"
+        )
+    )
+))]
+#[cfg(feature = "backend-cranelift")]
+#[test]
+fn cranelift_speed_profile_makes_user_main_local_and_process_main_global() {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("hello.osc");
+    let output_path =
+        std::env::temp_dir().join(format!("oscan-speed-linkage-{}.obj", process::id()));
+    let output = oscan_command()
+        .arg(&source)
+        .args([
+            "--backend",
+            "cranelift",
+            "--opt-level",
+            "speed",
+            "--verbose",
+            "-o",
+        ])
+        .arg(&output_path)
+        .output()
+        .expect("failed to emit a Cranelift speed-profile object");
+
+    assert!(
+        output.status.success(),
+        "Cranelift speed-profile emission failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("optimization: speed"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bytes = fs::read(&output_path).expect("object output should exist");
+    fs::remove_file(&output_path).expect("failed to remove object output");
+    let object = object::File::parse(bytes.as_slice()).expect("output should be an object file");
+    let user_main = object
+        .symbols()
+        .find(|symbol| symbol.name().ok() == Some("oscan_main"))
+        .expect("object must contain the reachable Oscan main function");
+    let process_main = object
+        .symbols()
+        .find(|symbol| symbol.name().ok() == Some("main"))
+        .expect("object must contain the process entry function");
+    assert!(user_main.is_local(), "oscan_main must have local linkage");
+    assert!(process_main.is_global(), "main must remain linker-visible");
 }
 
 #[cfg(any(
@@ -945,7 +1046,7 @@ fn llvm_ir_output_is_deterministic_and_direct() {
     );
     assert!(!ir.contains("program.c"), "no C source may appear: {ir}");
     assert!(!ir.contains(".c\""), "no C source may appear: {ir}");
-    assert!(ir.contains("define void @oscan_main("), "{ir}");
+    assert!(ir.contains("define internal void @oscan_main("), "{ir}");
     assert!(ir.contains("define i32 @main("), "{ir}");
     // Conservative poison policy.
     assert!(!ir.contains(" nsw "), "no nsw: {ir}");

@@ -217,6 +217,11 @@ fn extern_shim_signature(
 /// body. Mirrors the two-pass structure `src/codegen.rs` gets "for free"
 /// from C's own forward declarations.
 ///
+/// User functions are local object symbols: only the synthesized process
+/// entry point needs linker-visible export linkage. Calls and function
+/// pointers within this module still keep every reachable local function
+/// alive, while the optimizer/linker may discard unreachable ones.
+///
 /// `extern` block functions are deliberately *not* declared here — see
 /// `FuncTranslator::resolve_extern`'s docs for why they're resolved
 /// lazily, on first actual call, instead.
@@ -225,7 +230,7 @@ pub fn declare_and_translate_all(ctx: &mut BackendContext, lir: &mut dyn LirModu
         let sig = oscan_fn_signature(ctx.program, &f.params, &f.return_type);
         let symbol = BackendContext::user_fn_symbol(&f.name);
         let id = lir
-            .declare_function(&symbol, &sig, LLinkage::Export)
+            .declare_function(&symbol, &sig, LLinkage::Local)
             .map_err(|e| {
                 CompileError::new(
                     f.span,

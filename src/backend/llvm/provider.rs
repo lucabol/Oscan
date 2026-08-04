@@ -59,6 +59,8 @@
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 
+use super::super::OptimizationProfile;
+
 /// The LLVM major version this binding is written against. The LLVM C API
 /// is only guaranteed stable within one major release.
 pub const REQUIRED_LLVM_MAJOR: u32 = 22;
@@ -107,9 +109,9 @@ type LlvmTargetDataRef = *mut LlvmTargetDataOpaque;
 type LlvmPassBuilderOptionsRef = *mut LlvmPassBuilderOptionsOpaque;
 type LlvmErrorRef = *mut LlvmErrorOpaque;
 
-// `LLVMCodeGenOptLevel`. The IR pipeline is size-oriented and function
-// definitions carry `minsize`; use the matching fully optimizing machine
-// pipeline rather than LLVM's default codegen level.
+// `LLVMCodeGenOptLevel`. Both user profiles use LLVM's fully optimizing
+// machine pipeline; the IR pipeline and per-function attributes select
+// whether those machine heuristics favor size or speed.
 const LLVM_CODEGEN_LEVEL_AGGRESSIVE: c_int = 3;
 // `LLVMRelocMode`
 const LLVM_RELOC_PIC: c_int = 2;
@@ -831,7 +833,7 @@ impl LlvmProvider {
         &self,
         ir_text: &str,
         triple: &str,
-        optimize: OptimizationLevel,
+        optimization: OptimizationProfile,
     ) -> Result<Vec<u8>, String> {
         // LLVM's textual IR lexer reads a sentinel byte one past the end
         // of its buffer, so the buffer must be genuinely NUL-terminated
@@ -857,7 +859,7 @@ impl LlvmProvider {
         drop(layout);
 
         module.verify("emitted")?;
-        module.run_passes(&machine, optimize)?;
+        module.run_passes(&machine, optimization)?;
         // Re-verify after optimization: a pass pipeline that produced
         // invalid IR must be reported here, not turned into a broken
         // object file.
@@ -868,24 +870,14 @@ impl LlvmProvider {
     }
 }
 
-/// The optimization pipeline to run before object emission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OptimizationLevel {
-    /// Optimize for minimum size. Emitted functions carry LLVM's
-    /// `"no-builtins"` attribute, and the freestanding object audit rejects
-    /// any libc symbol that a future LLVM pipeline might nevertheless form.
-    FreestandingSafe,
-}
-
-impl OptimizationLevel {
-    /// LLVM's standard minimum-size pipeline includes size-aware inlining
-    /// and interprocedural cleanup that a local pass list cannot reproduce.
-    /// Safety does not rely on the list staying frozen: `"no-builtins"`
-    /// suppresses libc assumptions and the object is audited before linking.
-    pub fn pipeline(self) -> &'static str {
-        match self {
-            OptimizationLevel::FreestandingSafe => "default<Oz>",
-        }
+/// LLVM's standard pipelines include interprocedural cleanup that a local
+/// pass list cannot reproduce. Freestanding safety is independent of this
+/// choice: `"no-builtins"` suppresses libc assumptions and the object is
+/// audited before linking.
+fn optimization_pipeline(optimization: OptimizationProfile) -> &'static str {
+    match optimization {
+        OptimizationProfile::Size => "default<Oz>",
+        OptimizationProfile::Speed => "default<O3>",
     }
 }
 
@@ -984,9 +976,10 @@ impl Module<'_> {
     fn run_passes(
         &self,
         machine: &TargetMachine<'_>,
-        level: OptimizationLevel,
+        optimization: OptimizationProfile,
     ) -> Result<(), String> {
-        let pipeline = cstring(level.pipeline())?;
+        let pipeline_name = optimization_pipeline(optimization);
+        let pipeline = cstring(pipeline_name)?;
         // SAFETY: resolved entry point, no arguments.
         let options = unsafe { (self.provider.api.create_pass_builder_options)() };
         if options.is_null() {
@@ -1014,7 +1007,7 @@ impl Module<'_> {
             };
             return Err(format!(
                 "the LLVM optimization pipeline failed ('{}'): {detail}",
-                level.pipeline()
+                pipeline_name
             ));
         }
         Ok(())
@@ -1520,9 +1513,15 @@ mod tests {
     }
 
     #[test]
-    fn the_optimization_pipeline_uses_llvm_minimum_size_defaults() {
-        let pipeline = OptimizationLevel::FreestandingSafe.pipeline();
-        assert_eq!(pipeline, "default<Oz>");
+    fn optimization_profiles_select_standard_llvm_pipelines() {
+        assert_eq!(
+            optimization_pipeline(OptimizationProfile::Size),
+            "default<Oz>"
+        );
+        assert_eq!(
+            optimization_pipeline(OptimizationProfile::Speed),
+            "default<O3>"
+        );
     }
 
     #[test]
