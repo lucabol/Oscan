@@ -149,6 +149,24 @@ class PackageLayoutVerificationTests(unittest.TestCase):
             self._reject("linux-x86_64", "llvm", remove_profile),
         )
 
+    def test_a_missing_strict_embedded_notice_is_refused(self) -> None:
+        def remove_notice(bundle: Path) -> None:
+            (bundle / "LICENSES" / "embedded" / "LLVM-LICENSE.txt").unlink()
+
+        self.assertIn(
+            "embedded-input notices differ",
+            self._reject("windows-x86_64", "llvm", remove_notice),
+        )
+
+    def test_a_linker_binary_in_the_strict_package_is_refused(self) -> None:
+        def plant_linker(bundle: Path) -> None:
+            (bundle / "ld.lld.exe").write_bytes(b"forbidden sidecar linker")
+
+        self.assertIn(
+            "single-executable compiler",
+            self._reject("windows-x86_64", "llvm", plant_linker),
+        )
+
     def test_an_undeclared_runtime_archive_is_refused(self) -> None:
         def add_hosted(bundle: Path) -> None:
             hosted = (
@@ -255,6 +273,19 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
         self.assertIn("-ArchivePath must name a packaged release archive file", self.script)
         self.assertIn("-PathType Leaf", self.script)
 
+    def test_it_can_smoke_an_already_installed_package(self) -> None:
+        self.assertIn(
+            '[Parameter(Mandatory = $true, ParameterSetName = "Archive")]',
+            self.script,
+        )
+        self.assertIn(
+            '[Parameter(Mandatory = $true, ParameterSetName = "Installed")]',
+            self.script,
+        )
+        self.assertIn('$PSCmdlet.ParameterSetName -eq "Archive"', self.script)
+        self.assertIn("$InstallDir = $InstalledPackageDir", self.script)
+        self.assertIn("$OscanShim = $OscanCommand", self.script)
+
     def test_the_layout_is_verified_after_extraction_and_after_install(self) -> None:
         stages = re.findall(r'"--stage", "(\w+)"', self.script)
         self.assertEqual(stages, ["extracted", "installed"])
@@ -304,14 +335,19 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
         self.assertIn("$versionText = (& $OscanShim --version", self.script)
         self.assertIn("& $script:OscanCommand @Arguments", self.script)
 
-    def test_it_asserts_the_selected_backend_linker_and_provider(self) -> None:
+    def test_it_asserts_the_selected_backend_link_mode_and_provider(self) -> None:
         self.assertIn(r"^\[verbose\] $Backend backend target:", self.script)
         self.assertIn(r"^\[verbose\] LLVM code generator: ", self.script)
         # The native-link assertion checks *which* sidecar was used, so a
         # generic "the word sidecar appears" match must not creep back in.
         self.assertNotIn(r"^\[verbose\] native-link assets: sidecar \(", self.script)
         self.assertEqual(self.script.count("Assert-PackagedSidecarAssets -LogPath"), 2)
+        self.assertEqual(self.script.count("Assert-PackagedInProcessLinking -LogPath"), 2)
+        self.assertIn("\nfunction Assert-PackagedInProcessLinking {", self.script)
+        self.assertNotIn("\n    function Assert-PackagedInProcessLinking {", self.script)
         self.assertIn("-SidecarRoot (Join-Path $InstallDir $sidecarDirName)", self.script)
+        self.assertIn("LLVM code generator: statically-linked-llvm-", self.script)
+        self.assertIn('if ($usesSidecar)', self.script)
 
     def test_it_asserts_the_version_metadata_block(self) -> None:
         for line in ("backends", "default-backend", "distribution", "toolchain-free"):
@@ -352,6 +388,29 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
     def test_windows_object_packages_still_check_freestanding_imports(self) -> None:
         self.assertIn("KERNEL32\\.dll", self.script)
         self.assertIn("msvcrt|ucrt|vcruntime|api-ms-win-crt", self.script)
+
+    def test_strict_compiler_dependencies_are_checked(self) -> None:
+        self.assertIn("function Assert-StrictCompilerDependencies", self.script)
+        self.assertIn("/dependents $ExePath", self.script)
+        self.assertIn(
+            'if ($platform -eq "windows" -and $linkMode -eq "inprocess")',
+            self.script,
+        )
+        for forbidden in (
+            "msvcrt",
+            "ucrtbase",
+            "vcruntime",
+            "msvcp",
+            "api-ms-win-crt-",
+            "libLLVM",
+            "LLVM-C",
+            "libclang-cpp",
+            "liblld",
+            "libc\\+\\+",
+            "libunwind",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, self.script)
 
     @unittest.skipIf(POWERSHELL is None, "pwsh is not available in this environment")
     def test_the_script_parses(self) -> None:
@@ -428,6 +487,32 @@ Invoke-CaseAgainst 'relative-path' "[verbose] native-link assets: sidecar (nativ
 Invoke-CaseAgainst 'other-directory' "[verbose] native-link assets: sidecar ($elsewhere)" $sidecar
 Invoke-CaseAgainst 'no-manifest' "[verbose] native-link assets: sidecar ($bare)" $bare
 Invoke-CaseAgainst 'no-report' "[verbose] llvm backend target: x86_64" $sidecar
+"""
+
+    STRICT_DEPENDENCY_CASES = """
+param([string]$Helpers, [string]$Root)
+$ErrorActionPreference = 'Stop'
+. $Helpers
+function Find-Dumpbin { return $null }
+
+function Invoke-DependencyCase {
+    param([string]$Name, [string[]]$DllNames)
+    $exe = Join-Path $Root "$Name.exe"
+    [IO.File]::WriteAllBytes(
+        $exe,
+        [Text.Encoding]::ASCII.GetBytes(($DllNames -join [char]0))
+    )
+    try {
+        Assert-StrictCompilerDependencies -ExePath $exe
+        Write-Output "$Name PASS"
+    } catch {
+        Write-Output "$Name THROW"
+    }
+}
+
+Invoke-DependencyCase 'system-only' @('KERNEL32.dll', 'ADVAPI32.dll')
+Invoke-DependencyCase 'legacy-crt' @('KERNEL32.dll', 'MSVCR120.dll')
+Invoke-DependencyCase 'llvm-provider' @('KERNEL32.dll', 'libLLVM-22.dll')
 """
 
     def run_powershell(self, tmp: Path, name: str, body: str, arguments: list[str]) -> str:
@@ -509,6 +594,28 @@ Invoke-CaseAgainst 'no-report' "[verbose] llvm backend target: x86_64" $sidecar
                 "no-report": "THROW",
             }
             self.assertEqual(results, expected)
+
+    def test_strict_dependency_fallback_rejects_dynamic_crt_and_llvm(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            helpers = self.extract_helpers(tmp)
+            output = self.run_powershell(
+                tmp,
+                "strict-dependency-cases",
+                self.STRICT_DEPENDENCY_CASES,
+                [str(helpers), str(tmp)],
+            )
+            results = dict(
+                line.split(" ", 1) for line in output.splitlines() if " " in line
+            )
+            self.assertEqual(
+                results,
+                {
+                    "system-only": "PASS",
+                    "legacy-crt": "THROW",
+                    "llvm-provider": "THROW",
+                },
+            )
 
 
 class ShellSmokeInterfaceTests(unittest.TestCase):
@@ -593,8 +700,7 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
 
 
 class MsiHarvestTests(unittest.TestCase):
-    """The Windows installer is cut from an object package now, so the
-    harvester may not assume the payload is a `toolchain/` directory."""
+    """The recommended MSI is cut from the strict compiler-only LLVM bundle."""
 
     def test_the_wix_source_and_harvester_agree_on_the_component_group(self) -> None:
         wxs = WXS.read_text(encoding="utf-8")
@@ -605,7 +711,7 @@ class MsiHarvestTests(unittest.TestCase):
         self.assertNotIn("ToolchainFiles", harvester)
 
     @unittest.skipIf(POWERSHELL is None, "pwsh is not available in this environment")
-    def test_an_object_bundle_harvests_its_whole_payload(self) -> None:
+    def test_the_strict_bundle_harvests_metadata_and_notices_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             tmp = Path(tmp_name)
             bundle, _, _ = stage_fixture_package(tmp, "windows-x86_64", "llvm")
@@ -622,12 +728,17 @@ class MsiHarvestTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             fragment = harvest.read_text(encoding="utf-8")
-            self.assertIn('Name="build"', fragment)
-            self.assertIn('Name="runtime-archives"', fragment)
-            self.assertIn('Name="native-link"', fragment)
-            self.assertIn("native-link-assets.json", fragment)
-            self.assertIn("libosc_runtime_freestanding.a", fragment)
+            self.assertIn('Name="LICENSES"', fragment)
+            self.assertIn('Name="embedded"', fragment)
+            self.assertIn("LLVM-LICENSE.txt", fragment)
+            self.assertIn("mingw-w64-COPYING.txt", fragment)
+            self.assertIn("mingw-w64-project-COPYING.txt", fragment)
+            self.assertIn("mingw-w64-runtime-COPYING.txt", fragment)
             self.assertIn("oscan-package.json", fragment)
+            self.assertNotIn('Name="build"', fragment)
+            self.assertNotIn('Name="native-link"', fragment)
+            self.assertNotIn("ld.lld.exe", fragment)
+            self.assertNotIn("libLLVM-22.dll", fragment)
             self.assertIn('<ComponentGroup Id="BundlePayload">', fragment)
             # Files the .wxs declares itself, and the archive's own installer,
             # must not be harvested twice / at all.

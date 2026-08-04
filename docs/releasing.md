@@ -11,7 +11,7 @@ one `SHA256SUMS`** — and nothing else:
 
 | Target | Backend | Archive | Components staged |
 |---|---|---|---|
-| `windows-x86_64` | `llvm` | `oscan-v{version}-windows-x86_64-llvm.zip` | compiler, native-link sidecar (linker + the verified `libLLVM-22.dll` it shares with the LLVM provider), freestanding runtime archives |
+| `windows-x86_64` | `llvm` | `oscan-v{version}-windows-x86_64-llvm.zip` | one strict compiler executable with static LLVM, in-process LLD, runtime archives and link inputs embedded; third-party notices |
 | `windows-x86_64` | `cranelift` | `oscan-v{version}-windows-x86_64-cranelift.zip` | compiler, native-link sidecar, freestanding runtime archives |
 | `windows-x86_64` | `c` | `oscan-v{version}-windows-x86_64-c.zip` | compiler, pinned C toolchain |
 | `linux-x86_64` | `llvm` | `oscan-v{version}-linux-x86_64-llvm.tar.xz` | compiler, native-link sidecar, freestanding runtime archives, LLVM provider from the pinned provider archive |
@@ -30,16 +30,24 @@ label — it survives only as the compiler's deprecated `--backend` alias for
 Invariants the tooling enforces (see `scripts/test_release_workflow.py`,
 `scripts/test_release_packaging.py`, `scripts/test_smoke_release.py`):
 
-* **One backend per package.** Each binary is built with
-  `cargo build --release --no-default-features --features backend-<backend>`
-  and `OSCAN_DISTRIBUTION_BACKEND=<backend>`, so the other backends' code is
-  absent, and the package defaults deterministically to its own backend.
+* **One backend per package.** Each binary is built with the exact Cargo
+  feature set in the variant contract and
+  `OSCAN_DISTRIBUTION_BACKEND=<backend>`, so the other backends' code is absent
+  and the package defaults deterministically to its own backend. Windows LLVM
+  uses `backend-llvm,inprocess-lld,static-llvm` plus
+  `RUSTFLAGS="-C target-feature=+crt-static"`; ordinary variants use only
+  `backend-<backend>`.
 * **Object packages are toolchain-free.** An `llvm`/`cranelift` package may not
   contain a C compiler executable, a C header outside `native-link/`, a
   sysroot/`include/` tree, the hosted runtime archive, `native-runtime/`, or
   `cross-linkers/`. The Oscan runtime is precompiled from C *by the release
-  factory* with the pinned toolchain and shipped as freestanding archives, so
-  downstream users need no C tools at all.
+  factory* with the pinned toolchain. Sidecar variants ship those archives;
+  strict Windows LLVM embeds them in `oscan.exe`. Downstream users need no C
+  tools in either case.
+* **Windows LLVM is a strict single-executable compiler.** Its ZIP/MSI contains
+  no `native-link/`, `build/`, `toolchain/`, `ld.lld.exe`, provider DLL or
+  linker runtime DLL. `LICENSES/embedded/` contains the notices for the static
+  LLVM/LLD and embedded llvm-mingw inputs.
 * **C packages carry no object payload.** A `c` package may not ship
   `native-link/`, `build/`, `native-runtime/`, or `cross-linkers/`.
 * **No cross-target sidecars.** Minimum packages ship only their own target's
@@ -57,10 +65,12 @@ Invariants the tooling enforces (see `scripts/test_release_workflow.py`,
 
 ### Why the package job is per target, not per (target, backend)
 
-All of a target's variants reuse the same pinned toolchain download, the same
-freestanding runtime archives and the same native-link sidecar. The workflow
-therefore fans out over **targets**, prepares those expensive inputs once, and
-then builds the target's backends **sequentially** in one job — three
+All of a target's variants reuse the same pinned toolchain download and
+freestanding runtime archives. Sidecar variants also share one prepared
+native-link set; Windows LLVM additionally reuses a cached static LLVM/LLD
+build. The workflow therefore fans out over **targets**, prepares those
+expensive inputs once, and then builds the target's backends **sequentially**
+in one job — three
 `cargo build`s into `$RUNNER_TEMP/oscan-release-binaries/<backend>/`, each
 copied out before the next overwrites `target/release`. `target/` is
 deliberately not cached: the same crate is built three times with mutually
@@ -72,10 +82,12 @@ exclusive feature sets.
    `release_tools.py validate-contract`, and derive the package matrix with
    `release_tools.py ci-matrix --version <version>`.
 2. `package` (per target) — resolve and verify the pinned archives, extract the
-   toolchain, build runtime archives, prepare the native-link sidecar, build
-   one compiler per backend, then for each backend: assemble → smoke → stage
-   for upload. Windows additionally cuts the recommended LLVM MSI from the
-   staged bundle.
+   toolchain, build runtime archives, and prepare any sidecar inputs. Windows
+   also resolves the pinned LLVM SDK/source, builds or restores the patched
+   static LLVM/LLD toolchain, and prepares strict in-memory link inputs. It then
+   builds one compiler per backend and, for each backend, runs assemble → smoke
+   → stage for upload. Windows additionally cuts the recommended LLVM MSI from
+   the staged strict bundle.
 3. `checksums` — collect every `.zip`/`.msi`/`.tar.gz`/`.tar.xz`, refuse
    duplicate asset names, and write one `SHA256SUMS` over all of them.
 4. `publish` — only when publishing is enabled; uploads the archives, the MSI
@@ -108,17 +120,30 @@ $downloadDir = 'build/archive-cache'
 $toolchainArchive = ./scripts/resolve-archive.ps1 `
   -ManifestPath $manifest -Component toolchain `
   -DownloadDir $downloadDir -Download | Select-Object -Last 1
+$sdkArchive = ./scripts/resolve-archive.ps1 `
+  -ManifestPath $manifest -Component inprocess-llvm-sdk `
+  -DownloadDir $downloadDir -Download | Select-Object -Last 1
+$sourceArchive = ./scripts/resolve-archive.ps1 `
+  -ManifestPath $manifest -Component inprocess-llvm-source `
+  -DownloadDir $downloadDir -Download | Select-Object -Last 1
 # Linux llvm only: its provider comes from the manifest, not the sidecar.
 # $providerArchive = ./scripts/resolve-archive.ps1 `
 #   -ManifestPath $manifest -Component llvm-provider `
 #   -DownloadDir $downloadDir -Download | Select-Object -Last 1
 
-# 2. Extract that same verified archive locally. It is only used to *build*
-#    inputs below; packages are always staged from the archive itself.
+# 2. Extract the base toolchain and prepare/build the pinned static LLVM/LLD
+#    inputs. These directories are build-time inputs only.
 ./scripts/fetch-toolchain.ps1 `
   -ManifestPath $manifest `
   -Destination "build/toolchain-$target" `
   -DownloadDir $downloadDir
+python scripts/release_tools.py prepare-inprocess-toolchain-sources `
+  --manifest $manifest --sdk-archive $sdkArchive --source-archive $sourceArchive `
+  --output-dir "build/inprocess-sources/$target"
+./scripts/build-inprocess-toolchain.ps1 `
+  -LlvmSdk "build/inprocess-sources/$target/sdk" `
+  -LlvmSource "build/inprocess-sources/$target/source" `
+  -OutputDir "build/inprocess-toolchain/$target"
 
 # 3. Build this target's freestanding runtime archives with the pinned
 #    compiler/archiver the manifest names (one archive per declared profile).
@@ -132,28 +157,35 @@ foreach ($profileName in @('freestanding', 'freestanding_gfx', 'freestanding_cor
     -OutDir "build/runtime-archives/$target"
 }
 
-# 4. Prepare the verified native-link asset set this package ships as its
-#    sidecar (linker, its runtime libraries, import libraries, builtins).
-./scripts/prepare-embed-assets.ps1 `
-  -Target $target `
-  -ToolchainDir "build/toolchain-$target" `
-  -ToolchainManifest $manifest `
-  -OutputDir "build/native-link/$target"
+# 4. Prepare only the archives/import libraries/builtins that build.rs embeds.
+#    No linker executable or DLL is copied into this set.
+python scripts/release_tools.py prepare-inprocess-link-assets `
+  --target $target --toolchain-dir "build/toolchain-$target" `
+  --toolchain-manifest $manifest `
+  --runtime-archive-dir "build/runtime-archives/$target" `
+  --output-dir "build/inprocess-assets/$target"
+$noticeDir = "build/inprocess-notices/$target"
+python scripts/release_tools.py prepare-inprocess-notices `
+  --target $target --toolchain-dir "build/toolchain-$target" `
+  --toolchain-manifest $manifest `
+  --inprocess-toolchain-dir "build/inprocess-toolchain/$target" `
+  --output-dir $noticeDir
 
-# 5. Build exactly one backend into the compiler, stamped as that
-#    distribution. A release binary must not embed assets, so clear the
-#    embedding variables the dev/standalone build mode uses.
+# 5. Build the strict compiler with static LLVM, in-process LLD and static CRT.
 Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS -ErrorAction SilentlyContinue
 $env:OSCAN_DISTRIBUTION_BACKEND = $backend
 $env:OSCAN_VERSION = $tag
-cargo build --release --no-default-features --features "backend-$backend"
+$env:OSCAN_INPROCESS_TOOLCHAIN_DIR = (Resolve-Path "build/inprocess-toolchain/$target").Path
+$env:OSCAN_INPROCESS_ASSETS_DIR = (Resolve-Path "build/inprocess-assets/$target").Path
+$env:RUSTFLAGS = '-C target-feature=+crt-static'
+cargo build --release --no-default-features `
+  --features backend-llvm,inprocess-lld,static-llvm
 
 # 6. Assemble that variant, passing only the inputs its component list declares.
 $archive = ./scripts/assemble-release.ps1 `
   -Target $target -Backend $backend -Version $version `
   -BinaryPath target/release/oscan.exe `
-  -NativeLinkDir (Resolve-Path "build/native-link/$target").Path `
-  -PrebuiltRuntimeArchiveDir (Resolve-Path "build/runtime-archives/$target").Path `
+  -EmbeddedNoticesDir (Resolve-Path $noticeDir).Path `
   -OutputDir build/release-artifacts | Select-Object -Last 1
 
 # 7. Smoke exactly that archive, as that backend.
@@ -165,18 +197,26 @@ $archive = ./scripts/assemble-release.ps1 `
 
 Variant differences:
 
-* **`cranelift`** — identical, with `-Backend cranelift` and
-  `--features backend-cranelift`; steps 1–4 are unchanged and can be reused
-  from the LLVM run.
-* **`c`** — skip steps 3 and 4 and pass `-ToolchainArchive $toolchainArchive`
-  to `assemble-release.ps1` instead of `-NativeLinkDir`/
-  `-PrebuiltRuntimeArchiveDir`; its `runtime_profiles` list is empty.
-* **Linux `llvm`** — additionally pass
-  `-LlvmProviderArchive $providerArchive` (uncomment step 1's second
-  resolve), because its provider comes from the toolchain manifest rather
-  than the native-link sidecar.
-* **macOS `c`** — only step 5 plus `assemble-release.sh`/`smoke-release.sh`
-  with `-Backend c`; there is nothing pinned to fetch.
+* **`cranelift`** — reuse the base toolchain/runtime archives, run
+  `prepare-embed-assets.ps1`, remove `OSCAN_INPROCESS_TOOLCHAIN_DIR`,
+  `OSCAN_INPROCESS_ASSETS_DIR`, and `RUSTFLAGS`, then run
+  `cargo build --release --no-default-features --features backend-cranelift`.
+  Assemble with `-NativeLinkDir` plus `-PrebuiltRuntimeArchiveDir`; this remains
+  a sidecar package.
+* **`c`** — remove the same strict-only environment variables and run
+  `cargo build --release --no-default-features --features backend-c`. Skip
+  steps 3 and 4 and pass `-ToolchainArchive $toolchainArchive` to
+  `assemble-release.ps1`; the C variant declares no object-runtime profiles.
+* **Linux `llvm`** — remove the strict-only environment variables and run
+  `cargo build --release --no-default-features --features backend-llvm` (not
+  `inprocess-lld` or `static-llvm`). Also pass `-NativeLinkDir`,
+  `-PrebuiltRuntimeArchiveDir`, and
+  `-LlvmProviderArchive $providerArchive` after uncommenting step 1's provider
+  resolve.
+* **macOS `c`** — build with `--features backend-c`; there is nothing pinned to
+  fetch. The Unix wrappers use long options, for example
+  `assemble-release.sh --target macos-x86_64 --backend c ...` and
+  `smoke-release.sh --target macos-x86_64 --backend c ...`.
 
 Passing an input a variant's component list does not declare is an error, as is
 omitting one it does. `scripts/assemble-release.sh` / `smoke-release.sh` and the
@@ -387,17 +427,17 @@ wrapper. The Makefile delegates to the same Python builder, uses a concrete
 target tag, writes the same manifests, and embeds BearSSL under the same rules.
 
 Release assembly stages each archive/manifest pair at
-`build/runtime-archives/<target>/` inside an object package's bundle. Runtime
-*sources* are not staged: schema 2 packages ship no `native-runtime/`
-directory and no runtime builder, because the shim is already compiled into
-every runtime archive (see below). The paths mirror the shared object-backend
-linker's executable-relative lookup contract and are copied intact by the
-installers. Release smoke tests assert the assets survived packaging and
-installation, then compile and run the sample with the package's own backend —
-freestanding LLVM for an `llvm` package, freestanding Cranelift for a
-`cranelift` package — on Linux and Windows, and check that the package refuses
-by name everything it does not contain. The macOS target ships only the C
-package because no LLVM/Cranelift Darwin object target exists yet.
+`build/runtime-archives/<target>/` inside sidecar object packages. Strict
+Windows LLVM instead embeds the verified archive bytes in `oscan.exe` and
+installs no runtime-archive directory. Runtime *sources* are never staged:
+schema 2 packages ship no `native-runtime/` directory and no runtime builder,
+because the shim is already compiled into every runtime archive (see below).
+Release smoke tests assert the appropriate assets survived staging, then
+compile and run the sample with the package's own backend — freestanding LLVM
+for an `llvm` package, freestanding Cranelift for a `cranelift` package — on
+Linux and Windows, and check that the package refuses by name everything it
+does not contain. The macOS target ships only the C package because no
+LLVM/Cranelift Darwin object target exists yet.
 
 GitHub-hosted Windows release runners may run the packaging/smoke process with
 an elevated Administrator token. Normal interactive native final links still
@@ -430,17 +470,20 @@ override was hiding a real bug rather than working around an unfixable one.
 
 ### LLVM backend release contract
 
-The LLVM backend has no LLVM Cargo/build dependency. At run time it dynamically
-loads exact-major LLVM 22 through the C API and performs parse, verify,
-`default<Oz>`, and TargetMachine object emission in-process. It does not
-generate C or invoke Clang, `llvm-as`, `opt`, or `llc`.
+The LLVM backend performs parse, verify, `default<Oz>`, and TargetMachine
+object emission in-process. It does not generate C or invoke Clang, `llvm-as`,
+`opt`, or `llc`. Development and Linux release builds dynamically load
+exact-major LLVM 22 through the C API; the Windows LLVM release links the same
+API statically.
 
-Both the Windows and the Linux `llvm` package must ship a compatible provider:
+Both the Windows and the Linux `llvm` package must contain a compatible
+provider:
 
-- Windows: `libLLVM-22.dll` from pinned llvm-mingw 22.1.2, staged as part of
-  the verified `native-link/` sidecar (it is `ld.lld`'s own runtime dependency,
-  so it is shared rather than duplicated); x86 and AArch64 target initializers
-  are present, RISC-V is absent.
+- Windows: LLVM 22.1.0 and the patched LLD libraries are statically linked into
+  `oscan.exe`; only the x86 target is initialized. The compiler embeds the
+  three runtime archives, six import libraries, and compiler builtins and feeds
+  them to LLD from memory. There is no provider DLL, `ld.lld.exe`, linker
+  subprocess, generated-object temporary file, or extraction cache.
 - Linux: pinned LLVM 22.1.8 `libLLVM.so`, staged under `toolchain/` from the
   separately pinned provider archive declared by the target manifest's
   `toolchain.llvm_code_generator` block — the code generator only, with no
@@ -455,22 +498,23 @@ compiled in, and `--backend llvm` there reports which package to install
 instead. The Linux `cranelift` package has neither a provider nor a C
 toolchain.
 
-Provider lookup is limited to absolute `OSCAN_LLVM_LIB`, absolute
-`OSCAN_LLVM_DIR`, absolute `OSCAN_TOOLCHAIN_DIR`, and executable-relative
-package locations. Do not reintroduce CWD, `PATH`, or bare-loader lookup. In a
-multi-backend development build, implicit selection falls back to Cranelift/C
-when no compatible provider is available; explicit `--backend llvm` remains a
-hard failure. A published `llvm` package defaults to LLVM by stamp, not by
-probe.
+For dynamically linked builds, provider lookup is limited to absolute
+`OSCAN_LLVM_LIB`, absolute `OSCAN_LLVM_DIR`, absolute
+`OSCAN_TOOLCHAIN_DIR`, and executable-relative package locations. Do not
+reintroduce CWD, `PATH`, or bare-loader lookup. In a multi-backend development
+build, implicit selection falls back to Cranelift/C when no compatible
+provider is available; explicit `--backend llvm` remains a hard failure. The
+strict Windows package has no provider lookup at all. Every published `llvm`
+package defaults to LLVM by stamp, not by probe.
 
 Release/CI gates for LLVM are:
 
 1. `cargo build --release` with no LLVM development libraries installed.
 2. C-vs-LLVM differential runs on Windows and Linux.
-3. Packaged Windows and Linux implicit-default compiles proving
-   executable-relative provider discovery.
-4. The shared embedded-link smoke, proving the resulting LLVM object uses the
-   existing runtime archive and direct linker.
+3. Packaged Windows and Linux implicit-default compiles proving respectively
+   static-provider use and executable-relative provider discovery.
+4. The packaged link smoke, proving Windows links through strict in-process LLD
+   with no sidecar/host tools and Linux uses its verified direct-link sidecar.
 5. Explicit C-vs-Cranelift runs, preserving the previous backend as an option.
 6. The pinned-Windows-toolchain size gate in
    `scripts/compare-backend-size.ps1` (run from
@@ -605,15 +649,21 @@ unscanned extra C/object/library inputs still force the full archive.
 ## Native-link assets for self-contained Windows object builds
 
 On Windows x86-64, freestanding object-backend builds (`--backend llvm` or
-`--backend cranelift`) need no external C compiler or linker: `oscan.exe` uses
-a linker (`ld.lld`) plus the minimal MinGW support files it needs. In a
-schema-v2 release package those files ship as the verified `native-link/`
-sidecar beside the executable and are used in place (nothing is embedded and
-nothing is copied into a cache); an optional embedded CI/dev build carries the
-same set inside the binary and extracts it to a local cache at first use (see
-`docs/design/native-link-embedding.md` for the full design). This section
-covers the release-time steps that make both possible; it does not
-change anything described above about `build-runtime-archive` on its own.
+`--backend cranelift`) need no external C compiler or linker, but their release
+profiles are deliberately different:
+
+* The official LLVM package uses static LLVM plus patched in-process LLD. Its
+  runtime archives, import libraries and compiler builtins are embedded in
+  `oscan.exe` and passed to LLD from memory. No linker executable, DLL, cache or
+  temporary object is installed or extracted.
+* The Cranelift package retains the verified `native-link/` sidecar:
+  `ld.lld.exe`, its runtime DLLs, import libraries, builtins and runtime
+  archives are used in place beside the compiler.
+
+The older optional embedded CI/dev profile remains available for Cranelift and
+other non-strict builds; it embeds the sidecar set and extracts it to a local
+cache at first use. See `docs/design/native-link-embedding.md` for the complete
+design.
 
 The runtime shim (`runtime/osc_native_shim.c`) is now precompiled directly
 into every runtime archive's `sources` list (`runtime-archive-contract.json`,
@@ -625,7 +675,7 @@ actionable error; a legacy hosted archive without it falls back to a
 diagnosed local compile.
 
 `scripts/release_tools.py`'s **`prepare-embed-assets`** subcommand stages the
-embedded linker asset set — for `windows-x86_64` today, exactly 13 files
+sidecar/legacy-embedded linker asset set — for `windows-x86_64`, exactly 13 files
 (`ld.lld.exe`, its 5 required runtime DLLs, 6 Win32 import libraries, and
 `libclang_rt.builtins-x86_64.a`), totaling ≈85.4 MB — from an already-fetched
 pinned toolchain directory into `packaging/prebuilt/<target>/`, alongside a
@@ -644,7 +694,8 @@ scripts\prepare-embed-assets.ps1 `
   -OutputDir packaging\prebuilt\windows-x86_64
 ```
 
-`cargo build` then embeds those staged assets via two `build.rs` env vars:
+An optional development build embeds those staged assets via two `build.rs`
+environment variables:
 `OSCAN_EMBED_ASSETS_DIR` (path to the staged directory) and
 `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` (fail the build if any asset is
 missing/incomplete/digest-mismatched, rather than silently skipping
@@ -654,36 +705,48 @@ the resulting `oscan.exe` falls back to the external/bundled C-toolchain
 linker driver at native-link time (printing a one-line `note:` the first time
 that happens).
 
-**Release binaries deliberately embed nothing.** A published object package
-ships the same asset set as a verified `native-link/` sidecar beside the
-compiler instead, so the workflow explicitly clears
-`OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS` before every release
-`cargo build`. The embedding path above is what CI's dedicated smoke jobs
-exercise, and what a local build can opt into.
+The Windows Cranelift release deliberately embeds none of that set: it ships
+it as `native-link/` and clears
+`OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS` before building.
+
+The Windows LLVM release uses a separate strict path. The target manifest pins
+LLVM 22.1.0 SDK and source archives. `prepare-inprocess-toolchain-sources`
+verifies/extracts them, and `build-inprocess-toolchain.ps1` builds the patched
+static LLD bridge and collects the static LLVM/LLD libraries.
+`prepare-inprocess-link-assets` verifies and stages only the three runtime
+archives, six Win32 import libraries and compiler builtins for `build.rs`.
+Building with `backend-llvm,inprocess-lld,static-llvm`,
+`OSCAN_INPROCESS_TOOLCHAIN_DIR`, `OSCAN_INPROCESS_ASSETS_DIR`, and
+`RUSTFLAGS="-C target-feature=+crt-static"` produces the single strict
+`oscan.exe`. The LLVM and llvm-mingw notices are installed under
+`LICENSES/embedded/`; all build inputs stay out of the package.
 
 **The release `package` job's step order** (one job per target; every expensive
 input is prepared once and reused by that target's backends):
 
 1. Checkout / Rust / Python setup.
 2. **Resolve the pinned archives** (`resolve-archive.ps1`, once per target:
-   the C toolchain archive and, where the manifest declares one, the LLVM
-   provider archive), then **extract the pinned toolchain**
+   the C toolchain archive and, where declared, the LLVM provider and
+   in-process LLVM SDK/source archives), then **extract the pinned toolchain**
    (`fetch-toolchain.ps1`/`.sh`) for local use only.
 3. **Build runtime archives with the shim baked in** (`build-runtime-archive.ps1`/`.sh`).
-4. **`prepare-embed-assets.ps1`/`.sh`** — stages the native-link asset set
-   (13 files/≈85.4 MB on Windows, 1 file/≈2.78 MB on Linux) that becomes each
-   object package's sidecar.
-5. **One `cargo build --release --no-default-features --features backend-<b>`
-   per backend**, stamped with `OSCAN_DISTRIBUTION_BACKEND=<b>` and copied to a
-   per-backend path before the next build overwrites `target/release`.
+4. **Prepare each declared link profile.** `prepare-embed-assets` stages the
+   sidecar set (13 files/≈85.4 MB on Windows, 1 file/≈2.78 MB on Linux).
+   Windows additionally builds/restores static LLVM/LLD and runs
+   `prepare-inprocess-link-assets` for the strict LLVM variant.
+5. **One contract-driven `cargo build` per backend**, stamped with
+   `OSCAN_DISTRIBUTION_BACKEND=<b>` and copied to a per-backend path before the
+   next build overwrites `target/release`. The strict Windows LLVM build alone
+   enables `inprocess-lld,static-llvm` and static CRT; its environment is
+   cleared before the Cranelift and C builds.
 6. **For each backend: assemble → smoke → stage for upload.**
    `assemble-release.ps1` takes `-Backend` plus exactly the prepared inputs
-   that variant's component list declares (`-NativeLinkDir`,
-   `-PrebuiltRuntimeArchiveDir`, `-ToolchainArchive`, `-LlvmProviderArchive`),
-   so a `c` package never receives object assets and an object package never
-   receives a C toolchain. Only the C package's `toolchain/` carries a
-   compiler; LLVM and Cranelift freestanding final links need no compiler
-   executable at all.
+   that variant's component list declares (`-EmbeddedNoticesDir` for strict
+   Windows LLVM; `-NativeLinkDir`/`-PrebuiltRuntimeArchiveDir` for sidecar
+   object variants; `-ToolchainArchive` or `-LlvmProviderArchive` where
+   declared), so no package receives undeclared inputs. Only the C package's
+   `toolchain/` carries a compiler; LLVM and Cranelift freestanding final links
+   need no compiler executable at all.
 7. **Cut the recommended MSI** from the staged Windows LLVM bundle directory
    (Windows only), so the installer contains exactly what the smoked archive
    contains.

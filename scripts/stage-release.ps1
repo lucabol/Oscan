@@ -25,6 +25,10 @@ param(
     # manifest digest that staging re-verifies.
     [string]$NativeLinkDir,
 
+    # License notices for a strict compiler's statically linked and embedded
+    # LLVM/LLD and llvm-mingw inputs.
+    [string]$EmbeddedNoticesDir,
+
     # The pinned C toolchain *source archive* for the c variant. Staging
     # verifies it against the digest in packaging/toolchains/<target>.json
     # before extracting a single member, so an arbitrary or foreign
@@ -93,6 +97,9 @@ if ($RuntimeArchiveDir) {
 }
 if ($NativeLinkDir) {
     $pythonArgs += @("--native-link-dir", $NativeLinkDir)
+}
+if ($EmbeddedNoticesDir) {
+    $pythonArgs += @("--embedded-notices-dir", $EmbeddedNoticesDir)
 }
 if ($ToolchainArchive) {
     $pythonArgs += @("--toolchain-archive", $ToolchainArchive)

@@ -7,8 +7,8 @@ Two kinds of check live here:
   the real contract (and against mutated contracts) rather than by reading
   YAML; and
 * wiring — the workflow really does feed that matrix into per-target jobs
-  that build one Cargo feature per backend, never embed assets into a
-  release binary, and smoke every archive it uploads.
+  that build the exact Cargo features each variant declares, prepare the
+  strict Windows LLVM inputs, and smoke every archive it uploads.
 """
 
 from pathlib import Path
@@ -27,6 +27,7 @@ except ImportError:  # pragma: no cover - depends on the environment
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+INPROCESS_BUILD_SCRIPT = REPO_ROOT / "scripts" / "build-inprocess-toolchain.ps1"
 RELEASE_POWERSHELL_SCRIPTS = (
     REPO_ROOT / "scripts" / "assemble-release.ps1",
     REPO_ROOT / "scripts" / "build-runtime-archive.ps1",
@@ -55,9 +56,8 @@ class PackageMatrixTests(unittest.TestCase):
         self.matrix = rt.ci_target_matrix(self.contract, "1.2.3")
 
     def test_one_job_per_target_not_per_target_and_backend(self) -> None:
-        # Expensive per-target work (toolchain download, runtime archives,
-        # native-link sidecar) must happen once, so the matrix is keyed on
-        # the target and carries the backend list.
+        # Expensive per-target work must happen once, so the matrix is keyed
+        # on the target and carries the backend list.
         self.assertEqual(
             [entry["target"] for entry in self.matrix],
             ["linux-x86_64", "macos-x86_64", "windows-x86_64"],
@@ -107,15 +107,18 @@ class PackageMatrixTests(unittest.TestCase):
                 )
 
         # Only Linux overlays a separately pinned provider archive; Windows
-        # shares the copy already in its native-link sidecar.
+        # statically links LLVM into its strict compiler.
         self.assertEqual(linux["needs_provider_archive"], "true")
         self.assertEqual(windows["needs_provider_archive"], "false")
+        self.assertEqual(linux["needs_inprocess_toolchain"], "false")
+        self.assertEqual(windows["needs_inprocess_toolchain"], "true")
 
         # macOS is C-only and relies on the host Apple CLT: nothing to fetch.
         self.assertEqual(macos["backends"], "c")
         self.assertEqual(macos["needs_base_toolchain"], "false")
         self.assertEqual(macos["needs_native_link"], "false")
         self.assertEqual(macos["needs_provider_archive"], "false")
+        self.assertEqual(macos["needs_inprocess_toolchain"], "false")
         self.assertEqual(macos["runtime_profiles"], "")
 
     def test_archive_names_are_rendered_and_globally_unique(self) -> None:
@@ -167,9 +170,12 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertIn("release_tools.py validate-contract", self.workflow)
         self.assertIn("fromJson(needs.prepare.outputs.matrix)", self.workflow)
 
-    def test_every_backend_is_built_as_a_single_feature_distribution(self) -> None:
+    def test_every_backend_is_built_with_its_contract_features(self) -> None:
+        self.assertIn("$features = @([string]$variant['cargo_feature'])", self.workflow)
+        self.assertIn("$features += @($variant['extra_cargo_features'])", self.workflow)
+        self.assertIn("$featureList = $features -join ','", self.workflow)
         self.assertIn(
-            'cargo build --release --no-default-features --features "backend-$backend"',
+            "cargo build --release --no-default-features --features $featureList",
             self.workflow,
         )
         self.assertIn("$env:OSCAN_DISTRIBUTION_BACKEND = $backend", self.workflow)
@@ -182,26 +188,39 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
             r"-Destination \(Join-Path \$destinationDir \$env:RELEASE_BINARY_NAME\)",
         )
 
-    def test_release_binaries_never_embed_native_link_assets(self) -> None:
-        # Release packages ship a verified sidecar instead; a binary that
-        # embedded assets would carry a second, unverifiable copy.
+    def test_sidecar_and_strict_build_inputs_are_kept_separate(self) -> None:
         self.assertNotRegex(self.workflow, r"OSCAN_EMBED_ASSETS_DIR:\s")
         self.assertNotRegex(self.workflow, r"OSCAN_REQUIRE_EMBEDDED_ASSETS:\s")
         self.assertIn(
             "Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS",
             self.workflow,
         )
+        self.assertIn("$env:OSCAN_INPROCESS_TOOLCHAIN_DIR =", self.workflow)
+        self.assertIn("$env:OSCAN_INPROCESS_ASSETS_DIR =", self.workflow)
+        self.assertIn("$env:RUSTFLAGS = [string]$variant['rustflags']", self.workflow)
+        self.assertIn(
+            "Remove-Item Env:OSCAN_INPROCESS_TOOLCHAIN_DIR, Env:OSCAN_INPROCESS_ASSETS_DIR, Env:RUSTFLAGS",
+            self.workflow,
+        )
 
     def test_expensive_inputs_are_prepared_once_per_target(self) -> None:
         for command, expected in (
-            ("resolve-archive.ps1", 2),  # base toolchain + LLVM provider
+            ("resolve-archive.ps1", 4),  # base + provider + strict SDK/source
             ("fetch-toolchain.ps1", 1),
             ("prepare-embed-assets.ps1", 1),
+            ("prepare-inprocess-link-assets", 1),
+            ("prepare-inprocess-notices", 1),
+            ("build-inprocess-toolchain.ps1", 2),  # cache key + invocation
             ("build-runtime-archive.ps1", 1),  # in a loop over the profiles
         ):
             with self.subTest(command=command):
                 self.assertEqual(self.workflow.count(command), expected)
         self.assertIn("$env:RELEASE_RUNTIME_PROFILES.Split(',',", self.workflow)
+
+    def test_inprocess_patch_is_scoped_to_nested_extracted_sources(self) -> None:
+        script = INPROCESS_BUILD_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("[IO.Path]::GetRelativePath($sourceGitRoot, $source)", script)
+        self.assertIn('"--directory=$patchDirectory"', script)
 
     def test_no_cross_target_toolchains_or_sidecars_are_packaged(self) -> None:
         for absent in (
@@ -251,6 +270,19 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertIn("$msiPath = Join-Path $uploadDir \"$bundleName.msi\"", self.workflow)
         # Built from the bundle the assemble step staged and smoked.
         self.assertIn("The staged $target/$backend bundle is missing at $bundleDir", self.workflow)
+
+    def test_the_installed_msi_payload_is_smoked_before_upload(self) -> None:
+        self.assertIn("Start-Process -FilePath msiexec.exe", self.workflow)
+        self.assertIn("'/a'", self.workflow)
+        self.assertIn("'PFiles64\\Oscan'", self.workflow)
+        self.assertIn("-InstalledPackageDir $installedRoot", self.workflow)
+        build_index = self.workflow.index("& ./scripts/build-msi.ps1")
+        extract_index = self.workflow.index("Start-Process -FilePath msiexec.exe")
+        installed_smoke_index = self.workflow.index("-InstalledPackageDir $installedRoot")
+        upload_index = self.workflow.index("actions/upload-artifact@v4")
+        self.assertLess(build_index, extract_index)
+        self.assertLess(extract_index, installed_smoke_index)
+        self.assertLess(installed_smoke_index, upload_index)
 
     def test_publishing_still_collects_every_asset_kind(self) -> None:
         self.assertIn("'\\.(zip|msi|tar\\.gz|tar\\.xz)$'", self.workflow)

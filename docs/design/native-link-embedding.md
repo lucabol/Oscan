@@ -9,8 +9,9 @@
 This document is the single, file-level contract for removing the
 C-compiler/linker dependency from packaged freestanding final links. Both
 `--backend cranelift` and `--backend llvm` now feed this link layer;
-LLVM emits IR directly and loads packaged LLVM 22 in-process to emit its
-object. It was written so Bishop and Hicks can implement in parallel with
+LLVM emits IR directly and uses LLVM 22 in-process (dynamically on Linux,
+statically in the strict Windows release) to emit its object. It was written
+so Bishop and Hicks can implement in parallel with
 **zero file overlap**, and so "did you follow the design" is mechanically
 checkable at review.
 
@@ -31,11 +32,17 @@ backends.
 document describes what a *release archive* ships, or describes embedding as
 the only asset source, read [docs/releasing.md](../releasing.md) and
 `src/backend/native_assets/sidecar.rs` instead. Releases now publish one
-single-backend package per (target, backend) pair, and there are two distinct
+single-backend package per (target, backend) pair, and there are three distinct
 asset modes:
 
-* **Sidecar (schema v2 releases, the normal case).** The asset set described
-  below ships beside the executable at
+* **Strict in-process (official Windows LLVM release).** Static LLVM and the
+  patched LLD libraries link into `oscan.exe`; runtime archives, import
+  libraries and builtins are embedded and passed to LLD from memory. The
+  package has no `native-link/`, `build/`, `toolchain/`, linker/provider DLL,
+  extraction cache, generated-object temporary file, or linker subprocess.
+  See §15.
+* **Sidecar (Windows Cranelift and Linux object releases).** The asset set
+  described below ships beside the executable at
   `<exe-dir>/native-link/native-link-assets.json` plus its files. The release
   binary embeds **nothing** — the release workflow clears
   `OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS` before every build.
@@ -44,11 +51,9 @@ asset modes:
   because that copy is exactly the ~90 MB duplication the sidecar removes.
   The manifest is read only from that one fixed executable-relative path
   (never CWD, `PATH`, or an ancestor search), and any failure is a hard, named
-  error with no fallback. `<exe-dir>/native-link` is also a packaged LLVM
-  provider search root, because on Windows the single staged
-  `libLLVM-22.dll` is both `ld.lld.exe`'s runtime dependency and the code
-  generator.
-* **Embedded (optional dev/standalone mode).** A build configured with
+  error with no fallback. Dynamic LLVM builds may also use
+  `<exe-dir>/native-link` as a provider search root.
+* **Legacy embedded (optional dev/standalone mode).** A build configured with
   `OSCAN_EMBED_ASSETS_DIR` + `OSCAN_REQUIRE_EMBEDDED_ASSETS=1` carries the same
   asset set inside the binary and extracts it on first use to the
   content-verified local cache described below. CI smoke jobs and standalone
@@ -67,17 +72,17 @@ selection, and the `OSCAN_NATIVE_LINKER`/`OSCAN_NATIVE_LINKER_FLAVOR`/
 
 - **Windows x86-64, freestanding** (`--backend llvm|cranelift`, no `--libc`): compile +
   link a standalone `.exe` with **no** `clang`/`gcc`/`cc`/`cl` and **no**
-  externally installed linker on `PATH`. The shipped `oscan.exe` carries its own
-  linker and link inputs.
+  externally installed linker on `PATH`. The package carries its own linker and
+  link inputs, in-process for strict LLVM and as a sidecar for Cranelift.
 - **Linux x86-64, freestanding** (`--backend llvm|cranelift`, no `--libc`): compile +
   link a standalone ELF binary with **no** `gcc`/`cc`/`musl-gcc` and **no**
-  externally installed linker on `PATH`. The shipped `oscan` binary carries its
-  own linker (a single ~2.78 MB static binary). See §10.
+  externally installed linker on `PATH`. The package ships its own linker as a
+  sidecar (a single ~2.78 MB static binary). See §10.
 - **Precompiling `runtime/osc_native_shim.c`** into every runtime archive so no
   C compilation happens during a native build.
 - **Direct MinGW-flavor `ld.lld`** invocation (`-m i386pep`, GNU flavor — **not**
   `lld-link`), reproducing the proven 6,656-byte `hello.osc` output.
-- **Single-file embedding**: `ld.lld.exe`, its **5 required runtime DLLs**, the
+- **Legacy single-file embedding**: `ld.lld.exe`, its **5 required runtime DLLs**, the
   required MinGW import libraries, compiler-builtins, and an asset manifest are
   embedded into `oscan.exe` at compiler build time; extracted at runtime to a
   verified, concurrency-safe cache; invoked directly (no shell). The corrected
@@ -1663,8 +1668,9 @@ emulator that runs the foreign-arch binary natively on the x86-64 host kernel.
 > **Superseded by release contract schema 2.** The steps below describe the
 > single-full-bundle-per-target workflow this design was written against. The
 > current workflow builds one package per (target, backend) pair, stages the
-> host target's link assets as each object package's verified `native-link/`
-> sidecar, and packages **no** cross-linker sidecars. See
+> host target's link assets as a verified `native-link/` sidecar for ordinary
+> object packages, and packages **no** cross-linker sidecars. The Windows LLVM
+> variant instead uses the strict no-extraction profile in §15. See
 > [docs/releasing.md](../releasing.md) for the current job order.
 
 In `.github/workflows/release.yml`, the Linux matrix entry must:
@@ -1724,13 +1730,15 @@ In `.github/workflows/release.yml`, the Linux matrix entry must:
 
 ---
 
-## 15. Strict no-extraction profile (Windows x86-64)
+## 15. Strict no-extraction profile (official Windows LLVM release)
 
-The optional `inprocess-lld` profile removes the linker executable, linker DLLs,
-runtime-archive directory, generated-object temporary file, and linker
-subprocess. It is intentionally separate from the verified-cache design above:
-ordinary packages keep the portable extraction path, while strict packages
-trade target coverage and build simplicity for a single executable.
+The official Windows x86-64 LLVM ZIP and MSI use the `inprocess-lld` +
+`static-llvm` profile. It removes the linker executable, linker/provider DLLs,
+runtime-archive directory, generated-object temporary file, extraction cache,
+and linker subprocess. It is intentionally separate from the verified
+sidecar/cache design above: Windows Cranelift and Linux object packages keep
+their portable sidecar profile, while Windows LLVM trades target coverage and
+build simplicity for one self-contained executable.
 
 The implementation has four boundaries:
 
@@ -1749,6 +1757,14 @@ The implementation has four boundaries:
 provider, but resolves it against libraries linked into `oscan.exe`. A strict
 LLVM compiler therefore needs neither `libLLVM-22.dll` nor an LLVM sidecar.
 
+The release contract builds this variant with the exact features
+`backend-llvm,inprocess-lld,static-llvm` and
+`RUSTFLAGS="-C target-feature=+crt-static"`. The package contains
+`oscan.exe`, normal metadata/install files and the required LLVM/llvm-mingw
+notices under `LICENSES/embedded/`; it must not contain `native-link/`,
+`build/`, `toolchain/`, `ld.lld.exe`, or any DLL. Windows Cranelift remains a
+sidecar release and does not inherit this profile.
+
 Build the pinned components with:
 
 ```powershell
@@ -1764,12 +1780,14 @@ python scripts\release_tools.py prepare-inprocess-link-assets `
   --output-dir build\strict\inprocess-assets\windows-x86_64
 ```
 
-Then build a Cranelift distribution with
-`--no-default-features --features backend-cranelift,inprocess-lld`, or an LLVM
-distribution with
+The release workflow first resolves and verifies the SDK/source archives pinned
+by `packaging/toolchains/windows-x86_64.json`, then runs the commands above and
+builds the LLVM distribution with
 `--no-default-features --features backend-llvm,inprocess-lld,static-llvm`.
 Set `OSCAN_INPROCESS_TOOLCHAIN_DIR`, `OSCAN_INPROCESS_ASSETS_DIR`, and
-`RUSTFLAGS="-C target-feature=+crt-static"` for both builds.
+`RUSTFLAGS="-C target-feature=+crt-static"`. A Cranelift build can still opt
+into `backend-cranelift,inprocess-lld` for development, but it is not the
+published Cranelift profile.
 
 Current strict-profile limits are deliberate and reported as errors:
 

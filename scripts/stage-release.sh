@@ -12,11 +12,12 @@ CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
 RUNTIME_ARCHIVE_DIR=""
 BACKEND=""
 NATIVE_LINK_DIR=""
+EMBEDDED_NOTICES_DIR=""
 TOOLCHAIN_ARCHIVE=""
 LLVM_PROVIDER_ARCHIVE=""
 
 usage() {
-    echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --backend <llvm|cranelift|c> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>] [--native-link-dir <path>] [--toolchain-archive <path>] [--llvm-provider-archive <path>]" >&2
+    echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --backend <llvm|cranelift|c> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>] [--native-link-dir <path>] [--embedded-notices-dir <path>] [--toolchain-archive <path>] [--llvm-provider-archive <path>]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -51,6 +52,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --native-link-dir)
             NATIVE_LINK_DIR="$2"
+            shift 2
+            ;;
+        --embedded-notices-dir)
+            EMBEDDED_NOTICES_DIR="$2"
             shift 2
             ;;
         --toolchain-archive)
@@ -90,6 +95,7 @@ set -- "$SCRIPT_DIR/release_tools.py" stage-release \
     --contract "$CONTRACT_PATH"
 [ -n "$RUNTIME_ARCHIVE_DIR" ] && set -- "$@" --runtime-archive-dir "$RUNTIME_ARCHIVE_DIR"
 [ -n "$NATIVE_LINK_DIR" ] && set -- "$@" --native-link-dir "$NATIVE_LINK_DIR"
+[ -n "$EMBEDDED_NOTICES_DIR" ] && set -- "$@" --embedded-notices-dir "$EMBEDDED_NOTICES_DIR"
 [ -n "$TOOLCHAIN_ARCHIVE" ] && set -- "$@" --toolchain-archive "$TOOLCHAIN_ARCHIVE"
 [ -n "$LLVM_PROVIDER_ARCHIVE" ] && set -- "$@" --llvm-provider-archive "$LLVM_PROVIDER_ARCHIVE"
 python3 "$@"

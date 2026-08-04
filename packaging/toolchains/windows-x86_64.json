@@ -140,7 +140,10 @@
         "bin/llvm-ar.exe",
         "bin/llvm-ranlib.exe",
         "bin/llvm-windres.exe",
-        "bin/libLLVM-*.dll"
+        "bin/libLLVM-*.dll",
+        "x86_64-w64-mingw32/share/mingw32/COPYING",
+        "x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64.txt",
+        "x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt"
       ]
     },
     "llvm_code_generator": {
@@ -153,6 +156,50 @@
         "libLLVM.dll"
       ],
       "note": "Oscan's --backend llvm loads this library in-process (parse/verify/optimize/emit) and never invokes clang/llvm-as/opt/llc. It is also what bin/ld.lld.exe already links against, so it costs no extra bytes in this bundle."
+    },
+    "inprocess_toolchain": {
+      "llvm_version": "22.1.0",
+      "target": "x86_64-pc-windows-msvc",
+      "sdk": {
+        "archive": {
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/clang%2Bllvm-22.1.0-x86_64-pc-windows-msvc.tar.xz",
+          "type": "tar.xz",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "2dd6a6c990865f98766dec58cce1cbfba48e5affc0098e5b1fff96c2f1d23e81"
+          }
+        },
+        "extract": {
+          "strip_components": 1
+        }
+      },
+      "source": {
+        "archive": {
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.0/llvm-project-22.1.0.src.tar.xz",
+          "type": "tar.xz",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "25d2e2adc4356d758405dd885fcfd6447bce82a90eb78b6b87ce0934bd077173"
+          }
+        },
+        "extract": {
+          "strip_components": 1
+        }
+      },
+      "embedded_notices": [
+        {
+          "source": "x86_64-w64-mingw32/share/mingw32/COPYING",
+          "output": "mingw-w64-COPYING.txt"
+        },
+        {
+          "source": "x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64.txt",
+          "output": "mingw-w64-project-COPYING.txt"
+        },
+        {
+          "source": "x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt",
+          "output": "mingw-w64-runtime-COPYING.txt"
+        }
+      ]
     }
   },
   "stage": {
