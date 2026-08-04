@@ -141,6 +141,7 @@ class PackagingFixture:
         self.binary.write_bytes(b"fake oscan binary")
 
         self.native_link_dir = root / "native-link-input"
+        self.embedded_notices_dir = root / "embedded-notices-input"
         self.runtime_dir = root / "runtime-archives"
         self.archive_dir = root / "archives"
         self.packaging_dir = root / "packaging"
@@ -152,6 +153,7 @@ class PackagingFixture:
         self._write_toolchain_archive()
         self._write_provider_archive()
         self._write_native_link()
+        self._write_embedded_notices()
         self._write_runtime_archives()
 
     # -- packaging manifests -------------------------------------------------
@@ -210,6 +212,15 @@ class PackagingFixture:
                     file_entry(f"{root}/share/doc/readme.txt", b"pruned"),
                 ]
             )
+            for notice in toolchain.get("inprocess_toolchain", {}).get(
+                "embedded_notices", []
+            ):
+                entries.append(
+                    file_entry(
+                        f"{root}/{notice['source']}",
+                        f"{notice['output']} contents\n".encode(),
+                    )
+                )
         else:
             entries.extend(
                 [
@@ -376,6 +387,15 @@ class PackagingFixture:
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
 
+    def _write_embedded_notices(self) -> None:
+        self.embedded_notices_dir.mkdir(parents=True, exist_ok=True)
+        contract = json.loads(self.contract_path.read_text(encoding="utf-8"))
+        variant = contract["variants"].get(self.target, {}).get("backends", {}).get("llvm", {})
+        for name in variant.get("embedded_notice_files", []):
+            destination = self.embedded_notices_dir / rt.safe_relative_path(name)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(f"{name} contents\n", encoding="utf-8")
+
     def _write_runtime_archives(self) -> None:
         if not self.repo_manifest_path.is_file():
             return
@@ -446,6 +466,11 @@ def stage_namespace(fixture: PackagingFixture, backend: str, output_dir: Path, *
         "contract": str(fixture.contract_path),
         "runtime_archive_dir": str(fixture.runtime_dir),
         "native_link_dir": str(fixture.native_link_dir),
+        "embedded_notices_dir": (
+            str(fixture.embedded_notices_dir)
+            if fixture.target == "windows-x86_64" and backend == "llvm"
+            else None
+        ),
         "toolchain_archive": str(fixture.toolchain_archive)
         if fixture.toolchain_archive
         else None,
@@ -501,7 +526,7 @@ class ContractMatrixTests(unittest.TestCase):
                     self.assertNotIn("runtime_archives", variant["components"])
                     self.assertNotIn("llvm_provider", variant["components"])
                     self.assertEqual(variant["runtime_profiles"], [])
-                else:
+                elif variant["link_mode"] == "sidecar":
                     self.assertTrue(variant["toolchain_free"])
                     self.assertIn("direct_link_sidecar", variant["components"])
                     self.assertIn("runtime_archives", variant["components"])
@@ -511,13 +536,27 @@ class ContractMatrixTests(unittest.TestCase):
                         ["freestanding", "freestanding_gfx", "freestanding_core"],
                     )
                     self.assertNotIn("hosted", variant["runtime_profiles"])
+                else:
+                    self.assertEqual((target, backend), ("windows-x86_64", "llvm"))
+                    self.assertTrue(variant["toolchain_free"])
+                    self.assertEqual(variant["link_mode"], "inprocess")
+                    self.assertEqual(variant["components"], ["compiler"])
+                    self.assertEqual(
+                        variant["build_features"],
+                        ["backend-llvm", "inprocess-lld", "static-llvm"],
+                    )
+                    self.assertEqual(
+                        variant["rustflags"], "-C target-feature=+crt-static"
+                    )
 
-    def test_only_llvm_variants_carry_a_provider_and_windows_shares_the_sidecar_copy(self) -> None:
+    def test_only_sidecar_llvm_carries_a_provider(self) -> None:
         windows_llvm = rt.resolve_release_variant(
             self.contract, rt.CONTRACT_PATH, "windows-x86_64", "llvm"
         )
-        self.assertEqual(windows_llvm["llvm_provider_source"], "direct-link-sidecar")
-        self.assertEqual(windows_llvm["llvm_provider_asset"], "libLLVM-22.dll")
+        self.assertEqual(windows_llvm["link_mode"], "inprocess")
+        self.assertNotIn("llvm_provider", windows_llvm["components"])
+        self.assertNotIn("llvm_provider_source", windows_llvm)
+        self.assertNotIn("llvm_provider_asset", windows_llvm)
         linux_llvm = rt.resolve_release_variant(
             self.contract, rt.CONTRACT_PATH, "linux-x86_64", "llvm"
         )
@@ -557,6 +596,9 @@ class ContractValidationTests(unittest.TestCase):
         mutate(data)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "release-contract.json"
+            for manifest in TOOLCHAINS.glob("*.json"):
+                if manifest.name != "release-contract.json":
+                    shutil.copy2(manifest, path.parent / manifest.name)
             path.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaises(SystemExit) as caught:
                 rt.load_release_contract(path)
@@ -637,6 +679,46 @@ class ContractValidationTests(unittest.TestCase):
 
         self.assertIn("non-freestanding", self._reject(mutate))
 
+    def test_inprocess_linking_requires_the_exact_strict_features(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["windows-x86_64"]["backends"]["llvm"][
+                "extra_cargo_features"
+            ] = ["inprocess-lld"]
+
+        self.assertIn("extra_cargo_features", self._reject(mutate))
+
+    def test_inprocess_linking_requires_static_crt(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["windows-x86_64"]["backends"]["llvm"]["rustflags"] = ""
+
+        self.assertIn("+crt-static", self._reject(mutate))
+
+    def test_only_windows_llvm_can_use_the_inprocess_profile(self) -> None:
+        def mutate(data: dict) -> None:
+            variant = data["variants"]["windows-x86_64"]["backends"]["cranelift"]
+            variant["link_mode"] = "inprocess"
+
+        self.assertIn(
+            "only the official windows-x86_64/llvm package",
+            self._reject(mutate),
+        )
+
+    def test_strict_notice_list_must_match_the_pinned_toolchain_manifest(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["windows-x86_64"]["backends"]["llvm"][
+                "embedded_notice_files"
+            ] = ["LLVM-LICENSE.txt", "invented-notice.txt"]
+
+        self.assertIn("must exactly match the pinned toolchain notices", self._reject(mutate))
+
+    def test_sidecar_variant_cannot_claim_embedded_notices(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["windows-x86_64"]["backends"]["cranelift"][
+                "embedded_notice_files"
+            ] = ["LLVM-LICENSE.txt", "mingw-w64-COPYING.txt"]
+
+        self.assertIn("must not declare embedded_notice_files", self._reject(mutate))
+
     def test_duplicate_archive_names_cannot_pass_validation(self) -> None:
         def mutate(data: dict) -> None:
             data["variants"]["linux-x86_64"]["backends"]["llvm"]["archive_name_template"] = data[
@@ -711,7 +793,7 @@ class VariantStagingTests(unittest.TestCase):
                         else:
                             self.assertTrue((bundle / "toolchain").is_dir())
                             self.assertTrue(metadata["requirements"]["bundled_c_toolchain"])
-                    else:
+                    elif metadata["link_mode"] == "sidecar":
                         self.assertTrue(metadata["toolchain_free"])
                         self.assertTrue(
                             (bundle / "native-link" / "native-link-assets.json").is_file()
@@ -727,6 +809,20 @@ class VariantStagingTests(unittest.TestCase):
                         self.assertFalse((archives / "libosc_runtime_hosted.a").exists())
                         self.assertFalse((bundle / "native-runtime").exists())
                         self.assertFalse((bundle / "cross-linkers").exists())
+                    else:
+                        self.assertEqual((target, backend), ("windows-x86_64", "llvm"))
+                        self.assertTrue(metadata["toolchain_free"])
+                        self.assertEqual(
+                            metadata["cargo_features"],
+                            ["backend-llvm", "inprocess-lld", "static-llvm"],
+                        )
+                        self.assertEqual(metadata["link_mode"], "inprocess")
+                        self.assertFalse((bundle / "native-link").exists())
+                        self.assertFalse((bundle / "build").exists())
+                        self.assertFalse((bundle / "toolchain").exists())
+                        notices = bundle / "LICENSES" / "embedded"
+                        for name in metadata["embedded_notice_files"]:
+                            self.assertTrue((notices / name).is_file())
 
     def test_object_packages_contain_no_c_toolchain_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -752,21 +848,57 @@ class VariantStagingTests(unittest.TestCase):
                         self.assertNotIn("/include/", f"/{relative}")
                         self.assertNotIn("/sysroot/", f"/{relative}")
 
-    def test_windows_llvm_shares_the_single_sidecar_provider_copy(self) -> None:
+    def test_windows_llvm_is_a_single_executable_without_linker_or_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             bundle, _ = self._stage(Path(tmp_name), "windows-x86_64", "llvm")
-            copies = [
-                path.relative_to(bundle).as_posix()
-                for path in bundle.rglob("libLLVM-22.dll")
-            ]
-            self.assertEqual(copies, ["native-link/bin/libLLVM-22.dll"])
+            self.assertEqual(list(bundle.rglob("*.dll")), [])
+            self.assertEqual(list(bundle.rglob("ld.lld*")), [])
+            self.assertFalse((bundle / "native-link").exists())
+            self.assertFalse((bundle / "build").exists())
             self.assertFalse((bundle / "toolchain").exists())
             metadata = json.loads(
                 (bundle / rt.PACKAGE_METADATA_NAME).read_text(encoding="utf-8")
             )
-            provider = metadata["component_digests"]["llvm_provider"]
-            self.assertEqual(provider["source"], "direct-link-sidecar")
-            self.assertEqual(provider["path"], "native-link/bin/libLLVM-22.dll")
+            self.assertEqual(metadata["components"], ["compiler"])
+            self.assertEqual(metadata["link_mode"], "inprocess")
+            self.assertNotIn("llvm_provider", metadata["component_digests"])
+
+    def test_windows_llvm_rejects_every_undeclared_file_or_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            bundle, _ = self._stage(tmp, "windows-x86_64", "llvm")
+            cases = (
+                ("helper.exe", False),
+                ("payload.obj", False),
+                ("static.lib", False),
+                ("native-cache/marker", False),
+                ("empty-cache", True),
+            )
+            for relative, directory_only in cases:
+                with self.subTest(relative=relative):
+                    candidate = bundle / relative
+                    if directory_only:
+                        candidate.mkdir(parents=True)
+                    else:
+                        candidate.parent.mkdir(parents=True, exist_ok=True)
+                        candidate.write_bytes(b"unexpected")
+                    try:
+                        with self.assertRaises(SystemExit) as caught:
+                            rt.verify_package_layout(
+                                bundle,
+                                rt.CONTRACT_PATH,
+                                "windows-x86_64",
+                                "llvm",
+                                version="9.9.9",
+                            )
+                        self.assertIn("contains undeclared payload", str(caught.exception))
+                    finally:
+                        if candidate.is_dir():
+                            shutil.rmtree(candidate)
+                        else:
+                            candidate.unlink()
+                            if candidate.parent != bundle and not any(candidate.parent.iterdir()):
+                                candidate.parent.rmdir()
 
     def test_linux_llvm_stages_provider_payload_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -815,6 +947,13 @@ class VariantStagingTests(unittest.TestCase):
             self.assertIn("--backend c, --emit-c and -o *.c are refused", readme)
             self.assertIn("only LLD's runtime dependency", readme)
 
+            bundle, _ = self._stage(tmp, "windows-x86_64", "llvm")
+            readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
+            self.assertIn("LLD linker", readme)
+            self.assertIn("No native-link/", readme)
+            self.assertIn("LICENSES/embedded/", readme)
+            self.assertIn("Named --extra-lib inputs are refused", readme)
+
             bundle, _ = self._stage(tmp, "linux-x86_64", "c")
             readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
             self.assertIn("Backend: c", readme)
@@ -856,6 +995,21 @@ class VariantStagingTests(unittest.TestCase):
                     stage_namespace(fixture, "cranelift", tmp / "out", native_link_dir=None)
                 )
             self.assertIn("--native-link-dir", str(caught.exception))
+
+    def test_the_strict_variant_without_notices_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fixture = PackagingFixture(tmp / "input", "windows-x86_64")
+            with self.assertRaises(SystemExit) as caught:
+                rt.stage_release(
+                    stage_namespace(
+                        fixture,
+                        "llvm",
+                        tmp / "out",
+                        embedded_notices_dir=None,
+                    )
+                )
+            self.assertIn("--embedded-notices-dir", str(caught.exception))
 
 
 class RemovedStagingInputTests(unittest.TestCase):
@@ -939,6 +1093,29 @@ class TrustedToolchainArchiveTests(unittest.TestCase):
                     [], list(output.glob(f"*{suffix}")), "no archive may be produced"
                 )
             return str(caught.exception)
+
+    def test_pruning_keeps_declared_nested_notices_but_removes_siblings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            root = Path(tmp_name) / "toolchain"
+            notice = root / "x86_64-w64-mingw32" / "share" / "mingw32" / "COPYING"
+            unrelated = root / "x86_64-w64-mingw32" / "share" / "doc" / "manual.txt"
+            notice.parent.mkdir(parents=True)
+            unrelated.parent.mkdir(parents=True)
+            notice.write_text("keep\n", encoding="utf-8")
+            unrelated.write_text("remove\n", encoding="utf-8")
+
+            rt.prune_toolchain(
+                root,
+                {
+                    "remove_globs": ["share"],
+                    "keep_globs": [
+                        "x86_64-w64-mingw32/share/mingw32/COPYING",
+                    ],
+                },
+            )
+
+            self.assertTrue(notice.is_file())
+            self.assertFalse(unrelated.exists())
 
     def test_the_declared_toolchain_archive_stages_completely(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1631,18 +1808,108 @@ class OfflineStagingTests(unittest.TestCase):
                 )
             self.assertFalse((inspection / "unlisted-tool").exists())
 
-            fixture.provider_archive.write_bytes(b"tampered")
-            with self.assertRaises(SystemExit) as caught:
-                rt.prepare_llvm_provider(
-                    rt.argparse.Namespace(
-                        manifest=str(fixture.manifest_path),
-                        download_dir=str(tmp / "downloads"),
-                        archive=str(fixture.provider_archive),
-                        no_download=True,
-                        extract_to=None,
-                    )
-                )
-            self.assertIn("does not match the pinned sha256 digest", str(caught.exception))
+    def test_preparing_the_strict_toolchain_sources_verifies_both_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fixture = PackagingFixture(tmp / "input", "windows-x86_64")
+            sdk = tmp / "llvm-sdk.tar.xz"
+            source = tmp / "llvm-source.tar.xz"
+            build_tar_archive(
+                sdk,
+                [
+                    dir_entry("sdk-root"),
+                    file_entry("sdk-root/bin/llvm-config.exe", b"llvm-config"),
+                ],
+                "xz",
+            )
+            build_tar_archive(
+                source,
+                [
+                    dir_entry("source-root"),
+                    file_entry("source-root/lld/CMakeLists.txt", b"project(LLD)"),
+                    file_entry("source-root/LICENSE.TXT", b"LLVM license"),
+                ],
+                "xz",
+            )
+            manifest = fixture.manifest()
+            fixture._pin(manifest["toolchain"]["inprocess_toolchain"]["sdk"]["archive"], sdk)
+            fixture._pin(
+                manifest["toolchain"]["inprocess_toolchain"]["source"]["archive"], source
+            )
+            fixture.write_manifest(manifest)
+
+            output = tmp / "prepared"
+            provenance = rt.prepare_inprocess_toolchain_sources(
+                fixture.manifest_path, sdk, source, output
+            )
+            self.assertEqual(provenance["llvm_version"], "22.1.0")
+            self.assertTrue((output / "sdk" / "bin" / "llvm-config.exe").is_file())
+            self.assertTrue((output / "source" / "lld" / "CMakeLists.txt").is_file())
+            self.assertTrue(
+                (output / rt.INPROCESS_TOOLCHAIN_PROVENANCE_NAME).is_file()
+            )
+            self.assertEqual(
+                provenance["inputs"]["sdk"]["digest"]["value"],
+                rt.compute_digest(sdk, "sha256"),
+            )
+            self.assertEqual(
+                provenance["inputs"]["source"]["digest"]["value"],
+                rt.compute_digest(source, "sha256"),
+            )
+
+            for label, archive in (("sdk", sdk), ("source", source)):
+                with self.subTest(archive=label):
+                    original = archive.read_bytes()
+                    archive.write_bytes(b"tampered")
+                    try:
+                        with self.assertRaises(SystemExit) as caught:
+                            rt.prepare_inprocess_toolchain_sources(
+                                fixture.manifest_path,
+                                sdk,
+                                source,
+                                tmp / f"tampered-{label}",
+                            )
+                        self.assertIn(
+                            "does not match the pinned sha256 digest",
+                            str(caught.exception),
+                        )
+                    finally:
+                        archive.write_bytes(original)
+
+    def test_preparing_strict_notices_uses_manifest_declared_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            fixture = PackagingFixture(tmp / "input", "windows-x86_64")
+            manifest = fixture.manifest()
+            toolchain = tmp / "toolchain"
+            strict_toolchain = tmp / "strict-toolchain"
+            llvm_license = strict_toolchain / "LICENSES" / "LLVM-LICENSE.txt"
+            llvm_license.parent.mkdir(parents=True)
+            llvm_license.write_text("LLVM license\n", encoding="utf-8")
+
+            for notice in manifest["toolchain"]["inprocess_toolchain"][
+                "embedded_notices"
+            ]:
+                source = toolchain / rt.safe_relative_path(notice["source"])
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"{notice['output']}\n", encoding="utf-8")
+
+            output = tmp / "notices"
+            names = rt.prepare_inprocess_notices(
+                "windows-x86_64",
+                toolchain,
+                fixture.manifest_path,
+                strict_toolchain,
+                output,
+            )
+            expected = rt.load_release_contract(fixture.contract_path)["variants"][
+                "windows-x86_64"
+            ]["backends"]["llvm"]["embedded_notice_files"]
+            self.assertEqual(names, expected)
+            self.assertEqual(
+                sorted(path.name for path in output.iterdir()),
+                sorted(expected),
+            )
 
 
 class ReproducibleArchiveTests(unittest.TestCase):
@@ -1754,6 +2021,7 @@ class WrapperInterfaceTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertIn("[string]$ToolchainArchive", script)
                 self.assertIn("[string]$LlvmProviderArchive", script)
+                self.assertIn("[string]$EmbeddedNoticesDir", script)
                 self.assertIn("-ToolchainDir has been removed", script)
                 self.assertIn("-LlvmProviderDir has been removed", script)
 
@@ -1769,6 +2037,7 @@ class WrapperInterfaceTests(unittest.TestCase):
         self.assertIn("--llvm-provider-archive", script)
         self.assertIn("--toolchain-dir has been removed", script)
         self.assertIn("--llvm-provider-dir has been removed", script)
+        self.assertIn("--embedded-notices-dir", script)
 
     def test_an_archive_resolution_wrapper_exists_for_ci(self) -> None:
         for name in ("resolve-archive.ps1", "resolve-archive.sh"):
@@ -1776,6 +2045,8 @@ class WrapperInterfaceTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertIn("resolve-archive", script)
                 self.assertIn("llvm-provider", script)
+                self.assertIn("inprocess-llvm-sdk", script)
+                self.assertIn("inprocess-llvm-source", script)
 
 
 if __name__ == "__main__":

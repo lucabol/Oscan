@@ -34,7 +34,7 @@
 
 ### Getting the Oscan Compiler
 
-Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Every published artifact is one **(platform, backend) package**: Windows and Linux publish `llvm`, `cranelift` and `c` packages, macOS publishes `c`, and Windows additionally publishes one recommended installer, the LLVM MSI. There is no combined package. An `llvm`/`cranelift` package contains the compiler, its verified direct-link assets and precompiled freestanding runtime archives — and no C compiler, headers or sysroot. A `c` package contains the compiler and the pinned C toolchain it needs.
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Every published artifact is one **(platform, backend) package**: Windows and Linux publish `llvm`, `cranelift` and `c` packages, macOS publishes `c`, and Windows additionally publishes one recommended installer, the LLVM MSI. There is no combined package. An `llvm`/`cranelift` package contains the compiler and the verified direct-link/runtime inputs it needs — embedded in the strict Windows LLVM executable or installed as sidecars for the other object packages — and no C compiler, headers or sysroot. A `c` package contains the compiler and the pinned C toolchain it needs.
 
 #### Windows x86_64
 
@@ -59,11 +59,14 @@ installation is required for any of the three: the object packages need none,
 and the C package bundles its own.
 
 **Components (llvm package):**
-- `oscan.exe` — the Oscan compiler, built with the LLVM backend only
-- `native-link/` — the verified linker assets, including the `libLLVM-22.dll`
-  that serves as both LLD's runtime dependency and the LLVM code generator
-- `build/runtime-archives/windows-x86_64/` — precompiled freestanding runtime archives
+- `oscan.exe` — the strict single-executable compiler: LLVM 22.1.0, patched
+  in-process LLD, runtime archives and link inputs are statically linked or embedded
+- `LICENSES/embedded/` — notices for the embedded LLVM/LLD and llvm-mingw inputs
 - `install.ps1` — optional installation script
+
+The LLVM ZIP/MSI contains no `native-link/`, `build/`, `toolchain/`,
+`ld.lld.exe`, provider DLL or linker runtime DLL. The Windows Cranelift package
+retains the verified `native-link/` and runtime-archive sidecars.
 
 **Components (c package):**
 - `oscan.exe` — the Oscan compiler, built with the C backend only
@@ -133,8 +136,9 @@ To build the Oscan compiler from source:
 
 **Requirements:**
 - Rust toolchain (to build the compiler itself)
-- LLVM 22 shared library only when running the LLVM backend from a source build;
-  releases package it, and no LLVM SDK or Clang executable is used
+- LLVM 22 shared library only when running the ordinary LLVM backend from a
+  source build; the Windows LLVM release statically links it and Linux packages
+  it, while neither release invokes an LLVM SDK or Clang executable at run time
 - C compiler (GCC, Clang, or MSVC) for the C backend, hosted object-backend builds, `--extra-c`, and final links without packaged direct-link assets
 
 ```bash
@@ -144,29 +148,33 @@ cargo build --release
 ```
 
 Binary: `target/release/oscan` (or `oscan.exe` on Windows). A source build
-contains all three backends; released packages are single-backend builds
-(`--no-default-features --features backend-llvm|backend-cranelift|backend-c`).
+contains all three backends; released packages are single-backend builds.
+Ordinary variants use `--no-default-features --features backend-<backend>`;
+strict Windows LLVM uses
+`--features backend-llvm,inprocess-lld,static-llvm` with static CRT.
 
 ### Release Archive Structure
 
-An object package (here, Windows LLVM):
+A strict Windows LLVM package:
 
 ```
 oscan-vX.Y.Z-windows-x86_64-llvm/
   oscan.exe
-  native-link/
-    native-link-assets.json
-    bin/
-      ld.lld.exe
-      libLLVM-22.dll
-      ...
-  build/runtime-archives/windows-x86_64/
-    libosc_runtime_freestanding*.a (+ .json manifests)
   oscan-package.json
   install.ps1
   LICENSES/
+    embedded/
+      LLVM-LICENSE.txt
+      mingw-w64-COPYING.txt
+      mingw-w64-project-COPYING.txt
+      mingw-w64-runtime-COPYING.txt
   README-install.txt
 ```
+
+Sidecar object packages instead include `native-link/` and
+`build/runtime-archives/<target>/`. Those directories are intentionally absent
+from strict Windows LLVM: its code generator, linker, runtime archives, import
+libraries and compiler builtins are all part of `oscan.exe`.
 
 A C package (here, Linux):
 
@@ -215,10 +223,11 @@ says which artifact suffix to look for on a platform that publishes that
 backend; it does not assume every platform publishes every backend (macOS
 publishes only the C package today).
 
-With an installed package, the compiler discovers whatever it ships
+With an installed package, the compiler discovers any sidecars it ships
 (`toolchain/`, `native-link/`, runtime archives) relative to its own
-executable. `OSCAN_TOOLCHAIN_DIR` or `OSCAN_CC` can override the C-compiler
-lookup in builds that use one.
+executable. Strict Windows LLVM needs no such discovery.
+`OSCAN_TOOLCHAIN_DIR` or `OSCAN_CC` can override the C-compiler lookup in builds
+that use one.
 
 ### Upgrade and Uninstall
 
@@ -2069,15 +2078,17 @@ Cranelift or C.
 
 The LLVM backend lowers the same backend-neutral LIR as Cranelift directly to
 typed LLVM IR. Packaged LLVM 22 parses, verifies, optimizes, and emits the
-relocatable object in-process; the object then uses the same
-runtime-archive/link path as Cranelift. See `docs/design/llvm-backend.md`.
+relocatable object in-process. Linux then uses the same sidecar
+runtime-archive/direct-link path as Cranelift; strict Windows LLVM passes the
+object and embedded link assets directly to in-process LLD. See
+`docs/design/llvm-backend.md`.
 
 ### Host Toolchain Resolution (Windows/Linux)
 
 This behavior applies to Windows and Linux host builds only.
 
-The LLVM backend resolves its exact-major provider separately from the C
-compiler, in this order:
+An LLVM build that uses a dynamic provider resolves its exact-major provider
+separately from the C compiler, in this order:
 
 1. `OSCAN_LLVM_LIB` — absolute shared-library path
 2. `OSCAN_LLVM_DIR` — absolute provider directory
@@ -2086,7 +2097,8 @@ compiler, in this order:
    `<exe-dir>/native-link` (the verified package sidecar), `<exe-dir>`
 
 Relative overrides, the current working directory, `PATH`, and the bare
-platform loader search path are not accepted.
+platform loader search path are not accepted. Strict Windows LLVM statically
+links its provider and does not perform this lookup.
 
 For host-native compilation, Oscan resolves the C compiler/toolchain in the following order:
 
@@ -2107,27 +2119,31 @@ A Windows/Linux Oscan distribution that includes a bundled `toolchain/` director
 the resolution order above governs the external/bundled **C compiler** path. On
 Windows x86-64 and Linux x86-64, a freestanding `--backend llvm` or
 `--backend cranelift` build with no explicit `.c` files bypasses it entirely for
-linking: `oscan` uses its own linker plus the minimal support files it needs
-— on Windows, `ld.lld` plus
-5 MinGW runtime DLLs and import libraries; on Linux, a fully static
-`x86_64-linux-musl-ld` from the pinned musl-cross toolchain.
+linking. Strict Windows LLVM calls patched LLD in-process with embedded import
+libraries, builtins and runtime archives. Windows Cranelift uses sidecar
+`ld.lld.exe` plus its five MinGW runtime DLLs and support inputs. Linux object
+packages use sidecar `x86_64-linux-musl-ld` from the pinned musl-cross
+toolchain.
 
-Those files reach the compiler in one of two ways. A **schema-v2 release
-package** stages them beside the executable as a verified sidecar,
-`<exe-dir>/native-link/native-link-assets.json` plus its files: the binary
-embeds nothing, every file is SHA-256-verified against that manifest, and
-verified files are used in place rather than copied into a cache. An
-**optional embedded build** (`OSCAN_EMBED_ASSETS_DIR` with
+Sidecar release packages stage their files beside the executable as
+`<exe-dir>/native-link/native-link-assets.json` plus its verified payload.
+Every file is SHA-256-checked and used in place rather than copied into a
+cache. An **optional legacy embedded build** (`OSCAN_EMBED_ASSETS_DIR` with
 `OSCAN_REQUIRE_EMBEDDED_ASSETS=1`, used by CI smoke jobs and standalone
-single-file builds) instead carries them inside the binary and extracts them
-on first use to a content-verified local cache
+single-file builds) instead carries that sidecar set inside the binary and
+extracts it on first use to a content-verified local cache
 (`%LOCALAPPDATA%\oscan\native-assets\` on Windows;
 `$XDG_CACHE_HOME/oscan/native-assets` or `$HOME/.cache/oscan/native-assets` on
-Linux — safe to delete or ignore; rebuilt automatically on next use). Either
-way, such a packaged LLVM build does not consult `OSCAN_CC` or discover a
-separate C compiler: it loads packaged LLVM in-process for IR
-optimization/object emission and uses its own linker for the final link. No
-code-generation tool executable is spawned.
+Linux — safe to delete or ignore; rebuilt automatically on next use).
+
+Strict Windows LLVM is a third, no-extraction profile. LLVM and the patched LLD
+libraries are statically linked; the three runtime archives, six import
+libraries and compiler builtins are embedded as byte slices and passed to LLD
+from memory. It creates no native-asset cache and no generated-object temporary
+file, and its package contains no `native-link/`, `build/`, `toolchain/`,
+`ld.lld.exe` or provider/linker DLL. Neither LLVM release profile consults
+`OSCAN_CC` or discovers a separate C compiler for ordinary freestanding builds,
+and no code-generation tool executable is spawned.
 
 **Linux AArch64 / RISC-V64 object-backend support:** `--backend cranelift` supports
 cross-linking to `linux-aarch64` and `linux-riscv64` when a target-matched
@@ -2135,11 +2151,12 @@ linker and runtime archive are supplied. Released packages ship only their own
 target's assets, so the cross-linker binary and that target's runtime archives
 must be provided separately: set `OSCAN_NATIVE_LINKER`,
 `OSCAN_NATIVE_LINKER_FLAVOR=elf` and `OSCAN_RUNTIME_ARCHIVE_DIR`.
-`--backend llvm` uses
-the same link path, but can only emit objects for a target its provider exports.
-The Linux provider includes AArch64 and RISC-V; the Windows provider includes
-AArch64 but not RISC-V. **Note:** this is separate from the **C backend**'s existing
-ARM64/RISC-V64 support via `aarch64-linux-gnu-gcc` / `--target riscv64`.
+`--backend llvm` uses the same link path, but can only emit objects for a target
+its provider exports. The Linux provider includes AArch64 and RISC-V. Dynamic
+Windows providers may expose AArch64, but the official strict Windows package
+initializes only x86 and supports only its host target. **Note:** this is
+separate from the **C backend**'s existing ARM64/RISC-V64 support via
+`aarch64-linux-gnu-gcc` / `--target riscv64`.
 
 Hosted `--libc` mode, explicit `--extra-c` sources, and generated string-ABI
 extern shims still require the external/bundled C toolchain, even on Windows

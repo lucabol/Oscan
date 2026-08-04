@@ -14,7 +14,7 @@ param(
     [string]$Version,
 
     # The feature-gated binary for this variant: built with
-    # --no-default-features --features backend-<Backend> and
+    # the exact feature set declared by the release contract and
     # OSCAN_DISTRIBUTION_BACKEND=<Backend>.
     [Parameter(Mandatory = $true)]
     [string]$BinaryPath,
@@ -30,6 +30,10 @@ param(
     [string]$PrebuiltRuntimeArchiveDir,
 
     [string]$NativeLinkDir,
+
+    # License notices for code and link inputs embedded into a strict
+    # single-executable compiler.
+    [string]$EmbeddedNoticesDir,
 
     # Digest-pinned source archives (see 'release_tools.py resolve-archive').
     [string]$ToolchainArchive,
@@ -88,10 +92,13 @@ $variant = $targetSpec["backends"][$Backend]
 $components = @($variant["components"])
 $runtimeProfiles = @($variant["runtime_profiles"])
 
-# Object variants need a prepared native-link asset set: they ship a
-# verified sidecar rather than embedding assets in the binary.
+# Sidecar object variants need a prepared native-link asset set. Strict
+# in-process variants embed their linker and runtime inputs in the binary.
 if ($components -contains "direct_link_sidecar" -and -not $NativeLinkDir) {
     throw "Backend '$Backend' for '$Target' needs -NativeLinkDir (run prepare-embed-assets for this target first)."
+}
+if ($variant["link_mode"] -eq "inprocess" -and -not $EmbeddedNoticesDir) {
+    throw "Backend '$Backend' for '$Target' needs -EmbeddedNoticesDir containing the notices for its statically linked and embedded inputs."
 }
 if ($components -contains "c_toolchain" -and -not $ToolchainArchive) {
     throw "Backend '$Backend' for '$Target' needs -ToolchainArchive (the pinned C toolchain source archive; resolve it with 'release_tools.py resolve-archive --component toolchain')."
@@ -103,7 +110,7 @@ if ($components -contains "llvm_provider" -and
 }
 
 $runtimeArchiveDir = $null
-if ($runtimeProfiles.Count -gt 0) {
+if ($components -contains "runtime_archives") {
     if (-not $PrebuiltRuntimeArchiveDir) {
         throw "Backend '$Backend' for '$Target' needs -PrebuiltRuntimeArchiveDir containing its freestanding runtime archives ($($runtimeProfiles -join ', '))."
     }
@@ -126,6 +133,9 @@ if ($runtimeArchiveDir) {
 }
 if ($NativeLinkDir) {
     $stageArgs["NativeLinkDir"] = $NativeLinkDir
+}
+if ($EmbeddedNoticesDir) {
+    $stageArgs["EmbeddedNoticesDir"] = $EmbeddedNoticesDir
 }
 if ($ToolchainArchive) {
     $stageArgs["ToolchainArchive"] = $ToolchainArchive
