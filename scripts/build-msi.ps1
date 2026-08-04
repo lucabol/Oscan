@@ -53,12 +53,12 @@ if (-not $HarvestOnly) {
 # Harvest the bundle's payload into a WiX fragment.
 #
 # Schema 2 packages are backend-specific, so the payload is no longer always
-# `toolchain/`: an object package (llvm/cranelift) ships `native-link/` and
-# `build/runtime-archives/<target>/` instead, and every package ships
-# `oscan-package.json` plus its LICENSES tree at the root. Everything in the
-# staged bundle is therefore harvested, except the two files the .wxs
-# declares itself and the archive's own install script, which has no meaning
-# inside an MSI (and mirrors/deletes its destination when run).
+# `toolchain/`: sidecar object packages ship `native-link/` and runtime
+# archives, while strict Windows LLVM carries only its embedded-input notices.
+# Every package ships `oscan-package.json` plus its LICENSES tree at the root.
+# Everything in the staged bundle is therefore harvested, except the two files
+# the .wxs declares itself and the archive's own install script, which has no
+# meaning inside an MSI (and mirrors/deletes its destination when run).
 $RootFileExclusions = @("oscan.exe", "README-install.txt", "install.ps1")
 if (-not $HarvestPath) {
     $HarvestPath = Join-Path ([System.IO.Path]::GetTempPath()) "oscan-bundle-harvest.wxs"

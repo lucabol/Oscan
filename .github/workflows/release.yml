@@ -3,10 +3,10 @@ name: Oscan Release
 # Release contract schema 2: every published artifact is one (target,
 # backend) pair — Windows/Linux ship llvm, cranelift and c packages, macOS
 # ships c. The package job is keyed on the *target*, not on target x
-# backend, because all of a target's variants reuse the same pinned
-# toolchain download, the same freestanding runtime archives and the same
-# native-link sidecar; fanning out per backend would repeat the most
-# expensive work in the release three times per platform.
+# backend, because a target's variants reuse the same pinned toolchain
+# download and freestanding runtime archives. Sidecar variants also share one
+# prepared native-link set; the strict Windows LLVM variant additionally uses
+# one cached static LLVM/LLD build.
 
 on:
   push:
@@ -127,6 +127,7 @@ jobs:
       RELEASE_BINARY_PATH: ${{ matrix.binary_path }}
       RELEASE_MSI_BACKEND: ${{ matrix.msi_backend }}
       RELEASE_NEEDS_PROVIDER_ARCHIVE: ${{ matrix.needs_provider_archive }}
+      RELEASE_NEEDS_INPROCESS_TOOLCHAIN: ${{ matrix.needs_inprocess_toolchain }}
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
     steps:
@@ -157,6 +158,14 @@ jobs:
           key: release-cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: release-cargo-${{ matrix.target }}-
 
+      - name: Cache the strict in-process LLVM/LLD toolchain
+        if: matrix.needs_inprocess_toolchain == 'true'
+        id: inprocess-toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: build/inprocess-toolchain/${{ matrix.target }}
+          key: release-inprocess-${{ matrix.target }}-${{ hashFiles('packaging/toolchains/windows-x86_64.json', 'scripts/build-inprocess-toolchain.ps1', 'toolchain/inprocess/**') }}
+
       # The packaged LLVM code generator is dlopen()ed by the llvm package's
       # smoke test, so its shared-library dependencies must exist on the
       # runner even though they are never shipped.
@@ -178,6 +187,8 @@ jobs:
         if: matrix.needs_base_toolchain == 'true'
         id: archives
         shell: pwsh
+        env:
+          INPROCESS_CACHE_HIT: ${{ steps.inprocess-toolchain-cache.outputs.cache-hit }}
         run: |
           $downloadDir = Join-Path $env:RUNNER_TEMP 'oscan-archive-cache'
           New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
@@ -206,6 +217,28 @@ jobs:
             "provider_archive=$providerArchive" >> $env:GITHUB_OUTPUT
           }
 
+          if ($env:RELEASE_NEEDS_INPROCESS_TOOLCHAIN -eq 'true' -and
+              $env:INPROCESS_CACHE_HIT -ne 'true') {
+            $sdkArchive = & ./scripts/resolve-archive.ps1 `
+              -ManifestPath $manifestPath `
+              -Component inprocess-llvm-sdk `
+              -DownloadDir $downloadDir `
+              -Download | Select-Object -Last 1
+            if (-not $sdkArchive -or -not (Test-Path -LiteralPath $sdkArchive -PathType Leaf)) {
+              throw "Could not resolve the pinned in-process LLVM SDK archive."
+            }
+            $sourceArchive = & ./scripts/resolve-archive.ps1 `
+              -ManifestPath $manifestPath `
+              -Component inprocess-llvm-source `
+              -DownloadDir $downloadDir `
+              -Download | Select-Object -Last 1
+            if (-not $sourceArchive -or -not (Test-Path -LiteralPath $sourceArchive -PathType Leaf)) {
+              throw "Could not resolve the pinned in-process LLVM source archive."
+            }
+            "inprocess_sdk_archive=$sdkArchive" >> $env:GITHUB_OUTPUT
+            "inprocess_source_archive=$sourceArchive" >> $env:GITHUB_OUTPUT
+          }
+
       # Extracted once, from the archive already in the cache above, and used
       # only to build this target's runtime archives and to cut its
       # native-link sidecar. The packages themselves are staged from the
@@ -220,6 +253,49 @@ jobs:
             -DownloadDir '${{ steps.archives.outputs.download_dir }}'
           if ($LASTEXITCODE -ne 0) {
             throw "Extracting the pinned toolchain for ${env:RELEASE_TARGET} failed."
+          }
+
+      - name: Build the strict in-process LLVM/LLD toolchain
+        if: >-
+          matrix.needs_inprocess_toolchain == 'true' &&
+          steps.inprocess-toolchain-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $target = $env:RELEASE_TARGET
+          $sourceDir = "build/inprocess-sources/$target"
+          $outputDir = "build/inprocess-toolchain/$target"
+          & python scripts/release_tools.py prepare-inprocess-toolchain-sources `
+            --manifest "packaging/toolchains/$target.json" `
+            --sdk-archive '${{ steps.archives.outputs.inprocess_sdk_archive }}' `
+            --source-archive '${{ steps.archives.outputs.inprocess_source_archive }}' `
+            --output-dir $sourceDir
+          if ($LASTEXITCODE -ne 0) {
+            throw "Preparing the pinned in-process LLVM sources failed."
+          }
+          & ./scripts/build-inprocess-toolchain.ps1 `
+            -LlvmSdk "$sourceDir/sdk" `
+            -LlvmSource "$sourceDir/source" `
+            -OutputDir $outputDir `
+            -BuildDir "build/inprocess-lld/$target"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Building the in-process LLVM/LLD toolchain failed."
+          }
+          Remove-Item -LiteralPath $sourceDir -Recurse -Force
+
+      - name: Prepare strict compiler license notices
+        if: matrix.needs_inprocess_toolchain == 'true'
+        shell: pwsh
+        run: |
+          $target = $env:RELEASE_TARGET
+          $noticeDir = "build/inprocess-notices/$target"
+          & python scripts/release_tools.py prepare-inprocess-notices `
+            --target $target `
+            --toolchain-dir "build/toolchain-$target" `
+            --toolchain-manifest "packaging/toolchains/$target.json" `
+            --inprocess-toolchain-dir "build/inprocess-toolchain/$target" `
+            --output-dir $noticeDir
+          if ($LASTEXITCODE -ne 0) {
+            throw "Preparing the strict compiler notices for $target failed."
           }
 
       # Built once per target with that target's pinned compiler/archiver and
@@ -253,11 +329,9 @@ jobs:
             Write-Host "::endgroup::"
           }
 
-      # The verified, executable-relative native-link asset set (linker, its
-      # sibling runtime libraries, import libraries, compiler builtins) that
-      # every object package of this target ships as a sidecar. Prepared once;
-      # release binaries embed nothing, so OSCAN_EMBED_ASSETS_DIR is never set
-      # for the builds below.
+      # The verified, executable-relative native-link asset set used by every
+      # sidecar object variant of this target. The strict Windows LLVM variant
+      # embeds its own linker/runtime inputs instead.
       - name: Prepare the native-link sidecar
         if: matrix.needs_native_link == 'true'
         shell: pwsh
@@ -271,6 +345,21 @@ jobs:
             throw "Preparing the native-link sidecar for ${env:RELEASE_TARGET} failed."
           }
 
+      - name: Prepare the strict in-process link assets
+        if: matrix.needs_inprocess_toolchain == 'true'
+        shell: pwsh
+        run: |
+          $target = $env:RELEASE_TARGET
+          & python scripts/release_tools.py prepare-inprocess-link-assets `
+            --target $target `
+            --toolchain-dir "build/toolchain-$target" `
+            --toolchain-manifest "packaging/toolchains/$target.json" `
+            --runtime-archive-dir "build/runtime-archives/$target" `
+            --output-dir "build/inprocess-assets/$target"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Preparing the strict in-process link assets for $target failed."
+          }
+
       # One binary per backend, each built with exactly one backend feature
       # and stamped with the matching distribution backend, then copied to a
       # stable per-backend path before the next build overwrites
@@ -278,20 +367,44 @@ jobs:
       - name: Build the backend-specific compilers
         shell: pwsh
         run: |
-          # A release binary consumes its verified sidecar at run time; it
-          # must never carry embedded assets.
+          # Sidecar releases consume native-link assets at run time. The strict
+          # LLVM release uses the separate in-process asset contract below,
+          # never OSCAN_EMBED_ASSETS_DIR.
           Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS `
             -ErrorAction SilentlyContinue
+          $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
+            ConvertFrom-Json -AsHashtable
+          $variants = $contract['variants'][${env:RELEASE_TARGET}]['backends']
           $backends = $env:RELEASE_BACKENDS.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
           if ($backends.Count -eq 0) {
             throw "The release contract lists no backends for ${env:RELEASE_TARGET}."
           }
           $binRoot = Join-Path $env:RUNNER_TEMP 'oscan-release-binaries'
           foreach ($backend in $backends) {
-            Write-Host "::group::cargo build --release --no-default-features --features backend-$backend"
+            $variant = $variants[$backend]
+            $features = @([string]$variant['cargo_feature'])
+            if ($variant.ContainsKey('extra_cargo_features')) {
+              $features += @($variant['extra_cargo_features'])
+            }
+            $featureList = $features -join ','
+            Remove-Item Env:OSCAN_INPROCESS_TOOLCHAIN_DIR, Env:OSCAN_INPROCESS_ASSETS_DIR, Env:RUSTFLAGS `
+              -ErrorAction SilentlyContinue
+            if ($variant['link_mode'] -eq 'inprocess') {
+              $inprocessToolchain = "build/inprocess-toolchain/${env:RELEASE_TARGET}"
+              $inprocessAssets = "build/inprocess-assets/${env:RELEASE_TARGET}"
+              foreach ($path in @($inprocessToolchain, $inprocessAssets)) {
+                if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+                  throw "$backend needs strict in-process input '$path', but it is missing."
+                }
+              }
+              $env:OSCAN_INPROCESS_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $inprocessToolchain).Path
+              $env:OSCAN_INPROCESS_ASSETS_DIR = (Resolve-Path -LiteralPath $inprocessAssets).Path
+              $env:RUSTFLAGS = [string]$variant['rustflags']
+            }
+            Write-Host "::group::cargo build --release --no-default-features --features $featureList"
             $env:OSCAN_DISTRIBUTION_BACKEND = $backend
             $env:OSCAN_VERSION = $env:RELEASE_TAG
-            & cargo build --release --no-default-features --features "backend-$backend"
+            & cargo build --release --no-default-features --features $featureList
             if ($LASTEXITCODE -ne 0) {
               throw "cargo build failed for backend '$backend'."
             }
@@ -350,7 +463,14 @@ jobs:
               }
               $assembleArgs['NativeLinkDir'] = (Resolve-Path -LiteralPath $nativeLinkDir).Path
             }
-            if (@($variant['runtime_profiles']).Count -gt 0) {
+            if ($variant['link_mode'] -eq 'inprocess') {
+              $noticesDir = "build/inprocess-notices/$target"
+              if (-not (Test-Path -LiteralPath $noticesDir -PathType Container)) {
+                throw "$target/$backend needs embedded-input notices, but $noticesDir is missing."
+              }
+              $assembleArgs['EmbeddedNoticesDir'] = (Resolve-Path -LiteralPath $noticesDir).Path
+            }
+            if ($components -contains 'runtime_archives') {
               $runtimeArchiveDir = "build/runtime-archives/$target"
               if (-not (Test-Path -LiteralPath $runtimeArchiveDir)) {
                 throw "$target/$backend needs prebuilt runtime archives, but $runtimeArchiveDir is missing."
@@ -435,6 +555,31 @@ jobs:
           & ./scripts/build-msi.ps1 -BundleDir $bundleDir -Version $version -OutputPath $msiPath
           if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
             throw "The MSI build produced no installer at $msiPath."
+          }
+          $msiScratch = Join-Path $env:RUNNER_TEMP "oscan-release-msi/$target-$backend"
+          if (Test-Path -LiteralPath $msiScratch) {
+            Remove-Item -LiteralPath $msiScratch -Recurse -Force
+          }
+          $adminRoot = Join-Path $msiScratch 'admin'
+          New-Item -ItemType Directory -Path $adminRoot -Force | Out-Null
+          $msiLog = Join-Path $msiScratch 'administrative-extract.log'
+          $process = Start-Process -FilePath msiexec.exe -ArgumentList @(
+            '/a', "`"$msiPath`"", '/qn', "TARGETDIR=`"$adminRoot`"",
+            '/l*v', "`"$msiLog`""
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            Get-Content -LiteralPath $msiLog -Tail 100
+            throw "Administrative extraction of $msiPath failed with exit code $($process.ExitCode)."
+          }
+          $installedRoot = Join-Path $adminRoot 'PFiles64\Oscan'
+          & ./scripts/smoke-release.ps1 `
+            -Target $target `
+            -Backend $backend `
+            -InstalledPackageDir $installedRoot `
+            -Version $version `
+            -ScratchDir (Join-Path $msiScratch 'smoke')
+          if ($LASTEXITCODE -ne 0) {
+            throw "The MSI payload smoke failed for $target/$backend."
           }
 
       - name: Upload packaged artifacts

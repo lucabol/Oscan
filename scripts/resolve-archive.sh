@@ -28,7 +28,7 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         *)
-            echo "usage: $0 --manifest <path> [--component <toolchain|llvm-provider>] [--download-dir <path>] [--download]" >&2
+            echo "usage: $0 --manifest <path> [--component <toolchain|llvm-provider|inprocess-llvm-sdk|inprocess-llvm-source>] [--download-dir <path>] [--download]" >&2
             exit 1
             ;;
     esac

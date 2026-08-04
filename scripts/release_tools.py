@@ -62,6 +62,7 @@ PROVIDER_PROVENANCE_NAME = "llvm-provider-provenance.json"
 NATIVE_LINK_DIR_NAME = "native-link"
 NATIVE_LINK_MANIFEST_NAME = "native-link-assets.json"
 INPROCESS_LINK_MANIFEST_NAME = "inprocess-link-assets.json"
+INPROCESS_TOOLCHAIN_PROVENANCE_NAME = "inprocess-toolchain-sources.json"
 
 
 def fail(message: str) -> "NoReturn":
@@ -76,6 +77,41 @@ def safe_relative_path(value: str) -> Path:
     if any(part in ("", ".", "..") for part in pure.parts):
         fail(f"unsafe relative path '{value}'")
     return Path(*pure.parts)
+
+
+def declared_inprocess_notice_specs(manifest: dict) -> list[tuple[Path, Path]]:
+    target = manifest.get("target", "unknown")
+    strict_spec = manifest.get("toolchain", {}).get("inprocess_toolchain", {})
+    notices = strict_spec.get("embedded_notices")
+    if not isinstance(notices, list) or not notices:
+        fail(f"target '{target}' declares no embedded notices for its strict compiler")
+
+    result = []
+    outputs = set()
+    for index, notice in enumerate(notices):
+        if not isinstance(notice, dict):
+            fail(f"strict embedded notice #{index + 1} must be an object")
+        source_value = notice.get("source")
+        output_value = notice.get("output")
+        if not isinstance(source_value, str) or not isinstance(output_value, str):
+            fail(f"strict embedded notice #{index + 1} needs string source/output paths")
+        source = safe_relative_path(source_value)
+        output = safe_relative_path(output_value)
+        output_name = output.as_posix()
+        if output_name == "LLVM-LICENSE.txt":
+            fail("target-toolchain notice output must not replace LLVM-LICENSE.txt")
+        if output_name in outputs:
+            fail(f"strict embedded notice output path is duplicated: {output_name}")
+        outputs.add(output_name)
+        result.append((source, output))
+    return result
+
+
+def declared_inprocess_notice_files(manifest: dict) -> list[str]:
+    return [
+        "LLVM-LICENSE.txt",
+        *(output.as_posix() for _, output in declared_inprocess_notice_specs(manifest)),
+    ]
 
 
 def ensure_clean_dir(path: Path) -> None:
@@ -292,6 +328,10 @@ def _validate_contract_variants(path: Path, contract: dict) -> None:
             seen_roots[root] = f"{target}/{backend}"
 
 
+def variant_build_features(variant: dict) -> list[str]:
+    return [variant["cargo_feature"], *variant.get("extra_cargo_features", [])]
+
+
 def _validate_contract_variant(
     path: Path, contract: dict, target: str, backend: str, variant: dict
 ) -> None:
@@ -320,6 +360,24 @@ def _validate_contract_variant(
         fail(
             f"{where} declares distribution backend '{variant['distribution_backend']}', which "
             f"does not match the variant's own backend '{backend}'"
+        )
+    extra_features = variant.get("extra_cargo_features", [])
+    if not isinstance(extra_features, list) or not all(
+        isinstance(feature, str) and feature for feature in extra_features
+    ):
+        fail(f"{where} extra_cargo_features must be a list of non-empty feature names")
+    build_features = variant_build_features(variant)
+    if len(build_features) != len(set(build_features)):
+        fail(f"{where} declares duplicate Cargo build features")
+    extra_backends = [
+        feature
+        for feature in extra_features
+        if feature.startswith("backend-") and feature != variant["cargo_feature"]
+    ]
+    if extra_backends:
+        fail(
+            f"{where} may build only backend '{backend}', but extra_cargo_features includes "
+            f"{', '.join(extra_backends)}"
         )
 
     suffix = ARCHIVE_SUFFIXES[contract["variants"][target]["archive_format"]]
@@ -358,24 +416,96 @@ def _validate_contract_variant(
     if contract["backends"][backend]["kind"] == "object":
         if not variant["toolchain_free"]:
             fail(f"{where} is an object package and must be toolchain-free")
-        for required in ("direct_link_sidecar", "runtime_archives"):
-            if required not in components:
-                fail(f"{where} is an object package and must include the '{required}' component")
         if not profiles:
             fail(f"{where} must declare at least one freestanding runtime profile")
-        if backend == "llvm":
-            if "llvm_provider" not in components:
-                fail(f"{where} must include the 'llvm_provider' component")
-            source = variant.get("llvm_provider_source")
-            if source not in contract["components"]["llvm_provider"]["sources"]:
-                fail(f"{where} declares unknown llvm_provider_source {source!r}")
-            if source == "direct-link-sidecar" and not variant.get("llvm_provider_asset"):
+        link_mode = variant.get("link_mode")
+        if link_mode not in ("sidecar", "inprocess"):
+            fail(f"{where} must declare link_mode 'sidecar' or 'inprocess'")
+        expected_link_mode = (
+            "inprocess"
+            if (target, backend) == ("windows-x86_64", "llvm")
+            else "sidecar"
+        )
+        if link_mode != expected_link_mode:
+            fail(
+                f"{where} must use link_mode '{expected_link_mode}'; only the official "
+                "windows-x86_64/llvm package uses the strict in-process profile"
+            )
+        if link_mode == "sidecar":
+            for required in ("direct_link_sidecar", "runtime_archives"):
+                if required not in components:
+                    fail(
+                        f"{where} uses sidecar linking and must include the '{required}' component"
+                    )
+            if extra_features or variant.get("rustflags"):
+                fail(f"{where} uses sidecar linking and must use only its backend Cargo feature")
+            if backend == "llvm":
+                if "llvm_provider" not in components:
+                    fail(f"{where} must include the 'llvm_provider' component")
+                source = variant.get("llvm_provider_source")
+                if source not in contract["components"]["llvm_provider"]["sources"]:
+                    fail(f"{where} declares unknown llvm_provider_source {source!r}")
+                if source == "direct-link-sidecar" and not variant.get("llvm_provider_asset"):
+                    fail(
+                        f"{where} shares its provider with the direct-link sidecar, so it must "
+                        "name the sidecar asset in 'llvm_provider_asset'"
+                    )
+            elif "llvm_provider" in components:
+                fail(f"{where} is a Cranelift package and must not ship an LLVM provider")
+        else:
+            if target != "windows-x86_64":
+                fail(f"{where} uses in-process linking, which is supported only on windows-x86_64")
+            if components != ["compiler"]:
                 fail(
-                    f"{where} shares its provider with the direct-link sidecar, so it must name "
-                    "the sidecar asset in 'llvm_provider_asset'"
+                    f"{where} uses in-process linking and must package only the compiler component"
                 )
-        elif "llvm_provider" in components:
-            fail(f"{where} is a Cranelift package and must not ship an LLVM provider")
+            notice_files = variant.get("embedded_notice_files")
+            if (
+                not isinstance(notice_files, list)
+                or not notice_files
+                or not all(
+                    isinstance(name, str)
+                    and name
+                    and safe_relative_path(name).as_posix() == name
+                    for name in notice_files
+                )
+                or len(notice_files) != len(set(notice_files))
+            ):
+                fail(
+                    f"{where} uses in-process linking and must declare unique, safe "
+                    "embedded_notice_files for its embedded third-party inputs"
+                )
+            manifest_name = contract["variants"][target].get("toolchain_manifest")
+            if not isinstance(manifest_name, str):
+                fail(f"{where} has no toolchain manifest for its embedded notices")
+            manifest_path = path.parent / safe_relative_path(manifest_name)
+            if not manifest_path.is_file():
+                fail(
+                    f"{where} toolchain manifest is missing beside the release contract: "
+                    f"{manifest_path}"
+                )
+            manifest = load_manifest(manifest_path)
+            expected_notices = declared_inprocess_notice_files(manifest)
+            if notice_files != expected_notices:
+                fail(
+                    f"{where} embedded_notice_files must exactly match the pinned toolchain "
+                    f"notices {expected_notices!r}"
+                )
+            expected_features = ["inprocess-lld"]
+            if backend == "llvm":
+                expected_features.append("static-llvm")
+            if extra_features != expected_features:
+                fail(
+                    f"{where} uses in-process linking and must declare extra_cargo_features "
+                    f"{expected_features!r}"
+                )
+            if variant.get("rustflags") != "-C target-feature=+crt-static":
+                fail(
+                    f"{where} uses in-process linking and must set "
+                    "rustflags '-C target-feature=+crt-static'"
+                )
+            if "llvm_provider_source" in variant or "llvm_provider_asset" in variant:
+                fail(f"{where} statically links LLVM and must not declare a provider sidecar")
     else:
         for forbidden in ("direct_link_sidecar", "runtime_archives", "llvm_provider"):
             if forbidden in components:
@@ -384,6 +514,14 @@ def _validate_contract_variant(
                 )
         if profiles:
             fail(f"{where} is a C package and must not ship native runtime archives")
+        for forbidden in ("link_mode", "extra_cargo_features", "rustflags"):
+            if forbidden in variant:
+                fail(f"{where} is a C package and must not declare '{forbidden}'")
+        if "embedded_notice_files" in variant:
+            fail(f"{where} is a C package and must not declare 'embedded_notice_files'")
+
+    if variant.get("link_mode") != "inprocess" and "embedded_notice_files" in variant:
+        fail(f"{where} is not an in-process package and must not declare embedded_notice_files")
 
     if target.startswith("macos") and has_c_toolchain:
         fail(f"{where} must not bundle a C toolchain: macOS relies on the Apple CLT")
@@ -420,6 +558,8 @@ def resolve_release_variant(
     spec["archive_format"] = target_spec["archive_format"]
     spec["platform"] = target.split("-", 1)[0]
     spec["backend_kind"] = contract["backends"][backend]["kind"]
+    spec["build_features"] = variant_build_features(spec)
+    spec["rustflags"] = spec.get("rustflags", "")
 
     manifest_name = target_spec.get("toolchain_manifest")
     if manifest_name:
@@ -450,13 +590,16 @@ def release_variant_matrix(contract: dict) -> list[dict]:
                     "target": target,
                     "backend": backend,
                     "cargo_feature": variant["cargo_feature"],
+                    "build_features": variant_build_features(variant),
                     "distribution_backend": variant["distribution_backend"],
                     "toolchain_free": variant["toolchain_free"],
+                    "link_mode": variant.get("link_mode"),
                     "archive_format": target_spec["archive_format"],
                     "archive_name_template": variant["archive_name_template"],
                     "archive_root_template": variant["archive_root_template"],
                     "components": list(variant["components"]),
                     "runtime_profiles": list(variant["runtime_profiles"]),
+                    "embedded_notice_files": list(variant.get("embedded_notice_files", [])),
                 }
             )
     return matrix
@@ -1102,17 +1245,43 @@ def prune_toolchain(root: Path, prune_config: dict) -> None:
     if not remove_globs and not strip_debug:
         return
 
-    # Build keep set first (files that must not be deleted even if matched by remove)
+    # Build keep set first. Preserve each match's ancestors too: otherwise a
+    # broad directory removal (for example "share") would still delete a
+    # specifically retained notice below it.
     keep_paths: set[Path] = set()
+    root_resolved = root.resolve()
     for pattern in keep_globs:
         for match in root.rglob(pattern):
-            keep_paths.add(match.resolve())
+            kept = match.resolve()
+            try:
+                kept.relative_to(root_resolved)
+            except ValueError:
+                continue
+            while kept != root_resolved:
+                keep_paths.add(kept)
+                kept = kept.parent
 
     # Remove files matching remove_globs (dirs are removed if emptied)
     removed_count = 0
     for pattern in remove_globs:
         for match in sorted(root.rglob(pattern), key=lambda p: p.as_posix(), reverse=True):
-            if match.resolve() in keep_paths:
+            resolved_match = match.resolve()
+            if resolved_match in keep_paths and match.is_dir() and not match.is_symlink():
+                for child in sorted(
+                    match.rglob("*"),
+                    key=lambda path: (len(path.parts), path.as_posix()),
+                    reverse=True,
+                ):
+                    if child.resolve() in keep_paths:
+                        continue
+                    if child.is_symlink() or child.is_file():
+                        child.unlink()
+                        removed_count += 1
+                    elif child.is_dir() and not any(child.iterdir()):
+                        child.rmdir()
+                        removed_count += 1
+                continue
+            if resolved_match in keep_paths:
                 continue
             if match.is_symlink() or match.is_file():
                 match.unlink()
@@ -1557,18 +1726,34 @@ def write_install_readme(path: Path, variant: dict, asset_name: str) -> None:
         "--------------------------",
     ]
     if variant["backend_kind"] == "object":
+        features = ",".join(variant["build_features"])
         lines.append(
-            f"  oscan compiled with --features {variant['cargo_feature']} only: it emits object "
+            f"  oscan compiled with --features {features}: it emits object "
             "code directly and never writes or compiles C."
         )
-        lines.append(
-            f"  {NATIVE_LINK_DIR_NAME}/  the linker and its runtime libraries, verified against "
-            f"{NATIVE_LINK_DIR_NAME}/{NATIVE_LINK_MANIFEST_NAME} (SHA-256) before every use."
-        )
-        lines.append(
-            f"  build/runtime-archives/{target}/  precompiled freestanding runtime archives "
-            f"({', '.join(variant['runtime_profiles'])})."
-        )
+        if variant["link_mode"] == "inprocess":
+            lines.append(
+                "  oscan contains the LLVM code generator, LLD linker, import libraries, compiler "
+                "builtins, and all freestanding runtime profiles in the executable itself."
+            )
+            lines.append(
+                "  No native-link/, build/runtime-archives/, toolchain/, provider DLL, linker "
+                "executable, extraction cache, or linker subprocess is required."
+            )
+            lines.append(
+                "  LICENSES/embedded/ contains the notices for the statically linked and embedded "
+                "LLVM/LLD and llvm-mingw inputs."
+            )
+        else:
+            lines.append(
+                f"  {NATIVE_LINK_DIR_NAME}/  the linker and its runtime libraries, verified "
+                f"against {NATIVE_LINK_DIR_NAME}/{NATIVE_LINK_MANIFEST_NAME} (SHA-256) before "
+                "every use."
+            )
+            lines.append(
+                f"  build/runtime-archives/{target}/  precompiled freestanding runtime archives "
+                f"({', '.join(variant['runtime_profiles'])})."
+            )
         if "llvm_provider" in components:
             if variant.get("llvm_provider_source") == "direct-link-sidecar":
                 lines.append(
@@ -1596,6 +1781,10 @@ def write_install_readme(path: Path, variant: dict, asset_name: str) -> None:
             lines.append(
                 "  libLLVM in this package is only LLD's runtime dependency; this build has no "
                 "LLVM backend (--backend llvm is not included)."
+            )
+        if variant["link_mode"] == "inprocess":
+            lines.append(
+                "  Named --extra-lib inputs are refused; pass an explicit archive path instead."
             )
         lines.append(
             f"  Other backends are not included: --backend {'llvm' if backend == 'cranelift' else 'cranelift'} "
@@ -1655,9 +1844,12 @@ def write_package_metadata(
         "available_backends": [variant["backend"]],
         "default_backend": variant["distribution_backend"],
         "cargo_feature": variant["cargo_feature"],
+        "cargo_features": list(variant["build_features"]),
         "toolchain_free": variant["toolchain_free"],
+        "link_mode": variant.get("link_mode"),
         "components": list(variant["components"]),
         "runtime_profiles": list(variant["runtime_profiles"]),
+        "embedded_notice_files": list(variant.get("embedded_notice_files", [])),
         "archive_name": archive_name,
         "archive_root": bundle_name,
         "requirements": {
@@ -2298,6 +2490,15 @@ def manifest_component_archive(manifest: dict, component: str) -> tuple[dict, st
                 "it has no separately pinned provider archive"
             )
         return archive, f"pinned LLVM provider archive for {target}"
+    if component in ("inprocess-llvm-sdk", "inprocess-llvm-source"):
+        spec = manifest.get("toolchain", {}).get("inprocess_toolchain")
+        if not isinstance(spec, dict):
+            fail(f"target '{target}' declares no in-process LLVM/LLD toolchain")
+        key = "sdk" if component.endswith("-sdk") else "source"
+        source = spec.get(key)
+        if not isinstance(source, dict) or not isinstance(source.get("archive"), dict):
+            fail(f"target '{target}' has no pinned in-process LLVM {key} archive")
+        return source["archive"], f"pinned in-process LLVM {key} archive for {target}"
     fail(f"unknown archive component '{component}'")
 
 
@@ -2314,6 +2515,82 @@ def resolve_archive_command(args: argparse.Namespace) -> int:
         archive, Path(args.download_dir).resolve(), description, args.download
     )
     print(str(archive_path))
+    return 0
+
+
+def prepare_inprocess_toolchain_sources(
+    manifest_path: Path,
+    sdk_archive: Path,
+    source_archive: Path,
+    output_dir: Path,
+) -> dict:
+    manifest = load_manifest(manifest_path)
+    target = manifest.get("target", "unknown")
+    spec = manifest.get("toolchain", {}).get("inprocess_toolchain")
+    if not isinstance(spec, dict):
+        fail(f"target '{target}' declares no in-process LLVM/LLD toolchain")
+    if target != "windows-x86_64":
+        fail(f"in-process LLVM/LLD sources are supported only for windows-x86_64, not '{target}'")
+
+    ensure_clean_dir(output_dir)
+    inputs = {}
+    for key, supplied in (("sdk", sdk_archive), ("source", source_archive)):
+        source_spec = spec.get(key)
+        if not isinstance(source_spec, dict) or not isinstance(source_spec.get("archive"), dict):
+            fail(f"target '{target}' has no pinned in-process LLVM {key} archive")
+        archive = source_spec["archive"]
+        description = f"pinned in-process LLVM {key} archive for {target}"
+        verified = verify_supplied_archive(supplied, archive, description)
+        destination = output_dir / key
+        extract_archive_safely(
+            supplied,
+            archive["type"],
+            destination,
+            int(source_spec.get("extract", {}).get("strip_components", 0)),
+        )
+        inputs[key] = {
+            "archive": supplied.name,
+            "digest": {
+                "algorithm": verified["algorithm"],
+                "value": verified["value"],
+            },
+            "size": verified["size"],
+        }
+
+    required = (
+        output_dir / "sdk" / "bin" / "llvm-config.exe",
+        output_dir / "source" / "lld" / "CMakeLists.txt",
+        output_dir / "source" / "LICENSE.TXT",
+    )
+    for path in required:
+        if not path.is_file():
+            fail(f"prepared in-process toolchain source is missing: {path}")
+
+    provenance = {
+        "schema_version": 1,
+        "target": target,
+        "llvm_version": spec.get("llvm_version"),
+        "compiler_target": spec.get("target"),
+        "source_manifest": manifest_path.name,
+        "inputs": inputs,
+    }
+    (output_dir / INPROCESS_TOOLCHAIN_PROVENANCE_NAME).write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return provenance
+
+
+def prepare_inprocess_toolchain_sources_command(args: argparse.Namespace) -> int:
+    output_dir = Path(args.output_dir).resolve()
+    prepare_inprocess_toolchain_sources(
+        Path(args.manifest).resolve(),
+        Path(args.sdk_archive).resolve(),
+        Path(args.source_archive).resolve(),
+        output_dir,
+    )
+    print(str(output_dir))
     return 0
 
 
@@ -2684,6 +2961,30 @@ def stage_release(args: argparse.Namespace) -> int:
         binary_destination.chmod(0o755)
     component_digests = {variant["binary_name"]: compute_digest(binary_destination, "sha256")}
 
+    if variant.get("link_mode") == "inprocess":
+        if not args.embedded_notices_dir:
+            fail(
+                f"staging {target}/{variant['backend']} needs --embedded-notices-dir "
+                "for its statically linked and embedded third-party inputs"
+            )
+        notices_root = Path(args.embedded_notices_dir).resolve()
+        if not notices_root.is_dir():
+            fail(f"embedded notices directory not found: {notices_root}")
+        for relative in variant["embedded_notice_files"]:
+            source = notices_root / safe_relative_path(relative)
+            if not source.is_file() or source.stat().st_size == 0:
+                fail(f"required embedded-input notice is missing or empty: {source}")
+            destination = bundle_dir / "LICENSES" / "embedded" / safe_relative_path(relative)
+            copy_path(source, destination)
+            component_digests[destination.relative_to(bundle_dir).as_posix()] = compute_digest(
+                destination, "sha256"
+            )
+    elif args.embedded_notices_dir:
+        fail(
+            f"staging {target}/{variant['backend']} was given --embedded-notices-dir, "
+            "but the variant does not embed its link toolchain"
+        )
+
     install_source = REPO_ROOT / "scripts" / (
         "install-oscan.ps1" if platform == "windows" else "install-oscan.sh"
     )
@@ -2813,6 +3114,7 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
         needs_toolchain_archive = False
         needs_provider_archive = False
         needs_native_link = False
+        needs_inprocess_toolchain = False
         for backend in backends:
             variant = declared[backend]
             archive_name = render_release_template(
@@ -2830,6 +3132,8 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 needs_toolchain_archive = True
             if "direct_link_sidecar" in components:
                 needs_native_link = True
+            if variant.get("link_mode") == "inprocess":
+                needs_inprocess_toolchain = True
             if (
                 "llvm_provider" in components
                 and variant.get("llvm_provider_source") == "toolchain-manifest"
@@ -2858,6 +3162,9 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 "needs_base_toolchain": "true" if needs_base_toolchain else "false",
                 "needs_native_link": "true" if needs_native_link else "false",
                 "needs_provider_archive": "true" if needs_provider_archive else "false",
+                "needs_inprocess_toolchain": (
+                    "true" if needs_inprocess_toolchain else "false"
+                ),
                 "msi_backend": "llvm" if platform == "windows" and "llvm" in backends else "",
             }
         )
@@ -2888,9 +3195,12 @@ def expected_package_metadata(variant: dict, version: str) -> dict:
         "available_backends": [variant["backend"]],
         "default_backend": variant["distribution_backend"],
         "cargo_feature": variant["cargo_feature"],
+        "cargo_features": list(variant["build_features"]),
         "toolchain_free": variant["toolchain_free"],
+        "link_mode": variant.get("link_mode"),
         "components": list(variant["components"]),
         "runtime_profiles": list(variant["runtime_profiles"]),
+        "embedded_notice_files": list(variant.get("embedded_notice_files", [])),
         "archive_name": render_release_template(
             variant["archive_name_template"], version, "archive_name_template"
         ),
@@ -3117,9 +3427,9 @@ def _verify_absent_components(root: Path, variant: dict) -> None:
             f"{variant['target']}/{variant['backend']} does not declare a native-link sidecar, "
             f"but the package contains '{NATIVE_LINK_DIR_NAME}/'"
         )
-    if not variant["runtime_profiles"] and (root / "build").exists():
+    if "runtime_archives" not in components and (root / "build").exists():
         fail(
-            f"{variant['target']}/{variant['backend']} ships no runtime archives, but the "
+            f"{variant['target']}/{variant['backend']} declares no runtime archive directory, but "
             "package contains 'build/'"
         )
     if "c_toolchain" not in components and variant.get("llvm_provider_source") != (
@@ -3133,6 +3443,75 @@ def _verify_absent_components(root: Path, variant: dict) -> None:
     for forbidden in ("native-runtime", "cross-linkers", "runtime"):
         if (root / forbidden).exists():
             fail(f"{variant['target']}/{variant['backend']} must not ship '{forbidden}/'")
+    embedded_notices = root / "LICENSES" / "embedded"
+    if variant.get("link_mode") != "inprocess" and embedded_notices.exists():
+        fail(
+            f"{variant['target']}/{variant['backend']} does not embed its link toolchain, "
+            "but the package contains 'LICENSES/embedded/'"
+        )
+
+
+def _verify_inprocess_package_payload(root: Path, variant: dict) -> None:
+    notice_root = root / "LICENSES" / "embedded"
+    expected = set(variant["embedded_notice_files"])
+    if not notice_root.is_dir():
+        fail(
+            f"{variant['target']}/{variant['backend']} embeds LLVM/LLD but is missing "
+            "'LICENSES/embedded/'"
+        )
+    found = {
+        path.relative_to(notice_root).as_posix()
+        for path in notice_root.rglob("*")
+        if path.is_file()
+    }
+    if found != expected:
+        fail(
+            f"{variant['target']}/{variant['backend']} embedded-input notices differ from the "
+            f"contract (expected {sorted(expected)}, found {sorted(found)})"
+        )
+    for relative in sorted(found):
+        if (notice_root / safe_relative_path(relative)).stat().st_size == 0:
+            fail(f"embedded-input notice is empty: LICENSES/embedded/{relative}")
+
+    expected_files = {
+        variant["binary_name"],
+        PACKAGE_METADATA_NAME,
+        "README-install.txt",
+        *(f"LICENSES/embedded/{relative}" for relative in expected),
+    }
+    allowed_files = {
+        *expected_files,
+        "install.ps1" if variant["platform"] == "windows" else "install.sh",
+    }
+    found_files = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    expected_directories = set()
+    for relative in allowed_files:
+        parent = PurePosixPath(relative).parent
+        while parent != PurePosixPath("."):
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    found_directories = {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if path.is_dir()
+    }
+    if (
+        not expected_files.issubset(found_files)
+        or not found_files.issubset(allowed_files)
+        or found_directories != expected_directories
+    ):
+        fail(
+            f"{variant['target']}/{variant['backend']} must be a single-executable compiler and "
+            "contains undeclared payload "
+            f"(extra files: {sorted(found_files - allowed_files)}, "
+            f"missing files: {sorted(expected_files - found_files)}, "
+            f"extra directories: {sorted(found_directories - expected_directories)}, "
+            f"missing directories: {sorted(expected_directories - found_directories)})"
+        )
 
 
 def _verify_object_package_payload(root: Path, variant: dict) -> None:
@@ -3247,6 +3626,8 @@ def verify_package_layout(
 
     if variant["backend_kind"] == "object":
         _verify_object_package_payload(root, variant)
+        if variant.get("link_mode") == "inprocess":
+            _verify_inprocess_package_payload(root, variant)
     else:
         _verify_c_package_payload(root, variant)
 
@@ -4743,6 +5124,85 @@ def prepare_inprocess_link_assets_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def prepare_inprocess_notices(
+    target: str,
+    toolchain_dir: Path,
+    toolchain_manifest_path: Path,
+    inprocess_toolchain_dir: Path,
+    output_dir: Path,
+) -> list[str]:
+    """Collect the exact notices required by a strict compiler package."""
+    if target != "windows-x86_64":
+        fail(
+            "prepare-inprocess-notices currently supports only "
+            f"windows-x86_64, not '{target}'"
+        )
+    for label, directory in (
+        ("toolchain", toolchain_dir),
+        ("in-process toolchain", inprocess_toolchain_dir),
+    ):
+        if not directory.is_dir():
+            fail(f"{label} directory not found: {directory}")
+
+    manifest = load_manifest(toolchain_manifest_path)
+    if manifest.get("target") != target:
+        fail(
+            f"toolchain manifest {toolchain_manifest_path} identifies target "
+            f"'{manifest.get('target')}', expected '{target}'"
+        )
+    sources: list[tuple[Path, Path, Path, str]] = [
+        (
+            inprocess_toolchain_dir,
+            safe_relative_path("LICENSES/LLVM-LICENSE.txt"),
+            safe_relative_path("LLVM-LICENSE.txt"),
+            "static LLVM/LLD license",
+        )
+    ]
+    for relative_source, relative_output in declared_inprocess_notice_specs(manifest):
+        sources.append(
+            (
+                toolchain_dir,
+                relative_source,
+                relative_output,
+                f"embedded notice '{relative_output.as_posix()}'",
+            )
+        )
+
+    output_names = [relative.as_posix() for _, _, relative, _ in sources]
+
+    ensure_clean_dir(output_dir)
+    for root, relative_source, relative_output, description in sources:
+        source = resolve_contained_payload(
+            root / relative_source,
+            root,
+            description,
+            relative_source.as_posix(),
+        )
+        destination = output_dir / relative_output
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    return output_names
+
+
+def prepare_inprocess_notices_command(args: argparse.Namespace) -> int:
+    target = args.target
+    toolchain_manifest_path = (
+        Path(args.toolchain_manifest).resolve()
+        if args.toolchain_manifest
+        else REPO_ROOT / "packaging" / "toolchains" / f"{target}.json"
+    )
+    output_dir = Path(args.output_dir).resolve()
+    prepare_inprocess_notices(
+        target,
+        Path(args.toolchain_dir).resolve(),
+        toolchain_manifest_path,
+        Path(args.inprocess_toolchain_dir).resolve(),
+        output_dir,
+    )
+    print(str(output_dir))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Oscan release asset helpers")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -4774,6 +5234,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--native-link-dir",
         default=None,
         help="prepared native-link asset directory (native-link-assets.json plus its assets at their install_subpaths) for object variants",
+    )
+    stage.add_argument(
+        "--embedded-notices-dir",
+        default=None,
+        help="directory containing the contract-declared notices for a strict compiler's statically linked and embedded inputs",
     )
     stage.add_argument(
         "--toolchain-archive",
@@ -4847,7 +5312,12 @@ def build_parser() -> argparse.ArgumentParser:
     resolve.add_argument("--download-dir", required=True)
     resolve.add_argument(
         "--component",
-        choices=("toolchain", "llvm-provider"),
+        choices=(
+            "toolchain",
+            "llvm-provider",
+            "inprocess-llvm-sdk",
+            "inprocess-llvm-source",
+        ),
         default="toolchain",
     )
     resolve.add_argument(
@@ -4856,6 +5326,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="download the archive when it is not already cached (staging itself never downloads)",
     )
     resolve.set_defaults(func=resolve_archive_command)
+
+    prepare_inprocess_sources = subparsers.add_parser(
+        "prepare-inprocess-toolchain-sources",
+        help=(
+            "verify and extract the pinned LLVM SDK and source archives used to build the "
+            "strict Windows in-process LLVM/LLD toolchain"
+        ),
+    )
+    prepare_inprocess_sources.add_argument("--manifest", required=True)
+    prepare_inprocess_sources.add_argument("--sdk-archive", required=True)
+    prepare_inprocess_sources.add_argument("--source-archive", required=True)
+    prepare_inprocess_sources.add_argument("--output-dir", required=True)
+    prepare_inprocess_sources.set_defaults(func=prepare_inprocess_toolchain_sources_command)
 
     variants = subparsers.add_parser(
         "list-variants",
@@ -5014,6 +5497,17 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_inprocess.add_argument("--runtime-archive-dir", required=True)
     prepare_inprocess.add_argument("--output-dir", required=True)
     prepare_inprocess.set_defaults(func=prepare_inprocess_link_assets_command)
+
+    prepare_notices = subparsers.add_parser(
+        "prepare-inprocess-notices",
+        help="collect LLVM and target-toolchain notices for a strict compiler package",
+    )
+    prepare_notices.add_argument("--target", required=True)
+    prepare_notices.add_argument("--toolchain-dir", required=True)
+    prepare_notices.add_argument("--toolchain-manifest", default=None)
+    prepare_notices.add_argument("--inprocess-toolchain-dir", required=True)
+    prepare_notices.add_argument("--output-dir", required=True)
+    prepare_notices.set_defaults(func=prepare_inprocess_notices_command)
 
     return parser
 

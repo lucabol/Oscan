@@ -2,9 +2,14 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$ManifestPath,
 
-    # Which pinned archive to resolve: the base C toolchain archive, or the
-    # separately pinned LLVM provider archive.
-    [ValidateSet("toolchain", "llvm-provider")]
+    # Which pinned archive to resolve: the base C toolchain, the separately
+    # pinned LLVM provider, or one of the strict in-process LLVM build inputs.
+    [ValidateSet(
+        "toolchain",
+        "llvm-provider",
+        "inprocess-llvm-sdk",
+        "inprocess-llvm-source"
+    )]
     [string]$Component = "toolchain",
 
     [string]$DownloadDir,

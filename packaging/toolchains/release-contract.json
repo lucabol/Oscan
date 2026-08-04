@@ -130,16 +130,23 @@
           "archive_name_template": "oscan-v{version}-windows-x86_64-llvm.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-llvm",
           "cargo_feature": "backend-llvm",
+          "extra_cargo_features": [
+            "inprocess-lld",
+            "static-llvm"
+          ],
+          "rustflags": "-C target-feature=+crt-static",
           "distribution_backend": "llvm",
           "toolchain_free": true,
+          "link_mode": "inprocess",
           "components": [
-            "compiler",
-            "direct_link_sidecar",
-            "runtime_archives",
-            "llvm_provider"
+            "compiler"
           ],
-          "llvm_provider_source": "direct-link-sidecar",
-          "llvm_provider_asset": "libLLVM-22.dll",
+          "embedded_notice_files": [
+            "LLVM-LICENSE.txt",
+            "mingw-w64-COPYING.txt",
+            "mingw-w64-project-COPYING.txt",
+            "mingw-w64-runtime-COPYING.txt"
+          ],
           "runtime_profiles": [
             "freestanding",
             "freestanding_gfx",
@@ -152,6 +159,7 @@
           "cargo_feature": "backend-cranelift",
           "distribution_backend": "cranelift",
           "toolchain_free": true,
+          "link_mode": "sidecar",
           "components": [
             "compiler",
             "direct_link_sidecar",
@@ -188,6 +196,7 @@
           "cargo_feature": "backend-llvm",
           "distribution_backend": "llvm",
           "toolchain_free": true,
+          "link_mode": "sidecar",
           "components": [
             "compiler",
             "direct_link_sidecar",
@@ -207,6 +216,7 @@
           "cargo_feature": "backend-cranelift",
           "distribution_backend": "cranelift",
           "toolchain_free": true,
+          "link_mode": "sidecar",
           "components": [
             "compiler",
             "direct_link_sidecar",
