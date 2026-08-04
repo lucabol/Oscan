@@ -38,7 +38,7 @@ use crate::token::Span;
 
 use super::ctx::BackendContext;
 use super::lir::{LirArtifact, LirModule};
-use super::{NativeCompileOutput, NativeTarget, RuntimeMode};
+use super::{NativeCompileOutput, NativeTarget, OptimizationProfile, RuntimeMode};
 
 pub use provider::{LlvmProvider, TargetArch};
 
@@ -127,6 +127,7 @@ pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
     runtime_mode: RuntimeMode,
+    optimization: OptimizationProfile,
     emit_object: bool,
 ) -> Result<LlvmCompileOutput, CompileError> {
     backend.require_target(target)?;
@@ -140,7 +141,7 @@ pub fn compile_object(
         .data_layout_for(triple)
         .map_err(compile_error)?;
 
-    let mut emitter = emit::LlvmEmitter::new(triple, &data_layout);
+    let mut emitter = emit::LlvmEmitter::new(triple, &data_layout, optimization);
     let mut ctx = BackendContext::new(program, runtime_mode);
     let generated_extern_shim_c = super::translate_program(&mut ctx, &mut emitter)?;
 
@@ -157,11 +158,7 @@ pub fn compile_object(
     let object_bytes = if emit_object {
         let bytes = backend
             .provider
-            .compile_ir_to_object(
-                &ir_text,
-                triple,
-                provider::OptimizationLevel::FreestandingSafe,
-            )
+            .compile_ir_to_object(&ir_text, triple, optimization)
             .map_err(compile_error)?;
         validate_object(&bytes, target)?;
         if runtime_mode == RuntimeMode::Freestanding {

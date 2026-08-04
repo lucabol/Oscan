@@ -183,11 +183,13 @@ small `wc`-style command-line program step by step.
 | `oscan app.osc -o program.ll` | Emit LLVM IR |
 | `oscan app.osc --backend llvm` | Select LLVM explicitly |
 | `oscan app.osc --backend cranelift` | Select Cranelift explicitly |
+| `oscan app.osc --opt-level speed` | Favor generated-code speed over the default size profile |
 | `oscan app.osc --backend c` | Select the C backend explicitly |
 | `oscan --help` | Show every option |
 
 A release package contains one backend. If you request another one, Oscan tells
-you which package to install.
+you which package to install. `--opt-level size|speed` applies to LLVM and
+Cranelift generated code; the default is `size`.
 
 ## Examples
 

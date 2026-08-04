@@ -11,7 +11,7 @@ typed ir::Program
   -> shared Oscan LIR lowering
   -> deterministic typed LLVM IR
   -> packaged libLLVM loaded in-process
-     (parse -> verify -> default<Oz> -> verify -> TargetMachine object)
+     (parse -> verify -> default<Oz> / default<O3> -> verify -> object)
   -> relocatable COFF/ELF object
   -> shared Oscan runtime/archive/link pipeline
   -> executable
@@ -65,7 +65,8 @@ For object emission, Oscan:
 1. obtains the target data layout from the actual `TargetMachine`;
 2. parses emitted IR with `LLVMParseIRInContext`;
 3. verifies it with `LLVMVerifyModule`;
-4. runs LLVM's `default<Oz>` pipeline with `LLVMRunPasses`;
+4. runs LLVM's `default<Oz>` (size, the default) or `default<O3>` (speed)
+   pipeline with `LLVMRunPasses`;
 5. verifies the optimized module again;
 6. obtains object bytes from `LLVMTargetMachineEmitToMemoryBuffer`.
 
@@ -122,12 +123,19 @@ Every emitted object is checked with the Rust `object` crate:
 - Windows targets must be COFF and Linux targets ELF;
 - the architecture must match the requested target.
 
-Generated functions carry `minsize`, `optsize`, `nounwind`, and LLVM's
-`"no-builtins"` marker. The latter is the IR-level equivalent of a
-freestanding/no-builtin contract. After optimization, freestanding objects are
-audited for unresolved `memcpy`, `memmove`, `memset`, `memcmp`, `bcmp`, and
-`strlen`, so a future LLVM pass cannot silently add an unavailable libc
-dependency.
+`--opt-level size|speed` selects the pipeline. The default size profile also
+marks generated functions `minsize` and `optsize`; the speed profile omits
+those attributes. Both profiles retain `nounwind` and LLVM's `"no-builtins"`
+marker. The latter is the IR-level equivalent of a freestanding/no-builtin
+contract. After optimization, freestanding objects are audited for unresolved
+`memcpy`, `memmove`, `memset`, `memcmp`, `bcmp`, and `strlen`, so a future LLVM
+pass cannot silently add an unavailable libc dependency.
+
+Ordinary Oscan functions are emitted with LLVM `internal` linkage. Only the
+synthesized process entry point remains exported; runtime and user `extern`
+functions remain imports. This preserves internal calls and function pointers
+while allowing LLVM's global dead-code elimination to remove unreachable user
+functions.
 
 ## 5. Runtime and final linking
 

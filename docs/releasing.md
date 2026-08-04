@@ -432,8 +432,9 @@ override was hiding a real bug rather than working around an unfixable one.
 
 The LLVM backend has no LLVM Cargo/build dependency. At run time it dynamically
 loads exact-major LLVM 22 through the C API and performs parse, verify,
-`default<Oz>`, and TargetMachine object emission in-process. It does not
-generate C or invoke Clang, `llvm-as`, `opt`, or `llc`.
+`default<Oz>` (the default size profile) or `default<O3>` (the speed profile),
+and TargetMachine object emission in-process. It does not generate C or invoke
+Clang, `llvm-as`, `opt`, or `llc`.
 
 Both the Windows and the Linux `llvm` package must ship a compatible provider:
 
