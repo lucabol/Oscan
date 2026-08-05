@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::ast::{BinOp, UnaryOp};
 use crate::collection::{array_element_type, CollectionIntrinsic, CollectionOp, CoreType};
+use crate::debuginfo::{DebugInfo, SourceLocation, SourceMap};
 use crate::ir;
 use crate::types::*;
 
@@ -21,6 +22,9 @@ pub struct CodeGenerator {
     fn_ptr_types: Vec<BcType>,
     freestanding: bool,
     embed_runtime: bool,
+    debug_info: DebugInfo,
+    source_map: SourceMap,
+    current_source: Option<SourceLocation>,
 }
 
 enum CTypeDecl {
@@ -31,14 +35,21 @@ enum CTypeDecl {
 }
 
 impl CodeGenerator {
-    pub fn generate(program: &ir::Program, freestanding: bool) -> String {
-        Self::generate_with_runtime(program, freestanding, true)
+    pub fn generate(
+        program: &ir::Program,
+        freestanding: bool,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+    ) -> String {
+        Self::generate_with_runtime(program, freestanding, true, debug_info, source_map)
     }
 
     fn generate_with_runtime(
         program: &ir::Program,
         freestanding: bool,
         embed_runtime: bool,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
     ) -> String {
         let mut cg = Self {
             out: String::new(),
@@ -52,6 +63,9 @@ impl CodeGenerator {
             fn_ptr_types: Vec::new(),
             freestanding,
             embed_runtime,
+            debug_info,
+            source_map: source_map.clone(),
+            current_source: None,
         };
 
         // Collect all unique Result types used in the program
@@ -388,6 +402,16 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn line(&mut self, s: &str) {
+        if self.debug_info.is_enabled() {
+            if let Some(location) = self.current_source {
+                let path = self.source_map.path(location.file);
+                let path = Self::debug_line_path(path);
+                self.out
+                    .push_str(&format!("#line {} \"{}\"\n", location.line, path));
+            } else {
+                self.out.push_str("#line 1 \"<oscan-generated>\"\n");
+            }
+        }
         for _ in 0..self.indent {
             self.out.push_str("    ");
         }
@@ -397,6 +421,22 @@ impl CodeGenerator {
 
     fn blank(&mut self) {
         self.out.push('\n');
+    }
+
+    fn debug_line_path(path: &std::path::Path) -> String {
+        let mut escaped = String::new();
+        for ch in path.to_string_lossy().chars() {
+            match ch {
+                '\\' if cfg!(windows) => escaped.push('/'),
+                '\\' => escaped.push_str("\\\\"),
+                '"' => escaped.push_str("\\\""),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                other => escaped.push(other),
+            }
+        }
+        escaped
     }
 
     fn fresh_tmp(&mut self) -> String {
@@ -738,6 +778,8 @@ impl CodeGenerator {
     }
 
     fn emit_function(&mut self, f: &ir::FnDef) {
+        let saved_source = self.current_source;
+        self.current_source = self.source_map.location(f.span);
         let ret = self.fn_return_c(f);
         let params = self.fn_params_c(f);
         let name = if f.name == "main" {
@@ -756,6 +798,9 @@ impl CodeGenerator {
 
         // Emit body
         let body_val = self.emit_block_body(&f.body);
+        if let Some(tail) = f.body.tail_expr.as_deref() {
+            self.current_source = self.source_map.location(tail.span());
+        }
 
         // If the body has a tail expression and function returns non-unit, emit return
         if f.body.tail_expr.is_some() {
@@ -780,6 +825,7 @@ impl CodeGenerator {
         self.blank();
         self.current_fn_return_type = None;
         self.deferred_exprs = saved_deferred;
+        self.current_source = saved_source;
     }
 
     /// Emit all deferred expressions in LIFO order.
@@ -839,6 +885,7 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_main_wrapper(&mut self) {
+        self.current_source = None;
         self.line("int main(int argc, char *argv[]) {");
         self.indent += 1;
         self.line("osc_global_argc = argc;");
@@ -893,7 +940,11 @@ impl CodeGenerator {
             self.emit_stmt(stmt);
         }
         if let Some(tail) = &block.tail_expr {
-            self.emit_expr(tail)
+            let saved_source = self.current_source;
+            self.current_source = self.source_map.location(tail.span());
+            let result = self.emit_expr(tail);
+            self.current_source = saved_source;
+            result
         } else {
             "(void)0".to_string()
         }
@@ -945,6 +996,8 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_stmt(&mut self, stmt: &ir::Stmt) {
+        let saved_source = self.current_source;
+        self.current_source = self.source_map.location(stmt.span());
         match stmt {
             ir::Stmt::Let(ls) => {
                 let c_ty = self.type_to_c(&ls.ty);
@@ -1117,6 +1170,7 @@ impl CodeGenerator {
                 self.deferred_exprs.push(c_code);
             }
         }
+        self.current_source = saved_source;
     }
 
     fn emit_place(&mut self, place: &ir::Place, stored_ty: &BcType) -> String {
@@ -1156,6 +1210,14 @@ impl CodeGenerator {
     // -----------------------------------------------------------------------
 
     fn emit_expr(&mut self, expr: &ir::Expr) -> String {
+        let saved_source = self.current_source;
+        self.current_source = self.source_map.location(expr.span());
+        let result = self.emit_expr_inner(expr);
+        self.current_source = saved_source;
+        result
+    }
+
+    fn emit_expr_inner(&mut self, expr: &ir::Expr) -> String {
         match expr {
             ir::Expr::IntLit(v, _) => format!("{}", v),
             ir::Expr::FloatLit(v, _) => {

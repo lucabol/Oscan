@@ -10,7 +10,9 @@
 
 use std::collections::HashMap;
 
+use crate::debuginfo::{DebugInfo, SourceLocation, SourceMap};
 use crate::ir;
+use crate::token::Span;
 
 use super::extern_shim::NativeExternShim;
 use super::lir::LFunc;
@@ -25,6 +27,8 @@ pub enum ExternDeclKind {
 pub struct BackendContext<'a> {
     pub program: &'a ir::Program,
     pub runtime_mode: RuntimeMode,
+    debug_info: DebugInfo,
+    source_map: &'a SourceMap,
     /// Oscan `fn`/`fn!` name -> declared function (the IR's `main` is
     /// declared under the C-backend-compatible symbol `oscan_main`).
     pub functions: HashMap<String, LFunc>,
@@ -38,14 +42,28 @@ pub struct BackendContext<'a> {
 }
 
 impl<'a> BackendContext<'a> {
-    pub fn new(program: &'a ir::Program, runtime_mode: RuntimeMode) -> Self {
+    pub fn new(
+        program: &'a ir::Program,
+        runtime_mode: RuntimeMode,
+        debug_info: DebugInfo,
+        source_map: &'a SourceMap,
+    ) -> Self {
         BackendContext {
             program,
             runtime_mode,
+            debug_info,
+            source_map,
             functions: HashMap::new(),
             externs: HashMap::new(),
             extern_shims: Vec::new(),
         }
+    }
+
+    pub fn source_location(&self, span: Span) -> Option<SourceLocation> {
+        self.debug_info
+            .is_enabled()
+            .then(|| self.source_map.location(span))
+            .flatten()
     }
 
     /// The mangled symbol name for a user function definition (`main`

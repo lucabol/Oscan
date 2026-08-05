@@ -259,6 +259,17 @@ pub trait LirModule {
         linkage: LLinkage,
     ) -> Result<LFunc, String>;
 
+    /// Associate a user function with its source declaration. Generated
+    /// wrappers and runtime imports deliberately omit this hook.
+    fn set_function_source(
+        &mut self,
+        _func: LFunc,
+        _source_name: &str,
+        _linkage_name: &str,
+        _location: crate::debuginfo::SourceLocation,
+    ) {
+    }
+
     /// Define `func`: create its entry block, run `body` against an open
     /// builder, then finalize and install the result.
     fn define_function(
@@ -286,6 +297,10 @@ pub trait LirBuilder {
         sig: &LSig,
         linkage: LLinkage,
     ) -> Result<LFunc, String>;
+
+    /// Set the source location inherited by subsequently emitted
+    /// instructions, or clear it for compiler-generated instructions.
+    fn set_source_location(&mut self, _location: Option<crate::debuginfo::SourceLocation>) {}
 
     /// Get-or-create the deduplicated 16-byte `{ const char* data;
     /// int32_t len; }` header cell for a string literal, plus its

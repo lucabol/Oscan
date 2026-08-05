@@ -47,6 +47,31 @@ Some output requests imply a backend:
 - `--libc`, `--extra-c`, and `--extra-cflags` do not by themselves select C,
   though they may require a C toolchain during the final build.
 
+## Debug information
+
+`--debuginfo none` is the release-compatible default. Opting into
+`--debuginfo line-tables` preserves Oscan source locations for source
+breakpoints, stepping, stack symbolization, and imported-file mappings. It does
+not change optimization. Oscan's native emitters do not describe local
+variables or source types at this level; a C toolchain may include additional
+records.
+
+| Backend | Line-table implementation |
+|---|---|
+| C | The generated translation unit uses `#line` directives that name the original `.osc` files. Clang uses `-gline-tables-only`, GCC uses `-g1`, and MSVC uses embedded `/Z7` records plus linker debug output (which can contain more than line tables). |
+| LLVM | Oscan emits `DICompileUnit`, `DIFile`, `DISubprogram`, and `DILocation` metadata directly in its LLVM IR with `LineTablesOnly` emission. |
+| Cranelift | Oscan interns Cranelift source locations, converts final machine-code ranges into DWARF line rows, and writes the required DWARF sections into the object. |
+
+Debug final links retain symbols and line sections instead of passing strip
+flags. Debug-mode C and native code also preserve frame pointers; unwind
+metadata is retained or generated where the backend supports it.
+
+On Windows, the C backend can produce a PDB through an MSVC-compatible
+toolchain. The LLVM and Cranelift object backends currently emit DWARF in COFF,
+not CodeView/PDB, so they require a debugger that understands DWARF-in-COFF.
+Native CodeView/PDB generation, optimized locals, and full type information are
+separate future tiers.
+
 ## Release packages
 
 Release contract schema 2 publishes one archive per platform/backend pair. It

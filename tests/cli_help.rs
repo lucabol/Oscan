@@ -132,6 +132,8 @@ fn long_help_flag_prints_usage_and_succeeds() {
     let stdout = help_output();
     assert!(stdout.contains("usage: oscan"));
     assert!(stdout.contains("--extra-obj"));
+    assert!(stdout.contains("--debuginfo <level>"));
+    assert!(stdout.contains("none or line-tables (default: none)"));
     if cfg!(feature = "backend-c") {
         assert!(stdout.contains("--target <arch>"));
     }
@@ -588,6 +590,104 @@ fn implicit_emit_c_matches_explicit_c_source_output() {
         String::from_utf8_lossy(&explicit_c_output.stderr)
     );
     assert_eq!(default_output.stdout, explicit_c_output.stdout);
+}
+
+#[cfg(feature = "backend-c")]
+#[test]
+fn c_line_tables_map_root_and_imported_sources_without_changing_the_default() {
+    let dir = std::env::temp_dir().join(format!("oscan-c-debuginfo-{}", process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("create source directory");
+    let imported_path = dir.join("lib.osc");
+    let root_path = dir.join("main.osc");
+    fs::write(
+        &imported_path,
+        "fn! greet() {\n    println(\"from import\");\n}\n",
+    )
+    .expect("write imported source");
+    fs::write(
+        &root_path,
+        "use \"lib.osc\"\nfn! main() {\n    greet();\n}\n",
+    )
+    .expect("write root source");
+
+    let default = oscan_command()
+        .arg(&root_path)
+        .args(["--backend", "c", "--emit-c"])
+        .output()
+        .expect("emit default C");
+    let explicit_none = oscan_command()
+        .arg(&root_path)
+        .args(["--backend", "c", "--debuginfo", "none", "--emit-c"])
+        .output()
+        .expect("emit explicit no-debug C");
+    let debug = oscan_command()
+        .arg(&root_path)
+        .args(["--backend", "c", "--debuginfo", "line-tables", "--emit-c"])
+        .output()
+        .expect("emit debug C");
+    assert!(
+        default.status.success(),
+        "{}",
+        String::from_utf8_lossy(&default.stderr)
+    );
+    assert!(
+        debug.status.success(),
+        "{}",
+        String::from_utf8_lossy(&debug.stderr)
+    );
+    assert!(
+        explicit_none.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit_none.stderr)
+    );
+    assert_eq!(
+        default.stdout, explicit_none.stdout,
+        "the explicit default must not change generated C"
+    );
+
+    let default_c = String::from_utf8(default.stdout).expect("default C is UTF-8");
+    let debug_c = String::from_utf8(debug.stdout).expect("debug C is UTF-8");
+    assert!(!default_c.contains("#line "), "{default_c}");
+    assert!(
+        debug_c.contains("#line 1 \"<oscan-generated>\""),
+        "compiler-generated C must not inherit the previous Oscan location\n{debug_c}"
+    );
+    for (path, line) in [
+        (&imported_path, 1),
+        (&imported_path, 2),
+        (&root_path, 2),
+        (&root_path, 3),
+    ] {
+        let path = path
+            .canonicalize()
+            .expect("canonical source")
+            .to_string_lossy()
+            .replace('\\', "/");
+        let path = path.strip_prefix("//?/").unwrap_or(&path);
+        let marker = format!("#line {line} \"{path}\"");
+        assert!(debug_c.contains(&marker), "missing {marker:?}\n{debug_c}");
+    }
+    assert!(
+        !debug_c.contains("program.c"),
+        "source mappings must never point at the temporary C file\n{debug_c}"
+    );
+    fs::remove_dir_all(&dir).expect("remove source directory");
+}
+
+#[test]
+fn rejects_unknown_debug_info_level() {
+    let output = oscan_command()
+        .args(["--debuginfo", "full"])
+        .output()
+        .expect("run oscan");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("unknown debug-info level 'full' (supported: none, line-tables)"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[cfg(any(

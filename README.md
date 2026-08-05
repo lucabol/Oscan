@@ -185,11 +185,21 @@ small `wc`-style command-line program step by step.
 | `oscan app.osc --backend cranelift` | Select Cranelift explicitly |
 | `oscan app.osc --opt-level speed` | Favor generated-code speed over the default size profile |
 | `oscan app.osc --backend c` | Select the C backend explicitly |
+| `oscan app.osc --debuginfo line-tables` | Keep Oscan source locations for debugging |
 | `oscan --help` | Show every option |
 
 A release package contains one backend. If you request another one, Oscan tells
 you which package to install. `--opt-level size|speed` applies to LLVM and
 Cranelift generated code; the default is `size`.
+
+Debug information is opt-in: `--debuginfo none` is the default, while
+`--debuginfo line-tables` enables source breakpoints, stepping, stack
+symbolization, and imported-file locations without changing the selected
+optimization level. Oscan does not generate backend-independent local-variable
+or type descriptions at this level, although a C toolchain may include
+additional records. See
+[compiler technical details](docs/technical-details.md#debug-information) for
+backend and debugger-format notes.
 
 ## Examples
 

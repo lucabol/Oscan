@@ -12,8 +12,8 @@ use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
-    types, AbiParam, Function, InstBuilder, MemFlagsData, Signature, StackSlotData, StackSlotKind,
-    UserFuncName, Value,
+    types, AbiParam, Function, InstBuilder, MemFlagsData, Signature, SourceLoc, StackSlotData,
+    StackSlotKind, UserFuncName, Value,
 };
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
@@ -25,6 +25,7 @@ use super::lir::{
 };
 use super::target::{self, NativeTarget};
 use super::OptimizationProfile;
+use crate::debuginfo::{DebugInfo, SourceLocation, SourceMap};
 
 /// The flags used for every plain scalar/pointer load and store this
 /// backend emits. Not `trusted()`: Oscan values can indeed be read at
@@ -88,6 +89,7 @@ fn float_cc(cc: FloatCmp) -> FloatCC {
 /// can never be stored alongside the module it is built into).
 struct ModuleState {
     module: Option<ObjectModule>,
+    debug: Option<super::cranelift_debug::CraneliftDebug>,
     /// Dense `LFunc` -> Cranelift id / return type, plus a symbol cache
     /// so repeat declarations share one handle.
     func_ids: Vec<FuncId>,
@@ -217,17 +219,26 @@ pub struct CraneliftLir {
 }
 
 impl CraneliftLir {
-    pub fn new(target: NativeTarget, optimization: OptimizationProfile) -> Result<Self, String> {
-        let isa = target::build_isa(target, optimization)?;
-        let builder = ObjectBuilder::new(
+    pub fn new(
+        target: NativeTarget,
+        optimization: OptimizationProfile,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+    ) -> Result<Self, String> {
+        let isa = target::build_isa(target, optimization, debug_info)?;
+        let mut builder = ObjectBuilder::new(
             isa,
             "oscan_program",
             cranelift_module::default_libcall_names(),
         )
         .map_err(|e| format!("internal error configuring object writer: {e}"))?;
+        builder.unwind_info(debug_info.is_enabled());
         Ok(CraneliftLir {
             state: ModuleState {
                 module: Some(ObjectModule::new(builder)),
+                debug: debug_info
+                    .is_enabled()
+                    .then(|| super::cranelift_debug::CraneliftDebug::new(source_map)),
                 func_ids: Vec::new(),
                 func_rets: Vec::new(),
                 func_handles: HashMap::new(),
@@ -250,6 +261,19 @@ impl LirModule for CraneliftLir {
         self.state.declare_function(symbol, sig, linkage)
     }
 
+    fn set_function_source(
+        &mut self,
+        func: LFunc,
+        source_name: &str,
+        linkage_name: &str,
+        location: SourceLocation,
+    ) {
+        let func_id = self.state.func_ids[func.index()];
+        if let Some(debug) = &mut self.state.debug {
+            debug.set_function_source(func_id, source_name, linkage_name, location);
+        }
+    }
+
     fn define_function(
         &mut self,
         func: LFunc,
@@ -260,6 +284,9 @@ impl LirModule for CraneliftLir {
         let cl_sig = cl_signature(self.state.module_ref(), sig);
         let mut function =
             Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), cl_sig);
+        if self.state.debug.is_some() {
+            function.params.ensure_base_srcloc(SourceLoc::new(0));
+        }
         let mut fb_ctx = FunctionBuilderContext::new();
 
         {
@@ -299,6 +326,11 @@ impl LirModule for CraneliftLir {
             .module()
             .define_function(func_id, &mut ctx_obj)
             .map_err(|e| LirError::Backend(format!("{e}")))?;
+        if let Some(debug) = &mut self.state.debug {
+            debug
+                .capture_function(func_id, &ctx_obj)
+                .map_err(LirError::Backend)?;
+        }
         Ok(())
     }
 
@@ -308,7 +340,10 @@ impl LirModule for CraneliftLir {
             .module
             .take()
             .ok_or_else(|| "internal error: Cranelift module already finished".to_string())?;
-        let product = module.finish();
+        let mut product = module.finish();
+        if let Some(debug) = self.state.debug.take() {
+            debug.write(&mut product)?;
+        }
         let bytes = product
             .emit()
             .map_err(|e| format!("internal error emitting object file: {e}"))?;
@@ -359,6 +394,15 @@ impl CraneliftBuilder<'_> {
 }
 
 impl LirBuilder for CraneliftBuilder<'_> {
+    fn set_source_location(&mut self, location: Option<SourceLocation>) {
+        let source_loc = self
+            .state
+            .debug
+            .as_mut()
+            .map_or_else(SourceLoc::default, |debug| debug.source_loc(location));
+        self.builder.set_srcloc(source_loc);
+    }
+
     fn declare_function(
         &mut self,
         symbol: &str,
@@ -701,6 +745,210 @@ impl LirBuilder for CraneliftBuilder<'_> {
             None => {
                 self.builder.ins().return_(&[]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use gimli::read::AttributeValue;
+    use gimli::{DebugLine, DebugLineOffset, LittleEndian};
+    use object::{Object, ObjectSection};
+
+    use super::*;
+    use crate::debuginfo::SourceMapBuilder;
+
+    fn compile_test_object(debug_info: DebugInfo) -> (Vec<u8>, PathBuf, PathBuf) {
+        let root_path = PathBuf::from("project").join("root.osc");
+        let imported_path = PathBuf::from("project").join("lib").join("math.osc");
+        let mut source_map = SourceMapBuilder::default();
+        let root = source_map.intern_file(root_path.clone());
+        let imported = source_map.intern_file(imported_path.clone());
+        let source_map = source_map.finish(Vec::new());
+        let mut lir = CraneliftLir::new(
+            NativeTarget::LinuxX64,
+            OptimizationProfile::Size,
+            debug_info,
+            &source_map,
+        )
+        .unwrap_or_else(|error| panic!("create Cranelift module: {error}"));
+
+        for (symbol, source_name, file, declaration_line, body_line, value) in [
+            ("root_fn", "root_fn", root, 3, 4, 1),
+            ("imported_fn", "imported_fn", imported, 12, 13, 2),
+        ] {
+            let sig = LSig::new(Vec::new(), Some(LType::I32));
+            let func = lir
+                .declare_function(symbol, &sig, LLinkage::Export)
+                .unwrap_or_else(|error| panic!("declare {symbol}: {error}"));
+            lir.set_function_source(
+                func,
+                source_name,
+                symbol,
+                SourceLocation {
+                    file,
+                    line: declaration_line,
+                    column: 1,
+                },
+            );
+            lir.define_function(func, &sig, &mut |builder, _params| {
+                builder.set_source_location(Some(SourceLocation {
+                    file,
+                    line: body_line,
+                    column: 5,
+                }));
+                let result = builder.iconst(LType::I32, value);
+                builder.ret(Some(result));
+                Ok(())
+            })
+            .unwrap_or_else(|_| panic!("define {symbol}"));
+        }
+
+        let artifact = lir
+            .finish()
+            .unwrap_or_else(|error| panic!("finish Cranelift module: {error}"));
+        let LirArtifact::Object(bytes) = artifact else {
+            panic!("Cranelift must emit an object")
+        };
+        (bytes, root_path, imported_path)
+    }
+
+    fn debug_source_rows(bytes: &[u8]) -> Vec<(String, u64)> {
+        let object = object::File::parse(bytes).expect("parse object");
+        let line_data = object
+            .section_by_name(".debug_line")
+            .expect("debug line section")
+            .data()
+            .expect("debug line data");
+        let program = DebugLine::new(line_data, LittleEndian)
+            .program(DebugLineOffset(0), 8, None, None)
+            .expect("parse line program");
+        let mut rows = program.rows();
+        let mut source_rows = Vec::new();
+        while let Some((header, row)) = rows.next_row().expect("decode line row") {
+            if row.end_sequence() {
+                continue;
+            }
+            let file = row.file(header).expect("line row file");
+            let AttributeValue::String(path) = file.path_name() else {
+                panic!("DWARF v4 file path must be an inline string")
+            };
+            let path = path.to_string_lossy().into_owned();
+            let line = row.line().expect("line number").get();
+            source_rows.push((path, line));
+        }
+        source_rows
+    }
+
+    #[test]
+    fn default_object_has_no_debug_or_unwind_sections() {
+        let (bytes, _, _) = compile_test_object(DebugInfo::None);
+        let object = object::File::parse(bytes.as_slice()).expect("parse object");
+        let sections: Vec<_> = object
+            .sections()
+            .filter_map(|section| section.name().ok())
+            .collect();
+        assert!(!sections.iter().any(|name| name.starts_with(".debug_")));
+        assert!(!sections.contains(&".eh_frame"));
+    }
+
+    #[test]
+    fn line_tables_emit_parseable_multi_file_dwarf_and_unwind_info() {
+        let (bytes, root_path, imported_path) = compile_test_object(DebugInfo::LineTables);
+        let object = object::File::parse(bytes.as_slice()).expect("parse object");
+        for section in [
+            ".debug_abbrev",
+            ".debug_info",
+            ".debug_line",
+            ".debug_str",
+            ".eh_frame",
+        ] {
+            assert!(
+                object.section_by_name(section).is_some(),
+                "missing {section}"
+            );
+        }
+
+        let source_rows = debug_source_rows(&bytes);
+
+        for (path, line) in [(root_path, 4), (imported_path, 13)] {
+            let expected = path.to_string_lossy().replace('\\', "/");
+            assert!(
+                source_rows.iter().any(
+                    |(actual, actual_line)| actual.ends_with(&expected) && *actual_line == line
+                ),
+                "missing {expected}:{line} in {source_rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_locations_can_restore_an_earlier_source_id() {
+        let mut source_map = SourceMapBuilder::default();
+        let file = source_map.intern_file(PathBuf::from("project").join("nested.osc"));
+        let source_map = source_map.finish(Vec::new());
+        let mut lir = CraneliftLir::new(
+            NativeTarget::LinuxX64,
+            OptimizationProfile::Size,
+            DebugInfo::LineTables,
+            &source_map,
+        )
+        .expect("create Cranelift module");
+
+        let call_sig = LSig::new(vec![LType::I32], Some(LType::I32));
+        let imported = lir
+            .declare_function("opaque_call", &call_sig, LLinkage::Import)
+            .expect("declare imported function");
+        let func = lir
+            .declare_function("nested", &call_sig, LLinkage::Export)
+            .expect("declare test function");
+        lir.set_function_source(
+            func,
+            "nested",
+            "nested",
+            SourceLocation {
+                file,
+                line: 3,
+                column: 1,
+            },
+        );
+        lir.define_function(func, &call_sig, &mut |builder, params| {
+            let parent = SourceLocation {
+                file,
+                line: 10,
+                column: 3,
+            };
+            builder.set_source_location(Some(parent));
+            builder.set_source_location(Some(SourceLocation {
+                file,
+                line: 20,
+                column: 7,
+            }));
+            let child = builder
+                .call(imported, &[params[0]])
+                .expect("imported function returns a value");
+            builder.set_source_location(Some(parent));
+            let restored = builder
+                .call(imported, &[child])
+                .expect("imported function returns a value");
+            builder.ret(Some(restored));
+            Ok(())
+        })
+        .unwrap_or_else(|_| panic!("define test function"));
+
+        let LirArtifact::Object(bytes) = lir.finish().expect("finish Cranelift module") else {
+            panic!("Cranelift must emit an object")
+        };
+        let source_rows = debug_source_rows(&bytes);
+        for line in [10, 20] {
+            assert!(
+                source_rows
+                    .iter()
+                    .any(|(_, actual_line)| *actual_line == line),
+                "missing restored source line {line} in {source_rows:?}"
+            );
         }
     }
 }

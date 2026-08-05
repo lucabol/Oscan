@@ -129,6 +129,8 @@ pub fn compile_object(
     runtime_mode: RuntimeMode,
     optimization: OptimizationProfile,
     emit_object: bool,
+    debug_info: crate::debuginfo::DebugInfo,
+    source_map: &crate::debuginfo::SourceMap,
 ) -> Result<LlvmCompileOutput, CompileError> {
     backend.require_target(target)?;
     let triple = target_triple(target);
@@ -141,8 +143,9 @@ pub fn compile_object(
         .data_layout_for(triple)
         .map_err(compile_error)?;
 
-    let mut emitter = emit::LlvmEmitter::new(triple, &data_layout, optimization);
-    let mut ctx = BackendContext::new(program, runtime_mode);
+    let mut emitter =
+        emit::LlvmEmitter::new(triple, &data_layout, optimization, debug_info, source_map);
+    let mut ctx = BackendContext::new(program, runtime_mode, debug_info, source_map);
     let generated_extern_shim_c = super::translate_program(&mut ctx, &mut emitter)?;
 
     let ir_text = match emitter.finish() {

@@ -43,12 +43,14 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::path::Path;
 
 use crate::backend::lir::{
     copy_chunks, FloatCmp, IntCmp, LBlock, LData, LFunc, LLinkage, LSig, LType, LValue, LVar,
     LirArtifact, LirBody, LirBuilder, LirError, LirModule,
 };
 use crate::backend::OptimizationProfile;
+use crate::debuginfo::{DebugInfo, SourceFileId, SourceLocation, SourceMap};
 
 /// LLVM type text for a LIR type in the *value* world. See module docs
 /// for why `Ptr` is `i64`.
@@ -125,6 +127,8 @@ struct FuncDecl {
     sig: LSig,
     linkage: LLinkage,
     defined: bool,
+    debug_subprogram: Option<u32>,
+    debug_fallback_location: Option<u32>,
 }
 
 enum DataDecl {
@@ -135,11 +139,184 @@ enum DataDecl {
     Import { symbol: String },
 }
 
+struct DebugMetadata {
+    source_filename: String,
+    files: HashMap<SourceFileId, u32>,
+    primary_file: u32,
+    compile_unit: u32,
+    subroutine_type: u32,
+    dwarf_version_flag: u32,
+    debug_info_version_flag: u32,
+    locations: HashMap<(u32, SourceLocation), u32>,
+    definitions: Vec<String>,
+}
+
+impl DebugMetadata {
+    fn new(source_map: &SourceMap) -> Self {
+        let source_filename = source_map
+            .primary_path()
+            .map(path_text)
+            .unwrap_or_else(|| "oscan_program".to_string());
+        let mut metadata = DebugMetadata {
+            source_filename,
+            files: HashMap::new(),
+            primary_file: 0,
+            compile_unit: 0,
+            subroutine_type: 0,
+            dwarf_version_flag: 0,
+            debug_info_version_flag: 0,
+            locations: HashMap::new(),
+            definitions: Vec::new(),
+        };
+
+        let compile_unit = metadata.reserve_definition();
+        metadata.compile_unit = compile_unit;
+
+        let mut primary_file = None;
+        for (source_file, path) in source_map.files() {
+            let (filename, directory) = split_debug_path(path);
+            let file = metadata.add_definition(format!(
+                "!DIFile(filename: \"{}\", directory: \"{}\")",
+                llvm_bytes(filename.as_bytes()),
+                llvm_bytes(directory.as_bytes())
+            ));
+            primary_file.get_or_insert(file);
+            metadata.files.insert(source_file, file);
+        }
+        let primary_file = match primary_file {
+            Some(file) => file,
+            None => metadata.add_definition(
+                "!DIFile(filename: \"oscan_program\", directory: \"\")".to_string(),
+            ),
+        };
+        metadata.primary_file = primary_file;
+
+        let empty_types = metadata.add_definition("!{}".to_string());
+        metadata.subroutine_type =
+            metadata.add_definition(format!("!DISubroutineType(types: !{empty_types})"));
+        metadata.dwarf_version_flag =
+            metadata.add_definition("!{i32 7, !\"Dwarf Version\", i32 4}".to_string());
+        metadata.debug_info_version_flag =
+            metadata.add_definition("!{i32 2, !\"Debug Info Version\", i32 3}".to_string());
+        metadata.set_definition(
+            compile_unit,
+            format!(
+                "distinct !DICompileUnit(language: DW_LANG_C, file: !{primary_file}, producer: \
+                 \"Oscan\", isOptimized: true, runtimeVersion: 0, emissionKind: LineTablesOnly)"
+            ),
+        );
+        metadata
+    }
+
+    fn reserve_definition(&mut self) -> u32 {
+        let id = self.definitions.len() as u32;
+        self.definitions.push(String::new());
+        id
+    }
+
+    fn set_definition(&mut self, id: u32, definition: String) {
+        self.definitions[id as usize] = definition;
+    }
+
+    fn add_definition(&mut self, definition: String) -> u32 {
+        let id = self.reserve_definition();
+        self.set_definition(id, definition);
+        id
+    }
+
+    fn add_subprogram(
+        &mut self,
+        source_name: &str,
+        linkage_name: &str,
+        location: SourceLocation,
+    ) -> Option<u32> {
+        let file = *self.files.get(&location.file)?;
+        Some(self.add_definition(format!(
+            "distinct !DISubprogram(name: \"{}\", linkageName: \"{}\", scope: !{file}, file: \
+             !{file}, line: {}, type: !{}, scopeLine: {}, spFlags: DISPFlagDefinition | \
+             DISPFlagOptimized, unit: !{})",
+            llvm_bytes(source_name.as_bytes()),
+            llvm_bytes(linkage_name.as_bytes()),
+            location.line,
+            self.subroutine_type,
+            location.line,
+            self.compile_unit
+        )))
+    }
+
+    fn add_artificial_subprogram(&mut self, linkage_name: &str) -> (u32, u32) {
+        let subprogram = self.add_definition(format!(
+            "distinct !DISubprogram(name: \"{}\", linkageName: \"{}\", scope: !{}, file: !{}, \
+             line: 0, type: !{}, scopeLine: 0, flags: DIFlagArtificial, spFlags: \
+             DISPFlagDefinition | DISPFlagOptimized, unit: !{})",
+            llvm_bytes(linkage_name.as_bytes()),
+            llvm_bytes(linkage_name.as_bytes()),
+            self.primary_file,
+            self.primary_file,
+            self.subroutine_type,
+            self.compile_unit
+        ));
+        let location = self.add_definition(format!(
+            "!DILocation(line: 0, column: 0, scope: !{subprogram})"
+        ));
+        (subprogram, location)
+    }
+
+    fn location(&mut self, scope: u32, location: SourceLocation) -> u32 {
+        if let Some(existing) = self.locations.get(&(scope, location)) {
+            return *existing;
+        }
+        let column = if location.column <= u32::from(u16::MAX) {
+            location.column
+        } else {
+            0
+        };
+        let id = self.add_definition(format!(
+            "!DILocation(line: {}, column: {}, scope: !{scope})",
+            location.line, column
+        ));
+        self.locations.insert((scope, location), id);
+        id
+    }
+
+    fn write_to(&self, out: &mut String) {
+        let _ = writeln!(out, "!llvm.dbg.cu = !{{!{}}}", self.compile_unit);
+        let _ = writeln!(
+            out,
+            "!llvm.module.flags = !{{!{}, !{}}}",
+            self.dwarf_version_flag, self.debug_info_version_flag
+        );
+        out.push('\n');
+        for (id, definition) in self.definitions.iter().enumerate() {
+            debug_assert!(!definition.is_empty());
+            let _ = writeln!(out, "!{id} = {definition}");
+        }
+    }
+}
+
+fn path_text(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn split_debug_path(path: &Path) -> (String, String) {
+    let filename = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path_text(path));
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(path_text)
+        .unwrap_or_default();
+    (filename, directory)
+}
+
 /// Module-level state, mirroring `lir_cranelift::ModuleState`.
 struct ModuleState {
     target_triple: String,
     data_layout: String,
     optimization: OptimizationProfile,
+    debug: Option<DebugMetadata>,
     funcs: Vec<FuncDecl>,
     func_handles: HashMap<String, LFunc>,
     datas: Vec<DataDecl>,
@@ -180,6 +357,8 @@ impl ModuleState {
             sig: sig.clone(),
             linkage,
             defined: false,
+            debug_subprogram: None,
+            debug_fallback_location: None,
         });
         self.func_handles.insert(symbol.to_string(), handle);
         Ok(handle)
@@ -226,12 +405,21 @@ pub struct LlvmEmitter {
 }
 
 impl LlvmEmitter {
-    pub fn new(target_triple: &str, data_layout: &str, optimization: OptimizationProfile) -> Self {
+    pub fn new(
+        target_triple: &str,
+        data_layout: &str,
+        optimization: OptimizationProfile,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+    ) -> Self {
         LlvmEmitter {
             state: ModuleState {
                 target_triple: target_triple.to_string(),
                 data_layout: data_layout.to_string(),
                 optimization,
+                debug: debug_info
+                    .is_enabled()
+                    .then(|| DebugMetadata::new(source_map)),
                 funcs: Vec::new(),
                 func_handles: HashMap::new(),
                 datas: Vec::new(),
@@ -254,6 +442,25 @@ impl LirModule for LlvmEmitter {
         self.state.declare_function(symbol, sig, linkage)
     }
 
+    fn set_function_source(
+        &mut self,
+        func: LFunc,
+        source_name: &str,
+        linkage_name: &str,
+        location: SourceLocation,
+    ) {
+        if self.state.funcs[func.index()].debug_subprogram.is_some() {
+            return;
+        }
+        let subprogram = self
+            .state
+            .debug
+            .as_mut()
+            .and_then(|debug| debug.add_subprogram(source_name, linkage_name, location));
+        self.state.funcs[func.index()].debug_subprogram = subprogram;
+        self.state.funcs[func.index()].debug_fallback_location = None;
+    }
+
     fn define_function(
         &mut self,
         func: LFunc,
@@ -267,6 +474,18 @@ impl LirModule for LlvmEmitter {
             )));
         }
         self.state.funcs[func.index()].defined = true;
+        if self.state.funcs[func.index()].debug_subprogram.is_none() {
+            let symbol = self.state.funcs[func.index()].symbol.clone();
+            let generated_debug = self
+                .state
+                .debug
+                .as_mut()
+                .map(|debug| debug.add_artificial_subprogram(&symbol));
+            if let Some((subprogram, fallback_location)) = generated_debug {
+                self.state.funcs[func.index()].debug_subprogram = Some(subprogram);
+                self.state.funcs[func.index()].debug_fallback_location = Some(fallback_location);
+            }
+        }
 
         let mut fb = LlvmFuncBuilder::new(&mut self.state, func, sig);
         let params = fb.entry_params.clone();
@@ -283,7 +502,16 @@ impl LirModule for LlvmEmitter {
     fn finish(&mut self) -> Result<LirArtifact, String> {
         let mut out = String::new();
         out.push_str("; ModuleID = 'oscan_program'\n");
-        out.push_str("source_filename = \"oscan_program\"\n");
+        match &self.state.debug {
+            Some(debug) => {
+                let _ = writeln!(
+                    out,
+                    "source_filename = \"{}\"",
+                    llvm_bytes(debug.source_filename.as_bytes())
+                );
+            }
+            None => out.push_str("source_filename = \"oscan_program\"\n"),
+        }
         let _ = writeln!(out, "target datalayout = \"{}\"", self.state.data_layout);
         let _ = writeln!(out, "target triple = \"{}\"", self.state.target_triple);
         out.push('\n');
@@ -359,6 +587,10 @@ impl LirModule for LlvmEmitter {
             out.push('\n');
         }
 
+        if let Some(debug) = &self.state.debug {
+            debug.write_to(&mut out);
+        }
+
         Ok(LirArtifact::LlvmIr(out))
     }
 }
@@ -400,6 +632,9 @@ pub struct LlvmFuncBuilder<'a> {
 
     next_temp: u32,
     next_label: u32,
+    debug_subprogram: Option<u32>,
+    debug_fallback_location: Option<u32>,
+    source_location: Option<SourceLocation>,
     /// A hard error discovered while emitting (e.g. a type mismatch that
     /// would produce invalid IR), surfaced by `finish`.
     error: Option<String>,
@@ -407,6 +642,8 @@ pub struct LlvmFuncBuilder<'a> {
 
 impl<'a> LlvmFuncBuilder<'a> {
     fn new(state: &'a mut ModuleState, func: LFunc, sig: &LSig) -> Self {
+        let debug_subprogram = state.funcs[func.index()].debug_subprogram;
+        let debug_fallback_location = state.funcs[func.index()].debug_fallback_location;
         let mut fb = LlvmFuncBuilder {
             state,
             func,
@@ -421,6 +658,9 @@ impl<'a> LlvmFuncBuilder<'a> {
             allocas: String::new(),
             next_temp: 0,
             next_label: 0,
+            debug_subprogram,
+            debug_fallback_location,
+            source_location: None,
             error: None,
         };
         fb.new_block();
@@ -496,24 +736,44 @@ impl<'a> LlvmFuncBuilder<'a> {
     /// `break`/`return` inside a nested expression), and LLVM rejects a
     /// block with instructions past its terminator.
     fn emit(&mut self, instruction: String) {
-        let block = &mut self.blocks[self.current];
-        if block.terminated {
+        if self.blocks[self.current].terminated {
             return;
         }
+        let debug_location = self.debug_location();
+        let block = &mut self.blocks[self.current];
         block.body.push_str("  ");
         block.body.push_str(&instruction);
+        if let Some(debug_location) = debug_location {
+            let _ = write!(block.body, ", !dbg !{debug_location}");
+        }
         block.body.push('\n');
     }
 
     fn emit_terminator(&mut self, instruction: String) {
-        let block = &mut self.blocks[self.current];
-        if block.terminated {
+        if self.blocks[self.current].terminated {
             return;
         }
+        let debug_location = self.debug_location();
+        let block = &mut self.blocks[self.current];
         block.body.push_str("  ");
         block.body.push_str(&instruction);
+        if let Some(debug_location) = debug_location {
+            let _ = write!(block.body, ", !dbg !{debug_location}");
+        }
         block.body.push('\n');
         block.terminated = true;
+    }
+
+    fn debug_location(&mut self) -> Option<u32> {
+        let scope = self.debug_subprogram?;
+        match self.source_location {
+            Some(location) => self
+                .state
+                .debug
+                .as_mut()
+                .map(|debug| debug.location(scope, location)),
+            None => self.debug_fallback_location,
+        }
     }
 
     fn label(&self, block: LBlock) -> String {
@@ -693,9 +953,27 @@ impl<'a> LlvmFuncBuilder<'a> {
         // `"no-builtins"` is Clang's `-ffreestanding` marker: LLVM must not
         // assume libc entry points exist. Nothing stronger (no `nofree`, no
         // `willreturn`, no argument attributes) is promised.
+        let line_tables = self.state.debug.is_some();
+        let unwind_table_attribute =
+            if line_tables && self.state.target_triple.contains("-windows-") {
+                // Win64 stack walkers consume the mandatory PE unwind records.
+                // LLVM emits them for nounwind functions only when requested.
+                " uwtable"
+            } else {
+                ""
+            };
+        let line_table_attributes = if line_tables {
+            " \"frame-pointer\"=\"all\""
+        } else {
+            ""
+        };
+        let debug_subprogram = decl
+            .debug_subprogram
+            .map(|id| format!(" !dbg !{id}"))
+            .unwrap_or_default();
         let _ = writeln!(
             out,
-            "define {linkage}{ret} {}({params}) {optimization_attrs} \"no-builtins\" {{",
+            "define {linkage}{ret} {}({params}) {optimization_attrs}{unwind_table_attribute} \"no-builtins\"{line_table_attributes}{debug_subprogram} {{",
             llvm_symbol(&decl.symbol)
         );
         for (i, block) in self.blocks.iter().enumerate() {
@@ -744,6 +1022,10 @@ impl LirBuilder for LlvmFuncBuilder<'_> {
         linkage: LLinkage,
     ) -> Result<LFunc, String> {
         self.state.declare_function(symbol, sig, linkage)
+    }
+
+    fn set_source_location(&mut self, location: Option<SourceLocation>) {
+        self.source_location = location;
     }
 
     fn string_literal_data(&mut self, value: &str) -> LData {
@@ -1198,15 +1480,45 @@ impl LirBuilder for LlvmFuncBuilder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::debuginfo::SourceMapBuilder;
+    use std::path::PathBuf;
 
-    fn ir_of_profile(
+    fn ir_of_with_debug(
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+        build: impl FnOnce(&mut LlvmEmitter),
+    ) -> String {
+        ir_of_for_target_with_debug("x86_64-unknown-linux-gnu", debug_info, source_map, build)
+    }
+
+    fn ir_of_for_target_with_debug(
+        target_triple: &str,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+        build: impl FnOnce(&mut LlvmEmitter),
+    ) -> String {
+        ir_of_for_target_profile_with_debug(
+            target_triple,
+            OptimizationProfile::Size,
+            debug_info,
+            source_map,
+            build,
+        )
+    }
+
+    fn ir_of_for_target_profile_with_debug(
+        target_triple: &str,
         optimization: OptimizationProfile,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
         build: impl FnOnce(&mut LlvmEmitter),
     ) -> String {
         let mut emitter = LlvmEmitter::new(
-            "x86_64-unknown-linux-gnu",
+            target_triple,
             "e-m:e-p:64:64-i64:64",
             optimization,
+            debug_info,
+            source_map,
         );
         build(&mut emitter);
         match emitter.finish().expect("finish") {
@@ -1215,8 +1527,60 @@ mod tests {
         }
     }
 
+    fn ir_of_profile(
+        optimization: OptimizationProfile,
+        build: impl FnOnce(&mut LlvmEmitter),
+    ) -> String {
+        let source_map = SourceMap::default();
+        ir_of_for_target_profile_with_debug(
+            "x86_64-unknown-linux-gnu",
+            optimization,
+            DebugInfo::None,
+            &source_map,
+            build,
+        )
+    }
+
     fn ir_of(build: impl FnOnce(&mut LlvmEmitter)) -> String {
         ir_of_profile(OptimizationProfile::Size, build)
+    }
+
+    #[test]
+    fn line_tables_request_frame_pointers_and_windows_unwind_tables() {
+        let source_map = SourceMap::default();
+        for (target, debug_info, frame_pointer, unwind_table) in [
+            (
+                "x86_64-unknown-linux-gnu",
+                DebugInfo::LineTables,
+                true,
+                false,
+            ),
+            ("x86_64-w64-windows-gnu", DebugInfo::LineTables, true, true),
+            ("x86_64-w64-windows-gnu", DebugInfo::None, false, false),
+        ] {
+            let text = ir_of_for_target_with_debug(target, debug_info, &source_map, |emitter| {
+                let sig = LSig::new(vec![], None);
+                let wrapper = emitter
+                    .declare_function("main", &sig, LLinkage::Export)
+                    .expect("declare wrapper");
+                emitter
+                    .define_function(wrapper, &sig, &mut |b, _params| {
+                        b.ret(None);
+                        Ok(())
+                    })
+                    .unwrap_or_else(|_| panic!("define wrapper failed"));
+            });
+            let header = text
+                .lines()
+                .find(|line| line.starts_with("define "))
+                .expect("function definition");
+            assert_eq!(
+                header.contains("\"frame-pointer\"=\"all\""),
+                frame_pointer,
+                "{header}"
+            );
+            assert_eq!(header.contains(" uwtable "), unwind_table, "{header}");
+        }
     }
 
     #[test]
@@ -1252,10 +1616,13 @@ mod tests {
 
     #[test]
     fn conflicting_signatures_for_one_symbol_are_rejected() {
+        let source_map = SourceMap::default();
         let mut emitter = LlvmEmitter::new(
             "x86_64-unknown-linux-gnu",
             "e-m:e-p:64:64",
             OptimizationProfile::Size,
+            DebugInfo::None,
+            &source_map,
         );
         let a = LSig::new(vec![LType::I32], Some(LType::I32));
         let b = LSig::new(vec![LType::I64], Some(LType::I32));
@@ -1265,6 +1632,409 @@ mod tests {
             .declare_function("f", &b, LLinkage::Import)
             .unwrap_err();
         assert!(err.contains("conflicting signatures"), "{err}");
+    }
+
+    #[test]
+    fn debug_info_none_preserves_the_metadata_free_module_shape() {
+        let mut source_map = SourceMapBuilder::default();
+        let file = source_map.intern_file(PathBuf::from("ignored").join("actual.osc"));
+        let source_map = source_map.finish(Vec::new());
+        let text = ir_of_with_debug(DebugInfo::None, &source_map, |emitter| {
+            let sig = LSig::new(vec![], Some(LType::I32));
+            let func = emitter
+                .declare_function("plain", &sig, LLinkage::Export)
+                .expect("declare");
+            emitter.set_function_source(
+                func,
+                "plain",
+                "plain",
+                SourceLocation {
+                    file,
+                    line: 3,
+                    column: 1,
+                },
+            );
+            emitter
+                .define_function(func, &sig, &mut |b, _params| {
+                    b.set_source_location(Some(SourceLocation {
+                        file,
+                        line: 4,
+                        column: 2,
+                    }));
+                    let one = b.iconst(LType::I32, 1);
+                    let two = b.iconst(LType::I32, 2);
+                    let sum = b.iadd(one, two);
+                    b.ret(Some(sum));
+                    Ok(())
+                })
+                .unwrap_or_else(|_| panic!("define failed"));
+        });
+
+        assert!(
+            text.contains("source_filename = \"oscan_program\""),
+            "{text}"
+        );
+        for marker in [
+            "!llvm.dbg.cu",
+            "!llvm.module.flags",
+            "!DI",
+            "!dbg",
+            "\"frame-pointer\"",
+        ] {
+            assert!(
+                !text.contains(marker),
+                "DebugInfo::None must not emit '{marker}':\n{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn line_tables_emit_multi_file_function_and_location_metadata() {
+        let root_path = PathBuf::from("project").join("src").join("root.osc");
+        let imported_path = PathBuf::from("project").join("libs").join("math\"core.osc");
+        let mut source_map = SourceMapBuilder::default();
+        let root = source_map.intern_file(root_path.clone());
+        let imported = source_map.intern_file(imported_path.clone());
+        let source_map = source_map.finish(Vec::new());
+
+        let text = ir_of_with_debug(DebugInfo::LineTables, &source_map, |emitter| {
+            let wrapper_sig = LSig::new(vec![], Some(LType::I32));
+            let wrapper = emitter
+                .declare_function("main", &wrapper_sig, LLinkage::Export)
+                .expect("declare wrapper");
+            emitter
+                .define_function(wrapper, &wrapper_sig, &mut |b, _params| {
+                    let one = b.iconst(LType::I32, 1);
+                    let two = b.iconst(LType::I32, 2);
+                    let sum = b.iadd(one, two);
+                    b.ret(Some(sum));
+                    Ok(())
+                })
+                .unwrap_or_else(|_| panic!("define wrapper failed"));
+
+            let foo_sig = LSig::new(vec![LType::Ptr], Some(LType::I32));
+            let foo = emitter
+                .declare_function("__osc_foo", &foo_sig, LLinkage::Export)
+                .expect("declare foo");
+            emitter.set_function_source(
+                foo,
+                "foo",
+                "__osc_foo",
+                SourceLocation {
+                    file: root,
+                    line: 3,
+                    column: 4,
+                },
+            );
+            emitter
+                .define_function(foo, &foo_sig, &mut |b, _params| {
+                    let slot = b.declare_var(LType::I32);
+                    b.set_source_location(Some(SourceLocation {
+                        file: root,
+                        line: 4,
+                        column: 2,
+                    }));
+                    let one = b.iconst(LType::I32, 1);
+                    let two = b.iconst(LType::I32, 2);
+                    let sum = b.iadd(one, two);
+                    b.def_var(slot, sum);
+                    b.set_source_location(Some(SourceLocation {
+                        file: root,
+                        line: 8,
+                        column: 7,
+                    }));
+                    let result = b.use_var(slot);
+                    b.ret(Some(result));
+                    Ok(())
+                })
+                .unwrap_or_else(|_| panic!("define foo failed"));
+
+            let bar_sig = LSig::new(vec![], Some(LType::I32));
+            let bar = emitter
+                .declare_function("__osc_bar", &bar_sig, LLinkage::Export)
+                .expect("declare bar");
+            emitter.set_function_source(
+                bar,
+                "bar",
+                "__osc_bar",
+                SourceLocation {
+                    file: imported,
+                    line: 12,
+                    column: 3,
+                },
+            );
+            emitter
+                .define_function(bar, &bar_sig, &mut |b, _params| {
+                    b.set_source_location(Some(SourceLocation {
+                        file: imported,
+                        line: 13,
+                        column: u32::MAX,
+                    }));
+                    let one = b.iconst(LType::I32, 1);
+                    let two = b.iconst(LType::I32, 2);
+                    let sum = b.iadd(one, two);
+                    b.ret(Some(sum));
+                    Ok(())
+                })
+                .unwrap_or_else(|_| panic!("define bar failed"));
+        });
+
+        let source_filename = llvm_bytes(root_path.to_string_lossy().as_bytes());
+        assert!(
+            text.contains(&format!("source_filename = \"{source_filename}\"")),
+            "{text}"
+        );
+        assert!(text.contains("!llvm.dbg.cu = !{!"), "{text}");
+        assert!(text.contains("!llvm.module.flags = !{!"), "{text}");
+        assert!(
+            text.contains("!{i32 7, !\"Dwarf Version\", i32 4}"),
+            "{text}"
+        );
+        assert!(
+            text.contains("!{i32 2, !\"Debug Info Version\", i32 3}"),
+            "{text}"
+        );
+        assert_eq!(text.matches("!DIFile(").count(), 2, "{text}");
+        assert!(text.contains("filename: \"root.osc\""), "{text}");
+        assert!(
+            text.contains("filename: \"math\\22core.osc\""),
+            "LLVM strings must escape quotes:\n{text}"
+        );
+        assert_eq!(
+            text.matches("distinct !DICompileUnit(").count(),
+            1,
+            "{text}"
+        );
+        assert!(text.contains("emissionKind: LineTablesOnly"), "{text}");
+        assert_eq!(text.matches("!DISubroutineType(").count(), 1, "{text}");
+        for symbol in ["main", "__osc_foo", "__osc_bar"] {
+            let marker = format!("@{symbol}(");
+            let header = text
+                .lines()
+                .find(|line| line.starts_with("define ") && line.contains(&marker))
+                .expect("function definition");
+            assert!(
+                header.contains("\"frame-pointer\"=\"all\""),
+                "line-table definition lacks a frame pointer attribute: {header}"
+            );
+        }
+
+        let root_file = text
+            .lines()
+            .find(|line| line.contains("!DIFile(filename: \"root.osc\""))
+            .expect("root DIFile");
+        let imported_file = text
+            .lines()
+            .find(|line| line.contains("!DIFile(filename: \"math\\22core.osc\""))
+            .expect("imported DIFile");
+        let root_directory = llvm_bytes(
+            root_path
+                .parent()
+                .expect("root directory")
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        let imported_directory = llvm_bytes(
+            imported_path
+                .parent()
+                .expect("imported directory")
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        assert!(
+            root_file.contains(&format!("directory: \"{root_directory}\"")),
+            "{root_file}"
+        );
+        assert!(
+            imported_file.contains(&format!("directory: \"{imported_directory}\"")),
+            "{imported_file}"
+        );
+        let root_file_id = root_file
+            .strip_prefix('!')
+            .and_then(|line| line.split_once(" = "))
+            .map(|(id, _)| id)
+            .expect("root metadata id");
+        let imported_file_id = imported_file
+            .strip_prefix('!')
+            .and_then(|line| line.split_once(" = "))
+            .map(|(id, _)| id)
+            .expect("imported metadata id");
+
+        let subprograms: Vec<&str> = text
+            .lines()
+            .filter(|line| line.contains("distinct !DISubprogram("))
+            .collect();
+        assert_eq!(subprograms.len(), 3, "{text}");
+        let wrapper_subprogram = subprograms
+            .iter()
+            .copied()
+            .find(|line| line.contains("linkageName: \"main\""))
+            .expect("wrapper subprogram");
+        let foo_subprogram = subprograms
+            .iter()
+            .copied()
+            .find(|line| line.contains("name: \"foo\""))
+            .expect("foo subprogram");
+        let bar_subprogram = subprograms
+            .iter()
+            .copied()
+            .find(|line| line.contains("name: \"bar\""))
+            .expect("bar subprogram");
+        assert!(
+            wrapper_subprogram.contains("line: 0")
+                && wrapper_subprogram.contains("flags: DIFlagArtificial"),
+            "{wrapper_subprogram}"
+        );
+        assert!(
+            foo_subprogram.contains(&format!(
+                "linkageName: \"__osc_foo\", scope: !{root_file_id}, file: !{root_file_id}, line: 3"
+            )),
+            "{foo_subprogram}"
+        );
+        assert!(
+            bar_subprogram.contains(&format!(
+                "linkageName: \"__osc_bar\", scope: !{imported_file_id}, file: !{imported_file_id}, line: 12"
+            )),
+            "{bar_subprogram}"
+        );
+        for subprogram in &subprograms {
+            assert!(
+                subprogram.contains("spFlags: DISPFlagDefinition | DISPFlagOptimized, unit: !"),
+                "{subprogram}"
+            );
+            for obsolete in ["isLocal:", "isDefinition:", "isOptimized:"] {
+                assert!(
+                    !subprogram.contains(obsolete),
+                    "obsolete DISubprogram field '{obsolete}': {subprogram}"
+                );
+            }
+        }
+        let foo_type = foo_subprogram
+            .split("type: !")
+            .nth(1)
+            .and_then(|tail| tail.split(',').next())
+            .expect("foo type");
+        let bar_type = bar_subprogram
+            .split("type: !")
+            .nth(1)
+            .and_then(|tail| tail.split(',').next())
+            .expect("bar type");
+        assert_eq!(foo_type, bar_type, "subroutine type must be shared");
+
+        assert_eq!(text.matches("!DILocation(").count(), 4, "{text}");
+        assert!(
+            text.contains("!DILocation(line: 0, column: 0, scope: !"),
+            "{text}"
+        );
+        assert!(
+            text.contains("!DILocation(line: 13, column: 0, scope: !"),
+            "{text}"
+        );
+        assert!(!text.contains("column: 4294967295"), "{text}");
+        let foo_subprogram_id = foo_subprogram
+            .strip_prefix('!')
+            .and_then(|line| line.split_once(" = "))
+            .map(|(id, _)| id)
+            .expect("foo subprogram id");
+        let bar_subprogram_id = bar_subprogram
+            .strip_prefix('!')
+            .and_then(|line| line.split_once(" = "))
+            .map(|(id, _)| id)
+            .expect("bar subprogram id");
+        assert_eq!(
+            text.lines()
+                .filter(|line| {
+                    line.contains("!DILocation(")
+                        && line.contains(&format!("scope: !{foo_subprogram_id})"))
+                })
+                .count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(
+            text.lines()
+                .filter(|line| {
+                    line.contains("!DILocation(")
+                        && line.contains(&format!("scope: !{bar_subprogram_id})"))
+                })
+                .count(),
+            1,
+            "{text}"
+        );
+
+        let function_text = |symbol: &str| {
+            let marker = format!("@{symbol}(");
+            let start = text
+                .lines()
+                .position(|line| line.starts_with("define ") && line.contains(&marker))
+                .expect("function definition");
+            text.lines()
+                .skip(start)
+                .take_while(|line| *line != "}")
+                .chain(std::iter::once("}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let wrapper = function_text("main");
+        assert!(
+            wrapper
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .contains("!dbg !"),
+            "{wrapper}"
+        );
+        for instruction in wrapper.lines().filter(|line| line.starts_with("  ")) {
+            assert!(
+                instruction.contains("!dbg !"),
+                "generated wrapper instruction lacks its artificial location: {instruction}"
+            );
+        }
+        let foo = function_text("__osc_foo");
+        let foo_header = foo.lines().next().expect("foo header");
+        assert!(foo_header.contains("!dbg !"), "{foo_header}");
+        let alloca = foo
+            .lines()
+            .find(|line| line.contains(" = alloca "))
+            .expect("hoisted alloca");
+        let parameter_setup = foo
+            .lines()
+            .find(|line| line.contains("ptrtoint ptr %arg0"))
+            .expect("parameter setup");
+        assert!(!alloca.contains("!dbg"), "{alloca}");
+        assert!(!parameter_setup.contains("!dbg"), "{parameter_setup}");
+        let add = foo
+            .lines()
+            .find(|line| line.contains(" = add i32 "))
+            .expect("add instruction");
+        let store = foo
+            .lines()
+            .find(|line| line.contains("store i32 "))
+            .expect("store instruction");
+        let add_location = add.split("!dbg !").nth(1).expect("add location");
+        let store_location = store.split("!dbg !").nth(1).expect("store location");
+        assert_eq!(
+            add_location, store_location,
+            "equal source locations must share one DILocation"
+        );
+        for instruction in foo.lines().filter(|line| {
+            line.starts_with("  ")
+                && !line.contains(" = alloca ")
+                && !line.contains("ptrtoint ptr %arg")
+        }) {
+            assert!(
+                instruction.contains("!dbg !"),
+                "normal user instruction lacks debug location: {instruction}"
+            );
+        }
+        let bar = function_text("__osc_bar");
+        assert!(bar.lines().next().unwrap_or_default().contains("!dbg !"));
+        for instruction in bar.lines().filter(|line| line.starts_with("  ")) {
+            assert!(
+                instruction.contains("!dbg !"),
+                "bar instruction lacks debug location: {instruction}"
+            );
+        }
     }
 
     #[test]

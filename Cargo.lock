@@ -429,6 +429,7 @@ dependencies = [
  "cranelift-frontend",
  "cranelift-module",
  "cranelift-object",
+ "gimli",
  "object",
  "serde_json",
  "sha2",

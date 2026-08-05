@@ -1060,6 +1060,13 @@ C is selected implicitly by `--emit-c`, `-o file.c`, and
 `--target riscv64|wasi`. LLVM IR output selects LLVM. For compatibility, an
 explicit `--native-target` without `--backend` selects Cranelift.
 
+All three backends accept `--debuginfo line-tables`. This keeps Oscan
+source-file and line mappings (including imported files), disables final
+stripping, and preserves stack-walking support without changing the backend's
+optimization level. The default is `--debuginfo none`. Line-table mode does not
+ask Oscan's native emitters to describe local variables or source types; a C
+toolchain may include additional records.
+
 LLVM provider lookup order:
 
 1. `OSCAN_LLVM_LIB` — absolute shared-library path
