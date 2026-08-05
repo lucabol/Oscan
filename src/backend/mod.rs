@@ -107,6 +107,46 @@ use lir::LirArtifact;
 use lir::{LLinkage, LSig, LType, LirBuilder, LirError, LirModule};
 pub use target::NativeTarget;
 
+/// Generated-program optimization policy for the object backends.
+///
+/// This deliberately does not control runtime-archive selection: packaged
+/// runtimes keep their existing optimization until a separately benchmarked
+/// speed archive is added.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptimizationProfile {
+    Size,
+    Speed,
+}
+
+impl OptimizationProfile {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "size" => Some(Self::Size),
+            "speed" => Some(Self::Speed),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Size => "size",
+            Self::Speed => "speed",
+        }
+    }
+}
+
+impl Default for OptimizationProfile {
+    fn default() -> Self {
+        Self::Size
+    }
+}
+
+impl std::fmt::Display for OptimizationProfile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Runtime and final-link environment for a native-backend artifact.
 ///
 /// This is deliberately an enum rather than a `use_libc`/`freestanding`
@@ -149,10 +189,11 @@ pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
     runtime_mode: RuntimeMode,
+    optimization: OptimizationProfile,
     debug_info: crate::debuginfo::DebugInfo,
     source_map: &crate::debuginfo::SourceMap,
 ) -> Result<NativeCompileOutput, CompileError> {
-    let mut lir = lir_cranelift::CraneliftLir::new(target, debug_info, source_map)
+    let mut lir = lir_cranelift::CraneliftLir::new(target, optimization, debug_info, source_map)
         .map_err(|e| CompileError::new(crate::token::Span::new(1, 1), e))?;
     let mut ctx = BackendContext::new(program, runtime_mode, debug_info, source_map);
     let generated_extern_shim_c = translate_program(&mut ctx, &mut lir)?;

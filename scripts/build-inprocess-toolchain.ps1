@@ -25,6 +25,7 @@ $dependencyShims = Join-Path $repoRoot 'toolchain\inprocess\llvm-dependency-shim
 foreach ($path in @(
     (Join-Path $sdk 'bin\llvm-config.exe'),
     (Join-Path $source 'lld\CMakeLists.txt'),
+    (Join-Path $source 'LICENSE.TXT'),
     $patch,
     $bridgeSource,
     $dependencyShims
@@ -39,17 +40,38 @@ if ($version -ne '22.1.0') {
     throw "This patch is pinned to LLVM 22.1.0, but the SDK reports $version"
 }
 
-Push-Location $source
+$patchWorkingDirectory = $source
+$patchDirectory = $null
+$sourceGitRoot = (& git -C $source rev-parse --show-toplevel 2>$null)
+if ($LASTEXITCODE -eq 0 -and $sourceGitRoot) {
+    $sourceGitRoot = ([string]$sourceGitRoot).Trim()
+    $relativeSource = [IO.Path]::GetRelativePath($sourceGitRoot, $source)
+    if (-not $relativeSource.StartsWith("..$([IO.Path]::DirectorySeparatorChar)")) {
+        $patchWorkingDirectory = $sourceGitRoot
+        if ($relativeSource -ne '.') {
+            # git apply otherwise ignores every patch path when the extracted
+            # source happens to be nested under Oscan's own working tree.
+            $patchDirectory = $relativeSource.Replace('\', '/')
+        }
+    }
+}
+
+$basePatchArgs = @('apply', '--ignore-space-change')
+if ($patchDirectory) {
+    $basePatchArgs += "--directory=$patchDirectory"
+}
+
+Push-Location $patchWorkingDirectory
 try {
-    & git apply --ignore-space-change --check $patch 2>$null
+    & git @($basePatchArgs + @('--check', $patch)) 2>$null
     if ($LASTEXITCODE -eq 0) {
-        & git apply --ignore-space-change --whitespace=fix $patch
+        & git @($basePatchArgs + @('--whitespace=fix', $patch))
         if ($LASTEXITCODE -ne 0) {
             throw 'Failed to apply the Oscan in-memory LLD patch'
         }
     }
     else {
-        & git apply --ignore-space-change --reverse --check $patch 2>$null
+        & git @($basePatchArgs + @('--reverse', '--check', $patch)) 2>$null
         if ($LASTEXITCODE -ne 0) {
             throw 'LLVM source neither accepts the patch nor contains it already'
         }
@@ -122,6 +144,9 @@ if (Test-Path $output) {
     Remove-Item -Recurse -Force $output
 }
 New-Item -ItemType Directory -Force -Path $outputLib | Out-Null
+$outputLicenses = Join-Path $output 'LICENSES'
+New-Item -ItemType Directory -Force -Path $outputLicenses | Out-Null
+Copy-Item (Join-Path $source 'LICENSE.TXT') (Join-Path $outputLicenses 'LLVM-LICENSE.txt')
 foreach ($name in @('lldCommon.lib', 'lldCOFF.lib', 'lldMinGW.lib')) {
     $match = Get-ChildItem $build -Recurse -Filter $name | Select-Object -First 1
     if (-not $match) {

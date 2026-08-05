@@ -1044,6 +1044,18 @@ This path does not generate C and invokes no Clang, GCC, `llvm-as`, `opt`, or
 [the LLVM backend design](design/llvm-backend.md) for the exact architecture
 and no-toolchain boundary.
 
+LLVM and Cranelift accept `--opt-level size|speed`. `size` is the default and
+maps to LLVM's `Oz` pipeline or Cranelift's `speed_and_size` mode. `speed` maps
+to LLVM's `O3` pipeline or Cranelift's `speed` mode. The setting currently
+controls generated Oscan code; packaged runtime archives retain their existing
+size-oriented (freestanding) or `O2` (hosted) builds. Explicit use with the C
+backend is rejected rather than silently ignored.
+
+Ordinary Oscan functions use module-local object linkage. Calls and function
+pointers inside the program remain valid, but LLVM and the final linker may
+discard unreachable functions. The synthesized process `main` and required
+runtime/extern symbols keep external linkage.
+
 C is selected implicitly by `--emit-c`, `-o file.c`, and
 `--target riscv64|wasi`. LLVM IR output selects LLVM. For compatibility, an
 explicit `--native-target` without `--backend` selects Cranelift.

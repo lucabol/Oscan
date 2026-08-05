@@ -1,3 +1,4 @@
+[CmdletBinding(DefaultParameterSetName = "Archive")]
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("windows-x86_64", "linux-x86_64", "macos-x86_64")]
@@ -10,11 +11,16 @@ param(
     [ValidateSet("llvm", "cranelift", "c")]
     [string]$Backend,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = "Archive")]
     [string]$ArchivePath,
 
-    # The release version this archive claims to be. Checked against the
-    # archive name, the package metadata, and the compiler's own --version.
+    # An already installed/extracted package, used to smoke the payload that
+    # was actually recovered from the MSI.
+    [Parameter(Mandatory = $true, ParameterSetName = "Installed")]
+    [string]$InstalledPackageDir,
+
+    # The release version this package claims to be. Checked against the
+    # archive name (when present), package metadata, and compiler --version.
     [string]$Version,
 
     [string]$ScratchDir,
@@ -41,10 +47,17 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
-if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
-    throw "-ArchivePath must name a packaged release archive file, not '$ArchivePath'."
+if ($PSCmdlet.ParameterSetName -eq "Archive") {
+    if (-not (Test-Path -LiteralPath $ArchivePath -PathType Leaf)) {
+        throw "-ArchivePath must name a packaged release archive file, not '$ArchivePath'."
+    }
+    $ArchivePath = (Resolve-Path -LiteralPath $ArchivePath).Path
+} else {
+    if (-not (Test-Path -LiteralPath $InstalledPackageDir -PathType Container)) {
+        throw "-InstalledPackageDir must name an installed package directory, not '$InstalledPackageDir'."
+    }
+    $InstalledPackageDir = (Resolve-Path -LiteralPath $InstalledPackageDir).Path
 }
-$ArchivePath = (Resolve-Path -LiteralPath $ArchivePath).Path
 if (-not $ContractPath) {
     $ContractPath = Join-Path $RepoRoot "packaging/toolchains/release-contract.json"
 }
@@ -66,10 +79,12 @@ if (-not $targetSpec["backends"].ContainsKey($Backend)) {
 $variant = $targetSpec["backends"][$Backend]
 $backendKind = [string]$contract["backends"][$Backend]["kind"]
 $isObjectPackage = $backendKind -eq "object"
+$linkMode = [string]($variant["link_mode"] ?? "")
+$usesSidecar = $linkMode -eq "sidecar"
 $requiresHostCompiler = [bool]($variant["requires_host_compiler"] ?? $false)
 $binaryName = [string]$targetSpec["binary_name"]
-# Where an object package keeps its verified native-link assets, taken from
-# the contract rather than restated here.
+# Where a sidecar object package keeps its verified native-link assets, taken
+# from the contract rather than restated here.
 $sidecarSpec = $contract["components"]["direct_link_sidecar"]
 $sidecarDirName = ([string]$sidecarSpec["position"]).Split("/")[-1]
 $sidecarManifestName = [string]$sidecarSpec["manifest_name"]
@@ -79,7 +94,7 @@ $expectedArchiveSuffix = switch ([string]$targetSpec["archive_format"]) {
     "tar.xz" { ".tar.xz" }
     default { throw "Unsupported archive format '$($targetSpec["archive_format"])' for $Target." }
 }
-if (-not $ArchivePath.EndsWith($expectedArchiveSuffix)) {
+if ($ArchivePath -and -not $ArchivePath.EndsWith($expectedArchiveSuffix)) {
     throw "Archive '$ArchivePath' does not match the contract format '$expectedArchiveSuffix' for $Target."
 }
 
@@ -139,9 +154,9 @@ $ScratchDir = (Resolve-Path -LiteralPath $ScratchDir).Path
 # the native-asset cache, the runtime-archive directory, and the
 # runtime-archive builder opt-in. They are removed for *every* packaged
 # invocation below, so anything that works here works from the package
-# alone. In particular OSCAN_RUNTIME_ARCHIVE_DIR stays unset: an object
-# package must find its runtime archives at the fixed executable-relative
-# location it ships them in.
+# alone. In particular OSCAN_RUNTIME_ARCHIVE_DIR stays unset: a sidecar
+# package must use its fixed executable-relative archives, while a strict
+# package must use the archives compiled into its executable.
 $ScrubbedEnvironmentNames = @(
     "OSCAN_NO_TOOLCHAIN",
     "OSCAN_CC",
@@ -166,11 +181,11 @@ $ScrubbedEnvironmentNames = @(
 # host compiler fails loudly here instead of "working" because the runner
 # happens to have build-essential/Xcode CLT installed.
 #
-# Object packages additionally block the host *linkers*: their final link
-# runs the verified linker inside their own native-link sidecar, by absolute
-# path, so nothing on PATH may be needed. A C package drives its bundled
-# compiler, which finds its own sibling linker, so only compilers are
-# blocked there.
+# Object packages additionally block the host *linkers*: sidecar variants run
+# their verified packaged linker by absolute path and strict variants invoke
+# LLD in-process, so neither may need PATH. A C package drives its bundled
+# compiler, which finds its own sibling linker, so only compilers are blocked
+# there.
 function New-BlockedHostToolDir {
     param(
         [Parameter(Mandatory = $true)][string]$ScratchDir,
@@ -341,6 +356,88 @@ function Get-ComparablePath {
     return $normalized.TrimEnd([System.IO.Path]::DirectorySeparatorChar)
 }
 
+function Assert-PackagedInProcessLinking {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [Parameter(Mandatory = $true)][string]$What
+    )
+
+    $text = Get-LogText -LogPath $LogPath
+    if ($text -match "(?m)^\[verbose\] native-link assets:") {
+        throw "$What resolved extractable native-link assets; the strict package must feed its embedded inputs directly to in-process LLD:`n$text"
+    }
+    if ($text -match "Compiling with ") {
+        throw "$What invoked a C compiler instead of the strict in-process linker:`n$text"
+    }
+}
+
+function Find-Dumpbin {
+    $inPath = Get-Command dumpbin -ErrorAction SilentlyContinue
+    if ($inPath) {
+        return $inPath.Source
+    }
+
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        return $null
+    }
+    $vsPath = & $vswhere -latest -property installationPath 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $vsPath) {
+        return $null
+    }
+    $candidate = Get-ChildItem `
+        -Path (Join-Path $vsPath "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe") `
+        -File -ErrorAction SilentlyContinue |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if ($candidate) {
+        return $candidate.FullName
+    }
+    return $null
+}
+
+function Assert-StrictCompilerDependencies {
+    param([Parameter(Mandatory = $true)][string]$ExePath)
+
+    $dumpbin = Find-Dumpbin
+    if ($dumpbin) {
+        $raw = @(& $dumpbin /nologo /dependents $ExePath 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "dumpbin could not inspect strict packaged compiler dependencies:`n$($raw -join "`n")"
+        }
+        $dllNames = @(
+            $raw |
+                Where-Object { $_ -match '^\s+\S+\.dll\s*$' } |
+                ForEach-Object { $_.Trim() } |
+                Sort-Object -Unique
+        )
+    } else {
+        # PE import names are ASCII. Scanning every DLL reference is a
+        # conservative fallback: it can reject more than the import table, but
+        # it cannot overlook a forbidden imported runtime/provider DLL.
+        $ascii = [System.Text.Encoding]::ASCII.GetString(
+            [System.IO.File]::ReadAllBytes($ExePath)
+        )
+        $dllNames = @(
+            [regex]::Matches($ascii, '(?i)[A-Z0-9_+.-]+\.dll') |
+                ForEach-Object { $_.Value } |
+                Sort-Object -Unique
+        )
+    }
+    if ($dllNames.Count -eq 0) {
+        throw "No DLL dependencies could be read from strict packaged compiler $ExePath"
+    }
+
+    $forbidden = @(
+        $dllNames | Where-Object {
+            $_ -match '^(?i)(msvcr[^.]*|ucrtbase|vcruntime[^.]*|msvcp[^.]*|api-ms-win-crt-[^.]+|libLLVM[^.]*|LLVM-C|libclang-cpp[^.]*|liblld[^.]*|lld[^.]*|libc\+\+|libunwind|libwinpthread[^.]*|libgcc_s[^.]*|libstdc\+\+[^.]*)\.dll$'
+        }
+    )
+    if ($forbidden.Count -ne 0) {
+        throw "Strict packaged compiler has forbidden dynamic CRT/provider/linker dependencies: $($forbidden -join ', ')"
+    }
+}
+
 function Assert-PackagedSidecarAssets {
     <#
         An object package must resolve its linker and the rest of its
@@ -366,6 +463,7 @@ function Assert-PackagedSidecarAssets {
     if (-not $reported.Success) {
         throw "$What did not report which native-link assets it resolved:`n$text"
     }
+
     $source = $reported.Groups["source"].Value
     if ($source -ne "sidecar") {
         throw "$What resolved its native-link assets from '$source'; a packaged object build must use the verified sidecar beside its own executable:`n$text"
@@ -424,64 +522,67 @@ function Assert-Refused {
     }
 }
 
-# --- extract -----------------------------------------------------------------
+# --- extract/install ----------------------------------------------------------
 
-$ExtractDir = Join-Path $ScratchDir "extract"
-New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
-& tar -xf $ArchivePath -C $ExtractDir
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to extract $ArchivePath"
-}
-$bundleDirectories = @(Get-ChildItem -LiteralPath $ExtractDir -Directory)
-if ($bundleDirectories.Count -ne 1) {
-    throw "Expected exactly one extracted bundle directory under $ExtractDir, found $($bundleDirectories.Count)."
-}
-$BundleDir = $bundleDirectories[0].FullName
+if ($PSCmdlet.ParameterSetName -eq "Archive") {
+    $ExtractDir = Join-Path $ScratchDir "extract"
+    New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
+    & tar -xf $ArchivePath -C $ExtractDir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to extract $ArchivePath"
+    }
+    $bundleDirectories = @(Get-ChildItem -LiteralPath $ExtractDir -Directory)
+    if ($bundleDirectories.Count -ne 1) {
+        throw "Expected exactly one extracted bundle directory under $ExtractDir, found $($bundleDirectories.Count)."
+    }
+    $BundleDir = $bundleDirectories[0].FullName
 
-$layoutArgs = @(
-    $ReleaseTools, "verify-package-layout",
-    "--target", $Target,
-    "--backend", $Backend,
-    "--root", $BundleDir,
-    "--stage", "extracted",
-    "--archive", $ArchivePath,
-    "--contract", $ContractPath
-)
-if ($Version) {
-    $layoutArgs += @("--version", $Version)
-}
-& $Python @layoutArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "Extracted $Target/$Backend package does not match the release contract."
-}
+    $layoutArgs = @(
+        $ReleaseTools, "verify-package-layout",
+        "--target", $Target,
+        "--backend", $Backend,
+        "--root", $BundleDir,
+        "--stage", "extracted",
+        "--archive", $ArchivePath,
+        "--contract", $ContractPath
+    )
+    if ($Version) {
+        $layoutArgs += @("--version", $Version)
+    }
+    & $Python @layoutArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "Extracted $Target/$Backend package does not match the release contract."
+    }
 
-# --- install -----------------------------------------------------------------
-
-$InstallDir = Join-Path $ScratchDir "install"
-$BinDir = Join-Path $ScratchDir "bin"
-if ($platform -eq "windows") {
-    # install.ps1 is a PowerShell script with its own error handling; it
-    # throws on failure, and $LASTEXITCODE here belongs to the robocopy it
-    # ran internally (1 means "files copied"), so it must not be read.
-    & (Join-Path $BundleDir "install.ps1") -InstallDir $InstallDir -BinDir $BinDir -NoPathUpdate
-    # Compiles run the installed executable by absolute path. Inside a
-    # no-host-tool body PATH is the blocker directory alone, which leaves no
-    # command interpreter for a .cmd shim to be launched through — and a
-    # packaged compile must not need one. The shim is still exercised, by the
-    # --version check below, which runs with the ordinary PATH.
-    $OscanCommand = Join-Path $InstallDir $binaryName
-    $OscanShim = Join-Path $BinDir "oscan.cmd"
-    if (-not (Test-Path -LiteralPath $OscanShim -PathType Leaf)) {
-        throw "install.ps1 did not create the oscan.cmd shim in $BinDir"
+    $InstallDir = Join-Path $ScratchDir "install"
+    $BinDir = Join-Path $ScratchDir "bin"
+    if ($platform -eq "windows") {
+        # install.ps1 is a PowerShell script with its own error handling; it
+        # throws on failure, and $LASTEXITCODE here belongs to the robocopy it
+        # ran internally (1 means "files copied"), so it must not be read.
+        & (Join-Path $BundleDir "install.ps1") -InstallDir $InstallDir -BinDir $BinDir -NoPathUpdate
+        # Compiles run the installed executable by absolute path. Inside a
+        # no-host-tool body PATH is the blocker directory alone, which leaves
+        # no interpreter for a .cmd shim. The shim is still exercised by the
+        # --version check below with the ordinary PATH.
+        $OscanCommand = Join-Path $InstallDir $binaryName
+        $OscanShim = Join-Path $BinDir "oscan.cmd"
+        if (-not (Test-Path -LiteralPath $OscanShim -PathType Leaf)) {
+            throw "install.ps1 did not create the oscan.cmd shim in $BinDir"
+        }
+    } else {
+        & sh (Join-Path $BundleDir "install.sh") --source-dir $BundleDir --install-dir $InstallDir --bin-dir $BinDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "install.sh failed for $Target/$Backend"
+        }
+        # The bin-directory symlink, so every invocation also proves the
+        # compiler resolves its package through its real executable path.
+        $OscanCommand = Join-Path $BinDir "oscan"
+        $OscanShim = $OscanCommand
     }
 } else {
-    & sh (Join-Path $BundleDir "install.sh") --source-dir $BundleDir --install-dir $InstallDir --bin-dir $BinDir
-    if ($LASTEXITCODE -ne 0) {
-        throw "install.sh failed for $Target/$Backend"
-    }
-    # The bin-directory symlink, so every invocation also proves the compiler
-    # resolves its package through its real executable path.
-    $OscanCommand = Join-Path $BinDir "oscan"
+    $InstallDir = $InstalledPackageDir
+    $OscanCommand = Join-Path $InstallDir $binaryName
     $OscanShim = $OscanCommand
 }
 if (-not (Test-Path -LiteralPath $OscanCommand)) {
@@ -502,6 +603,9 @@ if ($Version) {
 & $Python @installedLayoutArgs
 if ($LASTEXITCODE -ne 0) {
     throw "Installed $Target/$Backend package does not match the release contract."
+}
+if ($platform -eq "windows" -and $linkMode -eq "inprocess") {
+    Assert-StrictCompilerDependencies -ExePath $OscanCommand
 }
 
 # --- identity ----------------------------------------------------------------
@@ -565,16 +669,23 @@ if ($isObjectPackage) {
     }
     Assert-LogMatches -LogPath $defaultLog -Pattern "(?m)^\[verbose\] $Backend backend target:" `
         -What "Packaged $Backend default compile"
-    # The package's own verified sidecar, at its own absolute location — not
-    # assets embedded in the binary, not an extracted cache, and not a host
-    # toolchain.
-    Assert-PackagedSidecarAssets -LogPath $defaultLog `
-        -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
-        -ManifestName $sidecarManifestName `
-        -What "Packaged $Backend default compile"
+    if ($usesSidecar) {
+        Assert-PackagedSidecarAssets -LogPath $defaultLog `
+            -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
+            -ManifestName $sidecarManifestName `
+            -What "Packaged $Backend default compile"
+    } else {
+        Assert-PackagedInProcessLinking -LogPath $defaultLog `
+            -What "Packaged $Backend default compile"
+    }
     if ($Backend -eq "llvm") {
+        $providerPattern = if ($linkMode -eq "inprocess") {
+            "(?m)^\[verbose\] LLVM code generator: statically-linked-llvm-\d+\.\d+\.\d+ \(LLVM \d+\.\d+\.\d+, targets: "
+        } else {
+            "(?m)^\[verbose\] LLVM code generator: .+ \(LLVM \d+\.\d+\.\d+, targets: "
+        }
         Assert-LogMatches -LogPath $defaultLog `
-            -Pattern "(?m)^\[verbose\] LLVM code generator: .+ \(LLVM \d+\.\d+\.\d+, targets: " `
+            -Pattern $providerPattern `
             -What "Packaged llvm default compile"
     }
     Assert-ProgramRuns -ExePath $defaultOutput -What "Packaged $Backend default compile"
@@ -591,10 +702,15 @@ if ($isObjectPackage) {
     }
     Assert-LogMatches -LogPath $explicitLog -Pattern "(?m)^\[verbose\] $Backend backend target:" `
         -What "Packaged '--backend $Backend' compile"
-    Assert-PackagedSidecarAssets -LogPath $explicitLog `
-        -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
-        -ManifestName $sidecarManifestName `
-        -What "Packaged '--backend $Backend' compile"
+    if ($usesSidecar) {
+        Assert-PackagedSidecarAssets -LogPath $explicitLog `
+            -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
+            -ManifestName $sidecarManifestName `
+            -What "Packaged '--backend $Backend' compile"
+    } else {
+        Assert-PackagedInProcessLinking -LogPath $explicitLog `
+            -What "Packaged '--backend $Backend' compile"
+    }
     Assert-ProgramRuns -ExePath $explicitOutput -What "Packaged '--backend $Backend' compile"
 
     # 3. Cranelift keeps accepting its deprecated spelling, with exactly one
@@ -722,5 +838,6 @@ if ($isObjectPackage) {
     }
 }
 
-Write-Host "Release smoke test passed for $Target/$Backend ($ArchivePath)"
+$smokedPackage = if ($ArchivePath) { $ArchivePath } else { $InstalledPackageDir }
+Write-Host "Release smoke test passed for $Target/$Backend ($smokedPackage)"
 $global:LASTEXITCODE = 0

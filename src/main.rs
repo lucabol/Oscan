@@ -357,6 +357,7 @@ fn print_usage(to_stderr: bool) {
     }
     usage.push_str(&format!(" [--backend {choices}]"));
     if has_object_backend {
+        usage.push_str(" [--opt-level size|speed]");
         usage.push_str(" [--native-target <tag>]");
     }
     if has_c {
@@ -407,6 +408,9 @@ fn print_usage(to_stderr: bool) {
         ));
     }
     if has_object_backend {
+        print_line(
+            "  --opt-level size|speed  Optimize generated LLVM/Cranelift code for size (default) or speed",
+        );
         print_line(&format!(
             "  --native-target <tag>  LLVM/Cranelift object target: {} (default: host; implicitly selects an object backend)",
             backend::NativeTarget::accepted_values()
@@ -482,6 +486,7 @@ fn main() {
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
     let mut explicit_backend: Option<Backend> = None;
+    let mut optimization_profile = None;
     let mut used_native_alias = false;
     let mut native_target_arg: Option<String> = None;
     let mut allow_elevated_native_link = false;
@@ -560,6 +565,21 @@ fn main() {
                 });
                 explicit_backend = Some(backend);
                 used_native_alias |= alias;
+            }
+            "--opt-level" => {
+                i += 1;
+                let val = args.get(i).cloned().unwrap_or_else(|| {
+                    eprintln!("error: --opt-level requires an argument (size, speed)");
+                    process::exit(1);
+                });
+                optimization_profile = Some(
+                    backend::OptimizationProfile::parse(&val).unwrap_or_else(|| {
+                        eprintln!(
+                            "error: unknown optimization level '{val}' (supported: size, speed)"
+                        );
+                        process::exit(1);
+                    }),
+                );
             }
             "--native-target" => {
                 i += 1;
@@ -726,6 +746,12 @@ fn main() {
             process::exit(1);
         }
     } else {
+        if optimization_profile.is_some() {
+            eprintln!(
+                "error: --opt-level is only supported with --backend llvm or --backend cranelift"
+            );
+            process::exit(1);
+        }
         if native_target_arg.is_some() {
             eprintln!("error: --native-target requires --backend llvm or --backend cranelift");
             process::exit(1);
@@ -925,6 +951,7 @@ fn main() {
 
     #[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
     if let Some(native_target) = native_target {
+        let optimization_profile = optimization_profile.unwrap_or_default();
         let runtime_mode = if use_libc {
             backend::RuntimeMode::Hosted
         } else {
@@ -936,6 +963,7 @@ fn main() {
             llvm_backend,
             native_target,
             runtime_mode,
+            optimization_profile,
             debug_info,
             &source_map,
             &path,
@@ -1149,6 +1177,7 @@ fn run_object_backend(
     llvm_backend: PreloadedLlvmBackend,
     native_target: backend::NativeTarget,
     runtime_mode: backend::RuntimeMode,
+    optimization_profile: backend::OptimizationProfile,
     debug_info: DebugInfo,
     source_map: &SourceMap,
     source_path: &str,
@@ -1168,8 +1197,8 @@ fn run_object_backend(
     let _ = (&llvm_backend, emit_llvm_ir);
     if is_verbose() {
         eprintln!(
-            "[verbose] {} backend target: {native_target}, runtime: {runtime_mode}",
-            backend_kind.as_str()
+            "[verbose] {} backend target: {native_target}, runtime: {runtime_mode}, optimization: {optimization_profile}",
+            backend_kind.as_str(),
         );
     }
     let compile_output = match backend_kind {
@@ -1179,6 +1208,7 @@ fn run_object_backend(
                 ir_program,
                 native_target,
                 runtime_mode,
+                optimization_profile,
                 debug_info,
                 source_map,
             ) {
@@ -1214,6 +1244,7 @@ fn run_object_backend(
                 ir_program,
                 native_target,
                 runtime_mode,
+                optimization_profile,
                 !emit_llvm_ir,
                 debug_info,
                 source_map,

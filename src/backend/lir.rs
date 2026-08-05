@@ -173,12 +173,13 @@ impl LSig {
     }
 }
 
-/// Module-level symbol visibility. Oscan objects only ever export the
-/// program's own functions and import runtime/extern symbols.
+/// Module-level symbol visibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LLinkage {
     /// Defined by this object and visible to the linker.
     Export,
+    /// Defined and referenced only inside this object/module.
+    Local,
     /// Declared here, defined by the runtime archive / user C.
     Import,
 }

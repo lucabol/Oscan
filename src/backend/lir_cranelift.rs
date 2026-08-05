@@ -24,6 +24,7 @@ use super::lir::{
     LirBody, LirBuilder, LirError, LirModule,
 };
 use super::target::{self, NativeTarget};
+use super::OptimizationProfile;
 use crate::debuginfo::{DebugInfo, SourceLocation, SourceMap};
 
 /// The flags used for every plain scalar/pointer load and store this
@@ -127,6 +128,7 @@ impl ModuleState {
         let cl_sig = cl_signature(self.module_ref(), sig);
         let cl_linkage = match linkage {
             LLinkage::Export => Linkage::Export,
+            LLinkage::Local => Linkage::Local,
             LLinkage::Import => Linkage::Import,
         };
         let id = self
@@ -219,10 +221,11 @@ pub struct CraneliftLir {
 impl CraneliftLir {
     pub fn new(
         target: NativeTarget,
+        optimization: OptimizationProfile,
         debug_info: DebugInfo,
         source_map: &SourceMap,
     ) -> Result<Self, String> {
-        let isa = target::build_isa(target, debug_info)?;
+        let isa = target::build_isa(target, optimization, debug_info)?;
         let mut builder = ObjectBuilder::new(
             isa,
             "oscan_program",
@@ -764,8 +767,13 @@ mod tests {
         let root = source_map.intern_file(root_path.clone());
         let imported = source_map.intern_file(imported_path.clone());
         let source_map = source_map.finish(Vec::new());
-        let mut lir = CraneliftLir::new(NativeTarget::LinuxX64, debug_info, &source_map)
-            .unwrap_or_else(|error| panic!("create Cranelift module: {error}"));
+        let mut lir = CraneliftLir::new(
+            NativeTarget::LinuxX64,
+            OptimizationProfile::Size,
+            debug_info,
+            &source_map,
+        )
+        .unwrap_or_else(|error| panic!("create Cranelift module: {error}"));
 
         for (symbol, source_name, file, declaration_line, body_line, value) in [
             ("root_fn", "root_fn", root, 3, 4, 1),
@@ -881,8 +889,13 @@ mod tests {
         let mut source_map = SourceMapBuilder::default();
         let file = source_map.intern_file(PathBuf::from("project").join("nested.osc"));
         let source_map = source_map.finish(Vec::new());
-        let mut lir = CraneliftLir::new(NativeTarget::LinuxX64, DebugInfo::LineTables, &source_map)
-            .expect("create Cranelift module");
+        let mut lir = CraneliftLir::new(
+            NativeTarget::LinuxX64,
+            OptimizationProfile::Size,
+            DebugInfo::LineTables,
+            &source_map,
+        )
+        .expect("create Cranelift module");
 
         let call_sig = LSig::new(vec![LType::I32], Some(LType::I32));
         let imported = lir

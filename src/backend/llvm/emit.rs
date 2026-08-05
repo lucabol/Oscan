@@ -49,6 +49,7 @@ use crate::backend::lir::{
     copy_chunks, FloatCmp, IntCmp, LBlock, LData, LFunc, LLinkage, LSig, LType, LValue, LVar,
     LirArtifact, LirBody, LirBuilder, LirError, LirModule,
 };
+use crate::backend::OptimizationProfile;
 use crate::debuginfo::{DebugInfo, SourceFileId, SourceLocation, SourceMap};
 
 /// LLVM type text for a LIR type in the *value* world. See module docs
@@ -314,6 +315,7 @@ fn split_debug_path(path: &Path) -> (String, String) {
 struct ModuleState {
     target_triple: String,
     data_layout: String,
+    optimization: OptimizationProfile,
     debug: Option<DebugMetadata>,
     funcs: Vec<FuncDecl>,
     func_handles: HashMap<String, LFunc>,
@@ -339,6 +341,12 @@ impl ModuleState {
                     "conflicting signatures for symbol '{symbol}': {} vs {}",
                     llvm_sig_text(&decl.sig),
                     llvm_sig_text(sig)
+                ));
+            }
+            if decl.linkage != linkage {
+                return Err(format!(
+                    "conflicting linkage for symbol '{symbol}': {:?} vs {:?}",
+                    decl.linkage, linkage
                 ));
             }
             return Ok(*existing);
@@ -400,6 +408,7 @@ impl LlvmEmitter {
     pub fn new(
         target_triple: &str,
         data_layout: &str,
+        optimization: OptimizationProfile,
         debug_info: DebugInfo,
         source_map: &SourceMap,
     ) -> Self {
@@ -407,6 +416,7 @@ impl LlvmEmitter {
             state: ModuleState {
                 target_triple: target_triple.to_string(),
                 data_layout: data_layout.to_string(),
+                optimization,
                 debug: debug_info
                     .is_enabled()
                     .then(|| DebugMetadata::new(source_map)),
@@ -550,9 +560,9 @@ impl LirModule for LlvmEmitter {
             if decl.defined {
                 continue;
             }
-            if decl.linkage == LLinkage::Export {
+            if decl.linkage != LLinkage::Import {
                 return Err(format!(
-                    "internal error: exported function '{}' was declared but never defined",
+                    "internal error: defined function '{}' was declared but never defined",
                     decl.symbol
                 ));
             }
@@ -922,9 +932,24 @@ impl<'a> LlvmFuncBuilder<'a> {
             .collect::<Vec<_>>()
             .join(", ");
         let mut out = String::new();
+        let linkage = match decl.linkage {
+            LLinkage::Export => "",
+            LLinkage::Local => "internal ",
+            LLinkage::Import => {
+                return Err(LirError::Backend(format!(
+                    "imported function '{}' cannot have a body",
+                    decl.symbol
+                )));
+            }
+        };
+        let optimization_attrs = match self.state.optimization {
+            OptimizationProfile::Size => "minsize nounwind optsize",
+            OptimizationProfile::Speed => "nounwind",
+        };
         // `nounwind`: Oscan has no exceptions and the runtime never
-        // unwinds — it aborts. `minsize`/`optsize` match the C backend's
-        // `-Oz` policy and guide both IR and machine-level optimization.
+        // unwinds — it aborts. The size profile's `minsize`/`optsize`
+        // attributes guide both IR and machine-level optimization; the
+        // speed profile deliberately omits both.
         // `"no-builtins"` is Clang's `-ffreestanding` marker: LLVM must not
         // assume libc entry points exist. Nothing stronger (no `nofree`, no
         // `willreturn`, no argument attributes) is promised.
@@ -948,7 +973,7 @@ impl<'a> LlvmFuncBuilder<'a> {
             .unwrap_or_default();
         let _ = writeln!(
             out,
-            "define {ret} {}({params}) minsize nounwind optsize{unwind_table_attribute} \"no-builtins\"{line_table_attributes}{debug_subprogram} {{",
+            "define {linkage}{ret} {}({params}) {optimization_attrs}{unwind_table_attribute} \"no-builtins\"{line_table_attributes}{debug_subprogram} {{",
             llvm_symbol(&decl.symbol)
         );
         for (i, block) in self.blocks.iter().enumerate() {
@@ -1458,11 +1483,6 @@ mod tests {
     use crate::debuginfo::SourceMapBuilder;
     use std::path::PathBuf;
 
-    fn ir_of(build: impl FnOnce(&mut LlvmEmitter)) -> String {
-        let source_map = SourceMap::default();
-        ir_of_with_debug(DebugInfo::None, &source_map, build)
-    }
-
     fn ir_of_with_debug(
         debug_info: DebugInfo,
         source_map: &SourceMap,
@@ -1477,9 +1497,26 @@ mod tests {
         source_map: &SourceMap,
         build: impl FnOnce(&mut LlvmEmitter),
     ) -> String {
+        ir_of_for_target_profile_with_debug(
+            target_triple,
+            OptimizationProfile::Size,
+            debug_info,
+            source_map,
+            build,
+        )
+    }
+
+    fn ir_of_for_target_profile_with_debug(
+        target_triple: &str,
+        optimization: OptimizationProfile,
+        debug_info: DebugInfo,
+        source_map: &SourceMap,
+        build: impl FnOnce(&mut LlvmEmitter),
+    ) -> String {
         let mut emitter = LlvmEmitter::new(
             target_triple,
             "e-m:e-p:64:64-i64:64",
+            optimization,
             debug_info,
             source_map,
         );
@@ -1488,6 +1525,24 @@ mod tests {
             LirArtifact::LlvmIr(text) => text,
             LirArtifact::Object(_) => panic!("LLVM emitter must produce IR, not an object"),
         }
+    }
+
+    fn ir_of_profile(
+        optimization: OptimizationProfile,
+        build: impl FnOnce(&mut LlvmEmitter),
+    ) -> String {
+        let source_map = SourceMap::default();
+        ir_of_for_target_profile_with_debug(
+            "x86_64-unknown-linux-gnu",
+            optimization,
+            DebugInfo::None,
+            &source_map,
+            build,
+        )
+    }
+
+    fn ir_of(build: impl FnOnce(&mut LlvmEmitter)) -> String {
+        ir_of_profile(OptimizationProfile::Size, build)
     }
 
     #[test]
@@ -1565,6 +1620,7 @@ mod tests {
         let mut emitter = LlvmEmitter::new(
             "x86_64-unknown-linux-gnu",
             "e-m:e-p:64:64",
+            OptimizationProfile::Size,
             DebugInfo::None,
             &source_map,
         );
@@ -2015,6 +2071,33 @@ mod tests {
         assert!(!first.contains("nuw"), "no poison-generating flags");
         assert!(!first.contains("inbounds"), "no inbounds");
         assert!(!first.contains("llvm.memcpy"), "no memcpy intrinsics");
+    }
+
+    #[test]
+    fn optimization_profiles_control_size_attributes_and_keep_safety_attributes() {
+        let emit = |optimization| {
+            ir_of_profile(optimization, |emitter| {
+                let sig = LSig::new(Vec::new(), None);
+                let f = emitter
+                    .declare_function("worker", &sig, LLinkage::Local)
+                    .expect("declare");
+                emitter
+                    .define_function(f, &sig, &mut |b, _| {
+                        b.ret(None);
+                        Ok(())
+                    })
+                    .unwrap_or_else(|_| panic!("define failed"));
+            })
+        };
+
+        let size = emit(OptimizationProfile::Size);
+        assert!(size
+            .contains("define internal void @worker() minsize nounwind optsize \"no-builtins\" {"));
+
+        let speed = emit(OptimizationProfile::Speed);
+        assert!(speed.contains("define internal void @worker() nounwind \"no-builtins\" {"));
+        assert!(!speed.contains("minsize"));
+        assert!(!speed.contains("optsize"));
     }
 
     #[test]
