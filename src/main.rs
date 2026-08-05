@@ -3,6 +3,7 @@ mod backend;
 mod c_name;
 mod codegen;
 mod collection;
+mod debuginfo;
 mod error;
 mod ir;
 mod lexer;
@@ -24,6 +25,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use backend::select::{self, Backend, SelectionInputs};
+use debuginfo::{DebugInfo, SourceLine, SourceMap, SourceMapBuilder};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
@@ -127,24 +129,45 @@ mod c_embed {
 #[cfg(feature = "backend-c")]
 use c_embed::*;
 
+#[derive(Default)]
+struct ResolvedSource {
+    text: String,
+    lines: Vec<Option<SourceLine>>,
+}
+
+impl ResolvedSource {
+    fn append(&mut self, other: ResolvedSource) {
+        self.text.push_str(&other.text);
+        self.lines.extend(other.lines);
+    }
+
+    fn push_line(&mut self, text: &str, origin: Option<SourceLine>) {
+        self.text.push_str(text);
+        self.text.push('\n');
+        self.lines.push(origin);
+    }
+}
+
 fn resolve_imports(
     path: &Path,
     visited: &mut HashSet<PathBuf>,
     namespaces: &mut Vec<String>,
-) -> Result<String, String> {
+    source_files: &mut SourceMapBuilder,
+) -> Result<ResolvedSource, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("cannot resolve {}: {}", path.display(), e))?;
     if !visited.insert(canonical.clone()) {
-        return Ok(String::new());
+        return Ok(ResolvedSource::default());
     }
+    let file_id = source_files.intern_file(canonical.clone());
     let source = fs::read_to_string(&canonical)
         .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
 
-    let mut result = String::new();
+    let mut result = ResolvedSource::default();
     let base_dir = canonical.parent().unwrap_or(Path::new("."));
 
-    for line in source.lines() {
+    for (line_index, line) in source.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.starts_with("use \"") {
             if let Some(end) = trimmed[5..].find('"') {
@@ -157,25 +180,35 @@ fn resolve_imports(
                     // can be imported under different namespaces.
                     let mut ns_visited = visited.clone();
                     let mut ns_namespaces = Vec::new();
-                    let imported =
-                        resolve_imports(&full_path, &mut ns_visited, &mut ns_namespaces)?;
-                    let mangled = mangle_top_level_names(&imported, &ns);
-                    result.push_str(&mangled);
-                    result.push('\n');
+                    let mut imported = resolve_imports(
+                        &full_path,
+                        &mut ns_visited,
+                        &mut ns_namespaces,
+                        source_files,
+                    )?;
+                    imported.text = mangle_top_level_names(&imported.text, &ns);
+                    result.append(imported);
+                    result.push_line("", None);
                     namespaces.push(ns);
                     namespaces.extend(ns_namespaces);
                     continue;
                 } else {
                     // Flat import (existing behavior)
-                    let imported = resolve_imports(&full_path, visited, namespaces)?;
-                    result.push_str(&imported);
-                    result.push('\n');
+                    let imported = resolve_imports(&full_path, visited, namespaces, source_files)?;
+                    result.append(imported);
+                    result.push_line("", None);
                     continue;
                 }
             }
         }
-        result.push_str(line);
-        result.push('\n');
+        result.push_line(
+            line,
+            Some(SourceLine {
+                file: file_id,
+                line: u32::try_from(line_index + 1)
+                    .expect("source file has too many lines for debug information"),
+            }),
+        );
     }
     Ok(result)
 }
@@ -311,7 +344,7 @@ fn print_usage(to_stderr: bool) {
     // option list below, so a backend-specific build never advertises a
     // flag it can only ever refuse.
     let mut usage = String::from(
-        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run]",
+        "usage: oscan [--help] [-h] [--version] [-V] [--verbose] [--warnings] [-W] [--dump-tokens] [--dump-ast] [--run] [--debuginfo none|line-tables]",
     );
     if has_c {
         usage.push_str(" [--emit-c]");
@@ -352,6 +385,7 @@ fn print_usage(to_stderr: bool) {
             "  --libc           Use the hosted libc runtime"
         });
     }
+    print_line("  --debuginfo <level>  Debug information: none or line-tables (default: none)");
     if has_c {
         print_line("  --target <arch>  Cross-compile for target (riscv64, wasi) — C backend only");
     }
@@ -444,6 +478,7 @@ fn main() {
     let mut emit_llvm_ir = false;
     let mut use_libc = false;
     let mut show_warnings = false;
+    let mut debug_info = DebugInfo::None;
     let mut verbose = false;
     let mut target: Option<CrossTarget> = None;
     let mut explicit_backend: Option<Backend> = None;
@@ -467,6 +502,17 @@ fn main() {
             "--libc" => use_libc = true,
             "--allow-elevated-native-link" => allow_elevated_native_link = true,
             "--warnings" | "-W" => show_warnings = true,
+            "--debuginfo" => {
+                i += 1;
+                let value = args.get(i).unwrap_or_else(|| {
+                    eprintln!("error: --debuginfo requires an argument (none, line-tables)");
+                    process::exit(1);
+                });
+                debug_info = value.parse().unwrap_or_else(|error: String| {
+                    eprintln!("error: {error}");
+                    process::exit(1);
+                });
+            }
             "--verbose" => verbose = true,
             "--version" | "-V" => {
                 // The build-metadata block lets tests and packaged release
@@ -785,20 +831,26 @@ fn main() {
     // Set global verbose flag so all functions can use is_verbose()
     VERBOSE.store(verbose, Ordering::Relaxed);
 
-    let source = {
+    let (source, source_map) = {
         if is_verbose() {
             eprintln!("[verbose] Resolving imports for {}", path);
         }
         let file_path_buf = PathBuf::from(&path);
         let mut visited = HashSet::new();
         let mut namespaces = Vec::new();
-        match resolve_imports(&file_path_buf, &mut visited, &mut namespaces) {
-            Ok(s) => {
-                let mut s = s;
+        let mut source_files = SourceMapBuilder::default();
+        match resolve_imports(
+            &file_path_buf,
+            &mut visited,
+            &mut namespaces,
+            &mut source_files,
+        ) {
+            Ok(mut resolved) => {
                 for ns in &namespaces {
-                    s = replace_ns_dot(&s, ns);
+                    resolved.text = replace_ns_dot(&resolved.text, ns);
                 }
-                s
+                let source_map = source_files.finish(resolved.lines);
+                (resolved.text, source_map)
             }
             Err(e) => {
                 eprintln!("error: {e}");
@@ -884,6 +936,8 @@ fn main() {
             llvm_backend,
             native_target,
             runtime_mode,
+            debug_info,
+            &source_map,
             &path,
             output_path,
             run_mode,
@@ -924,7 +978,8 @@ fn main() {
             }
         };
 
-        let c_code = codegen::CodeGenerator::generate(&ir_program, freestanding);
+        let c_code =
+            codegen::CodeGenerator::generate(&ir_program, freestanding, debug_info, &source_map);
         if is_verbose() {
             eprintln!(
                 "[verbose] Generated C code ({} bytes, freestanding={})",
@@ -947,6 +1002,7 @@ fn main() {
                 &path,
                 &c_code,
                 freestanding,
+                debug_info,
                 show_warnings,
                 &program_args,
                 &extra_c_files,
@@ -1003,6 +1059,7 @@ fn main() {
                 &exe_path,
                 freestanding,
                 target.as_ref(),
+                debug_info,
                 show_warnings,
                 &extra_c_files,
                 &extra_cflags,
@@ -1092,6 +1149,8 @@ fn run_object_backend(
     llvm_backend: PreloadedLlvmBackend,
     native_target: backend::NativeTarget,
     runtime_mode: backend::RuntimeMode,
+    debug_info: DebugInfo,
+    source_map: &SourceMap,
     source_path: &str,
     output_path: Option<String>,
     run_mode: bool,
@@ -1116,7 +1175,13 @@ fn run_object_backend(
     let compile_output = match backend_kind {
         #[cfg(feature = "backend-cranelift")]
         Backend::Cranelift => {
-            match backend::compile_object(ir_program, native_target, runtime_mode) {
+            match backend::compile_object(
+                ir_program,
+                native_target,
+                runtime_mode,
+                debug_info,
+                source_map,
+            ) {
                 Ok(output) => output,
                 Err(e) => {
                     eprintln!("{}", e.with_file(source_path));
@@ -1150,6 +1215,8 @@ fn run_object_backend(
                 native_target,
                 runtime_mode,
                 !emit_llvm_ir,
+                debug_info,
+                source_map,
             ) {
                 Ok(output) => output,
                 Err(e) => {
@@ -1327,6 +1394,7 @@ fn run_object_backend(
         }
         let link_options = backend::link::NativeLinkOptions {
             runtime_mode,
+            debug_info,
             show_warnings,
             allow_elevated_native_link,
             extra_c_files,
@@ -1452,6 +1520,7 @@ fn run_object_backend(
         }
         let link_options = backend::link::NativeLinkOptions {
             runtime_mode,
+            debug_info,
             show_warnings,
             allow_elevated_native_link,
             extra_c_files: &native_extra_c_files,
@@ -2090,6 +2159,7 @@ fn compile_to_executable(
     exe_path: &Path,
     freestanding: bool,
     target: Option<&CrossTarget>,
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2203,6 +2273,7 @@ fn compile_to_executable(
         &include_dirs,
         freestanding,
         target,
+        debug_info,
         show_warnings,
         extra_c_files,
         extra_cflags,
@@ -2225,6 +2296,7 @@ fn run_program(
     source_path: &str,
     c_code: &str,
     freestanding: bool,
+    debug_info: DebugInfo,
     show_warnings: bool,
     program_args: &[String],
     extra_c_files: &[String],
@@ -2338,6 +2410,7 @@ fn run_program(
         &include_dirs,
         freestanding,
         None,
+        debug_info,
         show_warnings,
         extra_c_files,
         extra_cflags,
@@ -2375,6 +2448,7 @@ fn invoke_c_compiler(
     include_dirs: &[PathBuf],
     freestanding: bool,
     target: Option<&CrossTarget>,
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2397,6 +2471,7 @@ fn invoke_c_compiler(
                     c_file,
                     exe_file,
                     include_dirs,
+                    debug_info,
                     show_warnings,
                     extra_c_files,
                     extra_cflags,
@@ -2427,6 +2502,7 @@ fn invoke_c_compiler(
                     runtime_c,
                     include_dirs,
                     &sysroot,
+                    debug_info,
                     show_warnings,
                     extra_c_files,
                     extra_cflags,
@@ -2489,6 +2565,7 @@ fn invoke_c_compiler(
                         include_dirs,
                         freestanding,
                         CompilerSource::Host,
+                        debug_info,
                         show_warnings,
                         extra_c_files,
                         extra_cflags,
@@ -2510,6 +2587,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 freestanding,
                 *source,
+                debug_info,
                 show_warnings,
                 extra_c_files,
                 extra_cflags,
@@ -2534,6 +2612,7 @@ fn invoke_c_compiler(
                         include_dirs,
                         freestanding,
                         CompilerSource::Host,
+                        debug_info,
                         show_warnings,
                         extra_c_files,
                         extra_cflags,
@@ -2555,6 +2634,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 freestanding,
                 *source,
+                debug_info,
                 show_warnings,
                 extra_c_files,
                 extra_cflags,
@@ -2583,6 +2663,7 @@ fn invoke_c_compiler(
                             include_dirs,
                             freestanding,
                             CompilerSource::Host,
+                            debug_info,
                             show_warnings,
                             extra_c_files,
                             extra_cflags,
@@ -2607,6 +2688,7 @@ fn invoke_c_compiler(
                 include_dirs,
                 false,
                 freestanding,
+                debug_info,
                 show_warnings,
                 extra_c_files,
                 extra_cflags,
@@ -2624,6 +2706,7 @@ fn compile_with_gcc_or_clang(
     include_dirs: &[PathBuf],
     freestanding: bool,
     _source: CompilerSource,
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2631,6 +2714,7 @@ fn compile_with_gcc_or_clang(
     extra_lib_files: &[String],
 ) -> bool {
     let mut command = Command::new(cmd);
+    let is_clang = cmd.to_ascii_lowercase().contains("clang");
 
     if freestanding {
         // Freestanding: single TU (runtime is #included), no libc
@@ -2643,25 +2727,38 @@ fn compile_with_gcc_or_clang(
         // BearSSL headers use memcpy in inline functions after l_tls.h undefs
         // the macro alias. Clang C99+ treats implicit function declarations as
         // errors. Downgrade to warning so the __asm__ linker shims still work.
-        if cmd.contains("clang") {
+        if is_clang {
             command.arg("-Wno-error=implicit-function-declaration");
         }
         // -Oz is Clang-only; GCC uses -Os for size optimization
-        let size_opt = if cmd.contains("clang") { "-Oz" } else { "-Os" };
-        command
-            .arg(size_opt)
-            .arg("-fno-builtin")
-            .arg("-fno-asynchronous-unwind-tables")
-            .arg("-fomit-frame-pointer")
-            .arg("-ffunction-sections")
-            .arg("-fdata-sections")
-            .arg("-s"); // strip symbols
+        let size_opt = if is_clang { "-Oz" } else { "-Os" };
+        command.arg(size_opt).arg("-fno-builtin");
+        if debug_info.is_enabled() {
+            command
+                .arg(if is_clang {
+                    "-gline-tables-only"
+                } else {
+                    "-g1"
+                })
+                .arg("-fno-omit-frame-pointer");
+        } else {
+            command
+                .arg("-fno-asynchronous-unwind-tables")
+                .arg("-fomit-frame-pointer");
+        }
+        command.arg("-ffunction-sections").arg("-fdata-sections");
+        if !debug_info.is_enabled() {
+            command.arg("-s"); // strip symbols
+        }
         if cfg!(windows) {
             // GNU-target compilers must omit MinGW startup objects because the
             // runtime supplies mainCRTStartup/atexit. MSVC-targeting Clang uses
             // lld-link instead: GNU ld flags are ignored there, while
             // -nostartfiles also removes the static __chkstk/_fltused helpers.
             let msvc_abi = compiler_uses_msvc_abi(cmd);
+            if debug_info.is_enabled() && msvc_abi {
+                command.arg("-Wl,/INCREMENTAL:NO,/OPT:REF,/OPT:ICF");
+            }
             for arg in windows_freestanding_link_args(msvc_abi) {
                 command.arg(arg);
             }
@@ -2700,6 +2797,18 @@ fn compile_with_gcc_or_clang(
         command.arg("-std=c99");
         if !show_warnings {
             command.arg("-w");
+        }
+        if debug_info.is_enabled() {
+            command
+                .arg(if is_clang {
+                    "-gline-tables-only"
+                } else {
+                    "-g1"
+                })
+                .arg("-fno-omit-frame-pointer");
+            if cfg!(windows) && compiler_uses_msvc_abi(cmd) {
+                command.arg("-Wl,/INCREMENTAL:NO,/OPT:REF,/OPT:ICF");
+            }
         }
         command.arg(c_file).arg(runtime_c);
         for dir in include_dirs {
@@ -2767,6 +2876,7 @@ fn compile_cross_riscv64(
     c_file: &Path,
     exe_file: &Path,
     include_dirs: &[PathBuf],
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2781,12 +2891,19 @@ fn compile_cross_riscv64(
     }
     command
         .arg("-Os") // RISC-V gcc doesn't support -Oz
-        .arg("-fno-builtin")
-        .arg("-fno-asynchronous-unwind-tables")
-        .arg("-fomit-frame-pointer")
-        .arg("-ffunction-sections")
-        .arg("-fdata-sections")
-        .arg("-s")
+        .arg("-fno-builtin");
+    if debug_info.is_enabled() {
+        command.arg("-g1").arg("-fno-omit-frame-pointer");
+    } else {
+        command
+            .arg("-fno-asynchronous-unwind-tables")
+            .arg("-fomit-frame-pointer");
+    }
+    command.arg("-ffunction-sections").arg("-fdata-sections");
+    if !debug_info.is_enabled() {
+        command.arg("-s");
+    }
+    command
         .arg("-march=rv64gc")
         .arg("-mabi=lp64d")
         .arg("-nostdlib")
@@ -2837,6 +2954,7 @@ fn compile_cross_wasi(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     sysroot: &str,
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2851,6 +2969,11 @@ fn compile_cross_wasi(
         .arg("-std=c99");
     if !show_warnings {
         command.arg("-w");
+    }
+    if debug_info.is_enabled() {
+        command
+            .arg("-gline-tables-only")
+            .arg("-fno-omit-frame-pointer");
     }
     command.arg(c_file).arg(runtime_c);
     for dir in include_dirs {
@@ -2899,6 +3022,7 @@ fn compile_with_msvc(
     include_dirs: &[PathBuf],
     freestanding: bool,
     needs_nofreestanding: bool,
+    debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
     extra_cflags: &[String],
@@ -2911,6 +3035,12 @@ fn compile_with_msvc(
         ""
     };
     let warn_flag = if show_warnings { "" } else { " /w" };
+    let debug_compile_flag = if debug_info.is_enabled() { " /Z7" } else { "" };
+    let debug_link_flag = if debug_info.is_enabled() {
+        " /DEBUG:FULL /INCREMENTAL:NO /OPT:REF /OPT:ICF"
+    } else {
+        ""
+    };
 
     // Build extra files/flags strings for MSVC
     let extra_c_str: String = extra_c_files
@@ -2931,16 +3061,16 @@ fn compile_with_msvc(
         let bat_content = if freestanding {
             // Freestanding: single TU, no CRT, optimize for size
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}  \"{}\"{}{} /Fe:\"{}\" /link /NODEFAULTLIB kernel32.lib ws2_32.lib secur32.lib crypt32.lib\r\n",
-                vcvars_path, cl_path, warn_flag,
-                all_includes, c_file.display(), extra_c_str, extra_flags_str, exe_file.display(),
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11 /Os /GS-{}{}  \"{}\"{}{} /Fe:\"{}\" /link{} /NODEFAULTLIB kernel32.lib ws2_32.lib secur32.lib crypt32.lib\r\n",
+                vcvars_path, cl_path, warn_flag, debug_compile_flag,
+                all_includes, c_file.display(), extra_c_str, extra_flags_str, exe_file.display(), debug_link_flag,
             )
         } else {
             // libc mode: two TUs, default CRT
             format!(
-                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11{}{}  \"{}\" \"{}\"{}{} /Fe:\"{}\" /link\r\n",
-                vcvars_path, cl_path, warn_flag, nofree_flag,
-                all_includes, c_file.display(), runtime_c.display(), extra_c_str, extra_flags_str, exe_file.display(),
+                "@echo off\r\ncall \"{}\" x64 >nul 2>&1\r\n\"{}\" /nologo{} /std:c11{}{}{}  \"{}\" \"{}\"{}{} /Fe:\"{}\" /link{}\r\n",
+                vcvars_path, cl_path, warn_flag, nofree_flag, debug_compile_flag,
+                all_includes, c_file.display(), runtime_c.display(), extra_c_str, extra_flags_str, exe_file.display(), debug_link_flag,
             )
         };
 
@@ -2982,13 +3112,24 @@ fn compile_with_msvc(
                 .arg("/std:c11")
                 .arg("/Os") // optimize for size
                 .arg("/GS-");
+            if debug_info.is_enabled() {
+                command.arg("/Z7");
+            }
             for dir in include_dirs {
                 command.arg(format!("/I{}", dir.display()));
             }
             command
                 .arg(c_file)
                 .arg(format!("/Fe:{}", exe_file.display()))
-                .arg("/link")
+                .arg("/link");
+            if debug_info.is_enabled() {
+                command
+                    .arg("/DEBUG:FULL")
+                    .arg("/INCREMENTAL:NO")
+                    .arg("/OPT:REF")
+                    .arg("/OPT:ICF");
+            }
+            command
                 .arg("/NODEFAULTLIB")
                 .arg("kernel32.lib")
                 .arg("ws2_32.lib")
@@ -3000,6 +3141,9 @@ fn compile_with_msvc(
                 command.arg("/w");
             }
             command.arg("/std:c11");
+            if debug_info.is_enabled() {
+                command.arg("/Z7");
+            }
             if needs_nofreestanding {
                 command.arg("/DOSC_NOFREESTANDING");
             }
@@ -3011,6 +3155,13 @@ fn compile_with_msvc(
                 .arg(runtime_c)
                 .arg(format!("/Fe:{}", exe_file.display()))
                 .arg("/link");
+            if debug_info.is_enabled() {
+                command
+                    .arg("/DEBUG:FULL")
+                    .arg("/INCREMENTAL:NO")
+                    .arg("/OPT:REF")
+                    .arg("/OPT:ICF");
+            }
         }
 
         // Add user-supplied extra C source files and compiler flags

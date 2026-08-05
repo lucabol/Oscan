@@ -144,6 +144,23 @@ pub enum Stmt {
     Continue(Span),
 }
 
+impl Stmt {
+    pub fn span(&self) -> Span {
+        match self {
+            Stmt::Let(stmt) => stmt.span,
+            Stmt::Assign(stmt) => stmt.span,
+            Stmt::CompoundAssign(stmt) => stmt.span,
+            Stmt::Expr(stmt) => stmt.span,
+            Stmt::While(stmt) => stmt.span,
+            Stmt::For(stmt) => stmt.span,
+            Stmt::ForIn(stmt) => stmt.span,
+            Stmt::Return(stmt) => stmt.span,
+            Stmt::Defer(stmt) => stmt.span,
+            Stmt::Break(span) | Stmt::Continue(span) => *span,
+        }
+    }
+}
+
 pub struct LetStmt {
     pub name: String,
     pub is_mut: bool,

@@ -190,6 +190,7 @@ use super::RuntimeMode;
 /// Inputs that affect final native linking but not Cranelift object emission.
 pub struct NativeLinkOptions<'a> {
     pub runtime_mode: RuntimeMode,
+    pub debug_info: crate::debuginfo::DebugInfo,
     pub show_warnings: bool,
     pub allow_elevated_native_link: bool,
     pub extra_c_files: &'a [String],
@@ -630,7 +631,7 @@ fn build_mingw_plan(
             .collect(),
         entry: None,
         gc_sections: true,
-        strip: true,
+        strip: !options.debug_info.is_enabled(),
         build_id_none: true,
         pie: false,
         emulation: Some("i386pep"),
@@ -708,7 +709,7 @@ fn build_elf_plan(
             .collect(),
         entry: None,
         gc_sections: true,
-        strip: true,
+        strip: !options.debug_info.is_enabled(),
         build_id_none: true,
         pie: false,
         emulation: Some(elf_emulation(target)),
@@ -879,7 +880,8 @@ fn build_compiler_driver_plan(
             .collect(),
         entry: None,
         gc_sections: true,
-        strip: options.runtime_mode == RuntimeMode::Freestanding,
+        strip: options.runtime_mode == RuntimeMode::Freestanding
+            && !options.debug_info.is_enabled(),
         build_id_none: options.runtime_mode == RuntimeMode::Freestanding,
         pie: false,
         emulation: None,
@@ -1012,6 +1014,7 @@ mod tests {
         };
         let options = NativeLinkOptions {
             runtime_mode: RuntimeMode::Hosted,
+            debug_info: crate::debuginfo::DebugInfo::None,
             show_warnings: false,
             allow_elevated_native_link: false,
             extra_c_files: &[],
@@ -1073,6 +1076,7 @@ mod tests {
     fn build_compiler_driver_plan_linux_freestanding_still_gets_static() {
         let options = NativeLinkOptions {
             runtime_mode: RuntimeMode::Freestanding,
+            debug_info: crate::debuginfo::DebugInfo::None,
             show_warnings: false,
             allow_elevated_native_link: false,
             extra_c_files: &[],
@@ -1097,6 +1101,10 @@ mod tests {
         )
         .expect("plan construction succeeds with no manifest");
         assert!(plan.static_link);
+        assert!(
+            plan.strip,
+            "release-default freestanding links stay stripped"
+        );
         let rendered: Vec<String> = plan
             .render()
             .into_iter()
@@ -1105,6 +1113,45 @@ mod tests {
         assert!(
             rendered.iter().any(|a| a == "-static"),
             "expected -static in {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn compiler_driver_debug_plan_preserves_symbols() {
+        let options = NativeLinkOptions {
+            runtime_mode: RuntimeMode::Freestanding,
+            debug_info: crate::debuginfo::DebugInfo::LineTables,
+            show_warnings: false,
+            allow_elevated_native_link: false,
+            extra_c_files: &[],
+            extra_cflags: &[],
+            extra_objects: &[],
+            extra_libs: &[],
+        };
+        let linker_driver = driver::LinkerDriver {
+            cmd: "cc".to_string(),
+            source: crate::CompilerSource::Host,
+            linker_family: driver::LinkerFamily::GnuLd,
+        };
+        let plan = build_compiler_driver_plan(
+            Path::new("/obj/program.o"),
+            Path::new("/out/hello"),
+            NativeTarget::LinuxX64,
+            &options,
+            Path::new("/archives/libosc_runtime_freestanding.a"),
+            None,
+            linker_driver,
+            archive::ShimSource::ArchiveMember,
+        )
+        .expect("debug plan construction succeeds");
+
+        assert!(
+            !plan.strip,
+            "debug links must retain line tables and symbols"
+        );
+        assert!(
+            !plan.render().iter().any(|arg| arg == "-s"),
+            "debug linker argv must not request stripping"
         );
     }
 

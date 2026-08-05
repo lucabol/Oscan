@@ -3,6 +3,8 @@ use std::ffi::{c_char, CString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::debuginfo::DebugInfo;
+
 use super::capability::freestanding_profile_from_bytes;
 #[cfg(test)]
 use super::capability::FreestandingProfile;
@@ -153,18 +155,7 @@ pub(super) fn link_executable(
     }
     remove_stale_output(&output)?;
 
-    let mut args = vec![
-        "ld.lld".to_string(),
-        "-s".to_string(),
-        "-m".to_string(),
-        "i386pep".to_string(),
-        "-Bdynamic".to_string(),
-        "--gc-sections".to_string(),
-        "--build-id=none".to_string(),
-        "-o".to_string(),
-        output.to_string_lossy().into_owned(),
-    ];
-    args.extend(positional_names);
+    let args = build_lld_args(&output, positional_names, options.debug_info);
     invoke_lld(&args, &inputs).inspect_err(|_| {
         let _ = fs::remove_file(&output);
     })?;
@@ -183,6 +174,28 @@ pub(super) fn link_executable(
         ));
     }
     Ok(())
+}
+
+fn build_lld_args(
+    output: &Path,
+    positional_names: Vec<String>,
+    debug_info: DebugInfo,
+) -> Vec<String> {
+    let mut args = vec!["ld.lld".to_string()];
+    if !debug_info.is_enabled() {
+        args.push("-s".to_string());
+    }
+    args.extend([
+        "-m".to_string(),
+        "i386pep".to_string(),
+        "-Bdynamic".to_string(),
+        "--gc-sections".to_string(),
+        "--build-id=none".to_string(),
+        "-o".to_string(),
+        output.to_string_lossy().into_owned(),
+    ]);
+    args.extend(positional_names);
+    args
 }
 
 fn read_strict_input(path: &Path) -> Result<Vec<u8>, String> {
@@ -318,6 +331,20 @@ mod tests {
         fs::write(&path, b"!<thin>\n").unwrap();
         let error = read_strict_input(&path).unwrap_err();
         assert!(error.contains("thin archive"), "{error}");
+    }
+
+    #[test]
+    fn lld_only_strips_non_debug_outputs() {
+        let output = Path::new("program.exe");
+        let positional = vec!["program.o".to_string(), "runtime.a".to_string()];
+        let release_args = build_lld_args(output, positional.clone(), DebugInfo::None);
+        let debug_args = build_lld_args(output, positional, DebugInfo::LineTables);
+
+        assert!(release_args.iter().any(|argument| argument == "-s"));
+        assert!(!debug_args.iter().any(|argument| argument == "-s"));
+        assert!(debug_args
+            .iter()
+            .any(|argument| argument == "--gc-sections"));
     }
 
     #[test]

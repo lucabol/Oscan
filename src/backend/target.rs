@@ -207,7 +207,10 @@ fn env_arch() -> &'static str {
 ///   `SpeedAndSize`-specific size optimization is picked up automatically
 ///   without another change here.
 #[cfg(feature = "backend-cranelift")]
-pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
+pub fn build_isa(
+    target: NativeTarget,
+    debug_info: crate::debuginfo::DebugInfo,
+) -> Result<Arc<dyn TargetIsa>, String> {
     let triple = target.triple();
     let mut flag_builder = settings::builder();
     flag_builder
@@ -219,6 +222,11 @@ pub fn build_isa(target: NativeTarget) -> Result<Arc<dyn TargetIsa>, String> {
     flag_builder
         .set("enable_probestack", "false")
         .map_err(|e| format!("internal error configuring Cranelift settings: {e}"))?;
+    if debug_info.is_enabled() {
+        flag_builder
+            .set("preserve_frame_pointers", "true")
+            .map_err(|e| format!("internal error configuring Cranelift settings: {e}"))?;
+    }
 
     let isa_builder = cranelift_codegen::isa::lookup(triple.clone()).map_err(|e| {
         format!(
@@ -255,7 +263,8 @@ mod tests {
             NativeTarget::LinuxAarch64,
             NativeTarget::LinuxRiscv64,
         ] {
-            let isa = build_isa(target).expect("every built-in target must configure an ISA");
+            let isa = build_isa(target, crate::debuginfo::DebugInfo::None)
+                .expect("every built-in target must configure an ISA");
             let flags = isa.flags();
             assert_eq!(
                 flags.opt_level(),
@@ -267,7 +276,22 @@ mod tests {
                 !flags.enable_probestack(),
                 "{target} must not enable stack probes"
             );
+            assert!(
+                !flags.preserve_frame_pointers(),
+                "{target} must preserve the release default without debug info"
+            );
         }
+    }
+
+    #[cfg(feature = "backend-cranelift")]
+    #[test]
+    fn debug_isa_preserves_frame_pointers() {
+        let isa = build_isa(
+            NativeTarget::WindowsX64,
+            crate::debuginfo::DebugInfo::LineTables,
+        )
+        .expect("debug ISA");
+        assert!(isa.flags().preserve_frame_pointers());
     }
 
     #[test]

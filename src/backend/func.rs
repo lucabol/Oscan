@@ -58,6 +58,7 @@ use std::collections::HashMap;
 
 use crate::ast::{BinOp, UnaryOp};
 use crate::collection::{CollectionIntrinsic, CollectionOp};
+use crate::debuginfo::SourceLocation;
 use crate::error::CompileError;
 use crate::ir as oir;
 use crate::token::Span;
@@ -123,6 +124,7 @@ pub struct FuncTranslator<'a, 'b> {
     defers: Vec<&'a oir::Expr>,
     fn_return_ty: BcType,
     arena_value: LValue,
+    current_source: Option<SourceLocation>,
     /// Whether the current block already ends in a terminator
     /// (`jump`/`brif`/`return`). Tracked ourselves rather than via
     /// [`LirBuilder::is_unreachable`] — that method answers a
@@ -251,6 +253,9 @@ fn translate_function(
 ) -> CResult<()> {
     let sig = oscan_fn_signature(ctx.program, &f.params, &f.return_type);
     let symbol = BackendContext::user_fn_symbol(&f.name);
+    if let Some(location) = ctx.source_location(f.span) {
+        lir.set_function_source(func_id, &f.name, &symbol, location);
+    }
 
     lir.define_function(func_id, &sig, &mut |b, params| {
         let arena_value = params[0];
@@ -263,6 +268,7 @@ fn translate_function(
             defers: Vec::new(),
             fn_return_ty: f.return_type.clone(),
             arena_value,
+            current_source: None,
             terminated: false,
         };
 
@@ -302,6 +308,14 @@ fn translate_function(
 
         let body_val = translator.lower_function_body(&f.body)?;
         if !translator.b.is_unreachable() {
+            let return_span = f
+                .body
+                .tail_expr
+                .as_deref()
+                .map(oir::Expr::span)
+                .unwrap_or(f.span);
+            let return_location = translator.ctx.source_location(return_span);
+            translator.set_source_location(return_location);
             // An implicit (bare tail-expression) `return` must copy an
             // inline-aggregate result exactly like the explicit
             // `return expr;` case does (see `Stmt::Return` below) —
@@ -328,6 +342,11 @@ fn translate_function(
 }
 
 impl<'a, 'b> FuncTranslator<'a, 'b> {
+    fn set_source_location(&mut self, location: Option<SourceLocation>) {
+        self.current_source = location;
+        self.b.set_source_location(location);
+    }
+
     fn fresh_var(&mut self, ty: Option<LType>) -> LVar {
         // Every variable needs *some* declared type even when it will
         // never be def_var'd/use_var'd (Unit bindings): use I8 as an
@@ -407,7 +426,10 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
     }
 
     fn lower_stmt(&mut self, stmt: &'a oir::Stmt) -> CResult<()> {
-        match stmt {
+        let saved_source = self.current_source;
+        let location = self.ctx.source_location(stmt.span());
+        self.set_source_location(location);
+        let result = (|| match stmt {
             oir::Stmt::Let(ls) => {
                 let raw = self.lower_expr(&ls.value)?;
                 let value = self.bind_value(&ls.ty, raw, &ls.value)?;
@@ -497,15 +519,19 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
                 self.terminated = true;
                 Ok(())
             }
-        }
+        })();
+        self.set_source_location(saved_source);
+        result
     }
 
     /// Emit every deferred expression (LIFO) and a `return`, exactly like
     /// `src/codegen.rs`'s `emit_deferred_before_return`.
     fn emit_return(&mut self, value: Option<LValue>) -> CResult<()> {
+        let return_source = self.current_source;
         for expr in self.defers.clone().into_iter().rev() {
             self.lower_expr(expr)?;
         }
+        self.set_source_location(return_source);
         match value {
             Some(v) => {
                 self.b.ret(Some(v));
@@ -750,6 +776,15 @@ impl<'a, 'b> FuncTranslator<'a, 'b> {
 /// Core scalar/control-flow/call expression lowering.
 impl<'a, 'b> FuncTranslator<'a, 'b> {
     fn lower_expr(&mut self, expr: &'a oir::Expr) -> CResult<Option<LValue>> {
+        let saved_source = self.current_source;
+        let location = self.ctx.source_location(expr.span());
+        self.set_source_location(location);
+        let result = self.lower_expr_inner(expr);
+        self.set_source_location(saved_source);
+        result
+    }
+
+    fn lower_expr_inner(&mut self, expr: &'a oir::Expr) -> CResult<Option<LValue>> {
         match expr {
             oir::Expr::IntLit(v, _) => Ok(Some(self.b.iconst(LType::I32, *v))),
             oir::Expr::FloatLit(v, _) => Ok(Some(self.b.f64const(*v))),

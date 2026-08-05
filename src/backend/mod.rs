@@ -71,6 +71,8 @@
 // The shared object-backend machinery (semantic lowering onto the
 // backend-independent `lir` interface) exists only when at least one
 // object backend does.
+#[cfg(feature = "backend-cranelift")]
+mod cranelift_debug;
 #[cfg(any(feature = "backend-cranelift", feature = "backend-llvm"))]
 mod ctx;
 pub mod distribution_contract;
@@ -147,10 +149,12 @@ pub fn compile_object(
     program: &ir::Program,
     target: NativeTarget,
     runtime_mode: RuntimeMode,
+    debug_info: crate::debuginfo::DebugInfo,
+    source_map: &crate::debuginfo::SourceMap,
 ) -> Result<NativeCompileOutput, CompileError> {
-    let mut lir = lir_cranelift::CraneliftLir::new(target)
+    let mut lir = lir_cranelift::CraneliftLir::new(target, debug_info, source_map)
         .map_err(|e| CompileError::new(crate::token::Span::new(1, 1), e))?;
-    let mut ctx = BackendContext::new(program, runtime_mode);
+    let mut ctx = BackendContext::new(program, runtime_mode, debug_info, source_map);
     let generated_extern_shim_c = translate_program(&mut ctx, &mut lir)?;
     let object_bytes = match lir.finish() {
         Ok(LirArtifact::Object(bytes)) => bytes,
