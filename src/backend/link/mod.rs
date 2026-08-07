@@ -855,9 +855,13 @@ fn build_compiler_driver_plan(
     // (which includes `-static`, alongside `-nostdlib`/`-Wl,--gc-sections,
     // --build-id=none` that are already rendered elsewhere in this module
     // independently of the manifest) — see `LinkPlan::static_link`'s doc
-    // comment. Never re-derive this by reading the manifest.
-    let static_link =
-        target != NativeTarget::WindowsX64 && options.runtime_mode == RuntimeMode::Freestanding;
+    // comment. Bundled non-Windows compiler drivers are musl toolchains, so
+    // hosted package outputs are static too: downstream hosts cannot be
+    // assumed to provide musl's dynamic loader. Never derive either choice
+    // from the untrusted runtime manifest.
+    let static_link = target != NativeTarget::WindowsX64
+        && (options.runtime_mode == RuntimeMode::Freestanding
+            || linker_driver.source == crate::CompilerSource::Bundled);
 
     Ok(LinkPlan {
         flavor: LinkerFlavor::CompilerDriver,
@@ -1068,6 +1072,10 @@ mod tests {
             rendered.iter().any(|a| a == "-lm"),
             "Linux hosted must still get -lm (now hardcoded, not manifest-derived), got {rendered:?}"
         );
+        assert!(
+            !plan.static_link,
+            "host compiler hosted links should preserve dynamic linking"
+        );
     }
 
     /// Companion regression test: Linux **freestanding** still gets
@@ -1113,6 +1121,42 @@ mod tests {
         assert!(
             rendered.iter().any(|a| a == "-static"),
             "expected -static in {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn build_compiler_driver_plan_linux_bundled_hosted_is_portably_static() {
+        let options = NativeLinkOptions {
+            runtime_mode: RuntimeMode::Hosted,
+            debug_info: crate::debuginfo::DebugInfo::None,
+            show_warnings: false,
+            allow_elevated_native_link: false,
+            extra_c_files: &[],
+            extra_cflags: &[],
+            extra_objects: &[],
+            extra_libs: &[],
+        };
+        let linker_driver = driver::LinkerDriver {
+            cmd: "x86_64-linux-musl-gcc".to_string(),
+            source: crate::CompilerSource::Bundled,
+            linker_family: driver::LinkerFamily::GnuLd,
+        };
+        let plan = build_compiler_driver_plan(
+            Path::new("/obj/program.o"),
+            Path::new("/out/hello"),
+            NativeTarget::LinuxX64,
+            &options,
+            Path::new("/archives/libosc_runtime_hosted.a"),
+            None,
+            linker_driver,
+            archive::ShimSource::ArchiveMember,
+        )
+        .expect("bundled hosted plan construction succeeds");
+
+        assert!(plan.static_link);
+        assert!(
+            plan.render().iter().any(|arg| arg == "-static"),
+            "bundled musl hosted links must not depend on a host musl loader"
         );
     }
 

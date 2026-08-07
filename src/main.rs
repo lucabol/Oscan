@@ -2742,7 +2742,7 @@ fn compile_with_gcc_or_clang(
     runtime_c: &Path,
     include_dirs: &[PathBuf],
     freestanding: bool,
-    _source: CompilerSource,
+    source: CompilerSource,
     debug_info: DebugInfo,
     show_warnings: bool,
     extra_c_files: &[String],
@@ -2832,6 +2832,12 @@ fn compile_with_gcc_or_clang(
     } else {
         // libc mode: two TUs (generated + runtime), link libc + libm
         command.arg("-std=c99");
+        if !cfg!(windows) && source == CompilerSource::Bundled {
+            // Packaged Linux compilers are musl cross-toolchains. Static
+            // hosted output runs without requiring the host to install
+            // musl's dynamic loader.
+            command.arg("-static");
+        }
         if !show_warnings {
             command.arg("-w");
         }
