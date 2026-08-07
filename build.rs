@@ -11,29 +11,27 @@ use sha2::{Digest, Sha256};
 
 fn main() {
     stamp_git_version();
-    stamp_distribution_backend();
+    stamp_distribution_config();
     generate_native_link_assets();
     configure_inprocess_toolchain();
     generate_inprocess_link_assets();
 }
 
 // ---------------------------------------------------------------------------
-// Backend-specific distribution builds.
+// Packaged distribution builds.
 //
-// `OSCAN_DISTRIBUTION_BACKEND=llvm|cranelift|c` marks a build as *the*
-// packaged compiler for one backend: the resulting `oscan` defaults to that
-// backend deterministically instead of probing host capabilities, and every
-// other backend is compiled out (`--no-default-features --features
-// backend-<name>`). Leaving it unset is the ordinary development build: all
-// enabled features, existing capability-based default behavior.
+// `OSCAN_DISTRIBUTION_PROFILE=full|llvm|cranelift|c` identifies the package,
+// while `OSCAN_DEFAULT_BACKEND=llvm|cranelift|c` independently fixes its
+// implicit backend. `OSCAN_DISTRIBUTION_BACKEND` remains a compatibility input
+// for legacy slim builds and expands to matching profile/default values.
 //
 // The rules themselves live in `src/backend/distribution_contract.rs`,
 // shared verbatim with the compiler (which reads the stamp and unit-tests
 // the rules) so the two can never drift apart. Validation happens here, at
 // build time, so a mismatched pair — a stamp naming a disabled backend, or
 // a stamp on a build that still contains every backend — fails the build
-// with a named reason instead of producing an artifact whose name promises
-// something it is not.
+// with a named reason instead of producing an artifact whose profile/default
+// metadata promises something it is not.
 // ---------------------------------------------------------------------------
 
 mod distribution_contract {
@@ -48,7 +46,9 @@ const BACKEND_FEATURES: [(&str, &str); 3] = [
     ("c", "CARGO_FEATURE_BACKEND_C"),
 ];
 
-fn stamp_distribution_backend() {
+fn stamp_distribution_config() {
+    println!("cargo:rerun-if-env-changed=OSCAN_DISTRIBUTION_PROFILE");
+    println!("cargo:rerun-if-env-changed=OSCAN_DEFAULT_BACKEND");
     println!("cargo:rerun-if-env-changed=OSCAN_DISTRIBUTION_BACKEND");
     println!("cargo:rerun-if-changed=src/backend/distribution_contract.rs");
 
@@ -57,17 +57,29 @@ fn stamp_distribution_backend() {
         .filter(|(_, feature)| std::env::var_os(feature).is_some())
         .map(|(name, _)| *name)
         .collect();
-    let raw = std::env::var("OSCAN_DISTRIBUTION_BACKEND").unwrap_or_default();
-    let stamp = distribution_contract::validate_distribution_stamp(&raw, &enabled)
-        .unwrap_or_else(|reason| panic!("{reason}"));
+    let profile_raw = std::env::var("OSCAN_DISTRIBUTION_PROFILE").unwrap_or_default();
+    let default_raw = std::env::var("OSCAN_DEFAULT_BACKEND").unwrap_or_default();
+    let legacy_raw = std::env::var("OSCAN_DISTRIBUTION_BACKEND").unwrap_or_default();
+    let config = distribution_contract::validate_distribution_config(
+        &profile_raw,
+        &default_raw,
+        &legacy_raw,
+        &enabled,
+    )
+    .unwrap_or_else(|reason| panic!("{reason}"));
 
-    // Always stamped (empty means "not a distribution build") so the
-    // compiler can read it with a plain `env!` rather than an `option_env!`
-    // whose absence would be indistinguishable from a stale build.
-    println!(
-        "cargo:rustc-env=OSCAN_DISTRIBUTION_BACKEND={}",
-        stamp.unwrap_or_default()
-    );
+    let profile = config.profile.as_deref().unwrap_or("");
+    let default_backend = config.default_backend.as_deref().unwrap_or("");
+    let legacy_backend = match profile {
+        "llvm" | "cranelift" | "c" => profile,
+        _ => "",
+    };
+
+    // Always stamp every normalized value. Empty means "not configured", and
+    // lets the compiler use env! without stale option_env! ambiguity.
+    println!("cargo:rustc-env=OSCAN_DISTRIBUTION_PROFILE={profile}");
+    println!("cargo:rustc-env=OSCAN_DEFAULT_BACKEND={default_backend}");
+    println!("cargo:rustc-env=OSCAN_DISTRIBUTION_BACKEND={legacy_backend}");
 }
 
 fn stamp_git_version() {

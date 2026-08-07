@@ -30,15 +30,18 @@ It is designed to be approachable for people and reliable for AI coding tools.
 
 Download the latest release from
 [GitHub Releases](https://github.com/lucabol/Oscan/releases). Choose the
-**LLVM package** unless you specifically need the Cranelift or C backend.
+**LLVM slim package** for the smallest recommended install, or choose **full**
+to use LLVM, Cranelift, and C from one compiler with `--backend`.
 
 | Platform | Recommended download | Notes |
 |---|---|---|
-| Windows x86_64 | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `oscan-vX.Y.Z-windows-x86_64-llvm.zip` | The MSI is the simplest option |
-| Linux x86_64 | `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` | Requires glibc 2.34 or newer |
+| Windows x86_64 | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `oscan-vX.Y.Z-windows-x86_64-llvm.zip` | LLVM remains the transition default; `-full.zip` includes all backends |
+| Linux x86_64 | `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` | `-full.tar.xz` includes all backends; LLVM requires glibc 2.34+ |
 | macOS x86_64 | `oscan-vX.Y.Z-macos-x86_64-c.tar.gz` | Requires Xcode Command Line Tools |
 
-Windows and Linux also provide `cranelift` and `c` packages. Each release
+Windows and Linux provide `full`, `llvm`, `cranelift`, and `c` profiles. Full
+contains one backend-neutral compiler; the others are smaller slim packages.
+Each release
 includes `SHA256SUMS`; keep the downloaded file's original name and verify it
 before installing. The [installation guide](docs/guide.md#installation) has
 step-by-step verification, upgrade, and uninstall instructions.
@@ -51,16 +54,20 @@ Install the latest recommended package:
 iwr -useb https://raw.githubusercontent.com/lucabol/Oscan/master/scripts/install-latest.ps1 | iex
 ```
 
-To select a backend explicitly:
+Install full, or select a slim package explicitly:
 
 ```powershell
 iwr -useb https://raw.githubusercontent.com/lucabol/Oscan/master/scripts/install-latest.ps1 -OutFile install-latest.ps1
+.\install-latest.ps1 -Profile full -SetDefault
 .\install-latest.ps1 -Backend llvm
 .\install-latest.ps1 -Backend cranelift
 .\install-latest.ps1 -Backend c
 ```
 
-Open a new terminal after installation, then check:
+Archive profiles coexist as `oscan-full`, `oscan-llvm`, `oscan-cranelift`, and
+`oscan-c`. The first archive install safely creates `oscan`; later installs
+preserve that selection unless `-SetDefault` is passed. Open a new terminal,
+then check:
 
 ```powershell
 oscan --version
@@ -68,16 +75,17 @@ oscan --version
 
 ### Linux
 
-Download the recommended archive and `SHA256SUMS`, verify the archive, extract
-it, and run the included installer:
+Download an archive and `SHA256SUMS`, verify it, extract it, and run the
+included installer. This example installs full and selects it as the default:
 
 ```bash
-tar xf oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz
-./oscan-vX.Y.Z-linux-x86_64-llvm/install.sh
+tar xf oscan-vX.Y.Z-linux-x86_64-full.tar.xz
+./oscan-vX.Y.Z-linux-x86_64-full/install.sh --set-default
 oscan --version
+oscan app.osc --backend cranelift
 ```
 
-On Debian or Ubuntu, the LLVM package also needs:
+On Debian or Ubuntu, the LLVM and full packages also need:
 
 ```bash
 sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g
@@ -93,8 +101,9 @@ xcode-select --install
 tar xf oscan-vX.Y.Z-macos-x86_64-c.tar.gz
 ```
 
-Copy `oscan` to a directory in your `PATH`, such as `/usr/local/bin`, then run
-`oscan --version`.
+Run the included `install.sh` to create `oscan-c` without disturbing another
+profile, then run `oscan-c --version`. Pass `--set-default` only when the plain
+`oscan` command should select this profile.
 
 ### Build from source
 
@@ -188,9 +197,9 @@ small `wc`-style command-line program step by step.
 | `oscan app.osc --debuginfo line-tables` | Keep Oscan source locations for debugging |
 | `oscan --help` | Show every option |
 
-A release package contains one backend. If you request another one, Oscan tells
-you which package to install. `--opt-level size|speed` applies to LLVM and
-Cranelift generated code; the default is `size`.
+Full contains every backend; slim packages contain one and identify the full or
+matching slim package when another is requested. `--opt-level size|speed`
+applies to LLVM and Cranelift generated code; the default is `size`.
 
 Debug information is opt-in: `--debuginfo none` is the default, while
 `--debuginfo line-tables` enables source breakpoints, stepping, stack
@@ -240,8 +249,8 @@ See the [full built-in function reference](docs/builtins.md) for signatures and 
   `free` calls or a garbage collector.
 - **Targets:** release and cross-compilation support varies by platform and
   backend.
-- **Distribution:** each release package contains one backend and its required
-  support files.
+- **Distribution:** full contains all backends; coexistence-safe slim profiles
+  contain one backend and its required support files.
 
 See [Compiler Technical Details](docs/technical-details.md) for backend
 selection, package layouts, runtime and linker behavior, supported targets,

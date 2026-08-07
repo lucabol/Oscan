@@ -39,6 +39,7 @@ DOWNLOAD_RETRY_BASE_DELAY_SECONDS = 2
 # `cranelift` and never appears in an artifact name, package label, or
 # contract entry.
 CANONICAL_BACKENDS = ("llvm", "cranelift", "c")
+CANONICAL_PROFILES = ("full", "llvm", "cranelift", "c")
 REQUIRED_COMPONENTS = (
     "compiler",
     "direct_link_sidecar",
@@ -50,11 +51,12 @@ REQUIRED_COMPONENTS = (
 # archive would need the host CRT, which is exactly the C-toolchain
 # dependency these packages exist to remove.
 FREESTANDING_PROFILES = ("freestanding", "freestanding_gfx", "freestanding_core")
+RUNTIME_PROFILES = ("hosted", *FREESTANDING_PROFILES)
 # The published matrix. macOS is C-only: there is no Darwin object target
 # for either object backend.
 SUPPORTED_RELEASE_TARGETS = {
-    "windows-x86_64": ("llvm", "cranelift", "c"),
-    "linux-x86_64": ("llvm", "cranelift", "c"),
+    "windows-x86_64": CANONICAL_PROFILES,
+    "linux-x86_64": CANONICAL_PROFILES,
     "macos-x86_64": ("c",),
 }
 PACKAGE_METADATA_NAME = "oscan-package.json"
@@ -185,28 +187,21 @@ def load_manifest(path: Path) -> dict:
 
 
 def load_release_contract(path: Path) -> dict:
-    """Load and fully validate the release contract (schema 2).
-
-    Schema 2 replaces schema 1's single "full bundle per target" model with
-    an explicit target x backend variant matrix: every artifact this
-    repository publishes is one (target, backend) pair with its own archive
-    names, Cargo feature, distribution stamp, capability flag, and component
-    list. There is no `-full` bundle any more, and `native` is never an
-    artifact label (it survives only as a deprecated CLI alias).
-    """
+    """Load and fully validate the profile-aware release contract (schema 3)."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         fail(f"cannot read release contract {path}: {exc}")
-    if data.get("schema_version") != 2:
+    if data.get("schema_version") != 3:
         fail(
-            f"unsupported release contract schema in {path}: expected schema_version 2 "
-            f"(target x backend variants), got {data.get('schema_version')!r}"
+            f"unsupported release contract schema in {path}: expected schema_version 3 "
+            f"(target x package profiles), got {data.get('schema_version')!r}"
         )
     for key in (
         "install_surface",
         "toolchains_committed_to_git",
         "backends",
+        "profiles",
         "components",
         "lookup_contract",
         "variants",
@@ -219,6 +214,7 @@ def load_release_contract(path: Path) -> dict:
         fail("the release contract must keep toolchains out of git")
 
     _validate_contract_backends(path, data["backends"])
+    _validate_contract_profiles(path, data)
     _validate_contract_components(path, data["components"])
 
     lookup_contract = data["lookup_contract"]
@@ -242,7 +238,7 @@ def _validate_contract_backends(path: Path, backends: dict) -> None:
     for name, spec in backends.items():
         if not isinstance(spec, dict):
             fail(f"release contract backend '{name}' must be an object")
-        for key in ("cargo_feature", "artifact_suffix", "kind"):
+        for key in ("cargo_feature", "kind"):
             if key not in spec:
                 fail(f"release contract backend '{name}' is missing '{key}'")
         if spec["cargo_feature"] != f"backend-{name}":
@@ -250,13 +246,50 @@ def _validate_contract_backends(path: Path, backends: dict) -> None:
                 f"release contract backend '{name}' must use cargo feature 'backend-{name}', "
                 f"got '{spec['cargo_feature']}'"
             )
-        if spec["artifact_suffix"] != name:
-            fail(
-                f"release contract backend '{name}' must use artifact suffix '{name}', got "
-                f"'{spec['artifact_suffix']}'"
-            )
         if spec["kind"] not in ("object", "c-source"):
             fail(f"release contract backend '{name}' has unknown kind '{spec['kind']}'")
+
+
+def _validate_contract_profiles(path: Path, contract: dict) -> None:
+    profiles = contract["profiles"]
+    if sorted(profiles) != sorted(CANONICAL_PROFILES):
+        fail(
+            f"release contract {path} must declare exactly the canonical profiles "
+            f"{', '.join(CANONICAL_PROFILES)}, got {', '.join(sorted(profiles))}"
+        )
+    for name, spec in profiles.items():
+        if not isinstance(spec, dict):
+            fail(f"release contract profile '{name}' must be an object")
+        for key in ("artifact_suffix", "backends", "default_backend"):
+            if key not in spec:
+                fail(f"release contract profile '{name}' is missing '{key}'")
+        if spec["artifact_suffix"] != name:
+            fail(
+                f"release contract profile '{name}' must use artifact suffix '{name}', got "
+                f"'{spec['artifact_suffix']}'"
+            )
+        available = spec["backends"]
+        if not isinstance(available, list) or not available:
+            fail(f"release contract profile '{name}' must declare a non-empty backend list")
+        unknown = [backend for backend in available if backend not in contract["backends"]]
+        if unknown:
+            fail(
+                f"release contract profile '{name}' declares unknown backend(s): "
+                f"{', '.join(unknown)}"
+            )
+        expected = list(CANONICAL_BACKENDS) if name == "full" else [name]
+        if available != expected:
+            fail(
+                f"release contract profile '{name}' must contain backends {expected!r}, got "
+                f"{available!r}"
+            )
+        if spec["default_backend"] not in available:
+            fail(
+                f"release contract profile '{name}' defaults to "
+                f"'{spec['default_backend']}', which it does not contain"
+            )
+        if name == "full" and spec["default_backend"] != "llvm":
+            fail("release contract profile 'full' must use LLVM as its stable default backend")
 
 
 def _validate_contract_components(path: Path, components: dict) -> None:
@@ -273,11 +306,10 @@ def _validate_contract_components(path: Path, components: dict) -> None:
             "runtime archives must be staged at archive-root/build/runtime-archives/{target}"
         )
     allowed_profiles = components["runtime_archives"].get("allowed_profiles")
-    if allowed_profiles != list(FREESTANDING_PROFILES):
+    if allowed_profiles != list(RUNTIME_PROFILES):
         fail(
             "release contract runtime_archives.allowed_profiles must be "
-            f"{list(FREESTANDING_PROFILES)} (freestanding only: object packages ship no hosted "
-            "archive)"
+            f"{list(RUNTIME_PROFILES)}"
         )
     for name in ("llvm_provider", "c_toolchain"):
         if components[name].get("position") != "archive-root/toolchain":
@@ -293,7 +325,7 @@ def _validate_contract_variants(path: Path, contract: dict) -> None:
     for target, target_spec in variants.items():
         if target not in SUPPORTED_RELEASE_TARGETS:
             fail(f"release contract declares unsupported target '{target}'")
-        for key in ("binary_name", "archive_format", "backends"):
+        for key in ("binary_name", "archive_format", "profiles"):
             if key not in target_spec:
                 fail(f"release contract target '{target}' is missing '{key}'")
         if target_spec["archive_format"] not in ARCHIVE_SUFFIXES:
@@ -301,48 +333,47 @@ def _validate_contract_variants(path: Path, contract: dict) -> None:
                 f"unsupported archive format '{target_spec['archive_format']}' for target "
                 f"'{target}'"
             )
-        backends = target_spec["backends"]
-        if not backends:
-            fail(f"release contract target '{target}' declares no backends")
-        expected_backends = SUPPORTED_RELEASE_TARGETS[target]
-        if sorted(backends) != sorted(expected_backends):
+        profiles = target_spec["profiles"]
+        if not profiles:
+            fail(f"release contract target '{target}' declares no profiles")
+        expected_profiles = SUPPORTED_RELEASE_TARGETS[target]
+        if sorted(profiles) != sorted(expected_profiles):
             fail(
-                f"release contract target '{target}' must declare backends "
-                f"{', '.join(expected_backends)}, got {', '.join(sorted(backends))}"
+                f"release contract target '{target}' must declare profiles "
+                f"{', '.join(expected_profiles)}, got {', '.join(sorted(profiles))}"
             )
-        for backend, variant in backends.items():
-            _validate_contract_variant(path, contract, target, backend, variant)
+        for profile, variant in profiles.items():
+            _validate_contract_variant(path, contract, target, profile, variant)
             name = variant["archive_name_template"]
             root = variant["archive_root_template"]
             if name in seen_archive_names:
                 fail(
                     f"release contract archive name '{name}' is used by both "
-                    f"{seen_archive_names[name]} and {target}/{backend}"
+                    f"{seen_archive_names[name]} and {target}/{profile}"
                 )
             if root in seen_roots:
                 fail(
                     f"release contract archive root '{root}' is used by both "
-                    f"{seen_roots[root]} and {target}/{backend}"
+                    f"{seen_roots[root]} and {target}/{profile}"
                 )
-            seen_archive_names[name] = f"{target}/{backend}"
-            seen_roots[root] = f"{target}/{backend}"
+            seen_archive_names[name] = f"{target}/{profile}"
+            seen_roots[root] = f"{target}/{profile}"
 
 
 def variant_build_features(variant: dict) -> list[str]:
-    return [variant["cargo_feature"], *variant.get("extra_cargo_features", [])]
+    return list(variant["cargo_features"])
 
 
 def _validate_contract_variant(
-    path: Path, contract: dict, target: str, backend: str, variant: dict
+    path: Path, contract: dict, target: str, profile: str, variant: dict
 ) -> None:
-    where = f"release contract variant {target}/{backend}"
-    if backend not in contract["backends"]:
-        fail(f"{where} names a backend the contract does not declare")
+    where = f"release contract variant {target}/{profile}"
+    if profile not in contract["profiles"]:
+        fail(f"{where} names a profile the contract does not declare")
     for key in (
         "archive_name_template",
         "archive_root_template",
-        "cargo_feature",
-        "distribution_backend",
+        "cargo_features",
         "toolchain_free",
         "components",
         "runtime_profiles",
@@ -350,35 +381,29 @@ def _validate_contract_variant(
         if key not in variant:
             fail(f"{where} is missing '{key}'")
 
-    backend_spec = contract["backends"][backend]
-    if variant["cargo_feature"] != backend_spec["cargo_feature"]:
-        fail(
-            f"{where} declares cargo feature '{variant['cargo_feature']}', but backend "
-            f"'{backend}' is built with '{backend_spec['cargo_feature']}'"
-        )
-    if variant["distribution_backend"] != backend:
-        fail(
-            f"{where} declares distribution backend '{variant['distribution_backend']}', which "
-            f"does not match the variant's own backend '{backend}'"
-        )
-    extra_features = variant.get("extra_cargo_features", [])
-    if not isinstance(extra_features, list) or not all(
-        isinstance(feature, str) and feature for feature in extra_features
-    ):
-        fail(f"{where} extra_cargo_features must be a list of non-empty feature names")
     build_features = variant_build_features(variant)
+    if not isinstance(variant["cargo_features"], list) or not all(
+        isinstance(feature, str) and feature for feature in build_features
+    ):
+        fail(f"{where} cargo_features must be a list of non-empty feature names")
     if len(build_features) != len(set(build_features)):
         fail(f"{where} declares duplicate Cargo build features")
-    extra_backends = [
-        feature
-        for feature in extra_features
-        if feature.startswith("backend-") and feature != variant["cargo_feature"]
+    profile_spec = contract["profiles"][profile]
+    available_backends = profile_spec["backends"]
+    expected_backend_features = [
+        contract["backends"][backend]["cargo_feature"] for backend in available_backends
     ]
-    if extra_backends:
+    declared_backend_features = [
+        feature for feature in build_features if feature.startswith("backend-")
+    ]
+    if declared_backend_features != expected_backend_features:
         fail(
-            f"{where} may build only backend '{backend}', but extra_cargo_features includes "
-            f"{', '.join(extra_backends)}"
+            f"{where} must build backend features {expected_backend_features!r}, got "
+            f"{declared_backend_features!r}"
         )
+    extra_features = [
+        feature for feature in build_features if not feature.startswith("backend-")
+    ]
 
     suffix = ARCHIVE_SUFFIXES[contract["variants"][target]["archive_format"]]
     for field in ("archive_name_template", "archive_root_template"):
@@ -390,10 +415,10 @@ def _validate_contract_variant(
                 f"{where} {field} uses 'native', which is only a deprecated CLI alias; the "
                 "canonical artifact label is 'cranelift'"
             )
-    if not variant["archive_name_template"].endswith(f"-{backend}{suffix}"):
-        fail(f"{where} archive_name_template must end with '-{backend}{suffix}'")
-    if not variant["archive_root_template"].endswith(f"-{backend}"):
-        fail(f"{where} archive_root_template must end with '-{backend}'")
+    if not variant["archive_name_template"].endswith(f"-{profile}{suffix}"):
+        fail(f"{where} archive_name_template must end with '-{profile}{suffix}'")
+    if not variant["archive_root_template"].endswith(f"-{profile}"):
+        fail(f"{where} archive_root_template must end with '-{profile}'")
 
     components = variant["components"]
     unknown = [name for name in components if name not in contract["components"]]
@@ -405,31 +430,44 @@ def _validate_contract_variant(
     has_c_toolchain = "c_toolchain" in components
     if variant["toolchain_free"] and has_c_toolchain:
         fail(f"{where} claims toolchain_free but ships the c_toolchain component")
-    if backend == "c" and variant["toolchain_free"]:
-        fail(f"{where} is a C-backend package and can never be toolchain-free")
+    has_c_backend = "c" in available_backends
+    has_object_backend = any(
+        contract["backends"][backend]["kind"] == "object" for backend in available_backends
+    )
+    if has_c_backend and variant["toolchain_free"]:
+        fail(f"{where} contains the C backend and can never be toolchain-free")
+    if has_c_backend and not target.startswith("macos") and not has_c_toolchain:
+        fail(f"{where} contains the C backend and must include the c_toolchain component")
 
-    profiles = variant["runtime_profiles"]
-    invalid = [profile for profile in profiles if profile not in FREESTANDING_PROFILES]
+    runtime_profiles = variant["runtime_profiles"]
+    invalid = [
+        runtime_profile
+        for runtime_profile in runtime_profiles
+        if runtime_profile not in RUNTIME_PROFILES
+    ]
     if invalid:
-        fail(f"{where} lists non-freestanding runtime profile(s): {', '.join(invalid)}")
+        fail(f"{where} lists unknown runtime profile(s): {', '.join(invalid)}")
 
-    if contract["backends"][backend]["kind"] == "object":
-        if not variant["toolchain_free"]:
+    if has_object_backend:
+        if profile != "full" and not variant["toolchain_free"]:
             fail(f"{where} is an object package and must be toolchain-free")
-        if not profiles:
+        if not runtime_profiles:
             fail(f"{where} must declare at least one freestanding runtime profile")
+        if not any(profile in FREESTANDING_PROFILES for profile in runtime_profiles):
+            fail(f"{where} must declare at least one freestanding runtime profile")
+        if "hosted" in runtime_profiles and not has_c_backend:
+            fail(f"{where} is a slim object package and must not ship the hosted runtime")
+        if profile == "full" and "hosted" not in runtime_profiles:
+            fail(f"{where} must ship the hosted runtime for --libc object-backend builds")
         link_mode = variant.get("link_mode")
         if link_mode not in ("sidecar", "inprocess"):
             fail(f"{where} must declare link_mode 'sidecar' or 'inprocess'")
         expected_link_mode = (
-            "inprocess"
-            if (target, backend) == ("windows-x86_64", "llvm")
-            else "sidecar"
+            "inprocess" if target == "windows-x86_64" and profile in ("full", "llvm") else "sidecar"
         )
         if link_mode != expected_link_mode:
             fail(
-                f"{where} must use link_mode '{expected_link_mode}'; only the official "
-                "windows-x86_64/llvm package uses the strict in-process profile"
+                f"{where} must use link_mode '{expected_link_mode}' for this target/profile"
             )
         if link_mode == "sidecar":
             for required in ("direct_link_sidecar", "runtime_archives"):
@@ -438,8 +476,8 @@ def _validate_contract_variant(
                         f"{where} uses sidecar linking and must include the '{required}' component"
                     )
             if extra_features or variant.get("rustflags"):
-                fail(f"{where} uses sidecar linking and must use only its backend Cargo feature")
-            if backend == "llvm":
+                fail(f"{where} uses sidecar linking and must use only backend Cargo features")
+            if "llvm" in available_backends:
                 if "llvm_provider" not in components:
                     fail(f"{where} must include the 'llvm_provider' component")
                 source = variant.get("llvm_provider_source")
@@ -455,9 +493,15 @@ def _validate_contract_variant(
         else:
             if target != "windows-x86_64":
                 fail(f"{where} uses in-process linking, which is supported only on windows-x86_64")
-            if components != ["compiler"]:
+            expected_components = (
+                ["compiler", "runtime_archives", "c_toolchain"]
+                if has_c_backend
+                else ["compiler"]
+            )
+            if components != expected_components:
                 fail(
-                    f"{where} uses in-process linking and must package only the compiler component"
+                    f"{where} uses in-process linking and must package components "
+                    f"{expected_components!r}"
                 )
             notice_files = variant.get("embedded_notice_files")
             if (
@@ -491,12 +535,10 @@ def _validate_contract_variant(
                     f"{where} embedded_notice_files must exactly match the pinned toolchain "
                     f"notices {expected_notices!r}"
                 )
-            expected_features = ["inprocess-lld"]
-            if backend == "llvm":
-                expected_features.append("static-llvm")
+            expected_features = ["inprocess-lld", "static-llvm"]
             if extra_features != expected_features:
                 fail(
-                    f"{where} uses in-process linking and must declare extra_cargo_features "
+                    f"{where} uses in-process linking and must declare non-backend cargo_features "
                     f"{expected_features!r}"
                 )
             if variant.get("rustflags") != "-C target-feature=+crt-static":
@@ -512,8 +554,12 @@ def _validate_contract_variant(
                 fail(
                     f"{where} is a C package and must not ship the '{forbidden}' component"
                 )
-        if profiles:
+        if runtime_profiles:
             fail(f"{where} is a C package and must not ship native runtime archives")
+        if extra_features:
+            fail(
+                f"{where} is a C package and must not declare non-backend cargo_features"
+            )
         for forbidden in ("link_mode", "extra_cargo_features", "rustflags"):
             if forbidden in variant:
                 fail(f"{where} is a C package and must not declare '{forbidden}'")
@@ -535,9 +581,9 @@ def render_release_template(template: str, version: str, field_name: str) -> str
 
 
 def resolve_release_variant(
-    contract: dict, contract_path: Path, target: str, backend: str
+    contract: dict, contract_path: Path, target: str, profile: str
 ) -> dict:
-    """The fully resolved (target, backend) variant spec, or a hard error."""
+    """The fully resolved (target, profile) variant spec, or a hard error."""
     variants = contract["variants"]
     if target not in variants:
         fail(
@@ -545,20 +591,33 @@ def resolve_release_variant(
             f"(known: {', '.join(sorted(variants))})"
         )
     target_spec = variants[target]
-    if backend not in target_spec["backends"]:
+    if profile not in target_spec["profiles"]:
         fail(
-            f"release contract does not define backend '{backend}' for target '{target}' "
-            f"(known: {', '.join(sorted(target_spec['backends']))})"
+            f"release contract does not define profile '{profile}' for target '{target}' "
+            f"(known: {', '.join(sorted(target_spec['profiles']))})"
         )
 
-    spec = dict(target_spec["backends"][backend])
+    spec = dict(target_spec["profiles"][profile])
+    profile_spec = contract["profiles"][profile]
     spec["target"] = target
-    spec["backend"] = backend
+    spec["profile"] = profile
+    # Compatibility aliases for internal helpers and third-party callers that
+    # consumed schema-2 resolved variants.
+    spec["backend"] = profile
+    spec["available_backends"] = list(profile_spec["backends"])
+    spec["default_backend"] = profile_spec["default_backend"]
+    spec["distribution_backend"] = None if profile == "full" else profile
     spec["binary_name"] = target_spec["binary_name"]
     spec["archive_format"] = target_spec["archive_format"]
     spec["platform"] = target.split("-", 1)[0]
-    spec["backend_kind"] = contract["backends"][backend]["kind"]
+    spec["package_kind"] = (
+        "full" if profile == "full" else contract["backends"][profile]["kind"]
+    )
+    spec["backend_kind"] = spec["package_kind"]
     spec["build_features"] = variant_build_features(spec)
+    spec["cargo_feature"] = next(
+        feature for feature in spec["build_features"] if feature.startswith("backend-")
+    )
     spec["rustflags"] = spec.get("rustflags", "")
 
     manifest_name = target_spec.get("toolchain_manifest")
@@ -579,19 +638,22 @@ def resolve_release_variant(
 
 
 def release_variant_matrix(contract: dict) -> list[dict]:
-    """Every (target, backend) pair the contract publishes, in a stable order."""
+    """Every (target, profile) pair the contract publishes, in stable order."""
     matrix: list[dict] = []
     for target in sorted(contract["variants"]):
         target_spec = contract["variants"][target]
-        for backend in sorted(target_spec["backends"]):
-            variant = target_spec["backends"][backend]
+        for profile in CANONICAL_PROFILES:
+            if profile not in target_spec["profiles"]:
+                continue
+            variant = target_spec["profiles"][profile]
+            profile_spec = contract["profiles"][profile]
             matrix.append(
                 {
                     "target": target,
-                    "backend": backend,
-                    "cargo_feature": variant["cargo_feature"],
+                    "profile": profile,
+                    "available_backends": list(profile_spec["backends"]),
                     "build_features": variant_build_features(variant),
-                    "distribution_backend": variant["distribution_backend"],
+                    "default_backend": profile_spec["default_backend"],
                     "toolchain_free": variant["toolchain_free"],
                     "link_mode": variant.get("link_mode"),
                     "archive_format": target_spec["archive_format"],
@@ -1701,121 +1763,86 @@ def fetch_toolchain(manifest_path: Path, download_dir: Path, destination: Path) 
 
 
 def write_install_readme(path: Path, variant: dict, asset_name: str) -> None:
-    """The package README: what this artifact is, and precisely what it can
-    and cannot do. Every claim here is enforced by the compiler itself (see
-    `backend::select` and `backend::no_toolchain`), so it must not overstate
-    a package's capabilities."""
+    """Write a capability-accurate package README."""
     target = variant["target"]
     platform, arch = target.split("-", 1)
-    backend = variant["backend"]
+    profile = variant["profile"]
+    available = variant["available_backends"]
     components = variant["components"]
 
     if platform == "windows":
-        install_hint = "Run install.ps1 from this directory, or keep this directory on PATH."
+        install_hint = (
+            f"Run install.ps1 from this directory to install the '{profile}' profile and its "
+            f"'oscan-{profile}' command."
+        )
     else:
-        install_hint = "Run install.sh from this directory, or copy oscan somewhere on PATH."
+        install_hint = (
+            f"Run install.sh from this directory to install the '{profile}' profile and its "
+            f"'oscan-{profile}' command."
+        )
 
     lines: list[str] = [
         f"Oscan release asset: {asset_name}",
         f"Platform: {platform} {arch}",
-        f"Backend: {backend} (this package's only backend, and its default)",
+        f"Profile: {profile}",
+        f"Available backends: {', '.join(available)}",
+        f"Default backend: {variant['default_backend']}",
         "",
         install_hint,
+        "Installing this profile does not remove other profiles or change the unqualified "
+        "'oscan' command unless the installer is explicitly asked to select it.",
         "",
         "What this package contains",
         "--------------------------",
+        f"  oscan compiled with --features {','.join(variant['build_features'])}.",
     ]
-    if variant["backend_kind"] == "object":
-        features = ",".join(variant["build_features"])
+
+    if variant["package_kind"] == "full":
         lines.append(
-            f"  oscan compiled with --features {features}: it emits object "
-            "code directly and never writes or compiles C."
+            "  One compiler exposes LLVM, Cranelift, and C through --backend; LLVM is the "
+            "deterministic implicit default."
         )
-        if variant["link_mode"] == "inprocess":
-            lines.append(
-                "  oscan contains the LLVM code generator, LLD linker, import libraries, compiler "
-                "builtins, and all freestanding runtime profiles in the executable itself."
-            )
-            lines.append(
-                "  No native-link/, build/runtime-archives/, toolchain/, provider DLL, linker "
-                "executable, extraction cache, or linker subprocess is required."
-            )
-            lines.append(
-                "  LICENSES/embedded/ contains the notices for the statically linked and embedded "
-                "LLVM/LLD and llvm-mingw inputs."
-            )
-        else:
-            lines.append(
-                f"  {NATIVE_LINK_DIR_NAME}/  the linker and its runtime libraries, verified "
-                f"against {NATIVE_LINK_DIR_NAME}/{NATIVE_LINK_MANIFEST_NAME} (SHA-256) before "
-                "every use."
-            )
-            lines.append(
-                f"  build/runtime-archives/{target}/  precompiled freestanding runtime archives "
-                f"({', '.join(variant['runtime_profiles'])})."
-            )
-        if "llvm_provider" in components:
-            if variant.get("llvm_provider_source") == "direct-link-sidecar":
-                lines.append(
-                    f"  the LLVM code generator is the single verified "
-                    f"{variant.get('llvm_provider_asset', 'libLLVM')} in {NATIVE_LINK_DIR_NAME}/ "
-                    "— it is shared with the linker rather than duplicated."
-                )
-            else:
-                lines.append(
-                    "  toolchain/  the packaged LLVM code generator only (no clang, no GCC, no "
-                    "headers, no sysroot, no LLVM command-line tools)."
-                )
+    elif variant["package_kind"] == "object":
+        lines.append(
+            f"  This slim package contains only the {profile} object backend and never writes or "
+            "compiles C."
+        )
         lines += [
             "",
             "What this package does NOT do",
             "-----------------------------",
-            "  --backend c, --emit-c and -o *.c are refused: this build has no C backend.",
-            "  --libc is refused: the hosted runtime needs this machine's CRT/libm.",
-            "  --extra-c/--extra-cflags are refused: there is no C compilation step.",
-            "  extern functions with `str` parameters/returns need a generated C shim and are "
-            "refused for the same reason.",
-            "  No C compiler is bundled, and none is searched for on PATH.",
+            "  The C backend, C sources, C compiler, headers, sysroot, and hosted runtime are "
+            "not included.",
+            "  Other backends report that the full or matching slim profile must be installed.",
         ]
-        if backend == "cranelift" and platform == "windows":
-            lines.append(
-                "  libLLVM in this package is only LLD's runtime dependency; this build has no "
-                "LLVM backend (--backend llvm is not included)."
-            )
-        if variant["link_mode"] == "inprocess":
-            lines.append(
-                "  Named --extra-lib inputs are refused; pass an explicit archive path instead."
-            )
-        lines.append(
-            f"  Other backends are not included: --backend {'llvm' if backend == 'cranelift' else 'cranelift'} "
-            "and --backend c report which package to install instead."
-        )
     else:
+        lines.append("  This slim package contains only the C backend.")
+
+    if variant.get("link_mode") == "inprocess":
         lines.append(
-            f"  oscan compiled with --features {variant['cargo_feature']} only: it emits C and "
-            "needs a C toolchain to compile it."
+            "  LLVM/LLD, native link inputs, and freestanding runtime profiles are embedded in "
+            "the compiler; LICENSES/embedded/ contains their notices."
         )
-        if "c_toolchain" in components:
-            lines.append(
-                "  toolchain/  the pinned C toolchain this package uses; oscan finds it beside "
-                "its own executable, never on PATH."
-            )
-        else:
-            lines.append(
-                f"  No toolchain is bundled: {variant.get('required_host_toolchain', 'a host C toolchain')} "
-                "must be installed on this machine."
-            )
-        lines += [
-            "",
-            "What this package does NOT do",
-            "-----------------------------",
-            "  --backend llvm and --backend cranelift are not included; each reports which "
-            "package to install instead.",
-            "  No native-link sidecar, LLVM provider, or freestanding runtime archives are "
-            "shipped.",
-        ]
-        if variant.get("note_file"):
-            lines.append(f"  See {variant['note_file']} for the macOS phase 1 note.")
+    elif "direct_link_sidecar" in components:
+        lines.append(
+            f"  {NATIVE_LINK_DIR_NAME}/ and build/runtime-archives/{target}/ contain the verified "
+            "native-link payload."
+        )
+    if "runtime_archives" in components and "direct_link_sidecar" not in components:
+        lines.append(
+            f"  build/runtime-archives/{target}/ contains hosted and compiler-driver runtime "
+            "archives used by the full profile."
+        )
+    if "llvm_provider" in components:
+        lines.append("  toolchain/ contains the packaged LLVM code generator.")
+    if "c_toolchain" in components:
+        lines.append("  toolchain/ also contains the pinned C toolchain used by the C backend.")
+    elif variant.get("requires_host_compiler"):
+        lines.append(
+            f"  {variant.get('required_host_toolchain', 'A host C toolchain')} must be installed."
+        )
+    if variant.get("note_file"):
+        lines.append(f"  See {variant['note_file']} for the macOS phase 1 note.")
 
     lines += [
         "",
@@ -1837,13 +1864,14 @@ def write_package_metadata(
     """Machine-readable record of what this package is, mirroring what the
     packaged compiler reports through `oscan --version`."""
     metadata = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "package_id": f"oscan-{variant['profile']}",
         "version": version,
         "target": variant["target"],
-        "backend": variant["backend"],
-        "available_backends": [variant["backend"]],
-        "default_backend": variant["distribution_backend"],
-        "cargo_feature": variant["cargo_feature"],
+        "profile": variant["profile"],
+        "is_distribution": True,
+        "available_backends": list(variant["available_backends"]),
+        "default_backend": variant["default_backend"],
         "cargo_features": list(variant["build_features"]),
         "toolchain_free": variant["toolchain_free"],
         "link_mode": variant.get("link_mode"),
@@ -2244,24 +2272,23 @@ def stage_direct_link_sidecar(
     }
 
 
-def stage_freestanding_runtime_archives(
+def stage_runtime_archives(
     bundle_dir: Path, variant: dict, runtime_archive_dir: Path
 ) -> dict:
-    """Stage exactly the freestanding archive/manifest pairs this variant
-    declares — no hosted archive, no runtime sources, no runtime builder."""
+    """Stage exactly the archive/manifest pairs this variant declares."""
     target = variant["target"]
     runtime_contract = load_runtime_archive_contract(RUNTIME_ARCHIVE_CONTRACT_PATH)
     destination = bundle_dir / "build" / "runtime-archives" / target
     digests: dict = {}
     for profile in variant["runtime_profiles"]:
-        if profile not in FREESTANDING_PROFILES:
-            fail(f"runtime profile '{profile}' is not a freestanding profile")
+        if profile not in RUNTIME_PROFILES:
+            fail(f"unknown runtime profile '{profile}'")
         mode_spec = runtime_contract["modes"][profile]
         archive_path = runtime_archive_dir / mode_spec["archive_name"]
         manifest_path = runtime_archive_dir / mode_spec["manifest_name"]
         if not archive_path.is_file() or not manifest_path.is_file():
             fail(
-                f"freestanding runtime {profile} archive pair for '{target}' is missing from "
+                f"runtime {profile} archive pair for '{target}' is missing from "
                 f"{runtime_archive_dir}; build it before staging the release"
             )
         try:
@@ -2936,7 +2963,10 @@ def reject_removed_staging_inputs(args: argparse.Namespace) -> None:
 def stage_release(args: argparse.Namespace) -> int:
     contract_path = Path(args.contract).resolve()
     contract = load_release_contract(contract_path)
-    variant = resolve_release_variant(contract, contract_path, args.target, args.backend)
+    profile = getattr(args, "profile", None) or getattr(args, "backend", None)
+    if profile is None:
+        fail("stage-release requires --profile")
+    variant = resolve_release_variant(contract, contract_path, args.target, profile)
     target = variant["target"]
     platform = variant["platform"]
     version = args.version
@@ -3014,7 +3044,7 @@ def stage_release(args: argparse.Namespace) -> int:
             else REPO_ROOT / "build" / "runtime-archives" / target
         )
         component_digests.update(
-            stage_freestanding_runtime_archives(bundle_dir, variant, runtime_archive_dir)
+            stage_runtime_archives(bundle_dir, variant, runtime_archive_dir)
         )
 
     provider_info = None
@@ -3056,9 +3086,9 @@ def stage_release(args: argparse.Namespace) -> int:
         component_digests,
     )
 
-    if variant["backend_kind"] == "object":
+    if variant["package_kind"] == "object":
         assert_object_package_is_toolchain_free(bundle_dir, variant)
-    else:
+    elif variant["package_kind"] == "c-source":
         assert_c_package_has_no_object_payload(bundle_dir, variant)
 
     archive_path = output_dir / archive_name
@@ -3083,12 +3113,12 @@ CI_PLATFORM_LABELS = {"windows": "Windows", "linux": "Linux", "macos": "macOS"}
 def ci_target_matrix(contract: dict, version: str) -> list[dict]:
     """The release workflow's package matrix: one entry per *target*.
 
-    Deliberately not one entry per (target, backend): every backend variant
+    Deliberately not one entry per (target, profile): every profile variant
     of a target reuses the same pinned toolchain download, the same
     freestanding runtime archives, and the same native-link sidecar, so
-    fanning out per backend would repeat the most expensive work in the
-    release three times per platform. The per-target entry therefore carries
-    the canonical backend list, and the job builds/assembles/smokes them
+    fanning out per profile would repeat the most expensive work in the
+    release once per profile. The per-target entry therefore carries
+    the canonical profile list, and the job builds/assembles/smokes them
     sequentially.
     """
     entries: list[dict] = []
@@ -3098,16 +3128,16 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
         platform = target.split("-", 1)[0]
         if platform not in CI_RUNNERS:
             fail(f"release contract target '{target}' has no CI runner mapping")
-        declared = target_spec["backends"]
-        unknown = sorted(set(declared) - set(CANONICAL_BACKENDS))
+        declared = target_spec["profiles"]
+        unknown = sorted(set(declared) - set(CANONICAL_PROFILES))
         if unknown:
             fail(
-                f"release contract target '{target}' declares non-canonical backend(s): "
+                f"release contract target '{target}' declares non-canonical profile(s): "
                 f"{', '.join(unknown)}"
             )
-        backends = [backend for backend in CANONICAL_BACKENDS if backend in declared]
-        if not backends:
-            fail(f"release contract target '{target}' declares no backends")
+        profiles = [profile for profile in CANONICAL_PROFILES if profile in declared]
+        if not profiles:
+            fail(f"release contract target '{target}' declares no profiles")
 
         archives: list[str] = []
         runtime_profiles: list[str] = []
@@ -3115,17 +3145,17 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
         needs_provider_archive = False
         needs_native_link = False
         needs_inprocess_toolchain = False
-        for backend in backends:
-            variant = declared[backend]
+        for profile in profiles:
+            variant = declared[profile]
             archive_name = render_release_template(
                 variant["archive_name_template"], version, "archive_name_template"
             )
             if archive_name in rendered_archives:
                 fail(
                     f"release archive name '{archive_name}' is produced by both "
-                    f"{rendered_archives[archive_name]} and {target}/{backend}"
+                    f"{rendered_archives[archive_name]} and {target}/{profile}"
                 )
-            rendered_archives[archive_name] = f"{target}/{backend}"
+            rendered_archives[archive_name] = f"{target}/{profile}"
             archives.append(archive_name)
             components = variant["components"]
             if "c_toolchain" in components:
@@ -3156,7 +3186,7 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 "os": CI_RUNNERS[platform],
                 "binary_name": target_spec["binary_name"],
                 "binary_path": f"target/release/{target_spec['binary_name']}",
-                "backends": ",".join(backends),
+                "profiles": ",".join(profiles),
                 "archives": ",".join(archives),
                 "runtime_profiles": ",".join(runtime_profiles),
                 "needs_base_toolchain": "true" if needs_base_toolchain else "false",
@@ -3165,7 +3195,7 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 "needs_inprocess_toolchain": (
                     "true" if needs_inprocess_toolchain else "false"
                 ),
-                "msi_backend": "llvm" if platform == "windows" and "llvm" in backends else "",
+                "msi_profile": "llvm" if platform == "windows" and "llvm" in profiles else "",
             }
         )
     if not entries:
@@ -3188,13 +3218,14 @@ def expected_package_metadata(variant: dict, version: str) -> dict:
     being described by whatever it happens to contain.
     """
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "package_id": f"oscan-{variant['profile']}",
         "version": version,
         "target": variant["target"],
-        "backend": variant["backend"],
-        "available_backends": [variant["backend"]],
-        "default_backend": variant["distribution_backend"],
-        "cargo_feature": variant["cargo_feature"],
+        "profile": variant["profile"],
+        "is_distribution": True,
+        "available_backends": list(variant["available_backends"]),
+        "default_backend": variant["default_backend"],
         "cargo_features": list(variant["build_features"]),
         "toolchain_free": variant["toolchain_free"],
         "link_mode": variant.get("link_mode"),
@@ -3290,7 +3321,7 @@ def _verify_sidecar_component(root: Path, variant: dict) -> dict:
 
 
 def _verify_runtime_archive_component(root: Path, variant: dict) -> None:
-    """Exactly the declared freestanding archive/manifest pairs, at the one
+    """Exactly the declared runtime archive/manifest pairs, at the one
     fixed executable-relative location a packaged compiler looks in."""
     target = variant["target"]
     runtime_contract = load_runtime_archive_contract(RUNTIME_ARCHIVE_CONTRACT_PATH)
@@ -3412,7 +3443,7 @@ def _verify_c_toolchain_component(root: Path, variant: dict, contract: dict) -> 
         for relative in llvm_provider_staged_paths(manifest)
         if (toolchain_root / safe_relative_path(relative)).exists()
     )
-    if excluded:
+    if excluded and "llvm_provider" not in variant["components"]:
         fail(
             f"{variant['target']}/{variant['backend']} is a C package and must not ship the "
             f"separately overlaid LLVM provider payload: {', '.join(excluded)}"
@@ -3472,6 +3503,12 @@ def _verify_inprocess_package_payload(root: Path, variant: dict) -> None:
     for relative in sorted(found):
         if (notice_root / safe_relative_path(relative)).stat().st_size == 0:
             fail(f"embedded-input notice is empty: LICENSES/embedded/{relative}")
+
+    # The Windows full profile additionally carries the independently
+    # verified C toolchain. Exact single-executable closure remains a slim
+    # LLVM invariant; component verifiers cover the full profile's union.
+    if variant["profile"] == "full":
+        return
 
     expected_files = {
         variant["binary_name"],
@@ -3566,7 +3603,7 @@ def verify_package_layout(
     root: Path,
     contract_path: Path,
     target: str,
-    backend: str,
+    profile: str,
     version: str | None = None,
     archive: Path | None = None,
     expect_archive_root_name: bool = False,
@@ -3579,7 +3616,7 @@ def verify_package_layout(
     be tested hermetically against staged fixture packages.
     """
     contract = load_release_contract(contract_path)
-    variant = resolve_release_variant(contract, contract_path, target, backend)
+    variant = resolve_release_variant(contract, contract_path, target, profile)
     if not root.is_dir():
         fail(f"package root '{root}' is not a directory")
 
@@ -3624,12 +3661,14 @@ def verify_package_layout(
         _verify_c_toolchain_component(root, variant, contract)
     _verify_absent_components(root, variant)
 
-    if variant["backend_kind"] == "object":
+    if variant["package_kind"] == "object":
         _verify_object_package_payload(root, variant)
         if variant.get("link_mode") == "inprocess":
             _verify_inprocess_package_payload(root, variant)
-    else:
+    elif variant["package_kind"] == "c-source":
         _verify_c_package_payload(root, variant)
+    elif variant.get("link_mode") == "inprocess":
+        _verify_inprocess_package_payload(root, variant)
 
     if variant.get("note_file") and not (root / Path(variant["note_file"]).name).is_file():
         fail(f"package is missing the contract note file '{variant['note_file']}'")
@@ -3637,17 +3676,20 @@ def verify_package_layout(
 
 
 def verify_package_layout_command(args: argparse.Namespace) -> int:
+    profile = getattr(args, "profile", None) or getattr(args, "backend", None)
+    if profile is None:
+        fail("verify-package-layout requires --profile")
     metadata = verify_package_layout(
         Path(args.root).resolve(),
         Path(args.contract).resolve(),
         args.target,
-        args.backend,
+        profile,
         version=args.version,
         archive=Path(args.archive).resolve() if args.archive else None,
         expect_archive_root_name=args.stage == "extracted",
     )
     print(
-        f"{args.target}/{args.backend} {args.stage} package layout OK "
+        f"{args.target}/{profile} {args.stage} package layout OK "
         f"(version {metadata['version']}, components: {', '.join(metadata['components'])})"
     )
     return 0
@@ -3658,10 +3700,11 @@ def list_variants_command(args: argparse.Namespace) -> int:
     matrix = release_variant_matrix(contract)
     if args.target:
         matrix = [entry for entry in matrix if entry["target"] == args.target]
-    if args.backend:
-        matrix = [entry for entry in matrix if entry["backend"] == args.backend]
+    profile = getattr(args, "profile", None) or getattr(args, "backend", None)
+    if profile:
+        matrix = [entry for entry in matrix if entry["profile"] == profile]
     if not matrix:
-        fail("no release variant matches the requested target/backend")
+        fail("no release variant matches the requested target/profile")
     print(json.dumps(matrix, indent=2, sort_keys=True))
     return 0
 
@@ -3670,7 +3713,7 @@ def validate_contract_command(args: argparse.Namespace) -> int:
     contract_path = Path(args.contract).resolve()
     contract = load_release_contract(contract_path)
     count = len(release_variant_matrix(contract))
-    print(f"{contract_path}: schema 2 OK, {count} variants")
+    print(f"{contract_path}: schema 3 OK, {count} variants")
     return 0
 
 
@@ -5216,10 +5259,12 @@ def build_parser() -> argparse.ArgumentParser:
     stage = subparsers.add_parser("stage-release")
     stage.add_argument("--target", required=True)
     stage.add_argument(
+        "--profile",
         "--backend",
+        dest="profile",
         required=True,
-        choices=list(CANONICAL_BACKENDS),
-        help="which backend variant to package ('native' is only a deprecated CLI alias for cranelift and is never an artifact label)",
+        choices=list(CANONICAL_PROFILES),
+        help="which package profile to stage (--backend is a compatibility spelling)",
     )
     stage.add_argument("--contract", default=str(CONTRACT_PATH))
     stage.add_argument("--version", required=True)
@@ -5342,22 +5387,34 @@ def build_parser() -> argparse.ArgumentParser:
 
     variants = subparsers.add_parser(
         "list-variants",
-        help="print the target x backend release matrix this contract publishes",
+        help="print the target x profile release matrix this contract publishes",
     )
     variants.add_argument("--contract", default=str(CONTRACT_PATH))
     variants.add_argument("--target", default=None)
-    variants.add_argument("--backend", default=None, choices=list(CANONICAL_BACKENDS))
+    variants.add_argument(
+        "--profile",
+        "--backend",
+        dest="profile",
+        default=None,
+        choices=list(CANONICAL_PROFILES),
+    )
     variants.set_defaults(func=list_variants_command)
 
     verify_layout = subparsers.add_parser(
         "verify-package-layout",
         help=(
-            "assert an extracted or installed package is exactly the (target, backend) variant "
+            "assert an extracted or installed package is exactly the (target, profile) variant "
             "the contract describes: metadata fields, component presence, and component absence"
         ),
     )
     verify_layout.add_argument("--target", required=True)
-    verify_layout.add_argument("--backend", required=True, choices=list(CANONICAL_BACKENDS))
+    verify_layout.add_argument(
+        "--profile",
+        "--backend",
+        dest="profile",
+        required=True,
+        choices=list(CANONICAL_PROFILES),
+    )
     verify_layout.add_argument(
         "--root",
         required=True,

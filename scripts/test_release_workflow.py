@@ -1,4 +1,4 @@
-"""Release/CI workflow regressions for release contract schema 2.
+"""Release/CI workflow regressions for release contract schema 3.
 
 Two kinds of check live here:
 
@@ -55,28 +55,28 @@ class PackageMatrixTests(unittest.TestCase):
         self.contract = rt.load_release_contract(rt.CONTRACT_PATH)
         self.matrix = rt.ci_target_matrix(self.contract, "1.2.3")
 
-    def test_one_job_per_target_not_per_target_and_backend(self) -> None:
+    def test_one_job_per_target_not_per_target_and_profile(self) -> None:
         # Expensive per-target work must happen once, so the matrix is keyed
-        # on the target and carries the backend list.
+        # on the target and carries the profile list.
         self.assertEqual(
             [entry["target"] for entry in self.matrix],
             ["linux-x86_64", "macos-x86_64", "windows-x86_64"],
         )
         variants = rt.release_variant_matrix(self.contract)
         self.assertEqual(
-            sum(len(entry["backends"].split(",")) for entry in self.matrix),
+            sum(len(entry["profiles"].split(",")) for entry in self.matrix),
             len(variants),
         )
 
-    def test_backends_are_listed_in_canonical_order(self) -> None:
+    def test_profiles_are_listed_in_canonical_order(self) -> None:
         for entry in self.matrix:
             with self.subTest(target=entry["target"]):
-                backends = entry["backends"].split(",")
+                profiles = entry["profiles"].split(",")
                 self.assertEqual(
-                    backends,
-                    [name for name in rt.CANONICAL_BACKENDS if name in backends],
+                    profiles,
+                    [name for name in rt.CANONICAL_PROFILES if name in profiles],
                 )
-                self.assertNotIn("native", backends)
+                self.assertNotIn("native", profiles)
 
     def test_each_entry_carries_its_runner_and_binary(self) -> None:
         expected = {
@@ -103,7 +103,7 @@ class PackageMatrixTests(unittest.TestCase):
                 self.assertEqual(entry["needs_native_link"], "true")
                 self.assertEqual(
                     entry["runtime_profiles"].split(","),
-                    list(rt.FREESTANDING_PROFILES),
+                    list(rt.RUNTIME_PROFILES),
                 )
 
         # Only Linux overlays a separately pinned provider archive; Windows
@@ -114,7 +114,7 @@ class PackageMatrixTests(unittest.TestCase):
         self.assertEqual(windows["needs_inprocess_toolchain"], "true")
 
         # macOS is C-only and relies on the host Apple CLT: nothing to fetch.
-        self.assertEqual(macos["backends"], "c")
+        self.assertEqual(macos["profiles"], "c")
         self.assertEqual(macos["needs_base_toolchain"], "false")
         self.assertEqual(macos["needs_native_link"], "false")
         self.assertEqual(macos["needs_provider_archive"], "false")
@@ -125,34 +125,36 @@ class PackageMatrixTests(unittest.TestCase):
         names = [name for entry in self.matrix for name in entry["archives"].split(",")]
         self.assertEqual(len(names), len(set(names)))
         self.assertIn("oscan-v1.2.3-windows-x86_64-llvm.zip", names)
+        self.assertIn("oscan-v1.2.3-windows-x86_64-full.zip", names)
+        self.assertIn("oscan-v1.2.3-linux-x86_64-full.tar.xz", names)
         self.assertIn("oscan-v1.2.3-linux-x86_64-cranelift.tar.xz", names)
         self.assertIn("oscan-v1.2.3-macos-x86_64-c.tar.gz", names)
         for name in names:
             self.assertNotIn("{version}", name)
 
     def test_exactly_one_recommended_msi_is_requested(self) -> None:
-        msi = [entry for entry in self.matrix if entry["msi_backend"]]
+        msi = [entry for entry in self.matrix if entry["msi_profile"]]
         self.assertEqual([entry["target"] for entry in msi], ["windows-x86_64"])
-        self.assertEqual(msi[0]["msi_backend"], "llvm")
+        self.assertEqual(msi[0]["msi_profile"], "llvm")
 
-    def test_a_contract_with_a_non_canonical_backend_is_refused(self) -> None:
+    def test_a_contract_with_a_non_canonical_profile_is_refused(self) -> None:
         contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
-        target = contract["variants"]["linux-x86_64"]["backends"]
+        target = contract["variants"]["linux-x86_64"]["profiles"]
         target["native"] = target.pop("cranelift")
         with self.assertRaises(SystemExit) as caught:
             rt.ci_target_matrix(contract, "1.2.3")
-        self.assertIn("non-canonical backend", str(caught.exception))
+        self.assertIn("non-canonical profile", str(caught.exception))
 
-    def test_a_target_with_no_backends_is_refused(self) -> None:
+    def test_a_target_with_no_profiles_is_refused(self) -> None:
         contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
-        contract["variants"]["macos-x86_64"]["backends"] = {}
+        contract["variants"]["macos-x86_64"]["profiles"] = {}
         with self.assertRaises(SystemExit) as caught:
             rt.ci_target_matrix(contract, "1.2.3")
-        self.assertIn("declares no backends", str(caught.exception))
+        self.assertIn("declares no profiles", str(caught.exception))
 
     def test_colliding_archive_names_are_refused(self) -> None:
         contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
-        windows = contract["variants"]["windows-x86_64"]["backends"]
+        windows = contract["variants"]["windows-x86_64"]["profiles"]
         windows["cranelift"]["archive_name_template"] = windows["llvm"][
             "archive_name_template"
         ]
@@ -170,15 +172,22 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertIn("release_tools.py validate-contract", self.workflow)
         self.assertIn("fromJson(needs.prepare.outputs.matrix)", self.workflow)
 
-    def test_every_backend_is_built_with_its_contract_features(self) -> None:
-        self.assertIn("$features = @([string]$variant['cargo_feature'])", self.workflow)
-        self.assertIn("$features += @($variant['extra_cargo_features'])", self.workflow)
+    def test_every_profile_is_built_with_its_contract_features(self) -> None:
+        self.assertIn("$features = @($variant['cargo_features'])", self.workflow)
         self.assertIn("$featureList = $features -join ','", self.workflow)
         self.assertIn(
             "cargo build --release --no-default-features --features $featureList",
             self.workflow,
         )
-        self.assertIn("$env:OSCAN_DISTRIBUTION_BACKEND = $backend", self.workflow)
+        self.assertIn("$env:OSCAN_DISTRIBUTION_PROFILE = $profile", self.workflow)
+        self.assertIn(
+            "$env:OSCAN_DEFAULT_BACKEND = [string]$profileSpec['default_backend']",
+            self.workflow,
+        )
+        self.assertIn(
+            "Remove-Item Env:OSCAN_DISTRIBUTION_BACKEND",
+            self.workflow,
+        )
         self.assertIn("$env:OSCAN_VERSION = $env:RELEASE_TAG", self.workflow)
         # Each build overwrites target/release, so the binary has to be moved
         # aside before the next backend is built.
@@ -238,9 +247,9 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
         self.assertNotIn("ToolchainDir =", self.workflow)
         self.assertNotIn("LlvmProviderDir", self.workflow)
 
-    def test_every_archive_is_smoked_with_its_backend_before_upload(self) -> None:
+    def test_every_archive_is_smoked_with_its_profile_before_upload(self) -> None:
         self.assertIn("./scripts/smoke-release.ps1", self.workflow)
-        self.assertRegex(self.workflow, r"-Backend \$backend")
+        self.assertRegex(self.workflow, r"-Profile \$profile")
         self.assertRegex(self.workflow, r"-ArchivePath \$archivePath")
         self.assertRegex(self.workflow, r"-Version \$version")
         smoke_index = self.workflow.index("./scripts/smoke-release.ps1")
@@ -265,11 +274,11 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
                 self.assertIn(message, self.workflow)
 
     def test_only_the_recommended_llvm_msi_is_built(self) -> None:
-        self.assertIn("if: matrix.msi_backend != ''", self.workflow)
-        self.assertIn("$backend = $env:RELEASE_MSI_BACKEND", self.workflow)
+        self.assertIn("if: matrix.msi_profile != ''", self.workflow)
+        self.assertIn("$profile = $env:RELEASE_MSI_PROFILE", self.workflow)
         self.assertIn("$msiPath = Join-Path $uploadDir \"$bundleName.msi\"", self.workflow)
         # Built from the bundle the assemble step staged and smoked.
-        self.assertIn("The staged $target/$backend bundle is missing at $bundleDir", self.workflow)
+        self.assertIn("The staged $target/$profile bundle is missing at $bundleDir", self.workflow)
 
     def test_the_installed_msi_payload_is_smoked_before_upload(self) -> None:
         self.assertIn("Start-Process -FilePath msiexec.exe", self.workflow)
@@ -324,6 +333,18 @@ class CiWorkflowTests(unittest.TestCase):
                 self.assertIn(job, self.workflow)
         self.assertIn('python -m unittest discover -s scripts -p "test_*.py"', self.workflow)
 
+    def test_the_strict_full_profile_is_tested_before_release(self) -> None:
+        self.assertIn("full-distribution:", self.workflow)
+        self.assertIn("OSCAN_DISTRIBUTION_PROFILE: full", self.workflow)
+        self.assertIn("OSCAN_DEFAULT_BACKEND: llvm", self.workflow)
+        self.assertIn('grep -qx "distribution: full"', self.workflow)
+
+    def test_windows_runs_archive_installer_coexistence_tests(self) -> None:
+        self.assertIn(
+            "python -m unittest scripts.test_installers.WindowsInstallerCoexistenceTests",
+            self.workflow,
+        )
+
 
 @unittest.skipIf(yaml is None, "PyYAML is not available in this environment")
 class WorkflowStructureTests(unittest.TestCase):
@@ -338,7 +359,7 @@ class WorkflowStructureTests(unittest.TestCase):
         self.assertEqual(package["strategy"]["matrix"], "${{ fromJson(needs.prepare.outputs.matrix) }}")
         self.assertFalse(package["strategy"]["fail-fast"])
         self.assertEqual(package["runs-on"], "${{ matrix.os }}")
-        for name in ("RELEASE_TARGET", "RELEASE_BACKENDS", "RELEASE_VERSION", "RELEASE_TAG"):
+        for name in ("RELEASE_TARGET", "RELEASE_PROFILES", "RELEASE_VERSION", "RELEASE_TAG"):
             self.assertIn(name, package["env"])
         self.assertEqual(
             workflow["jobs"]["publish"]["needs"], ["prepare", "package", "checksums"]
@@ -349,6 +370,8 @@ class WorkflowStructureTests(unittest.TestCase):
         job = workflow["jobs"]["backend-distributions"]
         self.assertEqual(job["strategy"]["matrix"]["backend"], list(rt.CANONICAL_BACKENDS))
         self.assertFalse(job["strategy"]["fail-fast"])
+        full = workflow["jobs"]["full-distribution"]
+        self.assertEqual(full["runs-on"], "ubuntu-latest")
 
 
 if __name__ == "__main__":

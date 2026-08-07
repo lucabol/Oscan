@@ -1,32 +1,34 @@
 <#
 .SYNOPSIS
-    Downloads and silently installs the latest backend-specific Oscan release
-    for Windows x86_64.
+    Downloads and installs a coexistence-safe Oscan package profile for
+    Windows x86_64.
 
 .DESCRIPTION
-    Every published Oscan artifact is one (target, backend) package. For
-    Windows x86_64 the release publishes exactly three archives —
-    oscan-vX.Y.Z-windows-x86_64-llvm.zip, ...-cranelift.zip and ...-c.zip —
-    plus one installer, the recommended LLVM MSI
-    (oscan-vX.Y.Z-windows-x86_64-llvm.msi). No combined all-backends package
-    is published.
+    Windows publishes a full package containing all backends and three slim
+    packages (LLVM, Cranelift, and C). Archive installs use profile-specific
+    roots and qualified commands, so installing one profile does not remove
+    another. The unqualified oscan command is created when no selector exists
+    and changes only when -SetDefault is supplied.
 
     This script queries the GitHub Releases API for lucabol/Oscan, picks the
     asset whose name is exactly the one the release contract derives from the
-    resolved tag and the requested backend, verifies its SHA-256 against the
+    resolved tag and the requested profile, verifies its SHA-256 against the
     release's SHA256SUMS file, and installs it without prompts. No fuzzy,
     suffix or version-drift matching is performed: if the exact name is not
     published, the script fails with the list of assets that are.
 
-    LLVM is the recommended backend and the default here. The zip flow is the
-    default install mode because it is per-user and does not require
-    administrator privileges; -Mode msi installs the recommended LLVM MSI
-    through msiexec /quiet instead (which may require elevation).
+    The slim LLVM package remains the transition default. Use -Profile full
+    for one compiler with --backend llvm|cranelift|c. The zip flow is the
+    default because it supports profile coexistence without administrator
+    privileges. The legacy LLVM MSI remains the only MSI and is intentionally
+    a separate, single-product install surface.
+
+.PARAMETER Profile
+    'slim' (default) selects the package named by -Backend. 'full' installs
+    one compiler containing LLVM, Cranelift, and C.
 
 .PARAMETER Backend
-    'llvm' (default, recommended), 'cranelift', or 'c'. The backend selects
-    the package: an llvm/cranelift package emits object code directly and
-    carries no C compiler; the c package carries the pinned C toolchain.
+    For -Profile slim: 'llvm' (default, recommended), 'cranelift', or 'c'.
     'native' is accepted as the compiler's deprecated CLI alias spelling and
     resolves to the cranelift package; it is never an artifact name.
 
@@ -42,7 +44,12 @@
     published release.
 
 .PARAMETER InstallDir
-    Forwarded to install.ps1 when installing a zip. Ignored for MSI.
+    Root under which profile-specific payloads and the stable bin directory
+    are installed. Forwarded to install.ps1 for zip installs. Ignored for MSI.
+
+.PARAMETER SetDefault
+    Select the installed archive profile for the unqualified oscan command.
+    Without this switch, an existing selection is preserved.
 
 .PARAMETER NoPathUpdate
     Forwarded to install.ps1 when installing a zip. Ignored for MSI.
@@ -56,13 +63,15 @@
     iwr -useb https://raw.githubusercontent.com/lucabol/Oscan/master/scripts/install-latest.ps1 | iex
 
 .EXAMPLE
-    .\install-latest.ps1 -Backend cranelift
+    .\install-latest.ps1 -Profile full -SetDefault
 
 .EXAMPLE
-    .\install-latest.ps1 -Backend llvm -Mode msi
+    .\install-latest.ps1 -Profile slim -Backend cranelift
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet('slim', 'full')]
+    [string]$Profile = 'slim',
     [ValidateSet('llvm', 'cranelift', 'c', 'native')]
     [string]$Backend = 'llvm',
     [ValidateSet('zip', 'msi')]
@@ -70,8 +79,10 @@ param(
     [string]$Version,
     [string]$InstallDir,
     [string]$BinDir,
+    [switch]$SetDefault,
     [switch]$NoPathUpdate,
-    [switch]$SkipChecksum
+    [switch]$SkipChecksum,
+    [switch]$AllowMsiCommandConflict
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,10 +91,10 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo = 'lucabol/Oscan'
 $ApiBase = "https://api.github.com/repos/$Repo/releases"
 
-# The one Windows target this installer serves, and the only backend that
+# The one Windows target this installer serves, and the only profile that
 # publishes an installer.
 $InstallerTarget = 'windows-x86_64'
-$MsiBackend = 'llvm'
+$MsiProfile = 'llvm'
 
 # Force TLS 1.2 for older PowerShell hosts
 try {
@@ -110,27 +121,39 @@ function Resolve-OscanBackend {
     return $normalized
 }
 
+function Resolve-OscanPackageProfile {
+    param(
+        [Parameter(Mandatory)][ValidateSet('slim', 'full')][string]$Profile,
+        [Parameter(Mandatory)][string]$Backend
+    )
+
+    if ($Profile -eq 'full') {
+        return 'full'
+    }
+    return Resolve-OscanBackend $Backend
+}
+
 function Get-OscanAssetName {
     <#
-        The exact canonical asset name for a (tag, backend, kind) triple, as
+        The exact canonical asset name for a (tag, profile, kind) triple, as
         rendered by packaging/toolchains/release-contract.json. Nothing here
         globs: an installer must never resolve to another backend's package.
     #>
     param(
         [Parameter(Mandatory)][string]$Tag,
-        [Parameter(Mandatory)][ValidateSet('llvm', 'cranelift', 'c')][string]$Backend,
+        [Parameter(Mandatory)][ValidateSet('full', 'llvm', 'cranelift', 'c')][string]$Profile,
         [Parameter(Mandatory)][ValidateSet('zip', 'msi')][string]$Kind
     )
 
-    if ($Kind -eq 'msi' -and $Backend -ne $MsiBackend) {
-        throw "Only the recommended $MsiBackend package is published as an MSI; the $Backend package ships as a zip archive."
+    if ($Kind -eq 'msi' -and $Profile -ne $MsiProfile) {
+        throw "Only the recommended $MsiProfile profile is published as an MSI; the $Profile profile ships as a zip archive."
     }
-    return "oscan-$Tag-$InstallerTarget-$Backend.$Kind"
+    return "oscan-$Tag-$InstallerTarget-$Profile.$Kind"
 }
 
 function Select-OscanReleaseAsset {
     <#
-        Pick the exact canonical asset for this backend out of a release's
+        Pick the exact canonical asset for this profile out of a release's
         asset list.
 
         * Matching is by exact, contract/tag-derived name only. A release
@@ -147,19 +170,19 @@ function Select-OscanReleaseAsset {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Assets,
         [Parameter(Mandatory)][string]$Tag,
-        [Parameter(Mandatory)][ValidateSet('llvm', 'cranelift', 'c')][string]$Backend,
+        [Parameter(Mandatory)][ValidateSet('full', 'llvm', 'cranelift', 'c')][string]$Profile,
         [Parameter(Mandatory)][ValidateSet('zip', 'msi')][string]$Mode
     )
 
-    if ($Mode -eq 'msi' -and $Backend -ne $MsiBackend) {
-        throw "-Mode msi is only available for the recommended $MsiBackend package. Re-run with '-Backend $MsiBackend -Mode msi', or install the $Backend package with '-Backend $Backend' (zip)."
+    if ($Mode -eq 'msi' -and $Profile -ne $MsiProfile) {
+        throw "-Mode msi is only available for the recommended $MsiProfile profile. Install '$Profile' with -Mode zip."
     }
 
     $wanted = @()
     if ($Mode -eq 'msi') {
-        $wanted += [PSCustomObject]@{ Kind = 'msi'; Name = (Get-OscanAssetName -Tag $Tag -Backend $Backend -Kind 'msi') }
+        $wanted += [PSCustomObject]@{ Kind = 'msi'; Name = (Get-OscanAssetName -Tag $Tag -Profile $Profile -Kind 'msi') }
     }
-    $wanted += [PSCustomObject]@{ Kind = 'zip'; Name = (Get-OscanAssetName -Tag $Tag -Backend $Backend -Kind 'zip') }
+    $wanted += [PSCustomObject]@{ Kind = 'zip'; Name = (Get-OscanAssetName -Tag $Tag -Profile $Profile -Kind 'zip') }
 
     foreach ($candidate in $wanted) {
         $match = @($Assets | Where-Object { $_.name -ieq $candidate.Name })
@@ -168,7 +191,7 @@ function Select-OscanReleaseAsset {
         }
         if ($match.Count -eq 1) {
             if ($candidate.Kind -ne $Mode) {
-                Write-Warning "Release $Tag publishes no $Backend MSI; installing $($match[0].name) instead."
+                Write-Warning "Release $Tag publishes no $Profile MSI; installing $($match[0].name) instead."
             }
             return [PSCustomObject]@{ Asset = $match[0]; Kind = $candidate.Kind }
         }
@@ -176,7 +199,7 @@ function Select-OscanReleaseAsset {
 
     $published = @($Assets | Where-Object { $_.name } | ForEach-Object { $_.name } | Sort-Object)
     $expected = ($wanted | ForEach-Object { $_.Name }) -join ' or '
-    throw "Release $Tag publishes no $expected. Asset names are derived from the release tag, and only that exact name is accepted. Windows releases ship one archive per backend (llvm, cranelift, c) and one recommended llvm MSI; there is no combined package. Published assets: $(if ($published) { $published -join ', ' } else { '(none)' })."
+    throw "Release $Tag publishes no $expected. Asset names are derived from the release tag, and only that exact name is accepted. Windows releases ship full, llvm, cranelift, and c archives plus one recommended llvm MSI. Published assets: $(if ($published) { $published -join ', ' } else { '(none)' })."
 }
 
 function Get-OscanExpectedChecksum {
@@ -194,6 +217,43 @@ function Get-OscanExpectedChecksum {
     return $null
 }
 
+function Assert-OscanArchiveBundle {
+    param(
+        [Parameter(Mandatory)][string]$BundleDir,
+        [Parameter(Mandatory)][ValidateSet('full', 'llvm', 'cranelift', 'c')][string]$ExpectedProfile
+    )
+
+    $metadataPath = Join-Path $BundleDir 'oscan-package.json'
+    if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+        throw "The downloaded archive has no profile-aware oscan-package.json. Legacy archives contain a destructive flat installer and cannot be installed over coexistence-safe profiles; extract it as a portable bundle or choose a schema-3 release."
+    }
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    } catch {
+        throw "The downloaded archive has unreadable oscan-package.json: $($_.Exception.Message)"
+    }
+    if ($metadata.schema_version -ne 2 -or
+        $metadata.target -ne $InstallerTarget -or
+        $metadata.profile -ne $ExpectedProfile -or
+        $metadata.package_id -ne "oscan-$ExpectedProfile" -or
+        $metadata.is_distribution -ne $true) {
+        throw "The downloaded archive metadata does not identify schema-2 package 'oscan-$ExpectedProfile' for '$InstallerTarget'; refusing to run its installer."
+    }
+    $expectedBackends = if ($ExpectedProfile -eq 'full') {
+        @('llvm', 'cranelift', 'c')
+    } else {
+        @($ExpectedProfile)
+    }
+    if ((@($metadata.available_backends) -join ',') -ne ($expectedBackends -join ',')) {
+        throw "The downloaded archive's backend inventory does not match profile '$ExpectedProfile'."
+    }
+    $expectedDefault = if ($ExpectedProfile -eq 'full') { 'llvm' } else { $ExpectedProfile }
+    if ($metadata.default_backend -ne $expectedDefault) {
+        throw "The downloaded archive's default backend does not match profile '$ExpectedProfile'."
+    }
+    return $metadata
+}
+
 function Invoke-GitHubApi {
     param([Parameter(Mandatory)][string]$Url)
     $headers = @{
@@ -201,23 +261,29 @@ function Invoke-GitHubApi {
         'Accept'     = 'application/vnd.github+json'
     }
     if ($env:GITHUB_TOKEN) {
-        $headers['Authorization'] = "******"
+        $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN"
     }
     Invoke-RestMethod -Uri $Url -Headers $headers
 }
 
 function Invoke-OscanInstallLatest {
     param(
+        [string]$Profile = 'slim',
         [string]$Backend = 'llvm',
         [string]$Mode = 'zip',
         [string]$Version,
         [string]$InstallDir,
         [string]$BinDir,
+        [switch]$SetDefault,
         [switch]$NoPathUpdate,
-        [switch]$SkipChecksum
+        [switch]$SkipChecksum,
+        [switch]$AllowMsiCommandConflict
     )
 
-    $resolvedBackend = Resolve-OscanBackend $Backend
+    $packageProfile = Resolve-OscanPackageProfile -Profile $Profile -Backend $Backend
+    if ($Mode -eq 'msi' -and $SetDefault) {
+        throw "-SetDefault applies to coexistence-safe zip profiles. The legacy LLVM MSI owns its own unqualified PATH command."
+    }
 
     if ($Version) {
         $tag = if ($Version.StartsWith('v')) { $Version } else { "v$Version" }
@@ -234,10 +300,10 @@ function Invoke-OscanInstallLatest {
     $selection = Select-OscanReleaseAsset `
         -Assets @($release.assets) `
         -Tag $tagName `
-        -Backend $resolvedBackend `
+        -Profile $packageProfile `
         -Mode $Mode
     $asset = $selection.Asset
-    Write-Host "Selected the $resolvedBackend package: $($asset.name)"
+    Write-Host "Selected the $packageProfile profile: $($asset.name)"
 
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("oscan-install-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
@@ -271,31 +337,57 @@ function Invoke-OscanInstallLatest {
         }
 
         if ($selection.Kind -eq 'msi') {
+            $archiveRoot = if ($InstallDir) {
+                [System.IO.Path]::GetFullPath($InstallDir)
+            } else {
+                Join-Path $env:LOCALAPPDATA 'Programs\Oscan'
+            }
+            $archiveSelector = Join-Path $archiveRoot 'default-profile'
+            $archiveCommand = Join-Path (Join-Path $archiveRoot 'bin') 'oscan.cmd'
+            $legacyArchiveCommand = Join-Path $archiveRoot 'oscan.exe'
+            $archiveMarker = Join-Path $env:LOCALAPPDATA 'Programs\Oscan\archive-default'
+            if (-not $AllowMsiCommandConflict -and
+                ((Test-Path -LiteralPath $archiveSelector) -or
+                 (Test-Path -LiteralPath $archiveCommand) -or
+                 (Test-Path -LiteralPath $legacyArchiveCommand) -or
+                 (Test-Path -LiteralPath $archiveMarker))) {
+                throw "A per-user archive command is installed under '$archiveRoot'. The legacy LLVM MSI also exports an unqualified oscan command, so PATH order would be ambiguous. Use the zip profile, remove the archive selector/legacy install first, or pass -AllowMsiCommandConflict to acknowledge the collision."
+            }
             Write-Host "Installing $($asset.name) silently via msiexec..."
             $logPath = Join-Path $tempRoot 'oscan-msi.log'
+            $msiArgs = @('/i', "`"$assetPath`"", '/quiet', '/norestart', '/l*v', "`"$logPath`"")
+            if ($AllowMsiCommandConflict) {
+                $msiArgs += 'OSCAN_ALLOW_ARCHIVE_CONFLICT=1'
+            }
             $proc = Start-Process -FilePath 'msiexec.exe' `
-                -ArgumentList @('/i', "`"$assetPath`"", '/quiet', '/norestart', '/l*v', "`"$logPath`"") `
+                -ArgumentList $msiArgs `
                 -Wait -PassThru
             if ($proc.ExitCode -ne 0) {
                 throw "msiexec exited with code $($proc.ExitCode). See log: $logPath"
             }
-            Write-Host "Installed Oscan $tagName ($resolvedBackend) via MSI."
+            Write-Host "Installed Oscan $tagName ($packageProfile) via MSI."
         } else {
             $extractDir = Join-Path $tempRoot 'extract'
             Write-Host "Extracting $($asset.name)..."
             Expand-Archive -Path $assetPath -DestinationPath $extractDir -Force
-            $bundle = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
-            if (-not $bundle) {
-                throw "Extracted archive does not contain a bundle directory."
+            $bundles = @(Get-ChildItem -Path $extractDir -Directory)
+            if ($bundles.Count -ne 1) {
+                throw "Extracted archive must contain exactly one bundle directory; found $($bundles.Count)."
             }
+            $bundle = $bundles[0]
+            Assert-OscanArchiveBundle -BundleDir $bundle.FullName -ExpectedProfile $packageProfile | Out-Null
             $installScript = Join-Path $bundle.FullName 'install.ps1'
             if (-not (Test-Path $installScript)) {
                 throw "install.ps1 not found in extracted bundle: $($bundle.FullName)"
             }
             $installArgs = @{}
-            if ($InstallDir)   { $installArgs['InstallDir']   = $InstallDir }
+            if ($InstallDir)   { $installArgs['InstallRoot']  = $InstallDir }
             if ($BinDir)       { $installArgs['BinDir']       = $BinDir }
+            if ($SetDefault)   { $installArgs['SetDefault']   = $true }
             if ($NoPathUpdate) { $installArgs['NoPathUpdate'] = $true }
+            if ($AllowMsiCommandConflict) {
+                $installArgs['AllowMsiCommandConflict'] = $true
+            }
             Write-Host "Running bundled installer..."
             & $installScript @installArgs
         }
@@ -304,9 +396,11 @@ function Invoke-OscanInstallLatest {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tempRoot
     }
 
-    Write-Host "Installed the $resolvedBackend package. Open a new terminal and run: oscan --help"
-    if ($resolvedBackend -ne 'c') {
-        Write-Host "This package builds with --backend $resolvedBackend only; --backend c, --emit-c, -o *.c, --libc and --extra-c are refused by design."
+    Write-Host "Installed the $packageProfile profile. Qualified command: oscan-$packageProfile --help"
+    if ($packageProfile -eq 'full') {
+        Write-Host "Select LLVM, Cranelift, or C with --backend."
+    } elseif ($packageProfile -ne 'c') {
+        Write-Host "This slim profile builds with --backend $packageProfile only; C-specific modes are refused by design."
     }
 }
 
@@ -314,11 +408,14 @@ function Invoke-OscanInstallLatest {
 # above without installing anything, so they can be unit-tested offline.
 if ($MyInvocation.InvocationName -ne '.') {
     Invoke-OscanInstallLatest `
+        -Profile $Profile `
         -Backend $Backend `
         -Mode $Mode `
         -Version $Version `
         -InstallDir $InstallDir `
         -BinDir $BinDir `
+        -SetDefault:$SetDefault `
         -NoPathUpdate:$NoPathUpdate `
-        -SkipChecksum:$SkipChecksum
+        -SkipChecksum:$SkipChecksum `
+        -AllowMsiCommandConflict:$AllowMsiCommandConflict
 }

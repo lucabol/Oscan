@@ -13,9 +13,33 @@
            Scope="perMachine"
            Compressed="yes">
 
-    <SummaryInformation Description="Oscan programming language" />
+    <SummaryInformation Description="Oscan programming language (LLVM profile)" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Oscan is already installed." />
+
+    <Property Id="OSCAN_ARCHIVE_DEFAULT">
+      <DirectorySearch Id="OscanArchiveRootSearch"
+                       Path="[LocalAppDataFolder]Programs\Oscan"
+                       Depth="0">
+        <FileSearch Id="OscanArchiveDefaultSearch" Name="archive-default" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="OSCAN_LEGACY_ARCHIVE">
+      <DirectorySearch Id="OscanLegacyArchiveRootSearch"
+                       Path="[LocalAppDataFolder]Programs\Oscan"
+                       Depth="0">
+        <FileSearch Id="OscanLegacyArchiveSearch" Name="oscan.exe" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="OSCAN_ALLOW_ARCHIVE_CONFLICT" Secure="yes" />
+    <Launch Condition="Installed OR (NOT OSCAN_ARCHIVE_DEFAULT AND NOT OSCAN_LEGACY_ARCHIVE) OR OSCAN_ALLOW_ARCHIVE_CONFLICT = &quot;1&quot;"
+            Message="A per-user Oscan archive profile already owns the unqualified oscan command. Uninstall or deselect it first, or run msiexec with OSCAN_ALLOW_ARCHIVE_CONFLICT=1 to acknowledge ambiguous PATH ownership." />
+    <InstallExecuteSequence>
+      <AppSearch Before="LaunchConditions" />
+    </InstallExecuteSequence>
+    <InstallUISequence>
+      <AppSearch Before="LaunchConditions" />
+    </InstallUISequence>
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
@@ -25,6 +49,8 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/lucabol/Oscan" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/lucabol/Oscan" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/lucabol/Oscan/releases" />
+    <Property Id="ARPCOMMENTS"
+              Value="Legacy canonical LLVM-profile MSI. Full and slim archive profiles use coexistence-safe qualified commands." />
 
     <!-- Full UI: welcome, license, install dir, progress, finish with Finish button -->
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />

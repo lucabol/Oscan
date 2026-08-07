@@ -448,7 +448,7 @@ fn a_build_without_the_c_backend_refuses_it_by_name() {
         stderr.contains("the c backend is not included in this compiler build"),
         "{stderr}"
     );
-    assert!(stderr.contains("ends in '-c'"), "{stderr}");
+    assert!(stderr.contains("ends in '-full' or '-c'"), "{stderr}");
     assert!(output.stdout.is_empty(), "no C may be emitted");
 }
 

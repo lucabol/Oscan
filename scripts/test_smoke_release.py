@@ -6,7 +6,7 @@ The smoke scripts have two halves and both are covered here:
   ``release_tools.py verify-package-layout``, which is exercised directly
   against real staged fixture packages (and against packages deliberately
   broken in one way each); and
-* how the scripts are *driven* — the mandatory backend, archives rather
+* how the scripts are *driven* — the mandatory package profile, archives rather
   than directories, and the environment scrubbing that makes a passing
   smoke test mean "this works from the package alone".
 
@@ -77,9 +77,18 @@ class PackageLayoutVerificationTests(unittest.TestCase):
                         archive=archive,
                         expect_archive_root_name=True,
                     )
-                    self.assertEqual(metadata["backend"], backend)
-                    self.assertEqual(metadata["default_backend"], backend)
-                    self.assertEqual(metadata["available_backends"], [backend])
+                    self.assertEqual(metadata["profile"], backend)
+                    self.assertEqual(metadata["package_id"], f"oscan-{backend}")
+                    expected = (
+                        ["llvm", "cranelift", "c"]
+                        if backend == "full"
+                        else [backend]
+                    )
+                    self.assertEqual(metadata["available_backends"], expected)
+                    self.assertEqual(
+                        metadata["default_backend"],
+                        "llvm" if backend == "full" else backend,
+                    )
 
     def test_the_command_line_entry_point_verifies_a_real_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -91,7 +100,7 @@ class PackageLayoutVerificationTests(unittest.TestCase):
                     str(REPO_ROOT / "scripts" / "release_tools.py"),
                     "verify-package-layout",
                     "--target", "linux-x86_64",
-                    "--backend", "llvm",
+                    "--profile", "llvm",
                     "--root", str(bundle),
                     "--stage", "extracted",
                     "--archive", str(archive),
@@ -261,12 +270,13 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.script = SMOKE_POWERSHELL.read_text(encoding="utf-8")
 
-    def test_the_backend_is_mandatory_and_canonical(self) -> None:
-        self.assertIn('[ValidateSet("llvm", "cranelift", "c")]', self.script)
+    def test_the_profile_is_mandatory_and_canonical(self) -> None:
+        self.assertIn('[ValidateSet("full", "llvm", "cranelift", "c")]', self.script)
         self.assertRegex(
             self.script,
             r"\[Parameter\(Mandatory = \$true\)\]\s*\n\s*"
-            r'\[ValidateSet\("llvm", "cranelift", "c"\)\]\s*\n\s*\[string\]\$Backend',
+            r'\[Alias\("Backend"\)\]\s*\n\s*'
+            r'\[ValidateSet\("full", "llvm", "cranelift", "c"\)\]\s*\n\s*\[string\]\$Profile',
         )
 
     def test_it_takes_an_archive_and_refuses_a_directory(self) -> None:
@@ -331,7 +341,7 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
         # packaged compile must not need one; the shim is still covered by
         # the --version check, which runs with the ordinary PATH.
         self.assertIn("$OscanCommand = Join-Path $InstallDir $binaryName", self.script)
-        self.assertIn('$OscanShim = Join-Path $BinDir "oscan.cmd"', self.script)
+        self.assertIn('$OscanShim = Join-Path $BinDir "oscan-$Profile.cmd"', self.script)
         self.assertIn("$versionText = (& $OscanShim --version", self.script)
         self.assertIn("& $script:OscanCommand @Arguments", self.script)
 
@@ -341,13 +351,21 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
         # The native-link assertion checks *which* sidecar was used, so a
         # generic "the word sidecar appears" match must not creep back in.
         self.assertNotIn(r"^\[verbose\] native-link assets: sidecar \(", self.script)
-        self.assertEqual(self.script.count("Assert-PackagedSidecarAssets -LogPath"), 2)
-        self.assertEqual(self.script.count("Assert-PackagedInProcessLinking -LogPath"), 2)
+        self.assertGreaterEqual(self.script.count("Assert-PackagedSidecarAssets -LogPath"), 2)
+        self.assertGreaterEqual(self.script.count("Assert-PackagedInProcessLinking -LogPath"), 2)
         self.assertIn("\nfunction Assert-PackagedInProcessLinking {", self.script)
         self.assertNotIn("\n    function Assert-PackagedInProcessLinking {", self.script)
         self.assertIn("-SidecarRoot (Join-Path $InstallDir $sidecarDirName)", self.script)
         self.assertIn("LLVM code generator: statically-linked-llvm-", self.script)
         self.assertIn('if ($usesSidecar)', self.script)
+
+    def test_full_profile_smokes_default_and_every_explicit_backend(self) -> None:
+        self.assertIn("if ($isFullPackage)", self.script)
+        self.assertIn("foreach ($selectedBackend in $availableBackends)", self.script)
+        self.assertIn('"--backend", $selectedBackend', self.script)
+        self.assertIn('"--verbose", "--libc"', self.script)
+        self.assertIn('"--verbose", "--extra-c", $extraCSource', self.script)
+        self.assertIn("Linking hosted executable with .+ \\(bundled\\)", self.script)
 
     def test_it_asserts_the_version_metadata_block(self) -> None:
         for line in ("backends", "default-backend", "distribution", "toolchain-free"):
@@ -371,7 +389,7 @@ class PowerShellSmokeInterfaceTests(unittest.TestCase):
             "the c backend is not included in this compiler build",
             "refuses --libc",
             "refuses --extra-c",
-            "archive name ends in '-c'",
+            "archive name ends in '-full' or '-c'",
         ):
             with self.subTest(expectation=expectation):
                 self.assertIn(expectation, self.script)
@@ -623,7 +641,7 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
         self.script = SMOKE_SHELL.read_text(encoding="utf-8")
 
     def test_it_keeps_the_same_contract_driven_interface(self) -> None:
-        for flag in ("--target", "--backend", "--archive", "--version", "--contract"):
+        for flag in ("--target", "--profile", "--archive", "--version", "--contract"):
             with self.subTest(flag=flag):
                 self.assertIn(flag, self.script)
         stages = re.findall(r"--stage (\w+)", self.script)
@@ -643,12 +661,13 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
                 self.assertIn(f"-u {name}", self.script)
         self.assertNotIn("OSCAN_RUNTIME_ARCHIVE_DIR=", self.script)
 
-    def test_it_asserts_the_same_backend_facts(self) -> None:
-        self.assertIn("^backends: $BACKEND\\$", self.script)
-        self.assertIn("^distribution: $BACKEND\\$", self.script)
-        self.assertIn("^toolchain-free: $EXPECTED_TOOLCHAIN_FREE\\$", self.script)
+    def test_it_asserts_the_same_profile_facts(self) -> None:
+        self.assertIn("^backends: $BACKEND_LIST\\$", self.script)
+        self.assertIn("^distribution: $PROFILE\\$", self.script)
+        self.assertIn("^toolchain-free: $TOOLCHAIN_FREE\\$", self.script)
         self.assertIn("native-link assets: sidecar", self.script)
         self.assertIn("the c backend is not included in this compiler build", self.script)
+        self.assertIn("for SELECTED_BACKEND in $AVAILABLE_BACKENDS", self.script)
 
     @unittest.skipIf(SHELL is None, "no POSIX shell is available in this environment")
     def test_the_script_is_syntactically_valid(self) -> None:
@@ -658,14 +677,14 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipIf(SHELL is None, "no POSIX shell is available in this environment")
-    def test_it_refuses_to_run_without_a_backend(self) -> None:
+    def test_it_refuses_to_run_without_a_profile(self) -> None:
         result = subprocess.run(
             [SHELL, str(SMOKE_SHELL), "--target", "linux-x86_64", "--archive", "x.tar.xz"],
             capture_output=True,
             text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("missing --backend", result.stderr)
+        self.assertIn("missing --profile", result.stderr)
 
     @unittest.skipIf(SHELL is None, "no POSIX shell is available in this environment")
     def test_it_refuses_the_deprecated_alias_as_a_package_label(self) -> None:
@@ -673,7 +692,7 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
             [
                 SHELL, str(SMOKE_SHELL),
                 "--target", "linux-x86_64",
-                "--backend", "native",
+                "--profile", "native",
                 "--archive", "x.tar.xz",
             ],
             capture_output=True,
@@ -689,7 +708,7 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
                 [
                     SHELL, str(SMOKE_SHELL),
                     "--target", "linux-x86_64",
-                    "--backend", "llvm",
+                    "--profile", "llvm",
                     "--archive", tmp_name,
                 ],
                 capture_output=True,
@@ -709,6 +728,13 @@ class MsiHarvestTests(unittest.TestCase):
         self.assertIn('ComponentGroup Id=`"BundlePayload`"', harvester)
         self.assertNotIn("ToolchainFiles", wxs)
         self.assertNotIn("ToolchainFiles", harvester)
+
+    def test_msi_checks_archive_ownership_after_app_search(self) -> None:
+        wxs = WXS.read_text(encoding="utf-8")
+        self.assertIn('Name="archive-default"', wxs)
+        self.assertIn('Name="oscan.exe"', wxs)
+        self.assertIn("OSCAN_ALLOW_ARCHIVE_CONFLICT", wxs)
+        self.assertEqual(wxs.count('<AppSearch Before="LaunchConditions" />'), 2)
 
     @unittest.skipIf(POWERSHELL is None, "pwsh is not available in this environment")
     def test_the_strict_bundle_harvests_metadata_and_notices_only(self) -> None:

@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # Variant-aware release smoke test (POSIX shell port of smoke-release.ps1).
 #
-# Every published artifact is one (target, backend) pair, so --backend is
+# Every published artifact is one (target, profile) pair, so --profile is
 # mandatory here too. The package layout/metadata assertions are delegated to
 # 'release_tools.py verify-package-layout', which the PowerShell smoke test
 # also runs, so both check identical facts about the same contract; what
@@ -12,14 +12,14 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 REPO_ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 
 TARGET=""
-BACKEND=""
+PROFILE=""
 ARCHIVE_PATH=""
 VERSION=""
 SCRATCH_DIR=""
 CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
 
 usage() {
-    echo "usage: $0 --target <linux-x86_64|macos-x86_64> --backend <llvm|cranelift|c> --archive <path> [--version <version>] [--scratch-dir <path>] [--contract <path>]" >&2
+    echo "usage: $0 --target <linux-x86_64|macos-x86_64> --profile <full|llvm|cranelift|c> --archive <path> [--version <version>] [--scratch-dir <path>] [--contract <path>]" >&2
 }
 
 fail() {
@@ -33,8 +33,8 @@ while [ "$#" -gt 0 ]; do
             TARGET="$2"
             shift 2
             ;;
-        --backend)
-            BACKEND="$2"
+        --profile|--backend)
+            PROFILE="$2"
             shift 2
             ;;
         --archive)
@@ -61,15 +61,15 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$TARGET" ] || { echo "missing --target" >&2; usage; exit 1; }
-[ -n "$BACKEND" ] || { echo "missing --backend (llvm|cranelift|c)" >&2; usage; exit 1; }
+[ -n "$PROFILE" ] || { echo "missing --profile (full|llvm|cranelift|c)" >&2; usage; exit 1; }
 [ -n "$ARCHIVE_PATH" ] || { echo "missing --archive" >&2; usage; exit 1; }
-case "$BACKEND" in
-    llvm|cranelift|c) ;;
+case "$PROFILE" in
+    full|llvm|cranelift|c) ;;
     native)
-        fail "'native' is a deprecated CLI alias for the cranelift backend and is never a package label; pass --backend cranelift"
+        fail "'native' is a deprecated CLI alias for the cranelift backend and is never a package label; pass --profile cranelift"
         ;;
     *)
-        fail "unknown backend '$BACKEND' (expected llvm, cranelift or c)"
+        fail "unknown profile '$PROFILE' (expected full, llvm, cranelift or c)"
         ;;
 esac
 case "$TARGET" in
@@ -81,7 +81,7 @@ esac
 ARCHIVE_PATH="$(CDPATH= cd -- "$(dirname -- "$ARCHIVE_PATH")" && pwd)/$(basename -- "$ARCHIVE_PATH")"
 
 if [ -z "$SCRATCH_DIR" ]; then
-    SCRATCH_DIR="$REPO_ROOT/target/release-smoke/$TARGET-$BACKEND"
+    SCRATCH_DIR="$REPO_ROOT/target/release-smoke/$TARGET-$PROFILE"
 fi
 
 PYTHON="$(command -v python3 || command -v python || true)"
@@ -89,28 +89,28 @@ PYTHON="$(command -v python3 || command -v python || true)"
 
 # Resolve exactly the facts this variant promises, from the contract.
 eval "$(
-    "$PYTHON" - "$CONTRACT_PATH" "$TARGET" "$BACKEND" <<'PY'
+    "$PYTHON" - "$CONTRACT_PATH" "$TARGET" "$PROFILE" <<'PY'
 import json
 import shlex
 import sys
 
-contract_path, target, backend = sys.argv[1], sys.argv[2], sys.argv[3]
+contract_path, target, profile = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(contract_path, encoding="utf-8") as handle:
     contract = json.load(handle)
 
-if contract.get("schema_version") != 2:
+if contract.get("schema_version") != 3:
     raise SystemExit(
-        f"release contract {contract_path} is not schema 2 "
+        f"release contract {contract_path} is not schema 3 "
         f"(got {contract.get('schema_version')!r})"
     )
 target_spec = contract["variants"].get(target)
 if target_spec is None:
     raise SystemExit(f"release contract does not define target '{target}'")
-variant = target_spec["backends"].get(backend)
+variant = target_spec["profiles"].get(profile)
 if variant is None:
-    known = ", ".join(sorted(target_spec["backends"]))
+    known = ", ".join(sorted(target_spec["profiles"]))
     raise SystemExit(
-        f"release contract does not define backend '{backend}' for target '{target}' "
+        f"release contract does not define profile '{profile}' for target '{target}' "
         f"(known: {known})"
     )
 
@@ -121,12 +121,19 @@ def emit(name: str, value: str) -> None:
 
 emit("ARCHIVE_FORMAT", target_spec["archive_format"])
 emit("BINARY_NAME", target_spec["binary_name"])
-emit("BACKEND_KIND", contract["backends"][backend]["kind"])
+emit("BACKEND_KIND", "full" if profile == "full" else contract["backends"][profile]["kind"])
+emit("AVAILABLE_BACKENDS", " ".join(contract["profiles"][profile]["backends"]))
+emit("BACKEND_LIST", ", ".join(contract["profiles"][profile]["backends"]))
+emit("DEFAULT_BACKEND", contract["profiles"][profile]["default_backend"])
 emit("COMPONENTS", ",".join(variant["components"]))
 emit("RUNTIME_PROFILES", ",".join(variant["runtime_profiles"]))
 emit("REQUIRES_HOST_COMPILER", "1" if variant.get("requires_host_compiler") else "0")
+emit("TOOLCHAIN_FREE", "yes" if variant.get("toolchain_free") else "no")
 PY
 )"
+
+# Compatibility variable for the slim-profile checks below.
+BACKEND="$PROFILE"
 
 case "$ARCHIVE_FORMAT" in
     zip) EXPECTED_SUFFIX=".zip" ;;
@@ -143,6 +150,13 @@ if [ "$BACKEND_KIND" = "object" ]; then
     IS_OBJECT_PACKAGE=1
 else
     IS_OBJECT_PACKAGE=0
+fi
+if [ "$BACKEND_KIND" = "full" ]; then
+    IS_FULL_PACKAGE=1
+    IS_OBJECT_CAPABLE=1
+else
+    IS_FULL_PACKAGE=0
+    IS_OBJECT_CAPABLE="$IS_OBJECT_PACKAGE"
 fi
 
 rm -rf "$SCRATCH_DIR"
@@ -167,7 +181,7 @@ SCRUBBED="-u OSCAN_NO_TOOLCHAIN -u OSCAN_CC -u OSCAN_TOOLCHAIN_DIR -u OSCAN_LLVM
 BLOCK_DIR="$SCRATCH_DIR/blocked-host-tools"
 mkdir -p "$BLOCK_DIR"
 BLOCKED_TOOLS="cc gcc g++ clang clang++ x86_64-linux-musl-gcc"
-if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
+if [ "$IS_OBJECT_CAPABLE" -eq 1 ]; then
     BLOCKED_TOOLS="$BLOCKED_TOOLS ld ld.lld lld x86_64-linux-musl-ld"
 fi
 for NAME in $BLOCKED_TOOLS; do
@@ -261,32 +275,34 @@ BUNDLE_COUNT="$(find "$SCRATCH_DIR/extract" -mindepth 1 -maxdepth 1 -type d | wc
 BUNDLE_DIR="$(find "$SCRATCH_DIR/extract" -mindepth 1 -maxdepth 1 -type d)"
 
 set -- "$SCRIPT_DIR/release_tools.py" verify-package-layout \
-    --target "$TARGET" --backend "$BACKEND" \
+    --target "$TARGET" --profile "$PROFILE" \
     --root "$BUNDLE_DIR" --stage extracted \
     --archive "$ARCHIVE_PATH" --contract "$CONTRACT_PATH"
 if [ -n "$VERSION" ]; then
     set -- "$@" --version "$VERSION"
 fi
-"$PYTHON" "$@" || fail "extracted $TARGET/$BACKEND package does not match the release contract"
+"$PYTHON" "$@" || fail "extracted $TARGET/$PROFILE package does not match the release contract"
 
 # --- install -----------------------------------------------------------------
 
-INSTALL_DIR="$SCRATCH_DIR/install"
+INSTALL_ROOT="$SCRATCH_DIR/install"
 BIN_DIR="$SCRATCH_DIR/bin"
-sh "$BUNDLE_DIR/install.sh" --source-dir "$BUNDLE_DIR" --install-dir "$INSTALL_DIR" --bin-dir "$BIN_DIR"
+PACKAGE_VERSION="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' "$BUNDLE_DIR/oscan-package.json")"
+INSTALL_DIR="$INSTALL_ROOT/profiles/$PROFILE/$PACKAGE_VERSION"
+sh "$BUNDLE_DIR/install.sh" --source-dir "$BUNDLE_DIR" --install-root "$INSTALL_ROOT" --bin-dir "$BIN_DIR"
 
-OSCAN_COMMAND="$BIN_DIR/$BINARY_NAME"
+OSCAN_COMMAND="$BIN_DIR/oscan-$PROFILE"
 [ -x "$OSCAN_COMMAND" ] || OSCAN_COMMAND="$INSTALL_DIR/$BINARY_NAME"
 [ -x "$OSCAN_COMMAND" ] || fail "installed oscan command was not found under $BIN_DIR or $INSTALL_DIR"
 SAVED_PATH="$PATH"
 
 set -- "$SCRIPT_DIR/release_tools.py" verify-package-layout \
-    --target "$TARGET" --backend "$BACKEND" \
+    --target "$TARGET" --profile "$PROFILE" \
     --root "$INSTALL_DIR" --stage installed --contract "$CONTRACT_PATH"
 if [ -n "$VERSION" ]; then
     set -- "$@" --version "$VERSION"
 fi
-"$PYTHON" "$@" || fail "installed $TARGET/$BACKEND package does not match the release contract"
+"$PYTHON" "$@" || fail "installed $TARGET/$PROFILE package does not match the release contract"
 
 # --- identity ----------------------------------------------------------------
 
@@ -295,15 +311,10 @@ VERSION_LOG="$SCRATCH_DIR/version.txt"
     cat "$VERSION_LOG" >&2
     fail "packaged 'oscan --version' failed"
 }
-if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
-    EXPECTED_TOOLCHAIN_FREE="yes"
-else
-    EXPECTED_TOOLCHAIN_FREE="no"
-fi
-assert_matches "$VERSION_LOG" "^backends: $BACKEND\$" "packaged 'oscan --version'"
-assert_matches "$VERSION_LOG" "^default-backend: $BACKEND\$" "packaged 'oscan --version'"
-assert_matches "$VERSION_LOG" "^distribution: $BACKEND\$" "packaged 'oscan --version'"
-assert_matches "$VERSION_LOG" "^toolchain-free: $EXPECTED_TOOLCHAIN_FREE\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^backends: $BACKEND_LIST\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^default-backend: $DEFAULT_BACKEND\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^distribution: $PROFILE\$" "packaged 'oscan --version'"
+assert_matches "$VERSION_LOG" "^toolchain-free: $TOOLCHAIN_FREE\$" "packaged 'oscan --version'"
 if [ -n "$VERSION" ]; then
     grep -qF "$VERSION" "$VERSION_LOG" || {
         cat "$VERSION_LOG" >&2
@@ -313,7 +324,66 @@ fi
 
 # --- behaviour ---------------------------------------------------------------
 
-if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
+if [ "$IS_FULL_PACKAGE" -eq 1 ]; then
+    DEFAULT_OUTPUT="$SCRATCH_DIR/hello-default"
+    DEFAULT_LOG="$SCRATCH_DIR/default.stderr.txt"
+    run_packaged "$DEFAULT_LOG" 0 -- --verbose "$SAMPLE_SOURCE" -o "$DEFAULT_OUTPUT"
+    [ "$STATUS" -eq 0 ] || {
+        cat "$DEFAULT_LOG" >&2
+        fail "packaged full-profile default compile failed"
+    }
+    assert_matches "$DEFAULT_LOG" "^\[verbose\] $DEFAULT_BACKEND backend target:" \
+        "packaged full-profile default compile"
+    assert_matches "$DEFAULT_LOG" "^\[verbose\] native-link assets: sidecar \(" \
+        "packaged full-profile default compile"
+    assert_program_runs "$DEFAULT_OUTPUT" "packaged full-profile default compile"
+
+    for SELECTED_BACKEND in $AVAILABLE_BACKENDS; do
+        OUTPUT="$SCRATCH_DIR/hello-$SELECTED_BACKEND"
+        LOG="$SCRATCH_DIR/$SELECTED_BACKEND.stderr.txt"
+        run_packaged "$LOG" 0 -- --verbose --backend "$SELECTED_BACKEND" \
+            "$SAMPLE_SOURCE" -o "$OUTPUT"
+        [ "$STATUS" -eq 0 ] || {
+            cat "$LOG" >&2
+            fail "packaged full-profile '--backend $SELECTED_BACKEND' compile failed"
+        }
+        if [ "$SELECTED_BACKEND" = "c" ]; then
+            assert_matches "$LOG" "Compiling with .+ \(bundled" \
+                "packaged full-profile C compile"
+        else
+            assert_matches "$LOG" "^\[verbose\] $SELECTED_BACKEND backend target:" \
+                "packaged full-profile $SELECTED_BACKEND compile"
+            assert_matches "$LOG" "^\[verbose\] native-link assets: sidecar \(" \
+                "packaged full-profile $SELECTED_BACKEND compile"
+        fi
+        assert_program_runs "$OUTPUT" "packaged full-profile $SELECTED_BACKEND compile"
+    done
+
+    HOSTED_OUTPUT="$SCRATCH_DIR/hello-hosted"
+    HOSTED_LOG="$SCRATCH_DIR/hosted.stderr.txt"
+    run_packaged "$HOSTED_LOG" 0 -- --verbose --libc "$SAMPLE_SOURCE" -o "$HOSTED_OUTPUT"
+    [ "$STATUS" -eq 0 ] || {
+        cat "$HOSTED_LOG" >&2
+        fail "packaged full-profile '--libc' compile failed"
+    }
+    assert_matches "$HOSTED_LOG" "Linking hosted executable with .+ \(bundled\)" \
+        "packaged full-profile hosted compile"
+    assert_program_runs "$HOSTED_OUTPUT" "packaged full-profile hosted compile"
+
+    EXTRA_C_SOURCE="$SCRATCH_DIR/extra.c"
+    printf 'int oscan_smoke_extra(void) { return 0; }\n' > "$EXTRA_C_SOURCE"
+    EXTRA_OUTPUT="$SCRATCH_DIR/hello-extra-c"
+    EXTRA_LOG="$SCRATCH_DIR/extra-c.stderr.txt"
+    run_packaged "$EXTRA_LOG" 0 -- --verbose --extra-c "$EXTRA_C_SOURCE" \
+        "$SAMPLE_SOURCE" -o "$EXTRA_OUTPUT"
+    [ "$STATUS" -eq 0 ] || {
+        cat "$EXTRA_LOG" >&2
+        fail "packaged full-profile '--extra-c' compile failed"
+    }
+    assert_matches "$EXTRA_LOG" "Linking freestanding executable with .+ \(bundled\)" \
+        "packaged full-profile extra-C compile"
+    assert_program_runs "$EXTRA_OUTPUT" "packaged full-profile extra-C compile"
+elif [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
     # 1. The default backend: a distribution build defaults to the one
     #    backend it ships, deterministically and without probing.
     DEFAULT_OUTPUT="$SCRATCH_DIR/hello-default"
@@ -376,7 +446,7 @@ if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
     assert_matches "$REFUSED_LOG" "the c backend is not included in this compiler build" \
         "'--backend c' refusal"
     assert_matches "$REFUSED_LOG" "this build includes: $BACKEND" "'--backend c' refusal"
-    assert_matches "$REFUSED_LOG" "archive name ends in '-c'" "'--backend c' refusal"
+    assert_matches "$REFUSED_LOG" "archive name ends in '-full' or '-c'" "'--backend c' refusal"
 
     REFUSED_OUTPUT="$SCRATCH_DIR/refused-other"
     REFUSED_LOG="$SCRATCH_DIR/refused-other-backend.stderr.txt"
@@ -386,7 +456,7 @@ if [ "$IS_OBJECT_PACKAGE" -eq 1 ]; then
     assert_matches "$REFUSED_LOG" \
         "the $OTHER_OBJECT_BACKEND backend is not included in this compiler build" \
         "'--backend $OTHER_OBJECT_BACKEND' refusal"
-    assert_matches "$REFUSED_LOG" "archive name ends in '-$OTHER_OBJECT_BACKEND'" \
+    assert_matches "$REFUSED_LOG" "archive name ends in '-full' or '-$OTHER_OBJECT_BACKEND'" \
         "'--backend $OTHER_OBJECT_BACKEND' refusal"
 
     REFUSED_OUTPUT="$SCRATCH_DIR/refused-libc"
@@ -463,9 +533,9 @@ else
             "the $MISSING backend is not included in this compiler build" \
             "'--backend $MISSING' refusal"
         assert_matches "$REFUSED_LOG" "this build includes: c" "'--backend $MISSING' refusal"
-        assert_matches "$REFUSED_LOG" "archive name ends in '-$MISSING'" \
+        assert_matches "$REFUSED_LOG" "archive name ends in '-full' or '-$MISSING'" \
             "'--backend $MISSING' refusal"
     done
 fi
 
-echo "Release smoke test passed for $TARGET/$BACKEND ($ARCHIVE_PATH)"
+echo "Release smoke test passed for $TARGET/$PROFILE ($ARCHIVE_PATH)"

@@ -1,4 +1,4 @@
-"""Release contract v2 + variant-aware packaging tests.
+"""Release contract v3 + profile-aware packaging tests.
 
 Everything here is offline and hermetic: each test builds a complete fake
 package input set (tiny binaries, a tiny native-link asset set, tiny
@@ -33,9 +33,11 @@ import release_tools as rt
 
 TOOLCHAINS = rt.REPO_ROOT / "packaging" / "toolchains"
 ALL_VARIANTS = (
+    ("windows-x86_64", "full"),
     ("windows-x86_64", "llvm"),
     ("windows-x86_64", "cranelift"),
     ("windows-x86_64", "c"),
+    ("linux-x86_64", "full"),
     ("linux-x86_64", "llvm"),
     ("linux-x86_64", "cranelift"),
     ("linux-x86_64", "c"),
@@ -390,7 +392,7 @@ class PackagingFixture:
     def _write_embedded_notices(self) -> None:
         self.embedded_notices_dir.mkdir(parents=True, exist_ok=True)
         contract = json.loads(self.contract_path.read_text(encoding="utf-8"))
-        variant = contract["variants"].get(self.target, {}).get("backends", {}).get("llvm", {})
+        variant = contract["variants"].get(self.target, {}).get("profiles", {}).get("llvm", {})
         for name in variant.get("embedded_notice_files", []):
             destination = self.embedded_notices_dir / rt.safe_relative_path(name)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -402,7 +404,7 @@ class PackagingFixture:
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         contract = rt.load_runtime_archive_contract(rt.RUNTIME_ARCHIVE_CONTRACT_PATH)
         toolchain = self._runtime_toolchain()
-        for profile in rt.FREESTANDING_PROFILES:
+        for profile in rt.RUNTIME_PROFILES:
             mode_spec = contract["modes"][profile]
             archive = self.runtime_dir / mode_spec["archive_name"]
             archive.write_bytes(f"{profile} archive".encode())
@@ -419,11 +421,6 @@ class PackagingFixture:
             (self.runtime_dir / mode_spec["manifest_name"]).write_text(
                 json.dumps(manifest), encoding="utf-8"
             )
-        # A hosted pair exists in the prepared directory and must never be
-        # staged into an object package.
-        hosted = self.runtime_dir / "libosc_runtime_hosted.a"
-        hosted.write_bytes(b"hosted archive")
-
     def _runtime_toolchain(self) -> dict:
         """The pinned provenance block the runtime-archive contract requires.
 
@@ -456,10 +453,10 @@ class PackagingFixture:
         }
 
 
-def stage_namespace(fixture: PackagingFixture, backend: str, output_dir: Path, **overrides):
+def stage_namespace(fixture: PackagingFixture, profile: str, output_dir: Path, **overrides):
     kwargs = {
         "target": fixture.target,
-        "backend": backend,
+        "profile": profile,
         "version": "9.9.9",
         "binary": str(fixture.binary),
         "output_dir": str(output_dir),
@@ -468,7 +465,7 @@ def stage_namespace(fixture: PackagingFixture, backend: str, output_dir: Path, *
         "native_link_dir": str(fixture.native_link_dir),
         "embedded_notices_dir": (
             str(fixture.embedded_notices_dir)
-            if fixture.target == "windows-x86_64" and backend == "llvm"
+            if fixture.target == "windows-x86_64" and profile in ("full", "llvm")
             else None
         ),
         "toolchain_archive": str(fixture.toolchain_archive)
@@ -487,18 +484,18 @@ class ContractMatrixTests(unittest.TestCase):
     def setUp(self) -> None:
         self.contract = rt.load_release_contract(rt.CONTRACT_PATH)
 
-    def test_the_published_matrix_is_exactly_seven_variants(self) -> None:
+    def test_the_published_matrix_contains_full_and_slim_profiles(self) -> None:
         matrix = rt.release_variant_matrix(self.contract)
         self.assertEqual(
-            sorted((entry["target"], entry["backend"]) for entry in matrix),
+            sorted((entry["target"], entry["profile"]) for entry in matrix),
             sorted(ALL_VARIANTS),
         )
 
     def test_archive_names_are_canonical_and_unique(self) -> None:
         names = set()
-        for target, backend in ALL_VARIANTS:
+        for target, profile in ALL_VARIANTS:
             variant = rt.resolve_release_variant(
-                self.contract, rt.CONTRACT_PATH, target, backend
+                self.contract, rt.CONTRACT_PATH, target, profile
             )
             name = rt.render_release_template(
                 variant["archive_name_template"], "1.2.3", "archive_name_template"
@@ -507,20 +504,44 @@ class ContractMatrixTests(unittest.TestCase):
                 variant["archive_root_template"], "1.2.3", "archive_root_template"
             )
             suffix = rt.ARCHIVE_SUFFIXES[variant["archive_format"]]
-            self.assertEqual(name, f"oscan-v1.2.3-{target}-{backend}{suffix}")
-            self.assertEqual(root, f"oscan-v1.2.3-{target}-{backend}")
-            self.assertNotIn("full", name)
+            self.assertEqual(name, f"oscan-v1.2.3-{target}-{profile}{suffix}")
+            self.assertEqual(root, f"oscan-v1.2.3-{target}-{profile}")
             self.assertNotIn("native", name)
             self.assertNotIn(name, names)
             names.add(name)
 
-    def test_object_variants_are_toolchain_free_and_c_variants_are_not(self) -> None:
-        for target, backend in ALL_VARIANTS:
+    def test_full_profiles_are_complete_and_slim_profiles_stay_slim(self) -> None:
+        for target, profile in ALL_VARIANTS:
             variant = rt.resolve_release_variant(
-                self.contract, rt.CONTRACT_PATH, target, backend
+                self.contract, rt.CONTRACT_PATH, target, profile
             )
-            with self.subTest(target=target, backend=backend):
-                if backend == "c":
+            with self.subTest(target=target, profile=profile):
+                if profile == "full":
+                    self.assertEqual(variant["available_backends"], ["llvm", "cranelift", "c"])
+                    self.assertEqual(variant["default_backend"], "llvm")
+                    self.assertFalse(variant["toolchain_free"])
+                    self.assertIn("c_toolchain", variant["components"])
+                    self.assertIn("runtime_archives", variant["components"])
+                    self.assertEqual(
+                        variant["runtime_profiles"],
+                        [
+                            "hosted",
+                            "freestanding",
+                            "freestanding_gfx",
+                            "freestanding_core",
+                        ],
+                    )
+                    if variant["link_mode"] == "sidecar":
+                        self.assertIn("direct_link_sidecar", variant["components"])
+                        self.assertIn("runtime_archives", variant["components"])
+                        self.assertIn("llvm_provider", variant["components"])
+                    else:
+                        self.assertEqual(target, "windows-x86_64")
+                        self.assertEqual(
+                            variant["components"],
+                            ["compiler", "runtime_archives", "c_toolchain"],
+                        )
+                elif profile == "c":
                     self.assertFalse(variant["toolchain_free"])
                     self.assertNotIn("direct_link_sidecar", variant["components"])
                     self.assertNotIn("runtime_archives", variant["components"])
@@ -537,7 +558,7 @@ class ContractMatrixTests(unittest.TestCase):
                     )
                     self.assertNotIn("hosted", variant["runtime_profiles"])
                 else:
-                    self.assertEqual((target, backend), ("windows-x86_64", "llvm"))
+                    self.assertEqual((target, profile), ("windows-x86_64", "llvm"))
                     self.assertTrue(variant["toolchain_free"])
                     self.assertEqual(variant["link_mode"], "inprocess")
                     self.assertEqual(variant["components"], ["compiler"])
@@ -561,6 +582,10 @@ class ContractMatrixTests(unittest.TestCase):
             self.contract, rt.CONTRACT_PATH, "linux-x86_64", "llvm"
         )
         self.assertEqual(linux_llvm["llvm_provider_source"], "toolchain-manifest")
+        linux_full = rt.resolve_release_variant(
+            self.contract, rt.CONTRACT_PATH, "linux-x86_64", "full"
+        )
+        self.assertEqual(linux_full["llvm_provider_source"], "toolchain-manifest")
         for target in ("windows-x86_64", "linux-x86_64"):
             cranelift = rt.resolve_release_variant(
                 self.contract, rt.CONTRACT_PATH, target, "cranelift"
@@ -569,14 +594,14 @@ class ContractMatrixTests(unittest.TestCase):
 
     def test_macos_is_c_only(self) -> None:
         self.assertEqual(
-            sorted(self.contract["variants"]["macos-x86_64"]["backends"]), ["c"]
+            sorted(self.contract["variants"]["macos-x86_64"]["profiles"]), ["c"]
         )
         with self.assertRaises(SystemExit):
             rt.resolve_release_variant(
                 self.contract, rt.CONTRACT_PATH, "macos-x86_64", "llvm"
             )
 
-    def test_unknown_target_or_backend_is_refused(self) -> None:
+    def test_unknown_target_or_profile_is_refused(self) -> None:
         with self.assertRaises(SystemExit):
             rt.resolve_release_variant(
                 self.contract, rt.CONTRACT_PATH, "freebsd-x86_64", "c"
@@ -609,7 +634,7 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_schema_1_is_refused(self) -> None:
         message = self._reject(lambda data: data.update(schema_version=1))
-        self.assertIn("schema_version 2", message)
+        self.assertIn("schema_version 3", message)
 
     def test_an_invalid_backend_name_is_refused(self) -> None:
         def mutate(data: dict) -> None:
@@ -619,19 +644,33 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_a_mismatched_cargo_feature_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["linux-x86_64"]["backends"]["llvm"]["cargo_feature"] = "backend-c"
+            data["variants"]["linux-x86_64"]["profiles"]["llvm"]["cargo_features"][0] = "backend-c"
 
-        self.assertIn("cargo feature", self._reject(mutate))
+        self.assertIn("backend features", self._reject(mutate))
+
+    def test_a_c_variant_rejects_non_backend_cargo_features(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["windows-x86_64"]["profiles"]["c"][
+                "cargo_features"
+            ].append("static-llvm")
+
+        self.assertIn("non-backend cargo_features", self._reject(mutate))
 
     def test_a_mismatched_distribution_default_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["linux-x86_64"]["backends"]["llvm"]["distribution_backend"] = "c"
+            data["profiles"]["llvm"]["default_backend"] = "c"
 
-        self.assertIn("distribution backend", self._reject(mutate))
+        self.assertIn("does not contain", self._reject(mutate))
+
+    def test_full_must_keep_llvm_as_its_stable_default(self) -> None:
+        def mutate(data: dict) -> None:
+            data["profiles"]["full"]["default_backend"] = "cranelift"
+
+        self.assertIn("stable default backend", self._reject(mutate))
 
     def test_a_toolchain_free_variant_with_a_c_toolchain_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["linux-x86_64"]["backends"]["cranelift"]["components"].append(
+            data["variants"]["linux-x86_64"]["profiles"]["cranelift"]["components"].append(
                 "c_toolchain"
             )
 
@@ -639,7 +678,7 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_an_object_variant_without_its_sidecar_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            variant = data["variants"]["windows-x86_64"]["backends"]["cranelift"]
+            variant = data["variants"]["windows-x86_64"]["profiles"]["cranelift"]
             variant["components"] = [
                 name for name in variant["components"] if name != "direct_link_sidecar"
             ]
@@ -648,7 +687,7 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_an_object_variant_without_runtime_archives_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            variant = data["variants"]["linux-x86_64"]["backends"]["llvm"]
+            variant = data["variants"]["linux-x86_64"]["profiles"]["llvm"]
             variant["components"] = [
                 name for name in variant["components"] if name != "runtime_archives"
             ]
@@ -658,54 +697,60 @@ class ContractValidationTests(unittest.TestCase):
     def test_a_c_variant_carrying_object_payload_is_refused(self) -> None:
         for extra in ("direct_link_sidecar", "llvm_provider", "runtime_archives"):
             def mutate(data: dict, extra=extra) -> None:
-                data["variants"]["windows-x86_64"]["backends"]["c"]["components"].append(extra)
+                data["variants"]["windows-x86_64"]["profiles"]["c"]["components"].append(extra)
 
             with self.subTest(component=extra):
                 self.assertIn("C package", self._reject(mutate))
 
     def test_a_cranelift_variant_with_a_provider_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["windows-x86_64"]["backends"]["cranelift"]["components"].append(
+            data["variants"]["windows-x86_64"]["profiles"]["cranelift"]["components"].append(
                 "llvm_provider"
             )
 
         self.assertIn("must not ship an LLVM provider", self._reject(mutate))
 
-    def test_a_hosted_runtime_profile_is_refused(self) -> None:
+    def test_a_slim_object_profile_refuses_the_hosted_runtime(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["linux-x86_64"]["backends"]["cranelift"]["runtime_profiles"].append(
+            data["variants"]["linux-x86_64"]["profiles"]["cranelift"]["runtime_profiles"].append(
                 "hosted"
             )
 
-        self.assertIn("non-freestanding", self._reject(mutate))
+        self.assertIn("slim object package", self._reject(mutate))
+
+    def test_a_full_profile_requires_the_hosted_runtime(self) -> None:
+        def mutate(data: dict) -> None:
+            data["variants"]["linux-x86_64"]["profiles"]["full"][
+                "runtime_profiles"
+            ].remove("hosted")
+
+        self.assertIn("must ship the hosted runtime", self._reject(mutate))
 
     def test_inprocess_linking_requires_the_exact_strict_features(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["windows-x86_64"]["backends"]["llvm"][
-                "extra_cargo_features"
-            ] = ["inprocess-lld"]
+            data["variants"]["windows-x86_64"]["profiles"]["llvm"]["cargo_features"] = [
+                "backend-llvm",
+                "inprocess-lld",
+            ]
 
-        self.assertIn("extra_cargo_features", self._reject(mutate))
+        self.assertIn("non-backend cargo_features", self._reject(mutate))
 
     def test_inprocess_linking_requires_static_crt(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["windows-x86_64"]["backends"]["llvm"]["rustflags"] = ""
+            data["variants"]["windows-x86_64"]["profiles"]["llvm"]["rustflags"] = ""
 
         self.assertIn("+crt-static", self._reject(mutate))
 
-    def test_only_windows_llvm_can_use_the_inprocess_profile(self) -> None:
+    def test_cranelift_cannot_use_the_inprocess_profile(self) -> None:
         def mutate(data: dict) -> None:
-            variant = data["variants"]["windows-x86_64"]["backends"]["cranelift"]
+            variant = data["variants"]["windows-x86_64"]["profiles"]["cranelift"]
             variant["link_mode"] = "inprocess"
 
-        self.assertIn(
-            "only the official windows-x86_64/llvm package",
-            self._reject(mutate),
-        )
+        self.assertIn("must use link_mode 'sidecar'", self._reject(mutate))
 
     def test_strict_notice_list_must_match_the_pinned_toolchain_manifest(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["windows-x86_64"]["backends"]["llvm"][
+            data["variants"]["windows-x86_64"]["profiles"]["llvm"][
                 "embedded_notice_files"
             ] = ["LLVM-LICENSE.txt", "invented-notice.txt"]
 
@@ -713,7 +758,7 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_sidecar_variant_cannot_claim_embedded_notices(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["windows-x86_64"]["backends"]["cranelift"][
+            data["variants"]["windows-x86_64"]["profiles"]["cranelift"][
                 "embedded_notice_files"
             ] = ["LLVM-LICENSE.txt", "mingw-w64-COPYING.txt"]
 
@@ -721,15 +766,15 @@ class ContractValidationTests(unittest.TestCase):
 
     def test_duplicate_archive_names_cannot_pass_validation(self) -> None:
         def mutate(data: dict) -> None:
-            data["variants"]["linux-x86_64"]["backends"]["llvm"]["archive_name_template"] = data[
+            data["variants"]["linux-x86_64"]["profiles"]["llvm"]["archive_name_template"] = data[
                 "variants"
-            ]["linux-x86_64"]["backends"]["cranelift"]["archive_name_template"]
+            ]["linux-x86_64"]["profiles"]["cranelift"]["archive_name_template"]
 
         # The per-variant suffix rule catches the attempt first; the\n        # cross-variant uniqueness check behind it is the backstop.\n        self.assertIn("must end with '-llvm.tar.xz'", self._reject(mutate))
 
     def test_a_native_label_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            variant = data["variants"]["windows-x86_64"]["backends"]["cranelift"]
+            variant = data["variants"]["windows-x86_64"]["profiles"]["cranelift"]
             variant["archive_name_template"] = "oscan-v{version}-windows-x86_64-native.zip"
 
         self.assertIn("deprecated CLI alias", self._reject(mutate))
@@ -740,11 +785,11 @@ class ContractValidationTests(unittest.TestCase):
 
         self.assertIn("unsupported target", self._reject(mutate))
 
-    def test_a_target_missing_a_declared_backend_is_refused(self) -> None:
+    def test_a_target_missing_a_declared_profile_is_refused(self) -> None:
         def mutate(data: dict) -> None:
-            del data["variants"]["linux-x86_64"]["backends"]["cranelift"]
+            del data["variants"]["linux-x86_64"]["profiles"]["cranelift"]
 
-        self.assertIn("must declare backends", self._reject(mutate))
+        self.assertIn("must declare profiles", self._reject(mutate))
 
 
 class VariantStagingTests(unittest.TestCase):
@@ -774,14 +819,36 @@ class VariantStagingTests(unittest.TestCase):
                         (bundle / rt.PACKAGE_METADATA_NAME).read_text(encoding="utf-8")
                     )
                     self.assertEqual(metadata["target"], target)
-                    self.assertEqual(metadata["backend"], backend)
-                    self.assertEqual(metadata["default_backend"], backend)
-                    self.assertEqual(metadata["available_backends"], [backend])
-                    self.assertEqual(metadata["cargo_feature"], f"backend-{backend}")
+                    self.assertEqual(metadata["profile"], backend)
+                    self.assertEqual(metadata["package_id"], f"oscan-{backend}")
+                    expected_backends = (
+                        ["llvm", "cranelift", "c"] if backend == "full" else [backend]
+                    )
+                    self.assertEqual(metadata["available_backends"], expected_backends)
+                    self.assertEqual(
+                        metadata["default_backend"], "llvm" if backend == "full" else backend
+                    )
+                    for available in expected_backends:
+                        self.assertIn(f"backend-{available}", metadata["cargo_features"])
                     self.assertEqual(metadata["version"], "9.9.9")
                     self.assertIn(binary_name, metadata["component_digests"])
 
-                    if backend == "c":
+                    if backend == "full":
+                        self.assertFalse(metadata["toolchain_free"])
+                        self.assertTrue((bundle / "toolchain").is_dir())
+                        self.assertTrue(metadata["requirements"]["bundled_c_toolchain"])
+                        if metadata["link_mode"] == "sidecar":
+                            self.assertTrue((bundle / "native-link").is_dir())
+                            self.assertTrue((bundle / "build").is_dir())
+                            self.assertIn("llvm_provider", metadata["component_digests"])
+                        else:
+                            self.assertEqual(target, "windows-x86_64")
+                            self.assertFalse((bundle / "native-link").exists())
+                            self.assertTrue((bundle / "build").is_dir())
+                            notices = bundle / "LICENSES" / "embedded"
+                            for name in metadata["embedded_notice_files"]:
+                                self.assertTrue((notices / name).is_file())
+                    elif backend == "c":
                         self.assertFalse((bundle / "native-link").exists())
                         self.assertFalse((bundle / "build").exists())
                         self.assertFalse(metadata["toolchain_free"])
@@ -941,29 +1008,33 @@ class VariantStagingTests(unittest.TestCase):
             tmp = Path(tmp_name)
             bundle, _ = self._stage(tmp, "windows-x86_64", "cranelift")
             readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
-            self.assertIn("Backend: cranelift", readme)
-            self.assertIn("--libc is refused", readme)
-            self.assertIn("--extra-c", readme)
-            self.assertIn("--backend c, --emit-c and -o *.c are refused", readme)
-            self.assertIn("only LLD's runtime dependency", readme)
+            self.assertIn("Profile: cranelift", readme)
+            self.assertIn("Available backends: cranelift", readme)
+            self.assertIn("contains only the cranelift object backend", readme)
+            self.assertIn("does not remove other profiles", readme)
 
             bundle, _ = self._stage(tmp, "windows-x86_64", "llvm")
             readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
-            self.assertIn("LLD linker", readme)
-            self.assertIn("No native-link/", readme)
+            self.assertIn("Profile: llvm", readme)
+            self.assertIn("native link inputs", readme)
             self.assertIn("LICENSES/embedded/", readme)
-            self.assertIn("Named --extra-lib inputs are refused", readme)
+
+            bundle, _ = self._stage(tmp, "windows-x86_64", "full")
+            readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
+            self.assertIn("Profile: full", readme)
+            self.assertIn("Available backends: llvm, cranelift, c", readme)
+            self.assertIn("One compiler exposes LLVM, Cranelift, and C", readme)
+            self.assertIn("pinned C toolchain", readme)
 
             bundle, _ = self._stage(tmp, "linux-x86_64", "c")
             readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
-            self.assertIn("Backend: c", readme)
+            self.assertIn("Profile: c", readme)
             self.assertIn("pinned C toolchain", readme)
-            self.assertNotIn("--libc is refused", readme)
 
             bundle, _ = self._stage(tmp, "macos-x86_64", "c")
             readme = (bundle / "README-install.txt").read_text(encoding="utf-8")
             self.assertIn("apple-clt", readme)
-            self.assertIn("No toolchain is bundled", readme)
+            self.assertIn("must be installed", readme)
 
     def test_a_sidecar_digest_mismatch_fails_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -1904,7 +1975,7 @@ class OfflineStagingTests(unittest.TestCase):
             )
             expected = rt.load_release_contract(fixture.contract_path)["variants"][
                 "windows-x86_64"
-            ]["backends"]["llvm"]["embedded_notice_files"]
+            ]["profiles"]["llvm"]["embedded_notice_files"]
             self.assertEqual(names, expected)
             self.assertEqual(
                 sorted(path.name for path in output.iterdir()),
@@ -2007,12 +2078,13 @@ class ReproducibleArchiveTests(unittest.TestCase):
 
 
 class WrapperInterfaceTests(unittest.TestCase):
-    def test_powershell_wrappers_require_a_backend(self) -> None:
+    def test_powershell_wrappers_require_a_profile(self) -> None:
         for name in ("stage-release.ps1", "assemble-release.ps1"):
             script = (rt.REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
             with self.subTest(script=name):
-                self.assertIn('[ValidateSet("llvm", "cranelift", "c")]', script)
-                self.assertIn("[string]$Backend", script)
+                self.assertIn('[ValidateSet("full", "llvm", "cranelift", "c")]', script)
+                self.assertIn("[string]$Profile", script)
+                self.assertIn('[Alias("Backend")]', script)
                 self.assertNotIn("CrossLinkerSidecarDir", script)
 
     def test_powershell_wrappers_take_archives_and_refuse_directories(self) -> None:
@@ -2025,10 +2097,10 @@ class WrapperInterfaceTests(unittest.TestCase):
                 self.assertIn("-ToolchainDir has been removed", script)
                 self.assertIn("-LlvmProviderDir has been removed", script)
 
-    def test_shell_wrapper_requires_a_backend(self) -> None:
+    def test_shell_wrapper_requires_a_profile(self) -> None:
         script = (rt.REPO_ROOT / "scripts" / "stage-release.sh").read_text(encoding="utf-8")
-        self.assertIn("--backend", script)
-        self.assertIn('missing --backend', script)
+        self.assertIn("--profile", script)
+        self.assertIn('missing --profile', script)
         self.assertNotIn("--cross-linker-sidecar-dir", script)
 
     def test_shell_wrapper_takes_archives_and_refuses_directories(self) -> None:

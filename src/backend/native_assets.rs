@@ -862,7 +862,7 @@ pub fn resolve_link_assets(
         return Ok(set);
     }
     if !EMBEDDED_ASSETS_PRESENT {
-        if let Some(backend) = crate::backend::select::distribution_backend() {
+        if let Some(profile) = crate::backend::select::distribution_profile() {
             let manifest_path = sidecar::exe_dir()
                 .map(|dir| sidecar::manifest_path_for(&dir).display().to_string())
                 .unwrap_or_else(|_| {
@@ -872,10 +872,7 @@ pub fn resolve_link_assets(
                         sidecar::MANIFEST_FILE_NAME
                     )
                 });
-            return Err(distribution_missing_assets_error(
-                backend.as_str(),
-                &manifest_path,
-            ));
+            return Err(distribution_missing_assets_error(profile, &manifest_path));
         }
     }
     let set = ensure_extracted(allow_elevated_native_link)?;
@@ -923,9 +920,9 @@ fn mis_staged_target_error(package_target: &str, link_target: &str) -> String {
 
 /// The diagnostic for a distribution package that ships no native-link
 /// assets at all.
-fn distribution_missing_assets_error(backend: &str, manifest_path: &str) -> String {
+fn distribution_missing_assets_error(profile: &str, manifest_path: &str) -> String {
     format!(
-        "this {backend} distribution has no native-link assets: neither embedded in the compiler \
+        "this {profile} distribution has no native-link assets: neither embedded in the compiler \
          nor staged at '{manifest_path}'. The package is incomplete or corrupt; reinstall it"
     )
 }

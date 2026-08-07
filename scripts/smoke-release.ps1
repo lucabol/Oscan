@@ -4,12 +4,11 @@ param(
     [ValidateSet("windows-x86_64", "linux-x86_64", "macos-x86_64")]
     [string]$Target,
 
-    # Which backend-specific package this archive is. The canonical names are
-    # the only artifact labels; 'native' is a deprecated CLI alias for
-    # cranelift and is never a package name.
+    # Which package profile this archive is.
     [Parameter(Mandatory = $true)]
-    [ValidateSet("llvm", "cranelift", "c")]
-    [string]$Backend,
+    [Alias("Backend")]
+    [ValidateSet("full", "llvm", "cranelift", "c")]
+    [string]$Profile,
 
     [Parameter(Mandatory = $true, ParameterSetName = "Archive")]
     [string]$ArchivePath,
@@ -30,8 +29,8 @@ param(
 
 # Variant-aware release smoke test.
 #
-# Every published artifact is one (target, backend) pair, so this script
-# takes the backend explicitly and checks *that* variant's promises:
+# Every published artifact is one (target, profile) pair, so this script
+# takes the profile explicitly and checks *that* variant's promises:
 #
 #   * the archive is the contract's archive (name, suffix, archive root);
 #   * the package contains exactly the components the contract declares and
@@ -45,6 +44,7 @@ param(
 #     refuse — by name, with no fallback — everything they do not contain.
 
 $ErrorActionPreference = "Stop"
+$Backend = $Profile
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 
 if ($PSCmdlet.ParameterSetName -eq "Archive") {
@@ -64,21 +64,26 @@ if (-not $ContractPath) {
 
 $platform = $Target.Split("-", 2)[0]
 $contract = Get-Content $ContractPath -Raw | ConvertFrom-Json -AsHashtable
-if ($contract["schema_version"] -ne 2) {
-    throw "Release contract $ContractPath is not schema 2 (got '$($contract["schema_version"])')."
+if ($contract["schema_version"] -ne 3) {
+    throw "Release contract $ContractPath is not schema 3 (got '$($contract["schema_version"])')."
 }
 if (-not $contract["variants"].ContainsKey($Target)) {
     $known = ($contract["variants"].Keys | Sort-Object) -join ", "
     throw "Release contract does not define target '$Target' (known: $known)."
 }
 $targetSpec = $contract["variants"][$Target]
-if (-not $targetSpec["backends"].ContainsKey($Backend)) {
-    $known = ($targetSpec["backends"].Keys | Sort-Object) -join ", "
-    throw "Release contract does not define backend '$Backend' for target '$Target' (known: $known)."
+if (-not $targetSpec["profiles"].ContainsKey($Profile)) {
+    $known = ($targetSpec["profiles"].Keys | Sort-Object) -join ", "
+    throw "Release contract does not define profile '$Profile' for target '$Target' (known: $known)."
 }
-$variant = $targetSpec["backends"][$Backend]
-$backendKind = [string]$contract["backends"][$Backend]["kind"]
+$variant = $targetSpec["profiles"][$Profile]
+$profileSpec = $contract["profiles"][$Profile]
+$availableBackends = @($profileSpec["backends"])
+$defaultBackend = [string]$profileSpec["default_backend"]
+$backendKind = if ($Profile -eq "full") { "full" } else { [string]$contract["backends"][$Profile]["kind"] }
+$isFullPackage = $Profile -eq "full"
 $isObjectPackage = $backendKind -eq "object"
+$isObjectCapable = $availableBackends -contains "llvm" -or $availableBackends -contains "cranelift"
 $linkMode = [string]($variant["link_mode"] ?? "")
 $usesSidecar = $linkMode -eq "sidecar"
 $requiresHostCompiler = [bool]($variant["requires_host_compiler"] ?? $false)
@@ -249,7 +254,7 @@ function Get-NoHostToolPath {
     return "$BlockDir$([System.IO.Path]::PathSeparator)$SavedPath"
 }
 
-$BlockedHostToolDir = New-BlockedHostToolDir -ScratchDir $ScratchDir -IncludeLinkers:$isObjectPackage
+$BlockedHostToolDir = New-BlockedHostToolDir -ScratchDir $ScratchDir -IncludeLinkers:$isObjectCapable
 
 function Invoke-PackagedOscan {
     <#
@@ -540,7 +545,7 @@ if ($PSCmdlet.ParameterSetName -eq "Archive") {
     $layoutArgs = @(
         $ReleaseTools, "verify-package-layout",
         "--target", $Target,
-        "--backend", $Backend,
+        "--profile", $Profile,
         "--root", $BundleDir,
         "--stage", "extracted",
         "--archive", $ArchivePath,
@@ -554,30 +559,32 @@ if ($PSCmdlet.ParameterSetName -eq "Archive") {
         throw "Extracted $Target/$Backend package does not match the release contract."
     }
 
-    $InstallDir = Join-Path $ScratchDir "install"
+    $packageMetadata = Get-Content (Join-Path $BundleDir "oscan-package.json") -Raw | ConvertFrom-Json
+    $InstallRoot = Join-Path $ScratchDir "install"
+    $InstallDir = Join-Path (Join-Path (Join-Path $InstallRoot "profiles") $Profile) ([string]$packageMetadata.version)
     $BinDir = Join-Path $ScratchDir "bin"
     if ($platform -eq "windows") {
         # install.ps1 is a PowerShell script with its own error handling; it
         # throws on failure, and $LASTEXITCODE here belongs to the robocopy it
         # ran internally (1 means "files copied"), so it must not be read.
-        & (Join-Path $BundleDir "install.ps1") -InstallDir $InstallDir -BinDir $BinDir -NoPathUpdate
+        & (Join-Path $BundleDir "install.ps1") -InstallRoot $InstallRoot -BinDir $BinDir -NoPathUpdate
         # Compiles run the installed executable by absolute path. Inside a
         # no-host-tool body PATH is the blocker directory alone, which leaves
         # no interpreter for a .cmd shim. The shim is still exercised by the
         # --version check below with the ordinary PATH.
         $OscanCommand = Join-Path $InstallDir $binaryName
-        $OscanShim = Join-Path $BinDir "oscan.cmd"
+        $OscanShim = Join-Path $BinDir "oscan-$Profile.cmd"
         if (-not (Test-Path -LiteralPath $OscanShim -PathType Leaf)) {
-            throw "install.ps1 did not create the oscan.cmd shim in $BinDir"
+            throw "install.ps1 did not create the oscan-$Profile.cmd shim in $BinDir"
         }
     } else {
-        & sh (Join-Path $BundleDir "install.sh") --source-dir $BundleDir --install-dir $InstallDir --bin-dir $BinDir
+        & sh (Join-Path $BundleDir "install.sh") --source-dir $BundleDir --install-root $InstallRoot --bin-dir $BinDir
         if ($LASTEXITCODE -ne 0) {
             throw "install.sh failed for $Target/$Backend"
         }
         # The bin-directory symlink, so every invocation also proves the
         # compiler resolves its package through its real executable path.
-        $OscanCommand = Join-Path $BinDir "oscan"
+        $OscanCommand = Join-Path $BinDir "oscan-$Profile"
         $OscanShim = $OscanCommand
     }
 } else {
@@ -592,7 +599,7 @@ if (-not (Test-Path -LiteralPath $OscanCommand)) {
 $installedLayoutArgs = @(
     $ReleaseTools, "verify-package-layout",
     "--target", $Target,
-    "--backend", $Backend,
+    "--profile", $Profile,
     "--root", $InstallDir,
     "--stage", "installed",
     "--contract", $ContractPath
@@ -618,11 +625,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "Packaged 'oscan --version' failed:`n$versionText"
 }
 Set-Content -LiteralPath $VersionLog -Value $versionText
+$backendList = $availableBackends -join ", "
 foreach ($expected in @(
-        "(?m)^backends: $Backend[ \t\r]*$",
-        "(?m)^default-backend: $Backend[ \t\r]*$",
-        "(?m)^distribution: $Backend[ \t\r]*$",
-        "(?m)^toolchain-free: $(if ($isObjectPackage) { 'yes' } else { 'no' })[ \t\r]*$"
+        "(?m)^backends: $([regex]::Escape($backendList))[ \t\r]*$",
+        "(?m)^default-backend: $defaultBackend[ \t\r]*$",
+        "(?m)^distribution: $Profile[ \t\r]*$",
+        "(?m)^toolchain-free: $(if ([bool]$variant['toolchain_free']) { 'yes' } else { 'no' })[ \t\r]*$"
     )) {
     if ($versionText -notmatch $expected) {
         throw "Packaged 'oscan --version' does not report /$expected/:`n$versionText"
@@ -642,7 +650,7 @@ fn! main() {
 '@
 $exeSuffix = if ($platform -eq "windows") { ".exe" } else { "" }
 
-if ($isObjectPackage -and $platform -eq "windows") {
+if ($isObjectCapable -and $platform -eq "windows") {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     $isWindowsAdministrator = $principal.IsInRole(
@@ -656,7 +664,85 @@ if ($isObjectPackage -and $platform -eq "windows") {
 # runner is elevated.
 $ElevatedOptIn = if ($isWindowsAdministrator) { @("--allow-elevated-native-link") } else { @() }
 
-if ($isObjectPackage) {
+if ($isFullPackage) {
+    # The full profile must exercise its deterministic default and every
+    # explicitly selectable backend from the installed package alone.
+    $defaultOutput = Join-Path $ScratchDir "hello-default$exeSuffix"
+    $defaultLog = Join-Path $ScratchDir "default.stderr.txt"
+    $defaultArgs = @("--verbose") + $ElevatedOptIn + @($SampleSource, "-o", $defaultOutput)
+    $exitCode = Invoke-PackagedOscan -Arguments $defaultArgs -LogPath $defaultLog -BlockHostTools
+    if ($exitCode -ne 0) {
+        throw "Packaged full-profile default compile failed:`n$(Get-LogText -LogPath $defaultLog)"
+    }
+    Assert-LogMatches -LogPath $defaultLog -Pattern "(?m)^\[verbose\] $defaultBackend backend target:" `
+        -What "Packaged full-profile default compile"
+    if ($usesSidecar) {
+        Assert-PackagedSidecarAssets -LogPath $defaultLog `
+            -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
+            -ManifestName $sidecarManifestName `
+            -What "Packaged full-profile default compile"
+    } else {
+        Assert-PackagedInProcessLinking -LogPath $defaultLog `
+            -What "Packaged full-profile default compile"
+    }
+    Assert-ProgramRuns -ExePath $defaultOutput -What "Packaged full-profile default compile"
+
+    foreach ($selectedBackend in $availableBackends) {
+        $output = Join-Path $ScratchDir "hello-$selectedBackend$exeSuffix"
+        $log = Join-Path $ScratchDir "$selectedBackend.stderr.txt"
+        $backendOptIn = if ($selectedBackend -eq "c") { @() } else { $ElevatedOptIn }
+        $arguments = @("--verbose", "--backend", $selectedBackend) + $backendOptIn +
+            @($SampleSource, "-o", $output)
+        $exitCode = Invoke-PackagedOscan -Arguments $arguments -LogPath $log -BlockHostTools
+        if ($exitCode -ne 0) {
+            throw "Packaged full-profile '--backend $selectedBackend' compile failed:`n$(Get-LogText -LogPath $log)"
+        }
+        if ($selectedBackend -eq "c") {
+            Assert-LogMatches -LogPath $log -Pattern "Compiling with .+ \(bundled" `
+                -What "Packaged full-profile C compile"
+        } else {
+            Assert-LogMatches -LogPath $log `
+                -Pattern "(?m)^\[verbose\] $selectedBackend backend target:" `
+                -What "Packaged full-profile $selectedBackend compile"
+            if ($usesSidecar) {
+                Assert-PackagedSidecarAssets -LogPath $log `
+                    -SidecarRoot (Join-Path $InstallDir $sidecarDirName) `
+                    -ManifestName $sidecarManifestName `
+                    -What "Packaged full-profile $selectedBackend compile"
+            } else {
+                Assert-PackagedInProcessLinking -LogPath $log `
+                    -What "Packaged full-profile $selectedBackend compile"
+            }
+        }
+        Assert-ProgramRuns -ExePath $output -What "Packaged full-profile $selectedBackend compile"
+    }
+
+    $hostedOutput = Join-Path $ScratchDir "hello-hosted$exeSuffix"
+    $hostedLog = Join-Path $ScratchDir "hosted.stderr.txt"
+    $hostedArgs = @("--verbose", "--libc") + $ElevatedOptIn +
+        @($SampleSource, "-o", $hostedOutput)
+    $exitCode = Invoke-PackagedOscan -Arguments $hostedArgs -LogPath $hostedLog -BlockHostTools
+    if ($exitCode -ne 0) {
+        throw "Packaged full-profile '--libc' compile failed:`n$(Get-LogText -LogPath $hostedLog)"
+    }
+    Assert-LogMatches -LogPath $hostedLog -Pattern "Linking hosted executable with .+ \(bundled\)" `
+        -What "Packaged full-profile hosted compile"
+    Assert-ProgramRuns -ExePath $hostedOutput -What "Packaged full-profile hosted compile"
+
+    $extraCSource = Join-Path $ScratchDir "extra.c"
+    Set-Content -Path $extraCSource -Encoding ASCII -Value "int oscan_smoke_extra(void) { return 0; }"
+    $extraOutput = Join-Path $ScratchDir "hello-extra-c$exeSuffix"
+    $extraLog = Join-Path $ScratchDir "extra-c.stderr.txt"
+    $extraArgs = @("--verbose", "--extra-c", $extraCSource) + $ElevatedOptIn +
+        @($SampleSource, "-o", $extraOutput)
+    $exitCode = Invoke-PackagedOscan -Arguments $extraArgs -LogPath $extraLog -BlockHostTools
+    if ($exitCode -ne 0) {
+        throw "Packaged full-profile '--extra-c' compile failed:`n$(Get-LogText -LogPath $extraLog)"
+    }
+    Assert-LogMatches -LogPath $extraLog -Pattern "Linking freestanding executable with .+ \(bundled\)" `
+        -What "Packaged full-profile extra-C compile"
+    Assert-ProgramRuns -ExePath $extraOutput -What "Packaged full-profile extra-C compile"
+} elseif ($isObjectPackage) {
     # 1. The default backend: a distribution build defaults to the one
     #    backend it ships, deterministically and without probing.
     $defaultOutput = Join-Path $ScratchDir "hello-default$exeSuffix"
@@ -752,7 +838,7 @@ if ($isObjectPackage) {
         -ExpectedPatterns @(
             "the c backend is not included in this compiler build",
             "this build includes: $Backend",
-            "archive name ends in '-c'"
+            "archive name ends in '-full' or '-c'"
         ) `
         -What "'--backend c' in the $Target/$Backend package"
 
@@ -761,7 +847,7 @@ if ($isObjectPackage) {
         -OutputPath (Join-Path $ScratchDir "refused-other$exeSuffix") `
         -ExpectedPatterns @(
             "the $otherObjectBackend backend is not included in this compiler build",
-            "archive name ends in '-$otherObjectBackend'"
+            "archive name ends in '-full' or '-$otherObjectBackend'"
         ) `
         -What "'--backend $otherObjectBackend' in the $Target/$Backend package"
 
@@ -832,7 +918,7 @@ if ($isObjectPackage) {
             -ExpectedPatterns @(
                 "the $missing backend is not included in this compiler build",
                 "this build includes: c",
-                "archive name ends in '-$missing'"
+                "archive name ends in '-full' or '-$missing'"
             ) `
             -What "'--backend $missing' in the $Target/$Backend package"
     }

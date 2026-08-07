@@ -6,21 +6,21 @@ A concise guide to writing correct Oscan programs. For the full formal specifica
 
 ## Compiler Backends
 
-Oscan has three production backends, and each release package contains exactly
-one of them:
+Oscan has three production backends. The `full` release profile contains all
+three in one compiler; `llvm`, `cranelift`, and `c` are smaller slim profiles:
 
 | Backend | Purpose | Packaged behavior |
 |---|---|---|
-| `llvm` | **Recommended** optimized backend | Direct LLVM IR and in-process object emission; the `llvm` package's default |
+| `llvm` | **Recommended** optimized backend | Direct LLVM IR and in-process object emission; the `full` and `llvm` profiles' default |
 | `cranelift` | Independent direct-codegen backend | Direct object emission; the `cranelift` package's default, and the fallback in a multi-backend build when LLVM is unavailable |
 | `c` | Portable C99, readable source output, and correctness oracle | The `c` package's default; also used for `.c` output, macOS, WASI, and C-only targets |
 
 `--backend native` is a deprecated compatibility alias for `--backend
 cranelift`; it warns once and is never used as a package or artifact name.
 
-The packaged freestanding LLVM and Cranelift paths invoke no C compiler and
-ship none. Hosted mode, extra C sources, and the C backend need the C
-package's bundled toolchain (or a host one in a source build). See
+The slim packaged freestanding LLVM and Cranelift paths invoke no C compiler
+and ship none. The full and C profiles include a C toolchain for hosted mode,
+extra C sources, and the C backend. See
 [Backend Roles and Toolchain Lookup](#backend-roles-and-toolchain-lookup-windowslinux)
 for the full selection and fallback rules.
 
@@ -31,16 +31,16 @@ for the full selection and fallback rules.
 ### Download Prebuilt Releases (Recommended)
 
 The easiest way to get started is to download a prebuilt Oscan package from
-[GitHub Releases](https://github.com/lucabol/Oscan/releases). Every artifact is
-one (platform, backend) package: Windows and Linux publish `llvm`, `cranelift`
-and `c` archives; macOS publishes `c`. See the
+[GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux
+publish `full`, `llvm`, `cranelift`, and `c` archives; macOS publishes `c`.
+Full is for backend switching, while slim profiles minimize download size. See the
 [release package matrix](technical-details.md#release-packages) for the full
 list and what each package contains.
 
 **Windows x86_64:**
 
-1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip` (recommended), or the
-   `-cranelift.zip`/`-c.zip` package, or the recommended installer
+1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip` (recommended slim),
+   `-full.zip`, `-cranelift.zip`, or `-c.zip`; the transition MSI remains
    `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
 2. Verify exactly that asset against the release's `SHA256SUMS` (filter the
    file to the asset you downloaded rather than checking every line):
@@ -49,32 +49,34 @@ list and what each package contains.
    $expected = (Select-String -Path SHA256SUMS -Pattern "\s\*?$([regex]::Escape($asset))$").Line.Split(' ')[0]
    if ((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw "checksum mismatch" }
    ```
-3. Extract to a stable location and run the included `install.ps1` (or add the
-   directory to your PATH); for the MSI, just run it
-4. Verify: `oscan --version`
+3. Extract and run the included `install.ps1`; pass `-SetDefault` to change an
+   existing unqualified `oscan` selection. For the MSI, just run it.
+4. Verify the qualified command, for example `oscan-full --version`
 
-`scripts/install-latest.ps1 -Backend llvm|cranelift|c` does all of this for you
-and verifies the checksum (and refuses to install unverified when a release
-publishes no `SHA256SUMS`, unless you pass `-SkipChecksum`).
+`scripts/install-latest.ps1 -Profile full -SetDefault` installs the all-backend
+profile. `-Backend llvm|cranelift|c` remains compatibility shorthand for the
+matching slim profile. The script verifies checksums and refuses an unverified
+release unless `-SkipChecksum` is supplied.
 
 **Linux x86_64:**
 
-1. Download `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` (recommended), or the
-   `-cranelift.tar.xz`/`-c.tar.xz` package, keeping its original file name
+1. Download `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` (recommended slim),
+   `-full.tar.xz`, `-cranelift.tar.xz`, or `-c.tar.xz`, keeping its original name
 2. Verify exactly that asset, then extract:
    ```bash
    grep -E "[[:space:]]\*?oscan-vX.Y.Z-linux-x86_64-llvm\.tar\.xz$" SHA256SUMS | sha256sum -c -
    tar xf oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz
    ```
-3. For the `llvm` package on Debian/Ubuntu:
+3. For the `llvm` or `full` package on Debian/Ubuntu:
    `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
-4. Add to PATH or run the included `install.sh`
-5. Verify: `oscan --version`
+4. Run the included `install.sh`; pass `--set-default` to change an existing
+   unqualified selection
+5. Verify, for example: `oscan-llvm --version`
 
 The Linux `llvm` package ships the pinned LLVM code generator only (no clang,
 no GCC, no headers, no sysroot). It requires glibc 2.34 or newer plus the host
 runtime libraries listed above, but no installed C/Clang/LLVM toolchain. The
-`cranelift` package needs nothing extra; the `c` package carries its own
+`cranelift` package needs nothing extra; the `c` and `full` packages carry a
 pinned C toolchain.
 
 **macOS:**
@@ -112,8 +114,8 @@ cargo build --release
 ```
 
 The binary is `target/release/oscan` (or `oscan.exe` on Windows). A default
-source build contains all three backends; released packages are single-backend
-builds (`--no-default-features --features backend-<name>`).
+source build and the `full` profile contain all three backends; slim releases
+use `--no-default-features --features backend-<name>`.
 
 ### Why `toolchain/` Is Not in Git
 
@@ -130,16 +132,37 @@ lives alongside the `oscan` binary in the unpacked archive. Oscan discovers its
 LLVM provider or C compiler there — relative to its own executable, never from
 `PATH` or the current directory.
 
-### Upgrade and Uninstall (Phase 1)
+### Side-by-side Profiles, Upgrade, and Uninstall
 
-**Phase 1 releases** do not yet use a system package manager, so upgrades and uninstalls are manual — and the right procedure depends on how you installed:
+Archive installers read `oscan-package.json` and install each profile
+independently:
 
-- **Upgrade (archive install):** Download the new package and extract it to the same location (or a new location and update your PATH).
-- **Upgrade (Windows MSI):** Run the new MSI; it replaces the previous MSI install in place.
-- **Uninstall (archive install):** Remove the directory containing `oscan` and, if the package had one, its `toolchain/`/`native-link/` subdirectories, then remove it from your PATH.
+```text
+Windows: %LOCALAPPDATA%\Programs\Oscan\profiles\<profile>\<version>\
+Unix:    ~/.local/share/oscan/profiles/<profile>/<version>/
+```
+
+The stable bin directory exposes `oscan-full`, `oscan-llvm`,
+`oscan-cranelift`, and `oscan-c`. The first archive profile safely creates the
+unqualified `oscan` selector. Installing or upgrading another profile does not
+change it; use `-SetDefault` on Windows or `--set-default` on Unix explicitly.
+An upgrade is staged and activated atomically, replaces only the same profile,
+and preserves every other profile.
+
+- **Uninstall (archive install):** Run that profile's extracted installer with
+  `-Uninstall` or `--uninstall`. It removes only the named profile and qualified
+  command. If it was selected, the unqualified selector is removed rather than
+  redirected implicitly.
+- **Upgrade (Windows MSI):** Run the new LLVM MSI; it replaces the previous MSI install in place.
 - **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps → Oscan → Uninstall**, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-llvm.msi /quiet`. Do **not** just delete the installed directory: that leaves the product registered with Windows Installer.
 
-A future release may add WinGet, Homebrew, and Scoop support for easier package management.
+The legacy LLVM MSI retains its existing product identity and unqualified PATH
+command. The quick installer and MSI detect a per-user archive selector for the
+same Windows account and refuse the ambiguous PATH setup unless explicitly
+overridden with `-AllowMsiCommandConflict` or
+`OSCAN_ALLOW_ARCHIVE_CONFLICT=1`, respectively.
+Legacy flat archive installs are left intact and reported; confirm the new
+qualified command works, then remove the old directory/PATH entry.
 
 ---
 
@@ -1022,11 +1045,10 @@ let x: i32 = 1;
 
 ## Backend Roles and Toolchain Lookup (Windows/Linux)
 
-A released package contains exactly one backend and defaults to it. In a
-multi-backend (development) build, ordinary executable, object, and `--run`
-builds prefer the **LLVM backend** when the host has a supported object target
-and a compatible packaged LLVM provider; if LLVM is not available, Oscan falls
-back to the **Cranelift backend**, then to the **C backend**. Explicit
+A slim package contains exactly one backend and defaults to it. A full package
+contains all three and deterministically defaults to LLVM. In an unstamped
+multi-backend development build, ordinary executable, object, and `--run`
+builds prefer LLVM when compatible, then Cranelift, then C. Explicit
 `--backend llvm|cranelift|c` always wins, and an explicit LLVM failure never
 falls back. `--backend native` still selects Cranelift, with one deprecation
 warning.

@@ -10,14 +10,14 @@ BINARY_PATH=""
 OUTPUT_DIR="$REPO_ROOT/target/release-artifacts"
 CONTRACT_PATH="$REPO_ROOT/packaging/toolchains/release-contract.json"
 RUNTIME_ARCHIVE_DIR=""
-BACKEND=""
+PROFILE=""
 NATIVE_LINK_DIR=""
 EMBEDDED_NOTICES_DIR=""
 TOOLCHAIN_ARCHIVE=""
 LLVM_PROVIDER_ARCHIVE=""
 
 usage() {
-    echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --backend <llvm|cranelift|c> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>] [--native-link-dir <path>] [--embedded-notices-dir <path>] [--toolchain-archive <path>] [--llvm-provider-archive <path>]" >&2
+    echo "usage: $0 --target <windows-x86_64|linux-x86_64|macos-x86_64> --profile <full|llvm|cranelift|c> --version <version> --binary <path> [--output-dir <path>] [--contract <path>] [--runtime-archive-dir <path>] [--native-link-dir <path>] [--embedded-notices-dir <path>] [--toolchain-archive <path>] [--llvm-provider-archive <path>]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
@@ -46,8 +46,8 @@ while [ "$#" -gt 0 ]; do
             RUNTIME_ARCHIVE_DIR="$2"
             shift 2
             ;;
-        --backend)
-            BACKEND="$2"
+        --profile|--backend)
+            PROFILE="$2"
             shift 2
             ;;
         --native-link-dir)
@@ -82,13 +82,13 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$TARGET" ] || { echo "missing --target" >&2; exit 1; }
-[ -n "$BACKEND" ] || { echo "missing --backend (llvm|cranelift|c)" >&2; exit 1; }
+[ -n "$PROFILE" ] || { echo "missing --profile (full|llvm|cranelift|c)" >&2; exit 1; }
 [ -n "$VERSION" ] || { echo "missing --version" >&2; exit 1; }
 [ -n "$BINARY_PATH" ] || { echo "missing --binary" >&2; exit 1; }
 
 set -- "$SCRIPT_DIR/release_tools.py" stage-release \
     --target "$TARGET" \
-    --backend "$BACKEND" \
+    --profile "$PROFILE" \
     --version "$VERSION" \
     --binary "$BINARY_PATH" \
     --output-dir "$OUTPUT_DIR" \

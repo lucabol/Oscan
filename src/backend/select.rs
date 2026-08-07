@@ -4,16 +4,17 @@
 //! independent questions about them:
 //!
 //! 1. **Which backends exist in this binary at all?** A development build
-//!    (the default feature set) compiles in all three. A *backend-specific
-//!    distribution* is built with exactly one (`--no-default-features
-//!    --features backend-llvm`, say), so the other two are not merely
-//!    disabled, their code and dependencies are absent.
+//!    (the default feature set) compiles in all three. A slim distribution is
+//!    built with exactly one (`--no-default-features --features backend-llvm`,
+//!    say), so the other two are not merely disabled, their code and
+//!    dependencies are absent. A `full` distribution deliberately contains
+//!    all three.
 //! 2. **Which backend runs when the user does not say?** A development
 //!    build keeps the historical capability-based policy (prefer the direct
 //!    LLVM code generator when it is actually loadable for this host, then
 //!    Cranelift, then C). A distribution build defaults deterministically to
-//!    the one backend it ships — never to a probe result, and never to a
-//!    backend it does not contain.
+//!    a fixed backend (`llvm` for `full`, the included backend for a slim
+//!    profile) — never to a probe result or a backend it does not contain.
 //!
 //! Both answers live here so `main.rs` never has to spell a `cfg!` out
 //! inline, and so the policy itself is unit-testable against arbitrary
@@ -46,10 +47,13 @@ pub const ALL: [Backend; 3] = [Backend::Llvm, Backend::Cranelift, Backend::C];
 /// The deprecated spelling of `--backend cranelift`.
 pub const NATIVE_ALIAS: &str = "native";
 
-/// The distribution backend stamped by `build.rs`. Empty means "ordinary
-/// development build": no forced default, existing capability-based policy.
-/// `build.rs` has already validated it against
-/// [`super::distribution_contract`]'s rules.
+/// Normalized packaged-profile and default-backend values stamped by
+/// `build.rs`. Empty means the corresponding property is not configured.
+const DISTRIBUTION_PROFILE_RAW: &str = env!("OSCAN_DISTRIBUTION_PROFILE");
+const DEFAULT_BACKEND_RAW: &str = env!("OSCAN_DEFAULT_BACKEND");
+
+/// Compatibility metadata for legacy slim distributions. New code should use
+/// `distribution_profile` or `configured_default_backend`.
 const DISTRIBUTION_BACKEND_RAW: &str = env!("OSCAN_DISTRIBUTION_BACKEND");
 
 impl Backend {
@@ -87,11 +91,8 @@ impl Backend {
     }
 
     /// The suffix a backend-specific release archive carries, e.g.
-    /// `oscan-v1.2.3-windows-x86_64-llvm.zip`. Every published artifact is
-    /// one (target, backend) package; there is no all-backends archive, and
-    /// which (target, backend) pairs exist is a property of the release
-    /// contract, not of this binary. Named in the "backend not included in
-    /// this build" error so the user knows what to look for.
+    /// `oscan-v1.2.3-windows-x86_64-llvm.zip`. Slim packages use these
+    /// suffixes; supported targets may also publish a `-full` archive.
     pub fn artifact_suffix(self) -> &'static str {
         match self {
             Self::Llvm => "-llvm",
@@ -184,44 +185,98 @@ pub fn cli_choices() -> String {
         .join("|")
 }
 
-/// The backend this build is a distribution *of*, if any.
-pub fn distribution_backend() -> Option<Backend> {
-    match super::distribution_contract::normalize_distribution_stamp(DISTRIBUTION_BACKEND_RAW) {
-        None => None,
-        Some(name) => Some(Backend::parse(&name).unwrap_or_else(|| {
-            unreachable!("build.rs validates OSCAN_DISTRIBUTION_BACKEND ('{name}')")
-        })),
+/// The package profile this build belongs to, if any.
+pub fn distribution_profile() -> Option<&'static str> {
+    match DISTRIBUTION_PROFILE_RAW {
+        "" => None,
+        "full" => Some("full"),
+        "llvm" => Some("llvm"),
+        "cranelift" => Some("cranelift"),
+        "c" => Some("c"),
+        _ => unreachable!("build.rs validates OSCAN_DISTRIBUTION_PROFILE"),
     }
 }
 
-// Defense in depth: `build.rs` already refuses a stamp that is not backed
-// by exactly one enabled backend, but this makes the same mismatch a
-// compile error even if this crate is ever built through something that
-// skips that check.
+/// Whether this binary belongs to any packaged profile. Packaged builds use
+/// strict executable-relative asset lookup.
+pub fn is_distribution() -> bool {
+    distribution_profile().is_some()
+}
+
+/// The deterministic build-time default, if one was configured.
+pub fn configured_default_backend() -> Option<Backend> {
+    match DEFAULT_BACKEND_RAW {
+        "" => None,
+        "llvm" => Some(Backend::Llvm),
+        "cranelift" => Some(Backend::Cranelift),
+        "c" => Some(Backend::C),
+        _ => unreachable!("build.rs validates OSCAN_DEFAULT_BACKEND"),
+    }
+}
+
+/// Compatibility accessor for code that identifies slim profiles by backend.
+/// Full distributions intentionally return `None`.
+#[allow(dead_code)]
+pub fn distribution_backend() -> Option<Backend> {
+    match DISTRIBUTION_BACKEND_RAW {
+        "" => None,
+        "llvm" => Some(Backend::Llvm),
+        "cranelift" => Some(Backend::Cranelift),
+        "c" => Some(Backend::C),
+        _ => unreachable!("build.rs validates OSCAN_DISTRIBUTION_BACKEND"),
+    }
+}
+
+// Defense in depth: build.rs validates the same complete contract.
 const _: () = assert!(
-    distribution_stamp_is_a_single_backend_build(),
-    "OSCAN_DISTRIBUTION_BACKEND must name the one backend this build enables \
-     (--no-default-features --features backend-llvm|backend-cranelift|backend-c)"
+    distribution_config_matches_features(),
+    "invalid packaged distribution profile/default for the enabled backends"
 );
 
-/// Whether the stamp (if any) matches a build that enables exactly the
-/// stamped backend and nothing else.
-const fn distribution_stamp_is_a_single_backend_build() -> bool {
-    if const_str_eq(DISTRIBUTION_BACKEND_RAW, "") {
-        return true;
-    }
+const fn distribution_config_matches_features() -> bool {
     let enabled = Backend::Llvm.is_compiled_in() as u8
         + Backend::Cranelift.is_compiled_in() as u8
         + Backend::C.is_compiled_in() as u8;
-    if enabled != 1 {
+    if enabled == 0 {
         return false;
     }
-    if const_str_eq(DISTRIBUTION_BACKEND_RAW, "llvm") {
+
+    let default_enabled = if const_str_eq(DEFAULT_BACKEND_RAW, "") {
+        true
+    } else if const_str_eq(DEFAULT_BACKEND_RAW, "llvm") {
         Backend::Llvm.is_compiled_in()
-    } else if const_str_eq(DISTRIBUTION_BACKEND_RAW, "cranelift") {
+    } else if const_str_eq(DEFAULT_BACKEND_RAW, "cranelift") {
         Backend::Cranelift.is_compiled_in()
-    } else if const_str_eq(DISTRIBUTION_BACKEND_RAW, "c") {
+    } else if const_str_eq(DEFAULT_BACKEND_RAW, "c") {
         Backend::C.is_compiled_in()
+    } else {
+        false
+    };
+    if !default_enabled {
+        return false;
+    }
+
+    if const_str_eq(DISTRIBUTION_PROFILE_RAW, "") {
+        const_str_eq(DISTRIBUTION_BACKEND_RAW, "")
+    } else if const_str_eq(DISTRIBUTION_PROFILE_RAW, "full") {
+        const_str_eq(DEFAULT_BACKEND_RAW, "llvm")
+            && const_str_eq(DISTRIBUTION_BACKEND_RAW, "")
+            && enabled == 3
+    } else if const_str_eq(DISTRIBUTION_PROFILE_RAW, "llvm") {
+        const_str_eq(DEFAULT_BACKEND_RAW, "llvm")
+            && const_str_eq(DISTRIBUTION_BACKEND_RAW, "llvm")
+            && Backend::Llvm.is_compiled_in()
+            && enabled == 1
+    } else if const_str_eq(DISTRIBUTION_PROFILE_RAW, "cranelift") {
+        const_str_eq(DEFAULT_BACKEND_RAW, "cranelift")
+            && const_str_eq(DISTRIBUTION_BACKEND_RAW, "cranelift")
+            && Backend::Cranelift.is_compiled_in()
+            && enabled == 1
+    } else if const_str_eq(DISTRIBUTION_PROFILE_RAW, "c") {
+        const_str_eq(DEFAULT_BACKEND_RAW, "c")
+            && const_str_eq(DISTRIBUTION_BACKEND_RAW, "c")
+            && Backend::C.is_compiled_in()
+            && enabled == 1
     } else {
         false
     }
@@ -248,12 +303,12 @@ pub fn resolve_backend(explicit: Option<Backend>, inputs: SelectionInputs) -> Ba
     resolve_backend_with(
         explicit,
         inputs,
-        distribution_backend(),
+        configured_default_backend(),
         Availability::COMPILED_IN,
     )
 }
 
-/// The selection policy itself, parameterized over the distribution stamp
+/// The selection policy itself, parameterized over the configured default
 /// and the compiled-in set so every combination is testable.
 ///
 /// An explicit `--backend` always wins — including when it names a backend
@@ -261,14 +316,14 @@ pub fn resolve_backend(explicit: Option<Backend>, inputs: SelectionInputs) -> Ba
 /// (see [`unavailable_error`]) instead of silently running something else.
 /// Output-format flags come next, because `--emit-c`/`-o *.c`/`--target`
 /// and `--emit-llvm-ir`/`-o *.ll` only have one possible producer each. A
-/// distribution build then pins the default to its own backend, before any
+/// configured build then pins the default, before any
 /// host probing, so the same command line always selects the same backend
 /// on every machine. Only an ordinary development build reaches the
 /// historical capability-based policy.
 pub fn resolve_backend_with(
     explicit: Option<Backend>,
     inputs: SelectionInputs,
-    distribution: Option<Backend>,
+    configured_default: Option<Backend>,
     available: Availability,
 ) -> Backend {
     if let Some(explicit) = explicit {
@@ -280,8 +335,8 @@ pub fn resolve_backend_with(
     if inputs.llvm_ir_output {
         return Backend::Llvm;
     }
-    if let Some(distribution) = distribution {
-        return distribution;
+    if let Some(configured_default) = configured_default {
+        return configured_default;
     }
     if inputs.native_target_requested {
         // `--native-target` names an object target shared by both object
@@ -326,10 +381,11 @@ pub fn deprecated_alias_warning() -> String {
 pub fn unavailable_error(requested: Backend) -> String {
     format!(
         "the {requested} backend is not included in this compiler build (this build includes: \
-         {}); to use it, install a release artifact whose archive name ends in '{}' for a \
-         platform that publishes that backend (oscan-v<version>-<target>{}.zip / .tar.xz / \
-         .tar.gz, or the corresponding .msi installer where one is published) — every published \
-         package contains exactly one backend, and not every platform publishes every backend",
+         {}); to use it, install a release artifact whose archive name ends in '-full' or '{}' \
+         for a platform that publishes that profile (oscan-v<version>-<target>-full.zip / \
+         .tar.xz / .tar.gz or oscan-v<version>-<target>{}.zip / .tar.xz / .tar.gz, or the \
+         corresponding .msi installer where one is published) — not every platform publishes \
+         every profile",
         compiled_in_list(),
         requested.artifact_suffix(),
         requested.artifact_suffix()
@@ -338,18 +394,21 @@ pub fn unavailable_error(requested: Backend) -> String {
 
 /// How the help text describes what happens without `--backend`, in terms
 /// of what this build actually contains: a stamped distribution names its
-/// own backend, a single-backend build names the only one it has, and a
+/// configured default, a single-backend build names the only one it has, and a
 /// multi-backend build describes the capability-based policy over exactly
 /// the backends it can choose between.
 pub fn default_description() -> String {
-    describe_default(distribution_backend(), Availability::COMPILED_IN)
+    describe_default(configured_default_backend(), Availability::COMPILED_IN)
 }
 
 /// [`default_description`]'s policy, parameterized so every build shape is
 /// testable.
-fn describe_default(distribution: Option<Backend>, available: Availability) -> String {
-    if let Some(backend) = distribution {
-        return format!("{backend}; this build includes only the {backend} backend");
+fn describe_default(configured_default: Option<Backend>, available: Availability) -> String {
+    if let Some(backend) = configured_default {
+        if available.list().len() == 1 {
+            return format!("{backend}; this build includes only the {backend} backend");
+        }
+        return format!("{backend}; configured at build time");
     }
     let available = available.list();
     if let [only] = available.as_slice() {
@@ -377,14 +436,11 @@ fn describe_default(distribution: Option<Backend>, available: Availability) -> S
 /// which one it defaults to without parsing help text or compiling
 /// anything.
 pub fn version_metadata() -> String {
-    let distribution = match distribution_backend() {
-        Some(backend) => backend.as_str().to_string(),
-        None => "none".to_string(),
-    };
+    let distribution = distribution_profile().unwrap_or("none");
     format!(
         "backends: {}\ndefault-backend: {}\ndistribution: {distribution}\ntoolchain-free: {}",
         compiled_in_list(),
-        default_backend_label(distribution_backend(), Availability::COMPILED_IN),
+        default_backend_label(configured_default_backend(), Availability::COMPILED_IN),
         if super::no_toolchain::TOOLCHAIN_FREE_BUILD {
             "yes"
         } else {
@@ -397,8 +453,8 @@ pub fn version_metadata() -> String {
 /// default is decided at build time (a stamped distribution, or a build
 /// with only one backend to choose from), `auto` when it still depends on
 /// what this host can do.
-fn default_backend_label(distribution: Option<Backend>, available: Availability) -> String {
-    match (distribution, available.list().as_slice()) {
+fn default_backend_label(configured_default: Option<Backend>, available: Availability) -> String {
+    match (configured_default, available.list().as_slice()) {
         (Some(backend), _) => backend.as_str().to_string(),
         (None, [only]) => only.as_str().to_string(),
         _ => "auto".to_string(),
@@ -521,6 +577,10 @@ mod tests {
             describe_default(Some(Backend::Llvm), LLVM_ONLY),
             "llvm; this build includes only the llvm backend"
         );
+        assert_eq!(
+            describe_default(Some(Backend::Llvm), ALL_BACKENDS),
+            "llvm; configured at build time"
+        );
     }
 
     /// A single-backend build with no stamp still defaults to the backend
@@ -540,27 +600,32 @@ mod tests {
         }
     }
 
-    /// This build's own stamp/feature combination must satisfy the shared
+    /// This build's own profile/default/feature combination must satisfy the shared
     /// contract `build.rs` enforces (the `const _: () = assert!(...)`
     /// above proves the same thing at compile time; this proves the
     /// runtime view agrees).
     #[test]
-    fn this_builds_stamp_satisfies_the_distribution_contract() {
+    fn this_builds_configuration_satisfies_the_distribution_contract() {
         let enabled: Vec<&str> = compiled_in().iter().map(|b| b.as_str()).collect();
-        let validated = super::super::distribution_contract::validate_distribution_stamp(
+        let validated = super::super::distribution_contract::validate_distribution_config(
+            DISTRIBUTION_PROFILE_RAW,
+            DEFAULT_BACKEND_RAW,
             DISTRIBUTION_BACKEND_RAW,
             &enabled,
         )
-        .expect("this build's stamp must satisfy the distribution contract");
+        .expect("this build's configuration must satisfy the distribution contract");
+        assert_eq!(validated.profile.as_deref(), distribution_profile());
         assert_eq!(
-            validated.as_deref(),
-            distribution_backend().map(|backend| backend.as_str())
+            validated.default_backend.as_deref(),
+            configured_default_backend().map(|backend| backend.as_str())
         );
-        if distribution_backend().is_some() {
+        if distribution_profile() == Some("full") {
+            assert_eq!(enabled.len(), 3, "the full profile has every backend");
+        } else if is_distribution() {
             assert_eq!(
                 enabled.len(),
                 1,
-                "a distribution build has exactly one backend"
+                "a slim distribution has exactly one backend"
             );
         }
     }
@@ -701,8 +766,8 @@ mod tests {
     }
 
     #[test]
-    fn a_distribution_build_defaults_to_its_own_backend_deterministically() {
-        for (distribution, available) in [
+    fn a_configured_build_defaults_deterministically() {
+        for (configured_default, available) in [
             (Backend::Llvm, LLVM_ONLY),
             (Backend::Cranelift, CRANELIFT_ONLY),
             (Backend::C, C_ONLY),
@@ -723,9 +788,9 @@ mod tests {
                 },
             ] {
                 assert_eq!(
-                    resolve_backend_with(None, probe, Some(distribution), available),
-                    distribution,
-                    "{distribution} distribution must default to itself"
+                    resolve_backend_with(None, probe, Some(configured_default), available),
+                    configured_default,
+                    "the configured default must be deterministic"
                 );
             }
             // An explicit request still reaches the availability check
@@ -733,11 +798,29 @@ mod tests {
             // own backend.
             for requested in ALL {
                 assert_eq!(
-                    resolve_backend_with(Some(requested), inputs(), Some(distribution), available),
+                    resolve_backend_with(
+                        Some(requested),
+                        inputs(),
+                        Some(configured_default),
+                        available
+                    ),
                     requested
                 );
             }
         }
+        assert_eq!(
+            resolve_backend_with(
+                None,
+                SelectionInputs {
+                    native_host_supported: true,
+                    ..inputs()
+                },
+                Some(Backend::Llvm),
+                ALL_BACKENDS
+            ),
+            Backend::Llvm,
+            "a full build may fix a default while retaining every backend"
+        );
     }
 
     #[test]
@@ -831,15 +914,9 @@ mod tests {
             message.contains("cranelift backend is not included"),
             "{message}"
         );
-        assert!(
-            message.contains("archive name ends in '-cranelift'"),
-            "{message}"
-        );
+        assert!(message.contains("'-full' or '-cranelift'"), "{message}");
         assert!(message.contains(&compiled_in_list()), "{message}");
-        // No release publishes an all-backends package, so the error must
-        // not offer one.
-        assert!(!message.contains("-full"), "{message}");
-        assert!(message.contains("exactly one backend"), "{message}");
+        assert!(message.contains("-full"), "{message}");
         // Every archive format a release can publish is named, so the
         // message is correct whichever platform the user is on...
         for format in [".zip", ".tar.xz", ".tar.gz", ".msi"] {
@@ -848,7 +925,7 @@ mod tests {
         // ...and it must never promise that *this* platform publishes the
         // requested backend (macOS ships only the C package today).
         assert!(
-            message.contains("not every platform publishes every backend"),
+            message.contains("not every platform publishes every profile"),
             "{message}"
         );
         assert_eq!(Backend::Llvm.artifact_suffix(), "-llvm");
@@ -862,7 +939,7 @@ mod tests {
     fn the_unavailable_error_never_promises_a_package_for_this_platform() {
         let message = unavailable_error(Backend::Llvm);
         assert!(
-            message.contains("for a platform that publishes that backend"),
+            message.contains("for a platform that publishes that profile"),
             "{message}"
         );
         assert!(
@@ -875,24 +952,18 @@ mod tests {
         );
     }
 
-    /// The developer build this test suite runs in: all three backends
-    /// compiled in, and therefore (by the distribution contract) never a
-    /// stamped distribution — so the capability-based default applies.
+    /// An all-backend build can be either an ordinary developer build or the
+    /// packaged full profile.
     #[cfg(all(
         feature = "backend-c",
         feature = "backend-cranelift",
         feature = "backend-llvm"
     ))]
     #[test]
-    fn the_default_developer_build_contains_every_backend() {
+    fn an_all_backend_build_reports_its_profile_and_default() {
         assert_eq!(Availability::COMPILED_IN, ALL_BACKENDS);
         assert_eq!(compiled_in_list(), "llvm, cranelift, c");
         assert_eq!(cli_choices(), "llvm|cranelift|c");
-        assert_eq!(
-            distribution_backend(),
-            None,
-            "an all-backends build can never be a distribution build"
-        );
 
         let metadata = version_metadata();
         assert!(
@@ -900,8 +971,22 @@ mod tests {
             "{metadata}"
         );
         assert!(metadata.contains("toolchain-free: no"), "{metadata}");
-        assert!(metadata.contains("default-backend: auto"), "{metadata}");
-        assert!(metadata.contains("distribution: none"), "{metadata}");
+        if is_distribution() {
+            assert_eq!(distribution_profile(), Some("full"));
+            assert!(configured_default_backend().is_some());
+            assert!(metadata.contains("distribution: full"), "{metadata}");
+            assert!(
+                metadata.contains(&format!(
+                    "default-backend: {}",
+                    configured_default_backend().unwrap()
+                )),
+                "{metadata}"
+            );
+        } else {
+            assert_eq!(distribution_profile(), None);
+            assert!(metadata.contains("default-backend: auto"), "{metadata}");
+            assert!(metadata.contains("distribution: none"), "{metadata}");
+        }
     }
 
     /// A build with a restricted feature set must report itself honestly,
@@ -935,7 +1020,7 @@ mod tests {
             line("default-backend: "),
             format!(
                 "default-backend: {}",
-                default_backend_label(distribution_backend(), Availability::COMPILED_IN)
+                default_backend_label(configured_default_backend(), Availability::COMPILED_IN)
             )
         );
         for backend in ALL {

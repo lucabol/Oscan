@@ -112,8 +112,10 @@ try {
 
     $installerArgs = @{
         SourceDir = $Stage
+        Profile = 'dev'
+        SetDefault = $true
     }
-    if ($PSBoundParameters.ContainsKey('InstallDir')) { $installerArgs.InstallDir = $InstallDir }
+    if ($PSBoundParameters.ContainsKey('InstallDir')) { $installerArgs.InstallRoot = $InstallDir }
     if ($PSBoundParameters.ContainsKey('BinDir'))     { $installerArgs.BinDir     = $BinDir }
     if ($NoPathUpdate)                                 { $installerArgs.NoPathUpdate = $true }
 

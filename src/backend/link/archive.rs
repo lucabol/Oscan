@@ -156,7 +156,7 @@ pub(super) fn packaged_runtime_archive_root(root: &Path, target: NativeTarget) -
 
 /// Roots to search for a prebuilt runtime archive.
 ///
-/// A **distribution** build — one stamped with `OSCAN_DISTRIBUTION_BACKEND`
+/// A **distribution** build — one stamped with `OSCAN_DISTRIBUTION_PROFILE`
 /// at compile time (see [`crate::backend::select`]) — searches exactly one
 /// root: the directory its own executable lives in, which is the package
 /// root. Not its ancestors, not the current directory, not the checkout it
@@ -165,14 +165,11 @@ pub(super) fn packaged_runtime_archive_root(root: &Path, target: NativeTarget) -
 /// remains the one explicit escape hatch and is handled by the caller
 /// before this is consulted.
 ///
-/// Every other build (development, and full releases that embed their
-/// assets) keeps the existing broader search: exe ancestors,
+/// Every other build (development and custom builds) keeps the existing
+/// broader search: exe ancestors,
 /// `CARGO_MANIFEST_DIR`, then the current directory.
 fn runtime_archive_roots() -> Vec<PathBuf> {
-    runtime_archive_roots_for(
-        crate::backend::select::distribution_backend().is_some(),
-        current_exe_dir(),
-    )
+    runtime_archive_roots_for(crate::backend::select::is_distribution(), current_exe_dir())
 }
 
 /// Pure core of [`runtime_archive_roots`].
@@ -245,7 +242,7 @@ pub(super) fn find_or_build_runtime_archive(
     // A distribution package ships its own runtime archives at one fixed
     // place. Not finding them there is package corruption, not a cue to
     // start looking for a C toolchain to build one with.
-    if let Some(backend) = crate::backend::select::distribution_backend() {
+    if let Some(profile) = crate::backend::select::distribution_profile() {
         let expected = current_exe_dir()
             .map(|dir| packaged_runtime_archive_root(&dir, target).join(archive_name))
             .map(|path| path.display().to_string())
@@ -256,7 +253,7 @@ pub(super) fn find_or_build_runtime_archive(
                 )
             });
         return Err(format!(
-            "this {backend} distribution is missing its {runtime_mode} runtime archive: '{expected}' \
+            "this {profile} distribution is missing its {runtime_mode} runtime archive: '{expected}' \
              does not exist. The package is incomplete or corrupt — reinstall it, or set \
              OSCAN_RUNTIME_ARCHIVE_DIR to a directory containing {archive_name}"
         ));
@@ -662,7 +659,7 @@ mod tests {
 
         // The live selector follows *this* build's own stamp, whichever
         // way this test binary was built.
-        let is_distribution = crate::backend::select::distribution_backend().is_some();
+        let is_distribution = crate::backend::select::is_distribution();
         assert_eq!(
             runtime_archive_roots(),
             runtime_archive_roots_for(is_distribution, current_exe_dir())

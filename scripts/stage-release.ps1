@@ -4,8 +4,9 @@ param(
     [string]$Target,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("llvm", "cranelift", "c")]
-    [string]$Backend,
+    [Alias("Backend")]
+    [ValidateSet("full", "llvm", "cranelift", "c")]
+    [string]$Profile,
 
     [Parameter(Mandatory = $true)]
     [string]$Version,
@@ -86,7 +87,7 @@ $pythonArgs = @(
     $tool,
     "stage-release",
     "--target", $Target,
-    "--backend", $Backend,
+    "--profile", $Profile,
     "--version", $Version,
     "--binary", $BinaryPath,
     "--output-dir", $OutputDir,
