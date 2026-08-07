@@ -44,11 +44,12 @@ def make_bundle(root: Path, profile: str, version: str, windows: bool) -> Path:
         ),
         "default_backend": "llvm" if profile == "full" else profile,
         "component_digests": {
-            binary.name: hashlib.sha256(binary.read_bytes()).hexdigest()
+            binary.name: hashlib.sha256(binary.read_bytes()).hexdigest(),
+            "c_toolchain": {"version": "nested-toolchain-version"},
         },
     }
     (bundle / "oscan-package.json").write_text(
-        json.dumps(metadata), encoding="utf-8"
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return bundle
 

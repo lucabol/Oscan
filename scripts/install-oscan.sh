@@ -144,21 +144,26 @@ if [ "$CREATE_LINK" -eq 1 ] || [ "$UNINSTALL" -eq 1 ]; then
     BIN_LOCK_HELD=1
 fi
 
-metadata_value() {
-    sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+metadata_top_string() {
+    sed -n "s/^  \"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" \
+        "$SOURCE_DIR/oscan-package.json" | sed -n '1p'
+}
+
+metadata_component_digest() {
+    sed -n "s/^    \"$1\"[[:space:]]*:[[:space:]]*\"\([0-9a-fA-F]*\)\".*/\1/p" \
         "$SOURCE_DIR/oscan-package.json" | sed -n '1p'
 }
 
 METADATA="$SOURCE_DIR/oscan-package.json"
 if [ -f "$METADATA" ]; then
-    SCHEMA="$(sed -n 's/.*"schema_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$METADATA" | sed -n '1p')"
+    SCHEMA="$(sed -n 's/^  "schema_version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$METADATA" | sed -n '1p')"
     [ "$SCHEMA" = "2" ] || fail "unsupported oscan-package.json schema '$SCHEMA'; expected 2"
-    PACKAGE_PROFILE="$(metadata_value profile)"
-    PACKAGE_ID="$(metadata_value package_id)"
-    VERSION="$(metadata_value version)"
-    PACKAGE_TARGET="$(metadata_value target)"
-    DEFAULT_BACKEND="$(metadata_value default_backend)"
-    EXPECTED_COMPILER_DIGEST="$(metadata_value oscan)"
+    PACKAGE_PROFILE="$(metadata_top_string profile)"
+    PACKAGE_ID="$(metadata_top_string package_id)"
+    VERSION="$(metadata_top_string version)"
+    PACKAGE_TARGET="$(metadata_top_string target)"
+    DEFAULT_BACKEND="$(metadata_top_string default_backend)"
+    EXPECTED_COMPILER_DIGEST="$(metadata_component_digest oscan)"
     case "$PACKAGE_PROFILE" in
         full|llvm|cranelift|c) ;;
         *) fail "package metadata contains unknown profile '$PACKAGE_PROFILE'" ;;
@@ -170,7 +175,7 @@ if [ -f "$METADATA" ]; then
     [ "$PACKAGE_ID" = "oscan-$PROFILE" ] ||
         fail "package metadata package_id '$PACKAGE_ID' does not match profile '$PROFILE'"
     [ -n "$VERSION" ] || fail "package metadata does not declare a version"
-    grep -Eq '"is_distribution"[[:space:]]*:[[:space:]]*true' "$METADATA" ||
+    grep -Eq '^  "is_distribution"[[:space:]]*:[[:space:]]*true' "$METADATA" ||
         fail "package metadata must identify a packaged distribution"
     EXPECTED_DEFAULT="$PROFILE"
     [ "$PROFILE" != "full" ] || EXPECTED_DEFAULT="llvm"
