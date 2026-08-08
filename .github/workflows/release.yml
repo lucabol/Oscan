@@ -1,11 +1,11 @@
 name: Oscan Release
 
-# Release contract schema 2: every published artifact is one (target,
-# backend) pair — Windows/Linux ship llvm, cranelift and c packages, macOS
+# Release contract schema 3: every published artifact is one (target,
+# profile) pair — Windows/Linux ship full, llvm, cranelift and c; macOS
 # ships c. The package job is keyed on the *target*, not on target x
-# backend, because a target's variants reuse the same pinned toolchain
+# profile, because a target's variants reuse the same pinned toolchain
 # download and freestanding runtime archives. Sidecar variants also share one
-# prepared native-link set; the strict Windows LLVM variant additionally uses
+# prepared native-link set; strict Windows full/LLVM variants additionally use
 # one cached static LLVM/LLD build.
 
 on:
@@ -120,12 +120,12 @@ jobs:
       # interpolated into script bodies, so nothing here depends on how a
       # given shell would quote them.
       RELEASE_TARGET: ${{ matrix.target }}
-      RELEASE_BACKENDS: ${{ matrix.backends }}
+      RELEASE_PROFILES: ${{ matrix.profiles }}
       RELEASE_ARCHIVES: ${{ matrix.archives }}
       RELEASE_RUNTIME_PROFILES: ${{ matrix.runtime_profiles }}
       RELEASE_BINARY_NAME: ${{ matrix.binary_name }}
       RELEASE_BINARY_PATH: ${{ matrix.binary_path }}
-      RELEASE_MSI_BACKEND: ${{ matrix.msi_backend }}
+      RELEASE_MSI_PROFILE: ${{ matrix.msi_profile }}
       RELEASE_NEEDS_PROVIDER_ARCHIVE: ${{ matrix.needs_provider_archive }}
       RELEASE_NEEDS_INPROCESS_TOOLCHAIN: ${{ matrix.needs_inprocess_toolchain }}
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -145,8 +145,8 @@ jobs:
           python-version: "3.x"
 
       # Only the downloaded crate sources are cached. target/ deliberately is
-      # not: this job builds the same crate three times with three different,
-      # mutually exclusive feature sets, and a shared target/ cache across
+      # not: this job builds the same crate once per package profile with
+      # different feature sets, and a shared target/ cache across
       # runs buys nothing there while risking a stale artifact being packaged.
       - name: Cache Cargo dependencies
         uses: actions/cache@v4
@@ -166,8 +166,8 @@ jobs:
           path: build/inprocess-toolchain/${{ matrix.target }}
           key: release-inprocess-${{ matrix.target }}-${{ hashFiles('packaging/toolchains/windows-x86_64.json', 'scripts/build-inprocess-toolchain.ps1', 'toolchain/inprocess/**') }}
 
-      # The packaged LLVM code generator is dlopen()ed by the llvm package's
-      # smoke test, so its shared-library dependencies must exist on the
+      # The packaged LLVM code generator is dlopen()ed by LLVM-capable package
+      # smoke tests, so its shared-library dependencies must exist on the
       # runner even though they are never shipped.
       - name: Install packaged LLVM provider runtime dependencies
         if: matrix.needs_provider_archive == 'true'
@@ -181,8 +181,8 @@ jobs:
       # One shared download cache per target: the base toolchain archive is
       # resolved (and verified against the digest the manifest pins) once and
       # then reused by the extraction below and by C-package staging, and the
-      # separately pinned LLVM provider archive is resolved once for the llvm
-      # package. Staging and assembly never download anything themselves.
+      # separately pinned LLVM provider archive is resolved once for profiles
+      # containing LLVM. Staging and assembly never download anything themselves.
       - name: Resolve the pinned release archives
         if: matrix.needs_base_toolchain == 'true'
         id: archives
@@ -298,9 +298,10 @@ jobs:
             throw "Preparing the strict compiler notices for $target failed."
           }
 
-      # Built once per target with that target's pinned compiler/archiver and
-      # shared by every object package of this target.
-      - name: Build the freestanding runtime archives
+      # Built once per target with that target's pinned compiler/archiver.
+      # Slim object packages consume only freestanding modes; full also
+      # consumes hosted mode through its bundled compiler driver.
+      - name: Build the declared runtime archives
         if: matrix.runtime_profiles != ''
         shell: pwsh
         run: |
@@ -360,32 +361,30 @@ jobs:
             throw "Preparing the strict in-process link assets for $target failed."
           }
 
-      # One binary per backend, each built with exactly one backend feature
-      # and stamped with the matching distribution backend, then copied to a
-      # stable per-backend path before the next build overwrites
+      # One binary per package profile, built with exactly the profile's
+      # backend features and stamped with independent profile/default values,
+      # then copied aside before the next build overwrites
       # target/release.
-      - name: Build the backend-specific compilers
+      - name: Build the profile-specific compilers
         shell: pwsh
         run: |
           # Sidecar releases consume native-link assets at run time. The strict
-          # LLVM release uses the separate in-process asset contract below,
+          # Windows full/LLVM releases use the separate in-process asset contract below,
           # never OSCAN_EMBED_ASSETS_DIR.
           Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS `
             -ErrorAction SilentlyContinue
           $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
             ConvertFrom-Json -AsHashtable
-          $variants = $contract['variants'][${env:RELEASE_TARGET}]['backends']
-          $backends = $env:RELEASE_BACKENDS.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
-          if ($backends.Count -eq 0) {
-            throw "The release contract lists no backends for ${env:RELEASE_TARGET}."
+          $variants = $contract['variants'][${env:RELEASE_TARGET}]['profiles']
+          $profiles = $env:RELEASE_PROFILES.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          if ($profiles.Count -eq 0) {
+            throw "The release contract lists no profiles for ${env:RELEASE_TARGET}."
           }
           $binRoot = Join-Path $env:RUNNER_TEMP 'oscan-release-binaries'
-          foreach ($backend in $backends) {
-            $variant = $variants[$backend]
-            $features = @([string]$variant['cargo_feature'])
-            if ($variant.ContainsKey('extra_cargo_features')) {
-              $features += @($variant['extra_cargo_features'])
-            }
+          foreach ($profile in $profiles) {
+            $variant = $variants[$profile]
+            $profileSpec = $contract['profiles'][$profile]
+            $features = @($variant['cargo_features'])
             $featureList = $features -join ','
             Remove-Item Env:OSCAN_INPROCESS_TOOLCHAIN_DIR, Env:OSCAN_INPROCESS_ASSETS_DIR, Env:RUSTFLAGS `
               -ErrorAction SilentlyContinue
@@ -394,7 +393,7 @@ jobs:
               $inprocessAssets = "build/inprocess-assets/${env:RELEASE_TARGET}"
               foreach ($path in @($inprocessToolchain, $inprocessAssets)) {
                 if (-not (Test-Path -LiteralPath $path -PathType Container)) {
-                  throw "$backend needs strict in-process input '$path', but it is missing."
+                  throw "$profile needs strict in-process input '$path', but it is missing."
                 }
               }
               $env:OSCAN_INPROCESS_TOOLCHAIN_DIR = (Resolve-Path -LiteralPath $inprocessToolchain).Path
@@ -402,16 +401,18 @@ jobs:
               $env:RUSTFLAGS = [string]$variant['rustflags']
             }
             Write-Host "::group::cargo build --release --no-default-features --features $featureList"
-            $env:OSCAN_DISTRIBUTION_BACKEND = $backend
+            Remove-Item Env:OSCAN_DISTRIBUTION_BACKEND -ErrorAction SilentlyContinue
+            $env:OSCAN_DISTRIBUTION_PROFILE = $profile
+            $env:OSCAN_DEFAULT_BACKEND = [string]$profileSpec['default_backend']
             $env:OSCAN_VERSION = $env:RELEASE_TAG
             & cargo build --release --no-default-features --features $featureList
             if ($LASTEXITCODE -ne 0) {
-              throw "cargo build failed for backend '$backend'."
+              throw "cargo build failed for profile '$profile'."
             }
             if (-not (Test-Path -LiteralPath $env:RELEASE_BINARY_PATH -PathType Leaf)) {
-              throw "cargo produced no binary at ${env:RELEASE_BINARY_PATH} for backend '$backend'."
+              throw "cargo produced no binary at ${env:RELEASE_BINARY_PATH} for profile '$profile'."
             }
-            $destinationDir = Join-Path $binRoot $backend
+            $destinationDir = Join-Path $binRoot $profile
             New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
             Copy-Item -LiteralPath $env:RELEASE_BINARY_PATH `
               -Destination (Join-Path $destinationDir $env:RELEASE_BINARY_NAME) -Force
@@ -421,15 +422,15 @@ jobs:
       # Each variant is assembled from only the prepared inputs its component
       # list declares, and smoked immediately: an archive is never uploaded
       # before the package it contains has been installed and exercised.
-      - name: Assemble and smoke every backend package
+      - name: Assemble and smoke every profile package
         shell: pwsh
         run: |
           $target = $env:RELEASE_TARGET
           $version = $env:RELEASE_VERSION
           $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
             ConvertFrom-Json -AsHashtable
-          $variants = $contract['variants'][$target]['backends']
-          $backends = $env:RELEASE_BACKENDS.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
+          $variants = $contract['variants'][$target]['profiles']
+          $profiles = $env:RELEASE_PROFILES.Split(',', [System.StringSplitOptions]::RemoveEmptyEntries)
           $binRoot = Join-Path $env:RUNNER_TEMP 'oscan-release-binaries'
           $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
           $uploadDir = Join-Path $env:GITHUB_WORKSPACE 'release-upload'
@@ -438,20 +439,20 @@ jobs:
           $providerArchive = '${{ steps.archives.outputs.provider_archive }}'
           $produced = @()
 
-          foreach ($backend in $backends) {
-            if (-not $variants.ContainsKey($backend)) {
-              throw "The release contract has no $target/$backend variant."
+          foreach ($profile in $profiles) {
+            if (-not $variants.ContainsKey($profile)) {
+              throw "The release contract has no $target/$profile variant."
             }
-            $variant = $variants[$backend]
+            $variant = $variants[$profile]
             $components = @($variant['components'])
-            $binary = Join-Path (Join-Path $binRoot $backend) $env:RELEASE_BINARY_NAME
+            $binary = Join-Path (Join-Path $binRoot $profile) $env:RELEASE_BINARY_NAME
             if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
-              throw "No $backend compiler was built for $target (expected $binary)."
+              throw "No $profile compiler was built for $target (expected $binary)."
             }
 
             $assembleArgs = @{
               Target = $target
-              Backend = $backend
+              Profile = $profile
               Version = $version
               BinaryPath = $binary
               OutputDir = $outputDir
@@ -459,52 +460,52 @@ jobs:
             if ($components -contains 'direct_link_sidecar') {
               $nativeLinkDir = "build/native-link/$target"
               if (-not (Test-Path -LiteralPath $nativeLinkDir)) {
-                throw "$target/$backend needs a prepared native-link sidecar, but $nativeLinkDir is missing."
+                throw "$target/$profile needs a prepared native-link sidecar, but $nativeLinkDir is missing."
               }
               $assembleArgs['NativeLinkDir'] = (Resolve-Path -LiteralPath $nativeLinkDir).Path
             }
             if ($variant['link_mode'] -eq 'inprocess') {
               $noticesDir = "build/inprocess-notices/$target"
               if (-not (Test-Path -LiteralPath $noticesDir -PathType Container)) {
-                throw "$target/$backend needs embedded-input notices, but $noticesDir is missing."
+                throw "$target/$profile needs embedded-input notices, but $noticesDir is missing."
               }
               $assembleArgs['EmbeddedNoticesDir'] = (Resolve-Path -LiteralPath $noticesDir).Path
             }
             if ($components -contains 'runtime_archives') {
               $runtimeArchiveDir = "build/runtime-archives/$target"
               if (-not (Test-Path -LiteralPath $runtimeArchiveDir)) {
-                throw "$target/$backend needs prebuilt runtime archives, but $runtimeArchiveDir is missing."
+                throw "$target/$profile needs prebuilt runtime archives, but $runtimeArchiveDir is missing."
               }
               $assembleArgs['PrebuiltRuntimeArchiveDir'] = (Resolve-Path -LiteralPath $runtimeArchiveDir).Path
             }
             if ($components -contains 'c_toolchain') {
               if (-not $toolchainArchive) {
-                throw "$target/$backend needs the pinned C toolchain archive, which was not resolved."
+                throw "$target/$profile needs the pinned C toolchain archive, which was not resolved."
               }
               $assembleArgs['ToolchainArchive'] = $toolchainArchive
             }
             if ($components -contains 'llvm_provider' -and
                 $variant['llvm_provider_source'] -eq 'toolchain-manifest') {
               if (-not $providerArchive) {
-                throw "$target/$backend needs the pinned LLVM provider archive, which was not resolved."
+                throw "$target/$profile needs the pinned LLVM provider archive, which was not resolved."
               }
               $assembleArgs['LlvmProviderArchive'] = $providerArchive
             }
 
-            Write-Host "::group::assemble $target/$backend"
+            Write-Host "::group::assemble $target/$profile"
             $archivePath = & ./scripts/assemble-release.ps1 @assembleArgs | Select-Object -Last 1
             if (-not $archivePath -or -not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
-              throw "Assembling $target/$backend produced no archive."
+              throw "Assembling $target/$profile produced no archive."
             }
             Write-Host "::endgroup::"
 
-            Write-Host "::group::smoke $target/$backend"
+            Write-Host "::group::smoke $target/$profile"
             & ./scripts/smoke-release.ps1 `
               -Target $target `
-              -Backend $backend `
+              -Profile $profile `
               -ArchivePath $archivePath `
               -Version $version `
-              -ScratchDir (Join-Path $env:RUNNER_TEMP "oscan-release-smoke/$target-$backend")
+              -ScratchDir (Join-Path $env:RUNNER_TEMP "oscan-release-smoke/$target-$profile")
             Write-Host "::endgroup::"
 
             $archiveName = Split-Path -Path $archivePath -Leaf
@@ -534,20 +535,20 @@ jobs:
       # staged bundle directory the assemble step above left in place, so it
       # contains exactly what the verified archive contains.
       - name: Build the recommended MSI installer
-        if: matrix.msi_backend != ''
+        if: matrix.msi_profile != ''
         shell: pwsh
         run: |
           $target = $env:RELEASE_TARGET
-          $backend = $env:RELEASE_MSI_BACKEND
+          $profile = $env:RELEASE_MSI_PROFILE
           $version = $env:RELEASE_VERSION
           $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
             ConvertFrom-Json -AsHashtable
-          $variant = $contract['variants'][$target]['backends'][$backend]
+          $variant = $contract['variants'][$target]['profiles'][$profile]
           $bundleName = ([string]$variant['archive_root_template']).Replace('{version}', $version)
           $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
           $bundleDir = Join-Path (Join-Path $outputDir 'stage') $bundleName
           if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
-            throw "The staged $target/$backend bundle is missing at $bundleDir; the MSI must be built from the bundle that was packaged and smoked."
+            throw "The staged $target/$profile bundle is missing at $bundleDir; the MSI must be built from the bundle that was packaged and smoked."
           }
           $uploadDir = Join-Path $env:GITHUB_WORKSPACE 'release-upload'
           New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
@@ -556,7 +557,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
             throw "The MSI build produced no installer at $msiPath."
           }
-          $msiScratch = Join-Path $env:RUNNER_TEMP "oscan-release-msi/$target-$backend"
+          $msiScratch = Join-Path $env:RUNNER_TEMP "oscan-release-msi/$target-$profile"
           if (Test-Path -LiteralPath $msiScratch) {
             Remove-Item -LiteralPath $msiScratch -Recurse -Force
           }
@@ -574,12 +575,12 @@ jobs:
           $installedRoot = Join-Path $adminRoot 'PFiles64\Oscan'
           & ./scripts/smoke-release.ps1 `
             -Target $target `
-            -Backend $backend `
+            -Profile $profile `
             -InstalledPackageDir $installedRoot `
             -Version $version `
             -ScratchDir (Join-Path $msiScratch 'smoke')
           if ($LASTEXITCODE -ne 0) {
-            throw "The MSI payload smoke failed for $target/$backend."
+            throw "The MSI payload smoke failed for $target/$profile."
           }
 
       - name: Upload packaged artifacts

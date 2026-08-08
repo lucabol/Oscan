@@ -1,24 +1,37 @@
-// The distribution-stamp contract.
+// The packaged-distribution contract.
 //
-// `OSCAN_DISTRIBUTION_BACKEND=llvm|cranelift|c` marks a build as *the*
-// packaged compiler for one backend. Two places have to agree on exactly
-// what that means, so they share this one dependency-free file:
+// A distribution has two independent facts:
 //
-// * `build.rs` `include!`s it and enforces the contract at build time, so
-//   a mismatched pair fails the build with a named reason instead of
-//   producing a compiler that cannot run its own default backend; and
-// * the compiler itself (`crate::backend::select`) compiles it as a normal
-//   module, reads the stamp through it, and unit-tests the rules below.
+// * OSCAN_DISTRIBUTION_PROFILE says whether this is a packaged build and
+//   which package profile it belongs to (`full`, `llvm`, `cranelift`, or `c`);
+// * OSCAN_DEFAULT_BACKEND says which compiled-in backend an invocation uses
+//   when no CLI/output flag selects one.
 //
-// Because `build.rs` includes this file verbatim, nothing here may refer
-// to the crate, to cargo features, or to any dependency.
+// OSCAN_DISTRIBUTION_BACKEND remains a compatibility input for existing
+// single-backend build scripts. It is normalized to the equivalent profile
+// and default. Two places share this dependency-free file:
+//
+// * build.rs validates and exports the normalized values at build time; and
+// * crate::backend::select reads those exported values and unit-tests the
+//   selection contract.
+//
+// Because build.rs includes this file verbatim, nothing here may refer to the
+// crate, Cargo features, or any dependency.
 
-/// Every backend name a stamp may carry, in canonical order.
+/// Every backend name, in canonical order.
 pub const DISTRIBUTION_BACKEND_NAMES: [&str; 3] = ["llvm", "cranelift", "c"];
 
-/// Normalize a raw stamp value. `None` means "unset": an ordinary
-/// development build with no forced default. Surrounding whitespace and
-/// letter case are not meaningful.
+/// Every packaged profile, in canonical order.
+pub const DISTRIBUTION_PROFILE_NAMES: [&str; 4] = ["full", "llvm", "cranelift", "c"];
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DistributionConfig {
+    pub profile: Option<String>,
+    pub default_backend: Option<String>,
+}
+
+/// Normalize an environment value. `None` means unset; surrounding whitespace
+/// and letter case are not meaningful.
 pub fn normalize_distribution_stamp(raw: &str) -> Option<String> {
     let trimmed = raw.trim().to_ascii_lowercase();
     if trimmed.is_empty() {
@@ -28,21 +41,36 @@ pub fn normalize_distribution_stamp(raw: &str) -> Option<String> {
     }
 }
 
-/// Validate a raw stamp against the backends this build actually enables.
+fn validate_backend_name(value: &str, variable: &str) -> Result<(), String> {
+    if DISTRIBUTION_BACKEND_NAMES.contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{variable}='{value}' is not a valid backend name (expected one of: {})",
+            DISTRIBUTION_BACKEND_NAMES.join(", ")
+        ))
+    }
+}
+
+/// Validate and normalize the complete distribution configuration.
 ///
-/// * `Ok(None)` — no stamp: an ordinary development build.
-/// * `Ok(Some(name))` — a valid single-backend distribution build.
-/// * `Err(message)` — an actionable reason the pair is not a distribution
-///   build at all.
+/// An empty configuration is an ordinary development build. A default backend
+/// without a profile is also allowed for deterministic custom/development
+/// builds, but it does not enable strict packaged lookup. Packaged profiles
+/// always require a default:
 ///
-/// A distribution build must enable **exactly one** backend, and it must
-/// be the stamped one. "At least one" is not enough: a stamp that merely
-/// picks a default out of several compiled-in backends would produce an
-/// artifact whose name promises a single-backend package while still
-/// carrying the others, which is precisely the confusion the stamp exists
-/// to prevent.
-#[allow(dead_code)] // `build.rs` is the primary caller; the crate unit-tests it.
-pub fn validate_distribution_stamp(raw: &str, enabled: &[&str]) -> Result<Option<String>, String> {
+/// * `full` enables all three backends and defaults to LLVM;
+/// * `llvm`, `cranelift`, and `c` enable exactly the named backend.
+///
+/// The legacy `OSCAN_DISTRIBUTION_BACKEND` input is accepted only for a
+/// matching single-backend build and must agree with any new variables.
+#[allow(dead_code)] // build.rs is the primary caller; the crate unit-tests it.
+pub fn validate_distribution_config(
+    profile_raw: &str,
+    default_raw: &str,
+    legacy_backend_raw: &str,
+    enabled: &[&str],
+) -> Result<DistributionConfig, String> {
     if enabled.is_empty() {
         return Err(
             "no backend feature is enabled: build with at least one of backend-llvm, \
@@ -50,35 +78,114 @@ pub fn validate_distribution_stamp(raw: &str, enabled: &[&str]) -> Result<Option
                 .to_string(),
         );
     }
-    let requested = match normalize_distribution_stamp(raw) {
-        None => return Ok(None),
-        Some(requested) => requested,
+
+    let mut profile = normalize_distribution_stamp(profile_raw);
+    let mut default_backend = normalize_distribution_stamp(default_raw);
+    let legacy_backend = normalize_distribution_stamp(legacy_backend_raw);
+
+    if let Some(legacy) = legacy_backend.as_deref() {
+        validate_backend_name(legacy, "OSCAN_DISTRIBUTION_BACKEND")?;
+        if enabled != [legacy] {
+            return Err(format!(
+                "OSCAN_DISTRIBUTION_BACKEND='{legacy}' marks a single-backend distribution \
+                 build, but this build enables {} backends ({}); build it with \
+                 --no-default-features --features backend-{legacy}",
+                enabled.len(),
+                enabled.join(", ")
+            ));
+        }
+        if let Some(configured) = profile.as_deref() {
+            if configured != legacy {
+                return Err(format!(
+                    "OSCAN_DISTRIBUTION_PROFILE='{configured}' conflicts with legacy \
+                     OSCAN_DISTRIBUTION_BACKEND='{legacy}'"
+                ));
+            }
+        } else {
+            profile = Some(legacy.to_string());
+        }
+        if let Some(configured) = default_backend.as_deref() {
+            if configured != legacy {
+                return Err(format!(
+                    "OSCAN_DEFAULT_BACKEND='{configured}' conflicts with legacy \
+                     OSCAN_DISTRIBUTION_BACKEND='{legacy}'"
+                ));
+            }
+        } else {
+            default_backend = Some(legacy.to_string());
+        }
+    }
+
+    if let Some(default) = default_backend.as_deref() {
+        validate_backend_name(default, "OSCAN_DEFAULT_BACKEND")?;
+        if !enabled.contains(&default) {
+            return Err(format!(
+                "OSCAN_DEFAULT_BACKEND='{default}' names a backend that is not enabled in this \
+                 build (enabled: {})",
+                enabled.join(", ")
+            ));
+        }
+    }
+
+    let Some(profile_name) = profile.as_deref() else {
+        return Ok(DistributionConfig {
+            profile: None,
+            default_backend,
+        });
     };
-    if !DISTRIBUTION_BACKEND_NAMES.contains(&requested.as_str()) {
+
+    if !DISTRIBUTION_PROFILE_NAMES.contains(&profile_name) {
         return Err(format!(
-            "OSCAN_DISTRIBUTION_BACKEND='{requested}' is not a valid backend name (expected one \
-             of: {})",
-            DISTRIBUTION_BACKEND_NAMES.join(", ")
+            "OSCAN_DISTRIBUTION_PROFILE='{profile_name}' is not a valid profile name (expected \
+             one of: {})",
+            DISTRIBUTION_PROFILE_NAMES.join(", ")
         ));
     }
-    if !enabled.contains(&requested.as_str()) {
-        return Err(format!(
-            "OSCAN_DISTRIBUTION_BACKEND='{requested}' names a backend that is not enabled in \
-             this build (enabled: {}); build it with --no-default-features --features \
-             backend-{requested}",
-            enabled.join(", ")
-        ));
+    let default = default_backend.as_deref().ok_or_else(|| {
+        format!("OSCAN_DISTRIBUTION_PROFILE='{profile_name}' requires OSCAN_DEFAULT_BACKEND")
+    })?;
+
+    if profile_name == "full" {
+        if enabled != DISTRIBUTION_BACKEND_NAMES {
+            return Err(format!(
+                "OSCAN_DISTRIBUTION_PROFILE='full' must enable every backend in canonical order \
+                 (expected: {}; enabled: {})",
+                DISTRIBUTION_BACKEND_NAMES.join(", "),
+                enabled.join(", ")
+            ));
+        }
+        if default != "llvm" {
+            return Err(format!(
+                "OSCAN_DISTRIBUTION_PROFILE='full' must default to 'llvm', not '{default}'"
+            ));
+        }
+    } else {
+        if enabled != [profile_name] {
+            return Err(format!(
+                "OSCAN_DISTRIBUTION_PROFILE='{profile_name}' is a slim profile and must enable \
+                 exactly backend-{profile_name} (enabled: {})",
+                enabled.join(", ")
+            ));
+        }
+        if default != profile_name {
+            return Err(format!(
+                "OSCAN_DISTRIBUTION_PROFILE='{profile_name}' must default to the same backend, \
+                 not '{default}'"
+            ));
+        }
     }
-    if enabled.len() != 1 {
-        return Err(format!(
-            "OSCAN_DISTRIBUTION_BACKEND='{requested}' marks a single-backend distribution build, \
-             but this build enables {} backends ({}); a distribution build must enable exactly \
-             one: build it with --no-default-features --features backend-{requested}",
-            enabled.len(),
-            enabled.join(", ")
-        ));
-    }
-    Ok(Some(requested))
+
+    Ok(DistributionConfig {
+        profile,
+        default_backend,
+    })
+}
+
+/// Backward-compatible validator for callers that only provide the legacy
+/// single-backend stamp.
+#[allow(dead_code)]
+pub fn validate_distribution_stamp(raw: &str, enabled: &[&str]) -> Result<Option<String>, String> {
+    validate_distribution_config("", "", raw, enabled).map(|config| config.profile)
 }
 
 #[cfg(test)]
@@ -88,29 +195,29 @@ mod tests {
     const ALL: [&str; 3] = ["llvm", "cranelift", "c"];
 
     #[test]
-    fn an_unset_stamp_is_an_ordinary_development_build() {
+    fn an_unset_configuration_is_an_ordinary_development_build() {
         for raw in ["", "   ", "\t\n"] {
             assert_eq!(normalize_distribution_stamp(raw), None);
-            assert_eq!(validate_distribution_stamp(raw, &ALL), Ok(None));
-            assert_eq!(validate_distribution_stamp(raw, &["llvm"]), Ok(None));
+            assert_eq!(
+                validate_distribution_config(raw, "", "", &ALL),
+                Ok(DistributionConfig {
+                    profile: None,
+                    default_backend: None
+                })
+            );
         }
     }
 
     #[test]
-    fn a_stamp_is_normalized_before_it_is_matched() {
-        assert_eq!(
-            normalize_distribution_stamp("  Cranelift \n"),
-            Some("cranelift".to_string())
-        );
-        assert_eq!(
-            validate_distribution_stamp(" LLVM ", &["llvm"]),
-            Ok(Some("llvm".to_string()))
-        );
-    }
-
-    #[test]
-    fn exactly_one_enabled_backend_matching_the_stamp_is_a_distribution_build() {
+    fn the_legacy_stamp_still_defines_a_slim_distribution() {
         for name in DISTRIBUTION_BACKEND_NAMES {
+            assert_eq!(
+                validate_distribution_config("", "", name, &[name]),
+                Ok(DistributionConfig {
+                    profile: Some(name.to_string()),
+                    default_backend: Some(name.to_string())
+                })
+            );
             assert_eq!(
                 validate_distribution_stamp(name, &[name]),
                 Ok(Some(name.to_string()))
@@ -118,54 +225,76 @@ mod tests {
         }
     }
 
-    /// The regression this rule exists for: stamping a default-feature
-    /// build (every backend enabled) must fail, not quietly produce a
-    /// "distribution" that still contains every backend.
     #[test]
-    fn a_stamped_all_features_build_is_rejected() {
-        let err = validate_distribution_stamp("llvm", &ALL)
-            .expect_err("an all-features build may not be stamped");
-        assert!(err.contains("exactly one"), "{err}");
-        assert!(err.contains("llvm, cranelift, c"), "{err}");
-        assert!(
-            err.contains("--no-default-features --features backend-llvm"),
-            "{err}"
+    fn a_full_distribution_contains_every_backend_and_has_a_fixed_default() {
+        assert_eq!(
+            validate_distribution_config(" FULL ", " LLVM ", "", &ALL),
+            Ok(DistributionConfig {
+                profile: Some("full".to_string()),
+                default_backend: Some("llvm".to_string())
+            })
         );
     }
 
     #[test]
-    fn a_stamp_with_more_than_one_enabled_backend_is_rejected_even_in_pairs() {
-        let err = validate_distribution_stamp("cranelift", &["cranelift", "c"])
-            .expect_err("two enabled backends may not be stamped");
-        assert!(err.contains("exactly one"), "{err}");
-        assert!(err.contains("2 backends"), "{err}");
+    fn a_full_profile_rejects_a_partial_backend_set() {
+        let err = validate_distribution_config("full", "llvm", "", &["llvm", "cranelift"])
+            .expect_err("full must mean every backend");
+        assert!(err.contains("must enable every backend"), "{err}");
     }
 
     #[test]
-    fn a_stamp_naming_a_disabled_backend_is_rejected() {
-        let err = validate_distribution_stamp("llvm", &["cranelift"])
-            .expect_err("a stamp must name an enabled backend");
-        assert!(err.contains("not enabled in this build"), "{err}");
-        assert!(err.contains("enabled: cranelift"), "{err}");
-        assert!(
-            err.contains("--no-default-features --features backend-llvm"),
-            "{err}"
+    fn a_full_profile_rejects_a_non_llvm_default() {
+        let err = validate_distribution_config("full", "cranelift", "", &ALL)
+            .expect_err("full has one stable cross-package default");
+        assert!(err.contains("must default to 'llvm'"), "{err}");
+    }
+
+    #[test]
+    fn a_slim_profile_rejects_extra_backends() {
+        let err = validate_distribution_config("llvm", "llvm", "", &["llvm", "cranelift", "c"])
+            .expect_err("a slim profile must stay slim");
+        assert!(err.contains("must enable exactly backend-llvm"), "{err}");
+    }
+
+    #[test]
+    fn a_profile_requires_an_enabled_default() {
+        let err = validate_distribution_config("full", "", "", &ALL)
+            .expect_err("packaged profiles need deterministic defaults");
+        assert!(err.contains("requires OSCAN_DEFAULT_BACKEND"), "{err}");
+
+        let err = validate_distribution_config("full", "swift", "", &ALL)
+            .expect_err("unknown defaults must be rejected");
+        assert!(err.contains("not a valid backend name"), "{err}");
+
+        let err = validate_distribution_config("", "llvm", "", &["cranelift"])
+            .expect_err("a default must be compiled in");
+        assert!(err.contains("not enabled"), "{err}");
+    }
+
+    #[test]
+    fn a_custom_unpacked_build_may_have_a_deterministic_default() {
+        assert_eq!(
+            validate_distribution_config("", "cranelift", "", &ALL),
+            Ok(DistributionConfig {
+                profile: None,
+                default_backend: Some("cranelift".to_string())
+            })
         );
     }
 
     #[test]
-    fn an_unknown_stamp_is_rejected_before_anything_else() {
-        let err = validate_distribution_stamp("cranelifty", &ALL)
-            .expect_err("an unknown backend name must be rejected");
-        assert!(err.contains("is not a valid backend name"), "{err}");
-        assert!(err.contains("llvm, cranelift, c"), "{err}");
+    fn legacy_and_new_variables_must_agree() {
+        let err = validate_distribution_config("c", "c", "llvm", &["llvm"])
+            .expect_err("conflicting profile inputs must fail");
+        assert!(err.contains("conflicts"), "{err}");
     }
 
     #[test]
-    fn a_build_with_no_backend_at_all_is_rejected_stamped_or_not() {
-        for raw in ["", "llvm"] {
-            let err = validate_distribution_stamp(raw, &[])
-                .expect_err("a build with no backend feature is never valid");
+    fn a_build_with_no_backend_is_always_rejected() {
+        for values in [("", "", ""), ("full", "llvm", ""), ("", "", "llvm")] {
+            let err = validate_distribution_config(values.0, values.1, values.2, &[])
+                .expect_err("a backendless build is invalid");
             assert!(err.contains("no backend feature is enabled"), "{err}");
         }
     }

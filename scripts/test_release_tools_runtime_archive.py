@@ -597,9 +597,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         bundle_dir = self.scratch / "bundle"
-        rt.stage_freestanding_runtime_archives(
-            bundle_dir, target_spec, runtime_archive_dir
-        )
+        rt.stage_runtime_archives(bundle_dir, target_spec, runtime_archive_dir)
 
         # Object packages ship precompiled archives only: no runtime
         # sources, and therefore no runtime builder, come along.
@@ -647,9 +645,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         bundle_dir = self.scratch / "bundle"
-        rt.stage_freestanding_runtime_archives(
-            bundle_dir, target_spec, runtime_archive_dir
-        )
+        rt.stage_runtime_archives(bundle_dir, target_spec, runtime_archive_dir)
 
         # Object packages ship precompiled archives only: no runtime
         # sources, and therefore no runtime builder, come along.
@@ -714,7 +710,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         with self.assertRaises(SystemExit) as ctx:
-            rt.stage_freestanding_runtime_archives(
+            rt.stage_runtime_archives(
                 self.scratch / "bundle",
                 target_spec,
                 runtime_archive_dir,
@@ -756,7 +752,7 @@ class ReleaseStagingTests(RepositoryScratchTests):
             )
 
         with self.assertRaises(SystemExit) as ctx:
-            rt.stage_freestanding_runtime_archives(
+            rt.stage_runtime_archives(
                 self.scratch / "bundle",
                 target_spec,
                 runtime_archive_dir,

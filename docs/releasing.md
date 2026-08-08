@@ -2,18 +2,20 @@
 
 Release builds are handled by GitHub Actions workflows. Two manual workflows must be run **once** (and again whenever their upstream dependencies change) before creating a release.
 
-## What a release publishes (contract schema 2)
+## What a release publishes (contract schema 3)
 
-`packaging/toolchains/release-contract.json` (`schema_version: 2`) is the
+`packaging/toolchains/release-contract.json` (`schema_version: 3`) is the
 single source of truth, and every published artifact is one **(target,
-backend) pair**. A release therefore publishes **seven archives, one MSI and
+profile) pair**. A release therefore publishes **nine archives, one MSI and
 one `SHA256SUMS`** — and nothing else:
 
-| Target | Backend | Archive | Components staged |
+| Target | Profile | Archive | Components staged |
 |---|---|---|---|
+| `windows-x86_64` | `full` | `oscan-v{version}-windows-x86_64-full.zip` | all-backend strict compiler with static LLVM/in-process LLD plus pinned C toolchain |
 | `windows-x86_64` | `llvm` | `oscan-v{version}-windows-x86_64-llvm.zip` | one strict compiler executable with static LLVM, in-process LLD, runtime archives and link inputs embedded; third-party notices |
 | `windows-x86_64` | `cranelift` | `oscan-v{version}-windows-x86_64-cranelift.zip` | compiler, native-link sidecar, freestanding runtime archives |
 | `windows-x86_64` | `c` | `oscan-v{version}-windows-x86_64-c.zip` | compiler, pinned C toolchain |
+| `linux-x86_64` | `full` | `oscan-v{version}-linux-x86_64-full.tar.xz` | all-backend compiler, native-link sidecar, runtimes, LLVM provider, pinned C toolchain |
 | `linux-x86_64` | `llvm` | `oscan-v{version}-linux-x86_64-llvm.tar.xz` | compiler, native-link sidecar, freestanding runtime archives, LLVM provider from the pinned provider archive |
 | `linux-x86_64` | `cranelift` | `oscan-v{version}-linux-x86_64-cranelift.tar.xz` | compiler, native-link sidecar, freestanding runtime archives |
 | `linux-x86_64` | `c` | `oscan-v{version}-linux-x86_64-c.tar.xz` | compiler, pinned C toolchain |
@@ -21,23 +23,24 @@ one `SHA256SUMS`** — and nothing else:
 
 Plus exactly **one installer**: `oscan-v{version}-windows-x86_64-llvm.msi`,
 cut from the *already staged and smoked* Windows LLVM bundle directory. The
-MSI backend is declared by the contract (`ci-matrix`'s `msi_backend`), so
-adding a second installer is a contract change, not a workflow tweak. There is
-no combined/`-full` archive of any kind, and `native` is never an artifact
-label — it survives only as the compiler's deprecated `--backend` alias for
-`cranelift`.
+MSI profile is declared by the contract (`ci-matrix`'s `msi_profile`), so
+adding a second installer is a contract change, not a workflow tweak. It
+remains `llvm`. `native` is never an
+artifact label — it survives only as the compiler's deprecated `--backend`
+alias for `cranelift`.
 
 Invariants the tooling enforces (see `scripts/test_release_workflow.py`,
 `scripts/test_release_packaging.py`, `scripts/test_smoke_release.py`):
 
-* **One backend per package.** Each binary is built with the exact Cargo
-  feature set in the variant contract and
-  `OSCAN_DISTRIBUTION_BACKEND=<backend>`, so the other backends' code is absent
-  and the package defaults deterministically to its own backend. Windows LLVM
+* **Profile and default are independent.** Each binary is built with the exact
+  `cargo_features` in the variant contract,
+  `OSCAN_DISTRIBUTION_PROFILE=<profile>`, and
+  `OSCAN_DEFAULT_BACKEND=<default>`. Full includes all three backends and
+  defaults to LLVM; slim profiles contain only their named backend. Windows LLVM
   uses `backend-llvm,inprocess-lld,static-llvm` plus
   `RUSTFLAGS="-C target-feature=+crt-static"`; ordinary variants use only
-  `backend-<backend>`.
-* **Object packages are toolchain-free.** An `llvm`/`cranelift` package may not
+  `backend-<name>`.
+* **Slim object packages are toolchain-free.** An `llvm`/`cranelift` package may not
   contain a C compiler executable, a C header outside `native-link/`, a
   sysroot/`include/` tree, the hosted runtime archive, `native-runtime/`, or
   `cross-linkers/`. The Oscan runtime is precompiled from C *by the release
@@ -50,6 +53,11 @@ Invariants the tooling enforces (see `scripts/test_release_workflow.py`,
   LLVM/LLD and embedded llvm-mingw inputs.
 * **C packages carry no object payload.** A `c` package may not ship
   `native-link/`, `build/`, `native-runtime/`, or `cross-linkers/`.
+* **Full is target-local.** Full is the union of that target's backend
+  components, not a copy of the slim archives and not a source of cross-target
+  sidecars. Shared files are staged once and retain component digests. Its
+  runtime-archive component includes hosted mode for `--libc` and the
+  freestanding profiles used by object-backend and `--extra-c` links.
 * **No cross-target sidecars.** Minimum packages ship only their own target's
   assets; the `cross-linkers/<target>/` staging that earlier full bundles used
   is refused outright now (see "Cross-target linking" below).
@@ -59,22 +67,23 @@ Invariants the tooling enforces (see `scripts/test_release_workflow.py`,
   per-file-hashed native-link asset directory. The former `--toolchain-dir`
   and `--llvm-provider-dir` inputs are hard errors: a prepared directory
   cannot be checked against the digest its manifest pins.
-* **Every archive is smoked before it is uploaded**, with its own backend, and
+* **Every archive is smoked before it is uploaded**. Full is compiled with its
+  implicit LLVM default and every explicit backend; slim packages are exercised
+  with their one backend. The
   the produced set is compared against the contract's expected archive names in
   both directions (nothing missing, nothing extra).
 
-### Why the package job is per target, not per (target, backend)
+### Why the package job is per target, not per (target, profile)
 
 All of a target's variants reuse the same pinned toolchain download and
 freestanding runtime archives. Sidecar variants also share one prepared
 native-link set; Windows LLVM additionally reuses a cached static LLVM/LLD
 build. The workflow therefore fans out over **targets**, prepares those
-expensive inputs once, and then builds the target's backends **sequentially**
-in one job — three
-`cargo build`s into `$RUNNER_TEMP/oscan-release-binaries/<backend>/`, each
+expensive inputs once, and then builds the target's profiles **sequentially**
+in one job — four builds on Windows/Linux and one on macOS.
+Each lands in `$RUNNER_TEMP/oscan-release-binaries/<profile>/` and is
 copied out before the next overwrites `target/release`. `target/` is
-deliberately not cached: the same crate is built three times with mutually
-exclusive feature sets.
+deliberately not cached.
 
 ### Release job order
 
@@ -85,7 +94,7 @@ exclusive feature sets.
    toolchain, build runtime archives, and prepare any sidecar inputs. Windows
    also resolves the pinned LLVM SDK/source, builds or restores the patched
    static LLVM/LLD toolchain, and prepares strict in-memory link inputs. It then
-   builds one compiler per backend and, for each backend, runs assemble → smoke
+   builds one compiler per profile and, for each profile, runs assemble → smoke
    → stage for upload. Windows additionally cuts the recommended LLVM MSI from
    the staged strict bundle.
 3. `checksums` — collect every `.zip`/`.msi`/`.tar.gz`/`.tar.xz`, refuse
@@ -98,19 +107,19 @@ exclusive feature sets.
 Run the workflow manually (Actions → "Oscan Release" → Run workflow) with a
 version and **`publish` cleared**. `prepare` then reports
 `should_publish=false`, the `publish` job is skipped, and the run still builds,
-smokes and checksums all seven archives and the MSI — the supported way to
+smokes and checksums all nine archives and the MSI — the supported way to
 rehearse a release. A tag push (`v*`) always publishes.
 
 ### Assembling and smoking one variant by hand
 
 Each variant can be produced locally with the same scripts CI uses, in the same
-order. `-Backend` is mandatory everywhere, and only the canonical names are
+order. `-Profile` is mandatory everywhere, and only the canonical names are
 accepted. This walkthrough produces the Windows LLVM package end to end; run it
 from the repository root on the target's own platform:
 
 ```powershell
 $target  = 'windows-x86_64'
-$backend = 'llvm'
+$profile = 'llvm'
 $version = '1.2.3'                       # archive/bundle version, no leading 'v'
 $tag     = "v$version"                   # what --version reports
 $manifest = "packaging/toolchains/$target.json"
@@ -173,7 +182,9 @@ python scripts/release_tools.py prepare-inprocess-notices `
 
 # 5. Build the strict compiler with static LLVM, in-process LLD and static CRT.
 Remove-Item Env:OSCAN_EMBED_ASSETS_DIR, Env:OSCAN_REQUIRE_EMBEDDED_ASSETS -ErrorAction SilentlyContinue
-$env:OSCAN_DISTRIBUTION_BACKEND = $backend
+Remove-Item Env:OSCAN_DISTRIBUTION_BACKEND -ErrorAction SilentlyContinue
+$env:OSCAN_DISTRIBUTION_PROFILE = $profile
+$env:OSCAN_DEFAULT_BACKEND = 'llvm'
 $env:OSCAN_VERSION = $tag
 $env:OSCAN_INPROCESS_TOOLCHAIN_DIR = (Resolve-Path "build/inprocess-toolchain/$target").Path
 $env:OSCAN_INPROCESS_ASSETS_DIR = (Resolve-Path "build/inprocess-assets/$target").Path
@@ -183,20 +194,26 @@ cargo build --release --no-default-features `
 
 # 6. Assemble that variant, passing only the inputs its component list declares.
 $archive = ./scripts/assemble-release.ps1 `
-  -Target $target -Backend $backend -Version $version `
+  -Target $target -Profile $profile -Version $version `
   -BinaryPath target/release/oscan.exe `
   -EmbeddedNoticesDir (Resolve-Path $noticeDir).Path `
   -OutputDir build/release-artifacts | Select-Object -Last 1
 
-# 7. Smoke exactly that archive, as that backend.
+# 7. Smoke exactly that archive, as that profile.
 ./scripts/smoke-release.ps1 `
-  -Target $target -Backend $backend -Version $version `
+  -Target $target -Profile $profile -Version $version `
   -ArchivePath $archive `
-  -ScratchDir "build/release-smoke/$target-$backend"
+  -ScratchDir "build/release-smoke/$target-$profile"
 ```
 
 Variant differences:
 
+* **`full`** — enable all three `backend-*` features. On Windows it uses the
+  same strict in-process inputs and static CRT as LLVM and also assembles with
+  `-ToolchainArchive`; build the `hosted` runtime archive in addition to step
+  3's freestanding set. On Linux it uses the sidecar/runtime/provider inputs,
+  including the hosted runtime archive, and the C toolchain archive. Its
+  stamped default remains LLVM.
 * **`cranelift`** — reuse the base toolchain/runtime archives, run
   `prepare-embed-assets.ps1`, remove `OSCAN_INPROCESS_TOOLCHAIN_DIR`,
   `OSCAN_INPROCESS_ASSETS_DIR`, and `RUSTFLAGS`, then run
@@ -215,8 +232,8 @@ Variant differences:
   resolve.
 * **macOS `c`** — build with `--features backend-c`; there is nothing pinned to
   fetch. The Unix wrappers use long options, for example
-  `assemble-release.sh --target macos-x86_64 --backend c ...` and
-  `smoke-release.sh --target macos-x86_64 --backend c ...`.
+  `assemble-release.sh --target macos-x86_64 --profile c ...` and
+  `smoke-release.sh --target macos-x86_64 --profile c ...`.
 
 Passing an input a variant's component list does not declare is an error, as is
 omitting one it does. `scripts/assemble-release.sh` / `smoke-release.sh` and the
@@ -428,9 +445,9 @@ target tag, writes the same manifests, and embeds BearSSL under the same rules.
 
 Release assembly stages each archive/manifest pair at
 `build/runtime-archives/<target>/` inside sidecar object packages. Strict
-Windows LLVM instead embeds the verified archive bytes in `oscan.exe` and
-installs no runtime-archive directory. Runtime *sources* are never staged:
-schema 2 packages ship no `native-runtime/` directory and no runtime builder,
+Windows full and LLVM profiles instead embed the verified archive bytes in `oscan.exe` and
+install no runtime-archive directory. Runtime *sources* are never staged:
+schema 3 packages ship no `native-runtime/` directory and no runtime builder,
 because the shim is already compiled into every runtime archive (see below).
 Release smoke tests assert the appropriate assets survived staging, then
 compile and run the sample with the package's own backend — freestanding LLVM
@@ -710,20 +727,21 @@ The Windows Cranelift release deliberately embeds none of that set: it ships
 it as `native-link/` and clears
 `OSCAN_EMBED_ASSETS_DIR`/`OSCAN_REQUIRE_EMBEDDED_ASSETS` before building.
 
-The Windows LLVM release uses a separate strict path. The target manifest pins
+The Windows full and LLVM releases use a separate strict path. The target manifest pins
 LLVM 22.1.0 SDK and source archives. `prepare-inprocess-toolchain-sources`
 verifies/extracts them, and `build-inprocess-toolchain.ps1` builds the patched
 static LLD bridge and collects the static LLVM/LLD libraries.
 `prepare-inprocess-link-assets` verifies and stages only the three runtime
 archives, six Win32 import libraries and compiler builtins for `build.rs`.
-Building with `backend-llvm,inprocess-lld,static-llvm`,
+The LLVM profile builds with `backend-llvm,inprocess-lld,static-llvm`; full adds
+`backend-cranelift,backend-c`. With
 `OSCAN_INPROCESS_TOOLCHAIN_DIR`, `OSCAN_INPROCESS_ASSETS_DIR`, and
 `RUSTFLAGS="-C target-feature=+crt-static"` produces the single strict
 `oscan.exe`. The LLVM and llvm-mingw notices are installed under
 `LICENSES/embedded/`; all build inputs stay out of the package.
 
 **The release `package` job's step order** (one job per target; every expensive
-input is prepared once and reused by that target's backends):
+input is prepared once and reused by that target's profiles):
 
 1. Checkout / Rust / Python setup.
 2. **Resolve the pinned archives** (`resolve-archive.ps1`, once per target:
@@ -734,20 +752,20 @@ input is prepared once and reused by that target's backends):
 4. **Prepare each declared link profile.** `prepare-embed-assets` stages the
    sidecar set (13 files/≈85.4 MB on Windows, 1 file/≈2.78 MB on Linux).
    Windows additionally builds/restores static LLVM/LLD and runs
-   `prepare-inprocess-link-assets` for the strict LLVM variant.
-5. **One contract-driven `cargo build` per backend**, stamped with
-   `OSCAN_DISTRIBUTION_BACKEND=<b>` and copied to a per-backend path before the
-   next build overwrites `target/release`. The strict Windows LLVM build alone
-   enables `inprocess-lld,static-llvm` and static CRT; its environment is
-   cleared before the Cranelift and C builds.
-6. **For each backend: assemble → smoke → stage for upload.**
-   `assemble-release.ps1` takes `-Backend` plus exactly the prepared inputs
+   `prepare-inprocess-link-assets` for the strict full and LLVM variants.
+5. **One contract-driven `cargo build` per profile**, stamped with
+   `OSCAN_DISTRIBUTION_PROFILE=<p>` and `OSCAN_DEFAULT_BACKEND=<b>`, then
+   copied to a per-profile path before the next build overwrites
+   `target/release`. Strict Windows full and LLVM enable
+   `inprocess-lld,static-llvm` and static CRT; that environment is cleared
+   before the sidecar/C builds.
+6. **For each profile: assemble → smoke → stage for upload.**
+   `assemble-release.ps1` takes `-Profile` plus exactly the prepared inputs
    that variant's component list declares (`-EmbeddedNoticesDir` for strict
-   Windows LLVM; `-NativeLinkDir`/`-PrebuiltRuntimeArchiveDir` for sidecar
+   Windows full/LLVM; `-NativeLinkDir`/`-PrebuiltRuntimeArchiveDir` for sidecar
    object variants; `-ToolchainArchive` or `-LlvmProviderArchive` where
-   declared), so no package receives undeclared inputs. Only the C package's
-   `toolchain/` carries a compiler; LLVM and Cranelift freestanding final links
-   need no compiler executable at all.
+   declared), so no package receives undeclared inputs. Only full and C carry
+   a C compiler; slim LLVM and Cranelift freestanding final links need none.
 7. **Cut the recommended MSI** from the staged Windows LLVM bundle directory
    (Windows only), so the installer contains exactly what the smoked archive
    contains.
@@ -782,7 +800,7 @@ On Linux x86-64, freestanding LLVM and Cranelift object generation/final
 linking need no external compiler driver. LLVM object emission loads packaged
 LLVM 22 in-process, and the final link uses a fully static
 `x86_64-linux-musl-ld` binary from the pinned musl-cross toolchain. In a
-schema-v2 release package that linker arrives as the verified
+schema-3 release package that linker arrives as the verified
 `native-link/` sidecar and is used in place; in an optional embedded
 (dev/standalone) build it lives inside the binary and is extracted to a local
 cache at first use (see `docs/design/native-link-embedding.md` §10 for the
@@ -819,11 +837,11 @@ A single Linux `oscan` binary only carries the linker for its own host target
 (`linux-x86_64`) — see `docs/design/native-link-embedding.md` §11.1 for why
 multi-target embedding is deliberately out of scope.
 
-**Schema 2 packages ship no cross-target sidecars.** Each published package
-contains only its own target's assets, and staging *refuses* a package that
-contains a `cross-linkers/` directory: the earlier full-bundle model that
-folded `cross-linkers/<target>/` into the `linux-x86_64` archive is gone along
-with the full bundle itself.
+**Schema 3 packages ship no cross-target sidecars.** Each published profile,
+including `full`, contains only its own target's assets, and staging *refuses*
+a package that contains a `cross-linkers/` directory. The current full profile
+combines backends for one target; it does not revive the earlier bundle that
+folded `cross-linkers/<target>/` into the `linux-x86_64` archive.
 
 The override mechanism the compiler exposes is unchanged, so cross-linking
 still works from user-supplied inputs. It needs a linker
@@ -857,8 +875,8 @@ git tag v0.0.12
 git push origin v0.0.12
 ```
 
-The Release workflow then builds one compiler per backend for each target,
-assembles and smokes all seven archives, cuts the recommended Windows LLVM
+The Release workflow then builds one compiler per profile for each target,
+assembles and smokes all nine archives, cuts the recommended Windows LLVM
 MSI, writes `SHA256SUMS` over everything, and publishes the result to GitHub
 Releases. To rehearse without publishing, use the manual workflow with
 `publish` cleared (see "Dry run without publishing" above).

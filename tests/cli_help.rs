@@ -1,14 +1,14 @@
 //! CLI-surface coverage.
 //!
 //! These tests run against whatever backends the package was built with,
-//! and against the distribution stamp it was built under: cargo sets the
+//! and against the distribution profile/default it was built under: cargo sets the
 //! package's own feature cfgs for integration-test targets too, and
-//! `build.rs` re-exports the validated stamp as `OSCAN_DISTRIBUTION_BACKEND`
+//! `build.rs` re-exports the normalized configuration
 //! for every target in the package. So `cfg!(feature = "backend-c")` and
-//! [`distribution_backend`] here describe exactly the `oscan` binary under
+//! [`distribution_profile`] here describe exactly the `oscan` binary under
 //! test. Tests that need a specific backend are gated on it; the rest
 //! derive their expectations from [`compiled_in_backends`] /
-//! [`distribution_backend`], so
+//! [`distribution_profile`], so
 //! `cargo test --no-default-features --features backend-<name>` — stamped
 //! or not — is a first-class configuration rather than a build that merely
 //! compiles.
@@ -80,33 +80,57 @@ fn compiled_in_backends() -> Vec<&'static str> {
     backends
 }
 
-/// The backend this build is a distribution *of*, read from the same
-/// compile-time stamp `build.rs` validated. `None` for an ordinary
-/// development build (the variable is unset, or set to an empty value).
-fn distribution_backend() -> Option<&'static str> {
-    let raw = option_env!("OSCAN_DISTRIBUTION_BACKEND")?.trim();
-    let stamped = ["llvm", "cranelift", "c"]
+/// The packaged profile and deterministic default stamped by `build.rs`.
+fn distribution_profile() -> Option<&'static str> {
+    let raw = option_env!("OSCAN_DISTRIBUTION_PROFILE")?.trim();
+    let profile = ["full", "llvm", "cranelift", "c"]
         .into_iter()
         .find(|name| raw.eq_ignore_ascii_case(name));
     assert!(
-        raw.is_empty() || stamped.is_some(),
-        "OSCAN_DISTRIBUTION_BACKEND={raw:?} is not a valid backend name"
+        raw.is_empty() || profile.is_some(),
+        "OSCAN_DISTRIBUTION_PROFILE={raw:?} is not a valid profile name"
     );
-    if let Some(stamped) = stamped {
+    if let Some(profile) = profile {
+        let expected = if profile == "full" {
+            vec!["llvm", "cranelift", "c"]
+        } else {
+            vec![profile]
+        };
         assert_eq!(
             compiled_in_backends(),
-            vec![stamped],
-            "a stamped distribution build must enable exactly its own backend"
+            expected,
+            "a packaged build must contain exactly the backends promised by its profile"
         );
     }
-    stamped
+    profile
+}
+
+fn configured_default_backend() -> Option<&'static str> {
+    let raw = option_env!("OSCAN_DEFAULT_BACKEND")?.trim();
+    let default = ["llvm", "cranelift", "c"]
+        .into_iter()
+        .find(|name| raw.eq_ignore_ascii_case(name));
+    assert!(
+        raw.is_empty() || default.is_some(),
+        "OSCAN_DEFAULT_BACKEND={raw:?} is not a valid backend name"
+    );
+    if let Some(default) = default {
+        assert!(
+            compiled_in_backends().contains(&default),
+            "the configured default must be compiled in"
+        );
+    }
+    default
 }
 
 /// The backend an implicit (no `--backend`) invocation resolves to, when
 /// that is decided at build time rather than by probing this host.
 fn build_time_default_backend() -> Option<&'static str> {
-    match (distribution_backend(), compiled_in_backends().as_slice()) {
-        (Some(stamped), _) => Some(stamped),
+    match (
+        configured_default_backend(),
+        compiled_in_backends().as_slice(),
+    ) {
+        (Some(configured), _) => Some(configured),
         (None, [only]) => Some(only),
         _ => None,
     }
@@ -362,10 +386,14 @@ fn help_describes_backend_roles_and_default() {
     }
     // The "default:" clause must describe the build in hand, not the
     // all-backends policy.
-    let expected_default = match (distribution_backend(), compiled_in_backends().as_slice()) {
-        (Some(stamped), _) => {
-            format!("default: {stamped}; this build includes only the {stamped} backend")
+    let expected_default = match (
+        configured_default_backend(),
+        compiled_in_backends().as_slice(),
+    ) {
+        (Some(configured), [_]) => {
+            format!("default: {configured}; this build includes only the {configured} backend")
         }
+        (Some(configured), _) => format!("default: {configured}; configured at build time"),
         (None, [only]) => format!("default: {only}; the only backend in this build"),
         (None, backends) if backends.contains(&"llvm") => {
             let rest: Vec<&str> = backends.iter().copied().filter(|b| *b != "llvm").collect();
@@ -498,10 +526,8 @@ fn a_compiled_out_backend_is_refused_with_an_actionable_error() {
             )),
             "{stderr}"
         );
-        assert!(
-            stderr.contains(&format!("ends in '-{backend}'")),
-            "{stderr}"
-        );
+        assert!(stderr.contains("ends in '-full'"), "{stderr}");
+        assert!(stderr.contains(&format!("or '-{backend}'")), "{stderr}");
         assert!(
             stderr.contains(&format!(
                 "this build includes: {}",
@@ -551,7 +577,7 @@ fn version_reports_available_and_default_backends() {
     );
     assert_eq!(
         line("distribution: "),
-        format!("distribution: {}", distribution_backend().unwrap_or("none"))
+        format!("distribution: {}", distribution_profile().unwrap_or("none"))
     );
     assert_eq!(
         line("toolchain-free: "),
@@ -704,6 +730,12 @@ fn rejects_unknown_debug_info_level() {
 #[cfg(feature = "backend-cranelift")]
 #[test]
 fn default_backend_emits_an_object_on_supported_hosts() {
+    // A configured LLVM default is intentionally not capability-probed. Its
+    // object emission is covered by the provider-backed LLVM tests below.
+    if configured_default_backend() == Some("llvm") {
+        return;
+    }
+
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
@@ -798,7 +830,7 @@ fn cranelift_speed_profile_makes_user_main_local_and_process_main_global() {
 ))]
 #[cfg(all(feature = "backend-llvm", feature = "backend-cranelift"))]
 #[test]
-fn unavailable_implicit_llvm_falls_back_to_cranelift() {
+fn unavailable_implicit_llvm_obeys_the_configured_default_or_falls_back() {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples")
         .join("hello.osc");
@@ -814,12 +846,21 @@ fn unavailable_implicit_llvm_falls_back_to_cranelift() {
         .output()
         .expect("failed to run LLVM fallback validation");
 
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if configured_default_backend() == Some("llvm") {
+        assert!(!output.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("the LLVM backend needs Oscan's packaged LLVM"),
+            "{stderr}"
+        );
+        assert!(!output_path.exists());
+        return;
+    }
+
     assert!(
         output.status.success(),
-        "implicit LLVM fallback failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        "implicit LLVM fallback failed: {stderr}"
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("[verbose] cranelift backend target:"));
     let bytes = fs::read(&output_path).expect("Cranelift fallback object should exist");
     fs::remove_file(&output_path).expect("failed to remove fallback object");

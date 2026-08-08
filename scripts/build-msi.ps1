@@ -26,6 +26,14 @@ $BundleDir = (Resolve-Path -LiteralPath $BundleDir).Path
 if (-not (Test-Path (Join-Path $BundleDir "oscan.exe"))) {
     throw "Bundle directory must contain oscan.exe"
 }
+$packageMetadataPath = Join-Path $BundleDir "oscan-package.json"
+if (-not (Test-Path -LiteralPath $packageMetadataPath)) {
+    throw "Bundle directory must contain oscan-package.json"
+}
+$packageMetadata = Get-Content -LiteralPath $packageMetadataPath -Raw | ConvertFrom-Json
+if ($packageMetadata.schema_version -ne 2 -or $packageMetadata.profile -ne "llvm") {
+    throw "The transition MSI is reserved for the schema-2 LLVM profile; got schema '$($packageMetadata.schema_version)' profile '$($packageMetadata.profile)'."
+}
 if (-not (Test-Path $WxsPath)) {
     throw "WiX source not found: $WxsPath"
 }
@@ -52,9 +60,9 @@ if (-not $HarvestOnly) {
 
 # Harvest the bundle's payload into a WiX fragment.
 #
-# Schema 2 packages are backend-specific, so the payload is no longer always
-# `toolchain/`: sidecar object packages ship `native-link/` and runtime
-# archives, while strict Windows LLVM carries only its embedded-input notices.
+# The transition MSI remains LLVM-only. The payload is no longer always
+# `toolchain/`: the strict Windows LLVM profile carries its embedded-input
+# notices and package metadata.
 # Every package ships `oscan-package.json` plus its LICENSES tree at the root.
 # Everything in the staged bundle is therefore harvested, except the two files
 # the .wxs declares itself and the archive's own install script, which has no

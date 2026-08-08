@@ -24,12 +24,13 @@ inside the compiler; it does not invoke `clang`, `llvm-as`, `opt`, or `llc`.
 
 ### Backend selection
 
-Every release package contains exactly one backend and defaults to it. Asking a
-release build for another backend produces an error that identifies the package
-to install.
+The `full` profile contains all three backends and defaults deterministically
+to LLVM. Slim `llvm`, `cranelift`, and `c` profiles contain and default to only
+their named backend. Asking a slim build for another backend produces an error
+that identifies either the matching slim profile or `full`.
 
-A default development build contains all three backends. Without an explicit
-selector it chooses:
+A default development build contains all three backends and probes for a
+usable default. Without an explicit selector it chooses:
 
 1. LLVM on a supported host when a compatible provider is available.
 2. Cranelift when native object generation is available.
@@ -74,34 +75,40 @@ separate future tiers.
 
 ## Release packages
 
-Release contract schema 2 publishes one archive per platform/backend pair. It
-does not publish a combined package.
+Release contract schema 3 publishes one archive per platform/profile pair.
+Windows and Linux have a combined `full` profile plus three slim profiles.
+Package metadata is schema 2 and records `package_id`, profile,
+`is_distribution`, available backends, deterministic default, components, and
+component digests.
 
-| Platform | Backend | Artifact | Additional host requirement |
+| Platform | Profile | Artifact | Additional host requirement |
 |---|---|---|---|
+| Windows x86_64 | `full` | `oscan-vX.Y.Z-windows-x86_64-full.zip` | None; all three backends and the C toolchain are included |
 | Windows x86_64 | `llvm` | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `oscan-vX.Y.Z-windows-x86_64-llvm.zip` | None |
 | Windows x86_64 | `cranelift` | `oscan-vX.Y.Z-windows-x86_64-cranelift.zip` | None |
 | Windows x86_64 | `c` | `oscan-vX.Y.Z-windows-x86_64-c.zip` | None; the C toolchain is bundled |
+| Linux x86_64 | `full` | `oscan-vX.Y.Z-linux-x86_64-full.tar.xz` | glibc 2.34+ and the LLVM provider's host libraries |
 | Linux x86_64 | `llvm` | `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` | glibc 2.34+ and the provider's host libraries |
 | Linux x86_64 | `cranelift` | `oscan-vX.Y.Z-linux-x86_64-cranelift.tar.xz` | None |
 | Linux x86_64 | `c` | `oscan-vX.Y.Z-linux-x86_64-c.tar.xz` | None; the C toolchain is bundled |
 | macOS x86_64 | `c` | `oscan-vX.Y.Z-macos-x86_64-c.tar.gz` | Xcode Command Line Tools |
 
-Object-backend packages contain the compiler, precompiled freestanding runtime
+Slim object-backend packages contain the compiler, precompiled freestanding runtime
 archives, and the files needed for final linking. They do not contain a C
 compiler, C headers, or a sysroot. They therefore reject operations that need
 one, including C emission, hosted libc builds, explicit C sources, rebuilding
 the runtime, and generated C ABI shims.
 
-The C packages contain the compiler and a pinned C toolchain on Windows and
-Linux. The macOS package uses Apple Clang from Xcode Command Line Tools.
+The full package combines those object inputs with the pinned C toolchain. C
+slim packages contain only the compiler and C toolchain. The macOS package
+uses Apple Clang from Xcode Command Line Tools.
 
 ### Package layout
 
-A Windows object-backend package has this shape:
+A Windows Cranelift slim package has this shape:
 
 ```text
-oscan-vX.Y.Z-windows-x86_64-llvm/
+oscan-vX.Y.Z-windows-x86_64-cranelift/
   oscan.exe
   native-link/
     native-link-assets.json
@@ -132,6 +139,32 @@ oscan-vX.Y.Z-windows-x86_64-c/
 
 Toolchains and runtime archives are release artifacts rather than source files,
 so they are not committed to the Git repository.
+
+### Installed profile layout
+
+Archive installs use one stable bin directory and isolated profile payloads:
+
+```text
+<bin-dir>/
+  oscan                   # managed default selector
+  oscan-full
+  oscan-llvm
+  oscan-cranelift
+  oscan-c
+<install-root>/
+  profiles/
+    full/<version>/...
+    llvm/<version>/...
+```
+
+Windows uses `.cmd` shims; Unix uses symlinks. The first profile may create the
+selector when none exists. Thereafter only `-SetDefault`/`--set-default`
+changes it. A staged same-profile upgrade updates its qualified entry and then
+removes the older payload; other profile roots are never touched. The existing
+LLVM MSI remains the only MSI and keeps its historical product/UpgradeCode
+identity during this transition. Archive and MSI installers reject ownership of
+the same unqualified Windows command by default; the direct MSI check applies
+to archive selectors owned by the same Windows account.
 
 ## Runtime and final linking
 

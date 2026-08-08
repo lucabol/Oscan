@@ -1,31 +1,64 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "install_surface": "github-releases",
   "toolchains_committed_to_git": false,
   "backends": {
     "llvm": {
       "cargo_feature": "backend-llvm",
-      "artifact_suffix": "llvm",
       "kind": "object",
       "description": "Direct in-process LLVM object code. No C compiler, no C source, no toolchain."
     },
     "cranelift": {
       "cargo_feature": "backend-cranelift",
-      "artifact_suffix": "cranelift",
       "kind": "object",
-      "description": "Cranelift object code. No C compiler, no C source, no toolchain. 'native' is only a deprecated CLI alias for this backend and is never an artifact label."
+      "description": "Cranelift object code. No C compiler, no C source, no toolchain. 'native' is only a deprecated CLI alias."
     },
     "c": {
       "cargo_feature": "backend-c",
-      "artifact_suffix": "c",
       "kind": "c-source",
       "description": "Portability/reference backend: emits C and needs a C toolchain to compile it."
+    }
+  },
+  "profiles": {
+    "full": {
+      "artifact_suffix": "full",
+      "backends": [
+        "llvm",
+        "cranelift",
+        "c"
+      ],
+      "default_backend": "llvm",
+      "description": "All backends in one compiler. Select explicitly with --backend; LLVM is the deterministic default."
+    },
+    "llvm": {
+      "artifact_suffix": "llvm",
+      "backends": [
+        "llvm"
+      ],
+      "default_backend": "llvm",
+      "description": "Slim LLVM-only compiler."
+    },
+    "cranelift": {
+      "artifact_suffix": "cranelift",
+      "backends": [
+        "cranelift"
+      ],
+      "default_backend": "cranelift",
+      "description": "Slim Cranelift-only compiler."
+    },
+    "c": {
+      "artifact_suffix": "c",
+      "backends": [
+        "c"
+      ],
+      "default_backend": "c",
+      "description": "Slim C-only compiler."
     }
   },
   "components": {
     "compiler": {
       "position": "archive-root",
-      "description": "The feature-gated oscan binary, stamped with OSCAN_DISTRIBUTION_BACKEND."
+      "description": "The feature-gated oscan binary, stamped with OSCAN_DISTRIBUTION_PROFILE and OSCAN_DEFAULT_BACKEND."
     },
     "direct_link_sidecar": {
       "position": "archive-root/native-link",
@@ -35,8 +68,9 @@
     },
     "runtime_archives": {
       "position_template": "archive-root/build/runtime-archives/{target}",
-      "description": "Precompiled freestanding runtime archives plus their manifests. Object packages ship no hosted archive, no runtime sources, and no runtime builder.",
+      "description": "Precompiled runtime archives plus their manifests. Full packages include hosted and freestanding modes; slim object packages include freestanding modes only.",
       "allowed_profiles": [
+        "hosted",
         "freestanding",
         "freestanding_gfx",
         "freestanding_core"
@@ -86,7 +120,7 @@
     },
     "c_toolchain": {
       "position": "archive-root/toolchain",
-      "description": "The pinned, pruned C toolchain a C package needs to compile the C the backend emits."
+      "description": "The pinned, pruned C toolchain a package containing the C backend needs to compile emitted C."
     }
   },
   "lookup_contract": {
@@ -125,17 +159,47 @@
       "binary_name": "oscan.exe",
       "archive_format": "zip",
       "toolchain_manifest": "windows-x86_64.json",
-      "backends": {
-        "llvm": {
-          "archive_name_template": "oscan-v{version}-windows-x86_64-llvm.zip",
-          "archive_root_template": "oscan-v{version}-windows-x86_64-llvm",
-          "cargo_feature": "backend-llvm",
-          "extra_cargo_features": [
+      "profiles": {
+        "full": {
+          "archive_name_template": "oscan-v{version}-windows-x86_64-full.zip",
+          "archive_root_template": "oscan-v{version}-windows-x86_64-full",
+          "cargo_features": [
+            "backend-llvm",
+            "backend-cranelift",
+            "backend-c",
             "inprocess-lld",
             "static-llvm"
           ],
           "rustflags": "-C target-feature=+crt-static",
-          "distribution_backend": "llvm",
+          "toolchain_free": false,
+          "link_mode": "inprocess",
+          "components": [
+            "compiler",
+            "runtime_archives",
+            "c_toolchain"
+          ],
+          "embedded_notice_files": [
+            "LLVM-LICENSE.txt",
+            "mingw-w64-COPYING.txt",
+            "mingw-w64-project-COPYING.txt",
+            "mingw-w64-runtime-COPYING.txt"
+          ],
+          "runtime_profiles": [
+            "hosted",
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
+        "llvm": {
+          "archive_name_template": "oscan-v{version}-windows-x86_64-llvm.zip",
+          "archive_root_template": "oscan-v{version}-windows-x86_64-llvm",
+          "cargo_features": [
+            "backend-llvm",
+            "inprocess-lld",
+            "static-llvm"
+          ],
+          "rustflags": "-C target-feature=+crt-static",
           "toolchain_free": true,
           "link_mode": "inprocess",
           "components": [
@@ -156,8 +220,9 @@
         "cranelift": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-cranelift.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-cranelift",
-          "cargo_feature": "backend-cranelift",
-          "distribution_backend": "cranelift",
+          "cargo_features": [
+            "backend-cranelift"
+          ],
           "toolchain_free": true,
           "link_mode": "sidecar",
           "components": [
@@ -174,8 +239,9 @@
         "c": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-c.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-c",
-          "cargo_feature": "backend-c",
-          "distribution_backend": "c",
+          "cargo_features": [
+            "backend-c"
+          ],
           "toolchain_free": false,
           "components": [
             "compiler",
@@ -189,12 +255,38 @@
       "binary_name": "oscan",
       "archive_format": "tar.xz",
       "toolchain_manifest": "linux-x86_64.json",
-      "backends": {
+      "profiles": {
+        "full": {
+          "archive_name_template": "oscan-v{version}-linux-x86_64-full.tar.xz",
+          "archive_root_template": "oscan-v{version}-linux-x86_64-full",
+          "cargo_features": [
+            "backend-llvm",
+            "backend-cranelift",
+            "backend-c"
+          ],
+          "toolchain_free": false,
+          "link_mode": "sidecar",
+          "components": [
+            "compiler",
+            "direct_link_sidecar",
+            "runtime_archives",
+            "llvm_provider",
+            "c_toolchain"
+          ],
+          "llvm_provider_source": "toolchain-manifest",
+          "runtime_profiles": [
+            "hosted",
+            "freestanding",
+            "freestanding_gfx",
+            "freestanding_core"
+          ]
+        },
         "llvm": {
           "archive_name_template": "oscan-v{version}-linux-x86_64-llvm.tar.xz",
           "archive_root_template": "oscan-v{version}-linux-x86_64-llvm",
-          "cargo_feature": "backend-llvm",
-          "distribution_backend": "llvm",
+          "cargo_features": [
+            "backend-llvm"
+          ],
           "toolchain_free": true,
           "link_mode": "sidecar",
           "components": [
@@ -213,8 +305,9 @@
         "cranelift": {
           "archive_name_template": "oscan-v{version}-linux-x86_64-cranelift.tar.xz",
           "archive_root_template": "oscan-v{version}-linux-x86_64-cranelift",
-          "cargo_feature": "backend-cranelift",
-          "distribution_backend": "cranelift",
+          "cargo_features": [
+            "backend-cranelift"
+          ],
           "toolchain_free": true,
           "link_mode": "sidecar",
           "components": [
@@ -231,8 +324,9 @@
         "c": {
           "archive_name_template": "oscan-v{version}-linux-x86_64-c.tar.xz",
           "archive_root_template": "oscan-v{version}-linux-x86_64-c",
-          "cargo_feature": "backend-c",
-          "distribution_backend": "c",
+          "cargo_features": [
+            "backend-c"
+          ],
           "toolchain_free": false,
           "components": [
             "compiler",
@@ -246,12 +340,13 @@
       "binary_name": "oscan",
       "archive_format": "tar.gz",
       "note_file": "macos-phase1-note.md",
-      "backends": {
+      "profiles": {
         "c": {
           "archive_name_template": "oscan-v{version}-macos-x86_64-c.tar.gz",
           "archive_root_template": "oscan-v{version}-macos-x86_64-c",
-          "cargo_feature": "backend-c",
-          "distribution_backend": "c",
+          "cargo_features": [
+            "backend-c"
+          ],
           "toolchain_free": false,
           "components": [
             "compiler"

@@ -34,14 +34,15 @@
 
 ### Getting the Oscan Compiler
 
-Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Every published artifact is one **(platform, backend) package**: Windows and Linux publish `llvm`, `cranelift` and `c` packages, macOS publishes `c`, and Windows additionally publishes one recommended installer, the LLVM MSI. There is no combined package. An `llvm`/`cranelift` package contains the compiler and the verified direct-link/runtime inputs it needs — embedded in the strict Windows LLVM executable or installed as sidecars for the other object packages — and no C compiler, headers or sysroot. A `c` package contains the compiler and the pinned C toolchain it needs.
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux publish `full`, `llvm`, `cranelift`, and `c` profiles; macOS publishes `c`. Full contains one compiler with all three backends and a deterministic LLVM default. The slim profiles contain only their named backend. Windows additionally publishes the historical LLVM MSI; full remains archive-only during this transition. Slim `llvm`/`cranelift` packages contain verified direct-link/runtime inputs and no C compiler, headers, or sysroot. The `c` and `full` profiles carry the pinned C toolchain they need.
 
 #### Windows x86_64
 
 **LLVM package (recommended):**
 
-1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip`, or run the recommended
-   installer `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
+1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip`, the all-backend
+   `oscan-vX.Y.Z-windows-x86_64-full.zip`, another slim archive, or run the
+   recommended transition installer `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
 2. Verify exactly that asset against the release's `SHA256SUMS`, keeping the
    downloaded file's canonical name:
    ```powershell
@@ -49,14 +50,14 @@ Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/rele
    $expected = (Select-String -Path SHA256SUMS -Pattern "\s\*?$([regex]::Escape($asset))$").Line.Split(' ')[0]
    if ((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw "checksum mismatch" }
    ```
-3. Extract to a stable directory (e.g., `C:\Program Files\oscan\`) and add it
-   to your PATH, or run the bundled `install.ps1`
-4. Verify: `oscan --version`
+3. Extract and run the bundled `install.ps1`; use `-SetDefault` only when this
+   profile should replace an existing unqualified selection
+4. Verify the qualified command, such as `oscan-full --version`
 
-`oscan-vX.Y.Z-windows-x86_64-cranelift.zip` and
+`oscan-vX.Y.Z-windows-x86_64-cranelift.zip`,
 `oscan-vX.Y.Z-windows-x86_64-c.zip` install the same way. No C compiler
-installation is required for any of the three: the object packages need none,
-and the C package bundles its own.
+installation is required: slim object packages need none, while C and full
+bundle one.
 
 **Components (llvm package):**
 - `oscan.exe` — the strict single-executable compiler: LLVM 22.1.0, patched
@@ -77,22 +78,22 @@ retains the verified `native-link/` and runtime-archive sidecars.
 
 **LLVM package (recommended):**
 
-1. Download `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` and `SHA256SUMS`, keeping
-   the archive's canonical file name
+1. Download `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz`, the all-backend
+   `oscan-vX.Y.Z-linux-x86_64-full.tar.xz`, or another slim profile plus
+   `SHA256SUMS`, keeping the archive's canonical file name
 2. Verify exactly that asset, then extract:
    ```bash
    grep -E "[[:space:]]\*?oscan-vX.Y.Z-linux-x86_64-llvm\.tar\.xz$" SHA256SUMS | sha256sum -c -
    tar xf oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz
    ```
-3. Move to a stable location: `mv oscan-*/ ~/.local/oscan/` or `/opt/oscan/`
-4. On Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
-5. Add to PATH: `export PATH=$PATH:~/.local/oscan/`
-6. Verify: `oscan --version`
+3. Run the included `install.sh`; use `--set-default` only to change an existing selection
+4. For LLVM/full on Debian/Ubuntu: `sudo apt-get install libedit2 libffi8 libxml2 libz3-4 libzstd1 zlib1g`
+5. Verify a qualified command, such as `oscan-llvm --version`
 
 The packaged LLVM code generator requires glibc 2.34 or newer plus the listed
 host runtime libraries — but no installed C/Clang/LLVM toolchain.
 `oscan-vX.Y.Z-linux-x86_64-cranelift.tar.xz` needs neither, and
-`oscan-vX.Y.Z-linux-x86_64-c.tar.xz` bundles its own C toolchain.
+`oscan-vX.Y.Z-linux-x86_64-c.tar.xz` and full bundle a C toolchain.
 
 **Components (llvm package):**
 - `oscan` — the Oscan compiler, built with the LLVM backend only
@@ -148,8 +149,8 @@ cargo build --release
 ```
 
 Binary: `target/release/oscan` (or `oscan.exe` on Windows). A source build
-contains all three backends; released packages are single-backend builds.
-Ordinary variants use `--no-default-features --features backend-<backend>`;
+and the full profile contain all three backends; slim packages contain one.
+Slim variants use `--no-default-features --features backend-<backend>`;
 strict Windows LLVM uses
 `--features backend-llvm,inprocess-lld,static-llvm` with static CRT.
 
@@ -204,10 +205,11 @@ oscan-vX.Y.Z-linux-x86_64-c/
 
 ### Compiler Invocation
 
-Once installed, invoke Oscan like this:
+Once installed, invoke the managed default (`oscan`) or a stable qualified
+profile command (`oscan-full`, `oscan-llvm`, `oscan-cranelift`, `oscan-c`):
 
 ```bash
-oscan <file.osc>              # Compile to executable (this package's backend)
+oscan <file.osc>              # Compile with the selected profile's default
 oscan <file.osc> --run        # Compile and run immediately
 oscan <file.osc> -o <file.c>  # Emit C code only (`.c` extension)
 oscan <file.osc> --emit-c     # Emit C code to stdout
@@ -231,14 +233,19 @@ that use one.
 
 ### Upgrade and Uninstall
 
-**Phase 1 releases** do not yet use system package managers. To upgrade or uninstall:
+Archive installers use profile-specific version roots and atomically activate a
+same-profile upgrade. Installing one profile never removes another or changes
+an existing unqualified selector; `-SetDefault`/`--set-default` is explicit.
 
-- **Upgrade (archive install):** Download the new package and extract it to the same location (or a new location and update your PATH)
+- **Upgrade (archive install):** Run the newer profile's bundled installer; it replaces only that profile
 - **Upgrade (Windows MSI):** Run the newer MSI; it replaces the previous MSI install
-- **Uninstall (archive install):** Remove the directory containing `oscan` and any `toolchain/`/`native-link/` it shipped, then remove it from your PATH
+- **Uninstall (archive install):** Run that profile's bundled installer with `-Uninstall` or `--uninstall`; other profiles remain installed
 - **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps → Oscan → Uninstall**, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-llvm.msi /quiet`. Deleting the directory by hand leaves the product registered with Windows Installer.
 
-Future releases may support WinGet, Homebrew, and Scoop for easier management.
+On Windows, archive and MSI installers reject ambiguous ownership of the
+unqualified `oscan` command by default. The MSI detects archive selectors owned
+by the same Windows account; intentional coexistence requires the explicit
+`OSCAN_ALLOW_ARCHIVE_CONFLICT=1` MSI property.
 
 ---
 
@@ -2053,7 +2060,7 @@ oscan [OPTIONS] <file.osc>
 | `--emit-c`      | Emit C-backend source to stdout. |
 | `--emit-llvm-ir` | Emit textual LLVM IR to stdout (alias: `--emit-llvm`). Requires the LLVM backend and stops before object emission and linking. |
 | `--libc`        | Use hosted libc mode instead of freestanding mode. Enables access to standard C library functions. |
-| `--backend <name>` | Explicitly select `llvm` (direct IR plus in-process LLVM object code), `cranelift` (direct Cranelift AOT object code), or `c` (portability/reference/source backend), limited to the backends the build contains. `native` is a deprecated alias for `cranelift`. Without this option, a released single-backend package uses its own backend; a multi-backend build prefers LLVM on supported Windows/Linux hosts when a compatible provider is available, then Cranelift, then C. |
+| `--backend <name>` | Explicitly select `llvm` (direct IR plus in-process LLVM object code), `cranelift` (direct Cranelift AOT object code), or `c` (portability/reference/source backend), limited to the backends the build contains. `native` is a deprecated alias for `cranelift`. A slim release defaults to its backend, full defaults to LLVM, and an unstamped multi-backend development build probes LLVM, then Cranelift, then C. |
 | `--debuginfo <level>` | Debug information level: `none` (default) or `line-tables`. Line tables preserve Oscan file/line mappings for breakpoints, stepping, stack traces, and symbolization without changing optimization. Oscan does not generate or guarantee local-variable and type descriptions at this level; a C toolchain may include additional records. |
 | `--native-target <tag>` | Object target for `--backend llvm` and `--backend cranelift`. Supported: `host` (default), `linux-x86_64`, `windows-x86_64`, `linux-aarch64`, `linux-riscv64`. Provider target capabilities are checked before LLVM emission. |
 | `--target <arch>` | Cross-compile for target architecture (C backend only). Supported: `riscv64`, `wasi`. Without this flag, compiles for the host platform. |

@@ -162,7 +162,9 @@ pub struct LinkPlan {
     /// Arbitrary passthrough flags (`--extra-cflags`), appended verbatim
     /// after all inputs/libs, matching prior ordering.
     pub passthrough_cflags: Vec<String>,
-    /// `-static` (non-Windows freestanding/freestanding_core only).
+    /// `-static` for non-Windows freestanding links and for hosted links
+    /// through a bundled musl toolchain, whose dynamic loader is not assumed
+    /// to exist on the user's Linux distribution.
     ///
     /// Security review 2026-07-15 (finding 1, `link_flags` injection): this
     /// crate used to render a runtime archive manifest's raw `link_flags`

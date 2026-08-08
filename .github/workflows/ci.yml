@@ -34,8 +34,8 @@ jobs:
   # ─────────────────────────────────────────────
   # Backend-specific distribution builds (one Cargo feature each)
   #
-  # The published packages are single-backend builds: exactly one backend
-  # feature, stamped with OSCAN_DISTRIBUTION_BACKEND. Those cfg
+  # Published slim packages are single-backend builds: exactly one backend
+  # feature, stamped with the legacy OSCAN_DISTRIBUTION_BACKEND input. Those cfg
   # configurations compile different code from the default all-backends
   # build, so they are tested here as first-class configurations rather
   # than only being discovered at release time.
@@ -82,6 +82,52 @@ jobs:
           grep -qx "backends: ${{ matrix.backend }}" <<<"$metadata"
           grep -qx "default-backend: ${{ matrix.backend }}" <<<"$metadata"
           grep -qx "distribution: ${{ matrix.backend }}" <<<"$metadata"
+
+  # The full package is a strict distribution too, not an unstamped development
+  # build: all backends are present, LLVM is deterministic, and packaged lookup
+  # remains enabled.
+  full-distribution:
+    name: Linux full-profile distribution build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: linux-full-profile-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-full-profile-cargo-
+
+      - name: Test the full profile contract and CLI
+        env:
+          OSCAN_DISTRIBUTION_PROFILE: full
+          OSCAN_DEFAULT_BACKEND: llvm
+        run: |
+          cargo test backend::select::tests
+          cargo test --test cli_help
+
+      - name: The built compiler reports the full profile
+        env:
+          OSCAN_DISTRIBUTION_PROFILE: full
+          OSCAN_DEFAULT_BACKEND: llvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release
+          metadata="$(./target/release/oscan --version)"
+          echo "$metadata"
+          grep -qx "backends: llvm, cranelift, c" <<<"$metadata"
+          grep -qx "default-backend: llvm" <<<"$metadata"
+          grep -qx "distribution: full" <<<"$metadata"
 
   # ─────────────────────────────────────────────
   # Verify generated docs are up to date
@@ -143,6 +189,9 @@ jobs:
 
       - name: Run unit tests (53 tests)
         run: cargo test
+
+      - name: Archive installer coexistence tests
+        run: python -m unittest scripts.test_installers.WindowsInstallerCoexistenceTests
 
       - name: Integration tests — positive (freestanding)
         shell: bash

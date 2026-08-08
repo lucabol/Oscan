@@ -1,9 +1,7 @@
 """Offline regressions for ``scripts/install-latest.ps1``.
 
-The Windows quick installer is the first thing most users run, and release
-contract schema 2 publishes one archive per (target, backend) pair plus a
-single recommended LLVM MSI — never a combined package. So two kinds of
-check live here:
+The Windows quick installer exposes the full package and every slim profile,
+while retaining a single recommended LLVM MSI. Two kinds of check live here:
 
 * static — the script's parameters, defaults and asset-name templates are
   read out of its text, so the contract's canonical names stay the ones the
@@ -19,6 +17,7 @@ from pathlib import Path
 import json
 import shutil
 import subprocess
+import tempfile
 import unittest
 
 import release_tools as rt
@@ -37,16 +36,16 @@ def installer_text() -> str:
 
 
 def contract_windows_archives() -> dict[str, str]:
-    """The exact Windows archive name the contract renders per backend."""
+    """The exact Windows archive name the contract renders per profile."""
     contract = rt.load_release_contract(rt.CONTRACT_PATH)
-    backends = contract["variants"][WINDOWS_TARGET]["backends"]
+    profiles = contract["variants"][WINDOWS_TARGET]["profiles"]
     return {
-        backend: spec["archive_name_template"].replace("{version}", TAG.lstrip("v"))
-        for backend, spec in backends.items()
+        profile: spec["archive_name_template"].replace("{version}", TAG.lstrip("v"))
+        for profile, spec in profiles.items()
     }
 
 
-def run_selection(assets: list[str], backend: str, mode: str, tag: str = TAG) -> dict:
+def run_selection(assets: list[str], profile: str, mode: str, tag: str = TAG) -> dict:
     """Dot-source the installer and run one asset selection offline."""
     asset_json = json.dumps([{"name": name} for name in assets])
     script = f"""
@@ -54,7 +53,7 @@ $ErrorActionPreference = 'Stop'
 . '{INSTALLER.as_posix()}'
 $assets = @('{asset_json.replace("'", "''")}' | ConvertFrom-Json)
 try {{
-    $selection = Select-OscanReleaseAsset -Assets $assets -Tag '{tag}' -Backend '{backend}' -Mode '{mode}'
+    $selection = Select-OscanReleaseAsset -Assets $assets -Tag '{tag}' -Profile '{profile}' -Mode '{mode}'
     @{{ ok = $true; name = $selection.Asset.name; kind = $selection.Kind }} | ConvertTo-Json -Compress
 }} catch {{
     @{{ ok = $false; error = $_.Exception.Message }} | ConvertTo-Json -Compress
@@ -79,7 +78,8 @@ class InstallerContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = installer_text()
 
-    def test_backend_is_a_first_class_parameter_defaulting_to_llvm(self) -> None:
+    def test_slim_llvm_remains_the_transition_default(self) -> None:
+        self.assertRegex(self.text, r"\[string\]\$Profile\s*=\s*'slim'")
         self.assertRegex(self.text, r"\[string\]\$Backend\s*=\s*'llvm'")
         self.assertRegex(self.text, r"ValidateSet\('llvm',\s*'cranelift',\s*'c',\s*'native'\)")
 
@@ -87,8 +87,8 @@ class InstallerContractTests(unittest.TestCase):
         self.assertRegex(self.text, r"\[string\]\$Mode\s*=\s*'zip'")
 
     def test_asset_names_are_rendered_exactly_like_the_release_contract(self) -> None:
-        # One template, no globbing: 'oscan-<tag>-windows-x86_64-<backend>.<ext>'.
-        self.assertIn('return "oscan-$Tag-$InstallerTarget-$Backend.$Kind"', self.text)
+        # One template, no globbing: 'oscan-<tag>-windows-x86_64-<profile>.<ext>'.
+        self.assertIn('return "oscan-$Tag-$InstallerTarget-$Profile.$Kind"', self.text)
         self.assertIn("$InstallerTarget = 'windows-x86_64'", self.text)
         self.assertNotIn("'*windows-x86_64", self.text)
 
@@ -100,14 +100,20 @@ class InstallerContractTests(unittest.TestCase):
                 self.assertNotIn(smell, self.text)
         self.assertIn("$_.name -ieq $candidate.Name", self.text)
 
-    def test_no_combined_full_package_is_assumed_anywhere(self) -> None:
-        self.assertNotIn("full.zip", self.text)
-        self.assertNotIn("x86_64-full", self.text)
-        self.assertIn("there is no combined package", self.text)
+    def test_full_is_a_first_class_package_choice(self) -> None:
+        self.assertRegex(self.text, r"ValidateSet\('slim',\s*'full'\)")
+        self.assertIn("return 'full'", self.text)
+        self.assertIn("Select LLVM, Cranelift, or C with --backend.", self.text)
 
     def test_only_the_llvm_package_is_installed_from_an_msi(self) -> None:
-        self.assertIn("$MsiBackend = 'llvm'", self.text)
+        self.assertIn("$MsiProfile = 'llvm'", self.text)
         self.assertIn("-Mode msi is only available for the recommended", self.text)
+
+    def test_archive_default_selection_is_explicit_and_msi_collision_is_detected(self) -> None:
+        self.assertRegex(self.text, r"\[switch\]\$SetDefault")
+        self.assertIn("$installArgs['SetDefault']", self.text)
+        self.assertIn("A per-user archive command is installed", self.text)
+        self.assertIn("OSCAN_ALLOW_ARCHIVE_CONFLICT=1", self.text)
 
     def test_checksum_verification_and_tag_selection_are_preserved(self) -> None:
         self.assertIn("SHA256SUMS", self.text)
@@ -116,6 +122,13 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("$ApiBase/tags/$tag", self.text)
         self.assertIn("$ApiBase/latest", self.text)
         self.assertRegex(self.text, r"\[switch\]\$SkipChecksum")
+
+    def test_github_token_uses_a_supported_authorization_header(self) -> None:
+        self.assertIn(
+            '$headers[\'Authorization\'] = "Bearer $env:GITHUB_TOKEN"',
+            self.text,
+        )
+        self.assertNotIn('"******"', self.text)
 
     def test_a_missing_checksum_file_fails_closed(self) -> None:
         self.assertIn("publishes no SHA256SUMS", self.text)
@@ -133,11 +146,11 @@ class InstallerContractTests(unittest.TestCase):
     def test_dot_sourcing_defines_the_functions_without_installing(self) -> None:
         self.assertIn("if ($MyInvocation.InvocationName -ne '.') {", self.text)
 
-    def test_every_windows_contract_archive_is_reachable_by_backend(self) -> None:
+    def test_every_windows_contract_archive_is_reachable_by_profile(self) -> None:
         archives = contract_windows_archives()
-        self.assertEqual(sorted(archives), ["c", "cranelift", "llvm"])
-        for backend, archive in archives.items():
-            self.assertEqual(archive, f"oscan-{TAG}-{WINDOWS_TARGET}-{backend}.zip")
+        self.assertEqual(sorted(archives), ["c", "cranelift", "full", "llvm"])
+        for profile, archive in archives.items():
+            self.assertEqual(archive, f"oscan-{TAG}-{WINDOWS_TARGET}-{profile}.zip")
 
 
 @unittest.skipUnless(POWERSHELL, "pwsh is required for installer behaviour tests")
@@ -146,6 +159,7 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
 
     def setUp(self) -> None:
         self.assets = [
+            f"oscan-{TAG}-windows-x86_64-full.zip",
             f"oscan-{TAG}-windows-x86_64-llvm.zip",
             f"oscan-{TAG}-windows-x86_64-llvm.msi",
             f"oscan-{TAG}-windows-x86_64-cranelift.zip",
@@ -163,13 +177,13 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
         self.assertEqual(result["name"], f"oscan-{TAG}-windows-x86_64-llvm.zip")
         self.assertEqual(result["kind"], "zip")
 
-    def test_each_backend_selects_its_own_exact_archive(self) -> None:
-        for backend in ("llvm", "cranelift", "c"):
-            with self.subTest(backend=backend):
-                result = run_selection(self.assets, backend, "zip")
+    def test_each_profile_selects_its_own_exact_archive(self) -> None:
+        for profile in ("full", "llvm", "cranelift", "c"):
+            with self.subTest(profile=profile):
+                result = run_selection(self.assets, profile, "zip")
                 self.assertTrue(result["ok"], result)
                 self.assertEqual(
-                    result["name"], f"oscan-{TAG}-windows-x86_64-{backend}.zip"
+                    result["name"], f"oscan-{TAG}-windows-x86_64-{profile}.zip"
                 )
 
     def test_msi_mode_prefers_the_recommended_llvm_installer(self) -> None:
@@ -185,10 +199,10 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
         self.assertEqual(result["name"], f"oscan-{TAG}-windows-x86_64-llvm.zip")
         self.assertEqual(result["kind"], "zip")
 
-    def test_msi_mode_is_refused_for_the_backends_that_publish_none(self) -> None:
-        for backend in ("cranelift", "c"):
-            with self.subTest(backend=backend):
-                result = run_selection(self.assets, backend, "msi")
+    def test_msi_mode_is_refused_for_the_profiles_that_publish_none(self) -> None:
+        for profile in ("full", "cranelift", "c"):
+            with self.subTest(profile=profile):
+                result = run_selection(self.assets, profile, "msi")
                 self.assertFalse(result["ok"], result)
                 self.assertIn("only available for the recommended llvm", result["error"])
 
@@ -197,12 +211,12 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
         result = run_selection(assets, "cranelift", "zip")
         self.assertFalse(result["ok"], result)
         self.assertIn(f"oscan-{TAG}-windows-x86_64-cranelift.zip", result["error"])
-        self.assertIn("one archive per backend", result["error"])
+        self.assertIn("full, llvm, cranelift, and c archives", result["error"])
 
-    def test_a_legacy_full_archive_never_satisfies_a_backend_request(self) -> None:
+    def test_a_legacy_unsuffixed_archive_never_satisfies_a_profile_request(self) -> None:
         result = run_selection(
             [
-                f"oscan-{TAG}-windows-x86_64-full.zip",
+                f"oscan-{TAG}-windows-x86_64.zip",
                 f"oscan-{TAG}-windows-x86_64.msi",
                 "SHA256SUMS",
             ],
@@ -210,7 +224,7 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
             "zip",
         )
         self.assertFalse(result["ok"], result)
-        self.assertIn("there is no combined package", result["error"])
+        self.assertIn(f"oscan-{TAG}-windows-x86_64-llvm.zip", result["error"])
 
     def test_a_backend_request_never_matches_another_backend(self) -> None:
         # Only the C archive is published: llvm and cranelift must fail
@@ -294,6 +308,20 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
         self.assertIn("deprecated", output)
         self.assertIn("cranelift", output)
 
+    def test_full_profile_resolves_without_a_slim_backend(self) -> None:
+        script = (
+            f"$ErrorActionPreference='Stop'; . '{INSTALLER.as_posix()}'; "
+            "Resolve-OscanPackageProfile -Profile full -Backend llvm"
+        )
+        completed = subprocess.run(
+            [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            check=True,
+            cwd=REPO_ROOT,
+        )
+        self.assertEqual(completed.stdout.strip(), "full")
+
     def test_an_unknown_backend_is_rejected(self) -> None:
         script = (
             f"$ErrorActionPreference='Stop'; . '{INSTALLER.as_posix()}'; "
@@ -327,6 +355,55 @@ Get-OscanExpectedChecksum -SumsLines $lines -AssetName 'oscan-{TAG}-windows-x86_
             cwd=REPO_ROOT,
         )
         self.assertEqual(completed.stdout.split(), ["bbbb"])
+
+    def test_profile_aware_bundle_preflight_accepts_matching_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp)
+            metadata = {
+                "schema_version": 2,
+                "package_id": "oscan-full",
+                "target": WINDOWS_TARGET,
+                "profile": "full",
+                "is_distribution": True,
+                "available_backends": ["llvm", "cranelift", "c"],
+                "default_backend": "llvm",
+            }
+            (bundle / "oscan-package.json").write_text(
+                json.dumps(metadata), encoding="utf-8"
+            )
+            script = (
+                f"$ErrorActionPreference='Stop'; . '{INSTALLER.as_posix()}'; "
+                f"Assert-OscanArchiveBundle -BundleDir '{bundle.as_posix()}' "
+                "-ExpectedProfile full | Out-Null; 'ok'"
+            )
+            completed = subprocess.run(
+                [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                cwd=REPO_ROOT,
+            )
+            self.assertEqual(
+                completed.returncode, 0, completed.stdout + completed.stderr
+            )
+            self.assertEqual(completed.stdout.strip(), "ok")
+
+    def test_legacy_bundle_preflight_is_refused_before_its_installer_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = (
+                f"$ErrorActionPreference='Stop'; . '{INSTALLER.as_posix()}'; "
+                "try { "
+                f"Assert-OscanArchiveBundle -BundleDir '{Path(tmp).as_posix()}' "
+                "-ExpectedProfile llvm "
+                "} catch { $_.Exception.Message }"
+            )
+            completed = subprocess.run(
+                [POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=REPO_ROOT,
+            )
+            self.assertIn("destructive flat installer", completed.stdout)
 
 
 @unittest.skipUnless(POWERSHELL, "pwsh is required to parse the installer")
@@ -367,15 +444,17 @@ class InstallerDocumentationTests(unittest.TestCase):
     def test_technical_details_list_the_exact_release_archive_names(self) -> None:
         contract = rt.load_release_contract(rt.CONTRACT_PATH)
         for target, spec in contract["variants"].items():
-            for backend in spec["backends"]:
-                name = f"oscan-vX.Y.Z-{target}-{backend}"
+            for profile in spec["profiles"]:
+                name = f"oscan-vX.Y.Z-{target}-{profile}"
                 self.assertIn(
-                    name, self.technical, f"{target}/{backend} is undocumented"
+                    name, self.technical, f"{target}/{profile} is undocumented"
                 )
 
-    def test_the_package_docs_make_no_full_bundle_claim(self) -> None:
-        self.assertNotRegex(self.technical, r"-full\.(zip|tar\.[gx]z)")
-        self.assertNotIn("x86_64-full", self.technical)
+    def test_the_package_docs_describe_full_and_coexisting_profiles(self) -> None:
+        self.assertIn("oscan-vX.Y.Z-windows-x86_64-full.zip", self.technical)
+        self.assertIn("oscan-vX.Y.Z-linux-x86_64-full.tar.xz", self.technical)
+        self.assertIn("oscan-full", self.technical)
+        self.assertIn("oscan-llvm", self.technical)
 
     def test_the_package_docs_name_the_single_recommended_msi(self) -> None:
         self.assertIn("oscan-vX.Y.Z-windows-x86_64-llvm.msi", self.technical)
@@ -412,6 +491,12 @@ class InstallerDocumentationTests(unittest.TestCase):
         # Deleting the directory is only correct for archive installs.
         self.assertIn("Uninstall (archive install)", self.guide)
         self.assertIn("Uninstall (Windows MSI)", self.guide)
+
+    def test_default_selection_and_profile_isolation_are_documented(self) -> None:
+        for text in (self.guide, self.technical, self.spec):
+            self.assertIn("SetDefault", text)
+            self.assertIn("oscan-full", text)
+            self.assertIn("oscan-llvm", text)
 
     def test_the_provider_search_roots_include_the_sidecar(self) -> None:
         for name, text in (
