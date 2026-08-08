@@ -132,10 +132,48 @@ class PackageMatrixTests(unittest.TestCase):
         for name in names:
             self.assertNotIn("{version}", name)
 
-    def test_exactly_one_recommended_msi_is_requested(self) -> None:
-        msi = [entry for entry in self.matrix if entry["msi_profile"]]
-        self.assertEqual([entry["target"] for entry in msi], ["windows-x86_64"])
-        self.assertEqual(msi[0]["msi_profile"], "llvm")
+    def test_every_windows_profile_has_an_msi(self) -> None:
+        by_target = {entry["target"]: entry for entry in self.matrix}
+        windows = by_target["windows-x86_64"]
+        self.assertEqual(windows["msi_profiles"].split(","), list(rt.CANONICAL_PROFILES))
+        self.assertEqual(
+            windows["msis"].split(","),
+            [
+                f"oscan-v1.2.3-windows-x86_64-{profile}.msi"
+                for profile in rt.CANONICAL_PROFILES
+            ],
+        )
+        for target in ("linux-x86_64", "macos-x86_64"):
+            with self.subTest(target=target):
+                self.assertEqual(by_target[target]["msi_profiles"], "")
+                self.assertEqual(by_target[target]["msis"], "")
+
+    def test_every_windows_profile_requires_a_complete_msi_identity(self) -> None:
+        contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
+        del contract["variants"]["windows-x86_64"]["profiles"]["c"][
+            "msi_upgrade_code"
+        ]
+        with self.assertRaises(SystemExit) as caught:
+            rt._validate_contract_variants(rt.CONTRACT_PATH, contract)
+        self.assertIn("missing MSI field", str(caught.exception))
+
+    def test_msi_upgrade_codes_are_unique_product_families(self) -> None:
+        contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
+        windows = contract["variants"]["windows-x86_64"]["profiles"]
+        windows["c"]["msi_upgrade_code"] = windows["llvm"]["msi_upgrade_code"]
+        with self.assertRaises(SystemExit) as caught:
+            rt._validate_contract_variants(rt.CONTRACT_PATH, contract)
+        self.assertIn("MSI UpgradeCode", str(caught.exception))
+        self.assertIn("used by both", str(caught.exception))
+
+    def test_llvm_msi_preserves_its_legacy_upgrade_family(self) -> None:
+        contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
+        contract["variants"]["windows-x86_64"]["profiles"]["llvm"][
+            "msi_upgrade_code"
+        ] = "E954CEAE-F3A4-451A-B122-95D84BAA4F83"
+        with self.assertRaises(SystemExit) as caught:
+            rt._validate_contract_variants(rt.CONTRACT_PATH, contract)
+        self.assertIn("preserve the legacy LLVM MSI UpgradeCode", str(caught.exception))
 
     def test_a_contract_with_a_non_canonical_profile_is_refused(self) -> None:
         contract = json.loads(rt.CONTRACT_PATH.read_text(encoding="utf-8"))
@@ -273,18 +311,22 @@ class ReleaseWorkflowWiringTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertIn(message, self.workflow)
 
-    def test_only_the_recommended_llvm_msi_is_built(self) -> None:
-        self.assertIn("if: matrix.msi_profile != ''", self.workflow)
-        self.assertIn("$profile = $env:RELEASE_MSI_PROFILE", self.workflow)
-        self.assertIn("$msiPath = Join-Path $uploadDir \"$bundleName.msi\"", self.workflow)
+    def test_every_windows_profile_msi_is_built(self) -> None:
+        self.assertIn("if: matrix.msi_profiles != ''", self.workflow)
+        self.assertIn("$profiles = $env:RELEASE_MSI_PROFILES.Split(", self.workflow)
+        self.assertIn("foreach ($profile in $profiles)", self.workflow)
+        self.assertIn("$variant['msi_name_template']", self.workflow)
+        self.assertIn("MSI set differs from the release contract", self.workflow)
         # Built from the bundle the assemble step staged and smoked.
         self.assertIn("The staged $target/$profile bundle is missing at $bundleDir", self.workflow)
 
     def test_the_installed_msi_payload_is_smoked_before_upload(self) -> None:
         self.assertIn("Start-Process -FilePath msiexec.exe", self.workflow)
         self.assertIn("'/a'", self.workflow)
-        self.assertIn("'PFiles64\\Oscan'", self.workflow)
+        self.assertIn('"PFiles64\\Oscan\\profiles\\$profile\\$version"', self.workflow)
         self.assertIn("-InstalledPackageDir $installedRoot", self.workflow)
+        self.assertIn('"PFiles64\\Oscan\\bin\\oscan-$profile.cmd"', self.workflow)
+        self.assertIn("'PFiles64\\Oscan\\bin\\oscan.cmd'", self.workflow)
         build_index = self.workflow.index("& ./scripts/build-msi.ps1")
         extract_index = self.workflow.index("Start-Process -FilePath msiexec.exe")
         installed_smoke_index = self.workflow.index("-InstalledPackageDir $installedRoot")

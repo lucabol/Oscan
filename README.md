@@ -35,12 +35,16 @@ to use LLVM, Cranelift, and C from one compiler with `--backend`.
 
 | Platform | Recommended download | Notes |
 |---|---|---|
-| Windows x86_64 | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `oscan-vX.Y.Z-windows-x86_64-llvm.zip` | LLVM remains the transition default; `-full.zip` includes all backends |
+| Windows x86_64 | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `.zip` | Every profile has both formats; `-full.msi`/`.zip` includes all backends |
 | Linux x86_64 | `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` | `-full.tar.xz` includes all backends; LLVM requires glibc 2.34+ |
 | macOS x86_64 | `oscan-vX.Y.Z-macos-x86_64-c.tar.gz` | Requires Xcode Command Line Tools |
 
 Windows and Linux provide `full`, `llvm`, `cranelift`, and `c` profiles. Full
 contains one backend-neutral compiler; the others are smaller slim packages.
+Windows publishes both `.msi` and `.zip` for all four profiles. Profile MSIs
+upgrade independently and may be installed together. If the legacy flat LLVM
+MSI is installed, run the current LLVM MSI once to migrate it before installing
+another MSI profile.
 Each release
 includes `SHA256SUMS`; keep the downloaded file's original name and verify it
 before installing. The [installation guide](docs/guide.md#installation) has

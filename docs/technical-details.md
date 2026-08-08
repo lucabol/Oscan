@@ -83,10 +83,10 @@ component digests.
 
 | Platform | Profile | Artifact | Additional host requirement |
 |---|---|---|---|
-| Windows x86_64 | `full` | `oscan-vX.Y.Z-windows-x86_64-full.zip` | None; all three backends and the C toolchain are included |
+| Windows x86_64 | `full` | `oscan-vX.Y.Z-windows-x86_64-full.msi` or `oscan-vX.Y.Z-windows-x86_64-full.zip` | None; all three backends and the C toolchain are included |
 | Windows x86_64 | `llvm` | `oscan-vX.Y.Z-windows-x86_64-llvm.msi` or `oscan-vX.Y.Z-windows-x86_64-llvm.zip` | None |
-| Windows x86_64 | `cranelift` | `oscan-vX.Y.Z-windows-x86_64-cranelift.zip` | None |
-| Windows x86_64 | `c` | `oscan-vX.Y.Z-windows-x86_64-c.zip` | None; the C toolchain is bundled |
+| Windows x86_64 | `cranelift` | `oscan-vX.Y.Z-windows-x86_64-cranelift.msi` or `oscan-vX.Y.Z-windows-x86_64-cranelift.zip` | None |
+| Windows x86_64 | `c` | `oscan-vX.Y.Z-windows-x86_64-c.msi` or `oscan-vX.Y.Z-windows-x86_64-c.zip` | None; the C toolchain is bundled |
 | Linux x86_64 | `full` | `oscan-vX.Y.Z-linux-x86_64-full.tar.xz` | glibc 2.34+ and the LLVM provider's host libraries |
 | Linux x86_64 | `llvm` | `oscan-vX.Y.Z-linux-x86_64-llvm.tar.xz` | glibc 2.34+ and the provider's host libraries |
 | Linux x86_64 | `cranelift` | `oscan-vX.Y.Z-linux-x86_64-cranelift.tar.xz` | None |
@@ -157,14 +157,19 @@ Archive installs use one stable bin directory and isolated profile payloads:
     llvm/<version>/...
 ```
 
-Windows uses `.cmd` shims; Unix uses symlinks. The first profile may create the
-selector when none exists. Thereafter only `-SetDefault`/`--set-default`
-changes it. A staged same-profile upgrade updates its qualified entry and then
-removes the older payload; other profile roots are never touched. The existing
-LLVM MSI remains the only MSI and keeps its historical product/UpgradeCode
-identity during this transition. Archive and MSI installers reject ownership of
-the same unqualified Windows command by default; the direct MSI check applies
-to archive selectors owned by the same Windows account.
+Windows uses `.cmd` shims; Unix uses symlinks. Archive installs preserve an
+existing selector unless `-SetDefault`/`--set-default` changes it. Their staged
+same-profile upgrades update only that qualified entry and payload.
+
+Windows also publishes four coinstallable MSI product families. They use
+distinct UpgradeCodes and payload directories, a qualified command per profile,
+and identical reference-counted PATH/selector components. The MSI selector
+falls through in `full`, `llvm`, `cranelift`, `c` order as profiles are
+uninstalled. The LLVM family preserves the historical UpgradeCode to upgrade
+legacy LLVM installs in place. Other MSI families require that migration first
+so the old flat executable cannot shadow the shared selector. Archive and MSI
+installers reject ownership of the same unqualified or profile-qualified
+Windows command by default.
 
 ## Runtime and final linking
 

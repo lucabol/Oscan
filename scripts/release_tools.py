@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -52,6 +53,8 @@ REQUIRED_COMPONENTS = (
 # dependency these packages exist to remove.
 FREESTANDING_PROFILES = ("freestanding", "freestanding_gfx", "freestanding_core")
 RUNTIME_PROFILES = ("hosted", *FREESTANDING_PROFILES)
+MSI_FIELDS = ("msi_name_template", "msi_product_name", "msi_upgrade_code")
+LEGACY_LLVM_MSI_UPGRADE_CODE = "F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B"
 # The published matrix. macOS is C-only: there is no Darwin object target
 # for either object backend.
 SUPPORTED_RELEASE_TARGETS = {
@@ -322,6 +325,9 @@ def _validate_contract_variants(path: Path, contract: dict) -> None:
         fail(f"release contract {path} declares no variants")
     seen_archive_names: dict[str, str] = {}
     seen_roots: dict[str, str] = {}
+    seen_msi_names: dict[str, str] = {}
+    seen_msi_products: dict[str, str] = {}
+    seen_msi_upgrade_codes: dict[str, str] = {}
     for target, target_spec in variants.items():
         if target not in SUPPORTED_RELEASE_TARGETS:
             fail(f"release contract declares unsupported target '{target}'")
@@ -358,6 +364,22 @@ def _validate_contract_variants(path: Path, contract: dict) -> None:
                 )
             seen_archive_names[name] = f"{target}/{profile}"
             seen_roots[root] = f"{target}/{profile}"
+            if "msi_name_template" in variant:
+                where = f"{target}/{profile}"
+                msi_name = variant["msi_name_template"]
+                product_name = variant["msi_product_name"]
+                upgrade_code = variant["msi_upgrade_code"].upper()
+                for value, seen, label in (
+                    (msi_name, seen_msi_names, "MSI name"),
+                    (product_name.casefold(), seen_msi_products, "MSI product name"),
+                    (upgrade_code, seen_msi_upgrade_codes, "MSI UpgradeCode"),
+                ):
+                    if value in seen:
+                        fail(
+                            f"release contract {label} '{value}' is used by both "
+                            f"{seen[value]} and {where}"
+                        )
+                    seen[value] = where
 
 
 def variant_build_features(variant: dict) -> list[str]:
@@ -419,6 +441,37 @@ def _validate_contract_variant(
         fail(f"{where} archive_name_template must end with '-{profile}{suffix}'")
     if not variant["archive_root_template"].endswith(f"-{profile}"):
         fail(f"{where} archive_root_template must end with '-{profile}'")
+
+    declared_msi_fields = [field for field in MSI_FIELDS if field in variant]
+    if target == "windows-x86_64":
+        missing_msi_fields = [field for field in MSI_FIELDS if field not in variant]
+        if missing_msi_fields:
+            fail(f"{where} is missing MSI field(s): {', '.join(missing_msi_fields)}")
+        msi_template = variant["msi_name_template"]
+        if "{version}" not in msi_template:
+            fail(f"{where} msi_name_template must include '{{version}}'")
+        if not msi_template.endswith(f"-{profile}.msi"):
+            fail(f"{where} msi_name_template must end with '-{profile}.msi'")
+        if not isinstance(variant["msi_product_name"], str) or not variant[
+            "msi_product_name"
+        ].startswith("Oscan "):
+            fail(f"{where} msi_product_name must be a non-empty 'Oscan ...' name")
+        try:
+            upgrade_code = uuid.UUID(variant["msi_upgrade_code"])
+        except (AttributeError, TypeError, ValueError):
+            fail(f"{where} msi_upgrade_code must be a GUID")
+        if str(upgrade_code).upper() != variant["msi_upgrade_code"]:
+            fail(f"{where} msi_upgrade_code must use canonical uppercase GUID syntax")
+        if (
+            profile == "llvm"
+            and variant["msi_upgrade_code"] != LEGACY_LLVM_MSI_UPGRADE_CODE
+        ):
+            fail(
+                f"{where} msi_upgrade_code must preserve the legacy LLVM MSI "
+                f"UpgradeCode {LEGACY_LLVM_MSI_UPGRADE_CODE}"
+            )
+    elif declared_msi_fields:
+        fail(f"{where} is not a Windows package and must not declare MSI fields")
 
     components = variant["components"]
     unknown = [name for name in components if name not in contract["components"]]
@@ -3140,6 +3193,8 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
             fail(f"release contract target '{target}' declares no profiles")
 
         archives: list[str] = []
+        msi_profiles: list[str] = []
+        msi_names: list[str] = []
         runtime_profiles: list[str] = []
         needs_toolchain_archive = False
         needs_provider_archive = False
@@ -3157,6 +3212,13 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 )
             rendered_archives[archive_name] = f"{target}/{profile}"
             archives.append(archive_name)
+            if "msi_name_template" in variant:
+                msi_profiles.append(profile)
+                msi_names.append(
+                    render_release_template(
+                        variant["msi_name_template"], version, "msi_name_template"
+                    )
+                )
             components = variant["components"]
             if "c_toolchain" in components:
                 needs_toolchain_archive = True
@@ -3188,6 +3250,8 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 "binary_path": f"target/release/{target_spec['binary_name']}",
                 "profiles": ",".join(profiles),
                 "archives": ",".join(archives),
+                "msi_profiles": ",".join(msi_profiles),
+                "msis": ",".join(msi_names),
                 "runtime_profiles": ",".join(runtime_profiles),
                 "needs_base_toolchain": "true" if needs_base_toolchain else "false",
                 "needs_native_link": "true" if needs_native_link else "false",
@@ -3195,7 +3259,6 @@ def ci_target_matrix(contract: dict, version: str) -> list[dict]:
                 "needs_inprocess_toolchain": (
                     "true" if needs_inprocess_toolchain else "false"
                 ),
-                "msi_profile": "llvm" if platform == "windows" and "llvm" in profiles else "",
             }
         )
     if not entries:

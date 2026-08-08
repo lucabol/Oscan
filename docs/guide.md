@@ -39,9 +39,10 @@ list and what each package contains.
 
 **Windows x86_64:**
 
-1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip` (recommended slim),
-   `-full.zip`, `-cranelift.zip`, or `-c.zip`; the transition MSI remains
-   `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
+1. Download the recommended slim
+   `oscan-vX.Y.Z-windows-x86_64-llvm.msi` (or `.zip`), or choose the matching
+   `-full`, `-cranelift`, or `-c` asset. Every profile is published as both
+   `.msi` and `.zip`.
 2. Verify exactly that asset against the release's `SHA256SUMS` (filter the
    file to the asset you downloaded rather than checking every line):
    ```powershell
@@ -49,8 +50,8 @@ list and what each package contains.
    $expected = (Select-String -Path SHA256SUMS -Pattern "\s\*?$([regex]::Escape($asset))$").Line.Split(' ')[0]
    if ((Get-FileHash $asset -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected.ToLowerInvariant()) { throw "checksum mismatch" }
    ```
-3. Extract and run the included `install.ps1`; pass `-SetDefault` to change an
-   existing unqualified `oscan` selection. For the MSI, just run it.
+3. For a ZIP, extract and run `install.ps1`; pass `-SetDefault` to change an
+   existing unqualified `oscan` selection. For an MSI, just run it.
 4. Verify the qualified command, for example `oscan-full --version`
 
 `scripts/install-latest.ps1 -Profile full -SetDefault` installs the all-backend
@@ -153,16 +154,33 @@ and preserves every other profile.
   `-Uninstall` or `--uninstall`. It removes only the named profile and qualified
   command. If it was selected, the unqualified selector is removed rather than
   redirected implicitly.
-- **Upgrade (Windows MSI):** Run the new LLVM MSI; it replaces the previous MSI install in place.
-- **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps → Oscan → Uninstall**, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-llvm.msi /quiet`. Do **not** just delete the installed directory: that leaves the product registered with Windows Installer.
+- **Upgrade (Windows MSI):** Run the newer MSI for that profile. `Oscan Full`,
+  `Oscan LLVM`, `Oscan Cranelift`, and `Oscan C` are independent product
+  families, so upgrading one preserves the others.
+- **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps** and
+  uninstall the named profile, or run
+  `msiexec /x oscan-vX.Y.Z-windows-x86_64-<profile>.msi /quiet`. Do **not**
+  delete its directory manually.
 
-The legacy LLVM MSI retains its existing product identity and unqualified PATH
-command. The quick installer and MSI detect a per-user archive selector for the
-same Windows account and refuse the ambiguous PATH setup unless explicitly
-overridden with `-AllowMsiCommandConflict` or
-`OSCAN_ALLOW_ARCHIVE_CONFLICT=1`, respectively.
+MSIs install isolated payloads under
+`Program Files\Oscan\profiles\<profile>\<version>` and expose
+`oscan-full`, `oscan-llvm`, `oscan-cranelift`, and `oscan-c` through a shared
+`Program Files\Oscan\bin`. Their reference-counted `oscan` selector chooses the
+first installed command in this order: full, LLVM, Cranelift, C; uninstalling a
+profile falls through to the next one. The LLVM family retains the historical
+UpgradeCode so a new LLVM MSI upgrades the old single-product MSI.
+
+The quick installer and MSI detect a per-user archive selector for the same
+Windows account and a matching profile-qualified archive command. They refuse
+the ambiguous PATH setup unless explicitly overridden with
+`-AllowMsiCommandConflict` or `OSCAN_ALLOW_ARCHIVE_CONFLICT=1`, respectively.
 Legacy flat archive installs are left intact and reported; confirm the new
 qualified command works, then remove the old directory/PATH entry.
+
+The pre-profile LLVM MSI installed `oscan.exe` directly under
+`Program Files\Oscan`. Run the current LLVM MSI once to migrate that product
+before installing Full, Cranelift, or C; those MSI families block while the
+legacy executable could shadow the shared selector.
 
 ---
 

@@ -125,7 +125,8 @@ jobs:
       RELEASE_RUNTIME_PROFILES: ${{ matrix.runtime_profiles }}
       RELEASE_BINARY_NAME: ${{ matrix.binary_name }}
       RELEASE_BINARY_PATH: ${{ matrix.binary_path }}
-      RELEASE_MSI_PROFILE: ${{ matrix.msi_profile }}
+      RELEASE_MSI_PROFILES: ${{ matrix.msi_profiles }}
+      RELEASE_MSIS: ${{ matrix.msis }}
       RELEASE_NEEDS_PROVIDER_ARCHIVE: ${{ matrix.needs_provider_archive }}
       RELEASE_NEEDS_INPROCESS_TOOLCHAIN: ${{ matrix.needs_inprocess_toolchain }}
       RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
@@ -531,56 +532,100 @@ jobs:
           Write-Host "Packaged and smoked: $($produced -join ', ')"
           $LASTEXITCODE = 0
 
-      # One installer, for the recommended package. The MSI is cut from the
-      # staged bundle directory the assemble step above left in place, so it
-      # contains exactly what the verified archive contains.
-      - name: Build the recommended MSI installer
-        if: matrix.msi_profile != ''
+      # Each Windows profile gets an independent MSI family cut from the exact
+      # staged bundle that was already packaged and smoked above.
+      - name: Build and smoke Windows MSI installers
+        if: matrix.msi_profiles != ''
         shell: pwsh
         run: |
           $target = $env:RELEASE_TARGET
-          $profile = $env:RELEASE_MSI_PROFILE
           $version = $env:RELEASE_VERSION
+          $profiles = $env:RELEASE_MSI_PROFILES.Split(
+            ',', [System.StringSplitOptions]::RemoveEmptyEntries
+          )
+          $expected = $env:RELEASE_MSIS.Split(
+            ',', [System.StringSplitOptions]::RemoveEmptyEntries
+          )
+          if ($profiles.Count -ne $expected.Count) {
+            throw "MSI profile/name matrix length mismatch: $($profiles.Count) profiles, $($expected.Count) names."
+          }
           $contract = Get-Content 'packaging/toolchains/release-contract.json' -Raw |
             ConvertFrom-Json -AsHashtable
-          $variant = $contract['variants'][$target]['profiles'][$profile]
-          $bundleName = ([string]$variant['archive_root_template']).Replace('{version}', $version)
           $outputDir = Join-Path $env:RUNNER_TEMP 'oscan-release-artifacts'
-          $bundleDir = Join-Path (Join-Path $outputDir 'stage') $bundleName
-          if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
-            throw "The staged $target/$profile bundle is missing at $bundleDir; the MSI must be built from the bundle that was packaged and smoked."
-          }
           $uploadDir = Join-Path $env:GITHUB_WORKSPACE 'release-upload'
           New-Item -ItemType Directory -Path $uploadDir -Force | Out-Null
-          $msiPath = Join-Path $uploadDir "$bundleName.msi"
-          & ./scripts/build-msi.ps1 -BundleDir $bundleDir -Version $version -OutputPath $msiPath
-          if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
-            throw "The MSI build produced no installer at $msiPath."
-          }
-          $msiScratch = Join-Path $env:RUNNER_TEMP "oscan-release-msi/$target-$profile"
+          $msiScratch = Join-Path $env:RUNNER_TEMP "oscan-release-msi/$target"
           if (Test-Path -LiteralPath $msiScratch) {
             Remove-Item -LiteralPath $msiScratch -Recurse -Force
           }
           $adminRoot = Join-Path $msiScratch 'admin'
           New-Item -ItemType Directory -Path $adminRoot -Force | Out-Null
-          $msiLog = Join-Path $msiScratch 'administrative-extract.log'
-          $process = Start-Process -FilePath msiexec.exe -ArgumentList @(
-            '/a', "`"$msiPath`"", '/qn', "TARGETDIR=`"$adminRoot`"",
-            '/l*v', "`"$msiLog`""
-          ) -Wait -PassThru
-          if ($process.ExitCode -ne 0) {
-            Get-Content -LiteralPath $msiLog -Tail 100
-            throw "Administrative extraction of $msiPath failed with exit code $($process.ExitCode)."
+          $produced = @()
+
+          foreach ($profile in $profiles) {
+            $variant = $contract['variants'][$target]['profiles'][$profile]
+            $bundleName = ([string]$variant['archive_root_template']).Replace('{version}', $version)
+            $bundleDir = Join-Path (Join-Path $outputDir 'stage') $bundleName
+            if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+              throw "The staged $target/$profile bundle is missing at $bundleDir; the MSI must be built from the bundle that was packaged and smoked."
+            }
+            $msiName = ([string]$variant['msi_name_template']).Replace('{version}', $version)
+            if ($produced -contains $msiName) {
+              throw "Two Windows profiles claim the same MSI name '$msiName'."
+            }
+            $msiPath = Join-Path $uploadDir $msiName
+            & ./scripts/build-msi.ps1 `
+              -BundleDir $bundleDir `
+              -Version $version `
+              -OutputPath $msiPath
+            if (-not (Test-Path -LiteralPath $msiPath -PathType Leaf)) {
+              throw "The MSI build produced no installer at $msiPath."
+            }
+
+            $msiLog = Join-Path $msiScratch "administrative-extract-$profile.log"
+            $process = Start-Process -FilePath msiexec.exe -ArgumentList @(
+              '/a', "`"$msiPath`"", '/qn', "TARGETDIR=`"$adminRoot`"",
+              '/l*v', "`"$msiLog`""
+            ) -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              Get-Content -LiteralPath $msiLog -Tail 100
+              throw "Administrative extraction of $msiPath failed with exit code $($process.ExitCode)."
+            }
+
+            $installedRoot = Join-Path $adminRoot "PFiles64\Oscan\profiles\$profile\$version"
+            & ./scripts/smoke-release.ps1 `
+              -Target $target `
+              -Profile $profile `
+              -InstalledPackageDir $installedRoot `
+              -Version $version `
+              -ScratchDir (Join-Path $msiScratch "smoke-$profile")
+            if ($LASTEXITCODE -ne 0) {
+              throw "The MSI payload smoke failed for $target/$profile."
+            }
+
+            $qualifiedCommand = Join-Path $adminRoot "PFiles64\Oscan\bin\oscan-$profile.cmd"
+            if (-not (Test-Path -LiteralPath $qualifiedCommand -PathType Leaf)) {
+              throw "The $profile MSI did not install its qualified command."
+            }
+            & $qualifiedCommand --version | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              throw "The administratively extracted command '$qualifiedCommand' failed."
+            }
+            $produced += $msiName
           }
-          $installedRoot = Join-Path $adminRoot 'PFiles64\Oscan'
-          & ./scripts/smoke-release.ps1 `
-            -Target $target `
-            -Profile $profile `
-            -InstalledPackageDir $installedRoot `
-            -Version $version `
-            -ScratchDir (Join-Path $msiScratch 'smoke')
+
+          $missing = @($expected | Where-Object { $produced -notcontains $_ })
+          $unexpected = @($produced | Where-Object { $expected -notcontains $_ })
+          if ($missing.Count -gt 0 -or $unexpected.Count -gt 0) {
+            throw "MSI set differs from the release contract. Missing: $($missing -join ', '); unexpected: $($unexpected -join ', ')."
+          }
+          $selector = Join-Path $adminRoot 'PFiles64\Oscan\bin\oscan.cmd'
+          if (-not (Test-Path -LiteralPath $selector -PathType Leaf)) {
+            throw "The coinstalled MSI image has no shared oscan selector."
+          }
+          & $selector --version | Out-Null
           if ($LASTEXITCODE -ne 0) {
-            throw "The MSI payload smoke failed for $target/$profile."
+            throw "The coinstalled MSI selector failed."
           }
 
       - name: Upload packaged artifacts

@@ -108,10 +108,18 @@ class WindowsInstallerCoexistenceTests(unittest.TestCase):
             archive_marker = (
                 root / "local-app-data" / "Programs" / "Oscan" / "archive-default"
             )
+            llvm_marker = (
+                root / "local-app-data" / "Programs" / "Oscan" / "archive-profile-llvm"
+            )
+            c_marker = (
+                root / "local-app-data" / "Programs" / "Oscan" / "archive-profile-c"
+            )
 
             self.invoke(llvm_v1, install_root, bin_dir)
             self.assertTrue(archive_marker.is_file())
+            self.assertTrue(llvm_marker.is_file())
             self.invoke(c_v1, install_root, bin_dir)
+            self.assertTrue(c_marker.is_file())
             self.assertTrue((bin_dir / "oscan-llvm.cmd").is_file())
             self.assertTrue((bin_dir / "oscan-c.cmd").is_file())
             self.assertEqual(
@@ -137,6 +145,8 @@ class WindowsInstallerCoexistenceTests(unittest.TestCase):
             self.assertFalse((bin_dir / "oscan.cmd").exists())
             self.assertFalse((install_root / "default-profile").exists())
             self.assertFalse(archive_marker.exists())
+            self.assertFalse(c_marker.exists())
+            self.assertTrue(llvm_marker.is_file())
 
     def test_invalid_repair_does_not_remove_working_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,6 +282,14 @@ class WindowsInstallerCoexistenceTests(unittest.TestCase):
             marker = (
                 root / "local-app-data" / "Programs" / "Oscan" / "archive-default"
             )
+            profile_marker = (
+                root
+                / "local-app-data"
+                / "Programs"
+                / "Oscan"
+                / "archive-profile-llvm"
+            )
+            self.assertEqual(len(profile_marker.read_text().splitlines()), 2)
             self.invoke(
                 bundle,
                 first_root,
@@ -279,6 +297,7 @@ class WindowsInstallerCoexistenceTests(unittest.TestCase):
                 "-Uninstall",
             )
             self.assertTrue(marker.is_file())
+            self.assertEqual(len(profile_marker.read_text().splitlines()), 1)
 
     def test_failed_uninstall_preserves_commands_and_selector(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,6 +375,44 @@ class WindowsInstallerCoexistenceTests(unittest.TestCase):
             while not ready.exists() and time.monotonic() < deadline:
                 time.sleep(0.05)
             self.assertTrue(ready.exists(), "lock holder did not start")
+            started = time.monotonic()
+            self.invoke(bundle, install_root, bin_dir)
+            self.assertGreaterEqual(time.monotonic() - started, 1.0)
+            stdout, stderr = holder.communicate(timeout=5)
+            self.assertEqual(holder.returncode, 0, stdout + stderr)
+
+    def test_archive_install_waits_for_windows_installer_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install_root = root / "install"
+            bin_dir = root / "bin"
+            bundle = make_bundle(root, "llvm", "1.0.0", True)
+            ready = root / "mutex-ready"
+            escaped_ready = str(ready).replace("'", "''")
+            holder = subprocess.Popen(
+                [
+                    POWERSHELL,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    (
+                        "$created = $false; "
+                        "$mutex = [Threading.Mutex]::new("
+                        "$true, 'Global\\_MSIExecute', [ref]$created); "
+                        "if (-not $created) { $mutex.WaitOne() | Out-Null }; "
+                        f"Set-Content -LiteralPath '{escaped_ready}' -Value ready; "
+                        "Start-Sleep -Seconds 2; "
+                        "$mutex.ReleaseMutex(); $mutex.Dispose()"
+                    ),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 5
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(ready.exists(), "MSI mutex holder did not start")
             started = time.monotonic()
             self.invoke(bundle, install_root, bin_dir)
             self.assertGreaterEqual(time.monotonic() - started, 1.0)

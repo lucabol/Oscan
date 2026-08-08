@@ -34,15 +34,15 @@
 
 ### Getting the Oscan Compiler
 
-Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux publish `full`, `llvm`, `cranelift`, and `c` profiles; macOS publishes `c`. Full contains one compiler with all three backends and a deterministic LLVM default. The slim profiles contain only their named backend. Windows additionally publishes the historical LLVM MSI; full remains archive-only during this transition. Slim `llvm`/`cranelift` packages contain verified direct-link/runtime inputs and no C compiler, headers, or sysroot. The `c` and `full` profiles carry the pinned C toolchain they need.
+Oscan is distributed via [GitHub Releases](https://github.com/lucabol/Oscan/releases). Windows and Linux publish `full`, `llvm`, `cranelift`, and `c` profiles; macOS publishes `c`. Full contains one compiler with all three backends and a deterministic LLVM default. The slim profiles contain only their named backend. Windows publishes every profile as both a ZIP and an independently upgradable, coinstallable MSI. Slim `llvm`/`cranelift` packages contain verified direct-link/runtime inputs and no C compiler, headers, or sysroot. The `c` and `full` profiles carry the pinned C toolchain they need.
 
 #### Windows x86_64
 
 **LLVM package (recommended):**
 
-1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip`, the all-backend
-   `oscan-vX.Y.Z-windows-x86_64-full.zip`, another slim archive, or run the
-   recommended transition installer `oscan-vX.Y.Z-windows-x86_64-llvm.msi`
+1. Download `oscan-vX.Y.Z-windows-x86_64-llvm.zip` or `.msi`, the all-backend
+   `oscan-vX.Y.Z-windows-x86_64-full.zip` or `.msi`, or the matching
+   Cranelift/C asset
 2. Verify exactly that asset against the release's `SHA256SUMS`, keeping the
    downloaded file's canonical name:
    ```powershell
@@ -238,14 +238,21 @@ same-profile upgrade. Installing one profile never removes another or changes
 an existing unqualified selector; `-SetDefault`/`--set-default` is explicit.
 
 - **Upgrade (archive install):** Run the newer profile's bundled installer; it replaces only that profile
-- **Upgrade (Windows MSI):** Run the newer MSI; it replaces the previous MSI install
+- **Upgrade (Windows MSI):** Run the newer same-profile MSI; each profile is an independent product family and preserves the others
 - **Uninstall (archive install):** Run that profile's bundled installer with `-Uninstall` or `--uninstall`; other profiles remain installed
-- **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps → Oscan → Uninstall**, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-llvm.msi /quiet`. Deleting the directory by hand leaves the product registered with Windows Installer.
+- **Uninstall (Windows MSI):** Use **Settings → Apps → Installed apps** to remove the named Oscan profile, or run `msiexec /x oscan-vX.Y.Z-windows-x86_64-<profile>.msi /quiet`. Deleting the directory by hand leaves the product registered with Windows Installer.
+
+Windows profile MSIs install isolated payloads and qualified commands. Their
+shared, reference-counted `oscan` selector chooses the first available profile
+in `full`, `llvm`, `cranelift`, `c` order and falls through when one is
+uninstalled. The LLVM MSI keeps the historical UpgradeCode so it upgrades the
+legacy LLVM-only product. Other profile MSIs require that migration first so
+the old flat executable cannot shadow the shared selector.
 
 On Windows, archive and MSI installers reject ambiguous ownership of the
-unqualified `oscan` command by default. The MSI detects archive selectors owned
-by the same Windows account; intentional coexistence requires the explicit
-`OSCAN_ALLOW_ARCHIVE_CONFLICT=1` MSI property.
+unqualified `oscan` command or a matching profile-qualified command by default.
+The MSI detects archive commands owned by the same Windows account; intentional
+coexistence requires the explicit `OSCAN_ALLOW_ARCHIVE_CONFLICT=1` MSI property.
 
 ---
 

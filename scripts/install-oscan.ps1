@@ -211,13 +211,22 @@ function Copy-InstallTree {
     }
 }
 
-function Test-OscanMsiInstalled {
+function Get-InstalledOscanMsiProfiles {
+    $families = [ordered]@{
+        "full" = "{2D90D756-5B6A-46EA-B70A-2AE1FBFF986D}"
+        "llvm" = "{F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B}"
+        "cranelift" = "{F3F0AE9A-0CBC-48EC-8CE3-6E2962F0DD7A}"
+        "c" = "{F9A6AE6D-5718-482F-9D3B-780F8CCB062F}"
+    }
     $installer = New-Object -ComObject WindowsInstaller.Installer
     try {
-        $products = @(
-            $installer.RelatedProducts("{F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B}")
-        )
-        return $products.Count -gt 0
+        $installed = @()
+        foreach ($family in $families.GetEnumerator()) {
+            if (@($installer.RelatedProducts($family.Value)).Count -gt 0) {
+                $installed += $family.Key
+            }
+        }
+        return $installed
     } finally {
         [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($installer)
     }
@@ -249,6 +258,39 @@ function Enter-OscanInstallLock {
     }
 }
 
+function Enter-WindowsInstallerExecutionLock {
+    param([int]$TimeoutSeconds = 30)
+
+    $createdNew = $false
+    try {
+        $mutex = [System.Threading.Mutex]::new(
+            $true,
+            "Global\_MSIExecute",
+            [ref]$createdNew
+        )
+    } catch {
+        throw "Could not open the Windows Installer execution mutex: $($_.Exception.Message)"
+    }
+    if ($createdNew) {
+        return $mutex
+    }
+
+    $acquired = $false
+    try {
+        $acquired = $mutex.WaitOne([TimeSpan]::FromSeconds($TimeoutSeconds))
+    } catch [System.Threading.AbandonedMutexException] {
+        $acquired = $true
+    } catch {
+        $mutex.Dispose()
+        throw
+    }
+    if (-not $acquired) {
+        $mutex.Dispose()
+        throw "Timed out waiting for another Windows Installer operation to finish."
+    }
+    return $mutex
+}
+
 $SourceDir = [System.IO.Path]::GetFullPath($SourceDir)
 $resolvedInstallRoot = [System.IO.Path]::GetFullPath($InstallRoot)
 if ([System.IO.Path]::GetPathRoot($resolvedInstallRoot) -eq $resolvedInstallRoot) {
@@ -269,6 +311,9 @@ $installLockPath = Join-Path $InstallRoot ".install.lock"
 $selectorLockPath = Join-Path $BinDir ".oscan-selectors.lock"
 $installLock = Enter-OscanInstallLock -Root $InstallRoot -Name ".install.lock"
 $selectorLock = $null
+$msiExecutionLock = $null
+$markerLock = $null
+$markerLockPath = $null
 try {
 $selectorLock = Enter-OscanInstallLock -Root $BinDir -Name ".oscan-selectors.lock"
 $metadataPath = Join-Path $SourceDir "oscan-package.json"
@@ -338,13 +383,17 @@ if (-not $Uninstall) {
     }
 }
 
+$archiveMarkerBase = Join-Path $env:LOCALAPPDATA "Programs\Oscan"
+$msiExecutionLock = Enter-WindowsInstallerExecutionLock
+$markerLockPath = Join-Path $archiveMarkerBase ".archive-markers.lock"
+$markerLock = Enter-OscanInstallLock -Root $archiveMarkerBase -Name ".archive-markers.lock"
 $profilesRoot = Join-Path $InstallRoot "profiles"
 $profileRoot = Join-Path $profilesRoot $Profile
 $qualifiedShim = Join-Path $BinDir "oscan-$Profile.cmd"
 $defaultShim = Join-Path $BinDir "oscan.cmd"
 $defaultState = Join-Path $InstallRoot "default-profile"
-$archiveMarkerBase = Join-Path $env:LOCALAPPDATA "Programs\Oscan"
 $archiveDefaultMarker = Join-Path $archiveMarkerBase "archive-default"
+$archiveProfileMarker = Join-Path $archiveMarkerBase "archive-profile-$Profile"
 $archiveOwnerRoot = Join-Path $archiveMarkerBase "archive-defaults"
 $archiveOwnerBytes = [System.Text.Encoding]::UTF8.GetBytes(
     "$($InstallRoot.ToUpperInvariant())`n$($BinDir.ToUpperInvariant())"
@@ -420,6 +469,7 @@ if ($Uninstall) {
     $stateRemoved = $false
     $ownerMarkerRemoved = $false
     $defaultMarkerRemoved = $false
+    $profileMarkerChanged = $false
     $uninstallCommitted = $false
 
     $qualifiedExisted = Test-Path -LiteralPath $qualifiedShim -PathType Leaf
@@ -450,6 +500,10 @@ if ($Uninstall) {
     $defaultMarkerContent = if ($defaultMarkerExisted) {
         Get-Content -LiteralPath $archiveDefaultMarker -Raw
     } else { "" }
+    $profileMarkerExisted = Test-Path -LiteralPath $archiveProfileMarker -PathType Leaf
+    $profileMarkerContent = if ($profileMarkerExisted) {
+        Get-Content -LiteralPath $archiveProfileMarker -Raw
+    } else { "" }
 
     try {
         if (Test-Path -LiteralPath $profileRoot) {
@@ -464,6 +518,23 @@ if ($Uninstall) {
             if ($qualifiedOwnerExisted) {
                 Remove-Item -LiteralPath $qualifiedOwner -Force -ErrorAction Stop
                 $qualifiedOwnerRemoved = $true
+            }
+        }
+        $profileMarkerOwners = @(
+            $profileMarkerContent -split '\r?\n' |
+                Where-Object { $_ -match '^[0-9a-f]{64}$' }
+        )
+        if ($profileMarkerOwners -contains $selectorOwnerId) {
+            $remainingProfileOwners = @(
+                $profileMarkerOwners | Where-Object { $_ -ne $selectorOwnerId }
+            )
+            $profileMarkerChanged = $true
+            if ($remainingProfileOwners.Count -gt 0) {
+                Write-AtomicText -Path $archiveProfileMarker -Content (
+                    ($remainingProfileOwners -join "`r`n") + "`r`n"
+                )
+            } else {
+                Remove-Item -LiteralPath $archiveProfileMarker -Force -ErrorAction Stop
             }
         }
         if ($selected -eq $Profile) {
@@ -513,7 +584,8 @@ if ($Uninstall) {
                 [pscustomobject]@{ Path = $defaultOwner; Existed = $defaultOwnerExisted; Content = $defaultOwnerContent; Changed = $defaultOwnerRemoved },
                 [pscustomobject]@{ Path = $defaultState; Existed = $stateExisted; Content = $stateContent; Changed = $stateRemoved },
                 [pscustomobject]@{ Path = $archiveOwnerMarker; Existed = $ownerMarkerExisted; Content = $ownerMarkerContent; Changed = $ownerMarkerRemoved },
-                [pscustomobject]@{ Path = $archiveDefaultMarker; Existed = $defaultMarkerExisted; Content = $defaultMarkerContent; Changed = $defaultMarkerRemoved }
+                [pscustomobject]@{ Path = $archiveDefaultMarker; Existed = $defaultMarkerExisted; Content = $defaultMarkerContent; Changed = $defaultMarkerRemoved },
+                [pscustomobject]@{ Path = $archiveProfileMarker; Existed = $profileMarkerExisted; Content = $profileMarkerContent; Changed = $profileMarkerChanged }
             )) {
             if ($restore.Changed) {
                 try {
@@ -560,9 +632,16 @@ $willSelectProfile = $SetDefault -or
 if ($willSelectProfile -and $defaultOwnership -in @("Foreign", "Unmanaged")) {
     throw "Refusing to replace default command '$defaultShim' because it is not owned by install root '$InstallRoot'. Uninstall its owning default or use a different -BinDir."
 }
-if ($willSelectProfile -and -not $AllowMsiCommandConflict) {
-    if (Test-OscanMsiInstalled) {
-        throw "The legacy LLVM MSI is installed and already owns an unqualified oscan command. Installing an archive default would make PATH order ambiguous. Install the qualified profile without -SetDefault after creating an archive selector explicitly, uninstall the MSI, or pass -AllowMsiCommandConflict to acknowledge the collision."
+if (-not $AllowMsiCommandConflict) {
+    $installedMsiProfiles = @()
+    if ($willSelectProfile -or $Profile -in @("full", "llvm", "cranelift", "c")) {
+        $installedMsiProfiles = @(Get-InstalledOscanMsiProfiles)
+    }
+    if ($installedMsiProfiles -contains $Profile) {
+        throw "The Oscan $Profile MSI already owns the qualified oscan-$Profile command. Uninstall that MSI, choose a different archive profile, or pass -AllowMsiCommandConflict to acknowledge ambiguous PATH ownership."
+    }
+    if ($willSelectProfile -and $installedMsiProfiles.Count -gt 0) {
+        throw "An Oscan profile MSI is installed and already owns an unqualified oscan command. Installing an archive default would make PATH order ambiguous. Install the qualified archive profile without -SetDefault, uninstall the MSI profiles, or pass -AllowMsiCommandConflict to acknowledge the collision."
     }
 }
 
@@ -611,12 +690,19 @@ $ownerMarkerContent = if ($ownerMarkerExisted) {
 } else {
     ""
 }
+$profileMarkerExisted = Test-Path -LiteralPath $archiveProfileMarker
+$profileMarkerContent = if ($profileMarkerExisted) {
+    Get-Content -LiteralPath $archiveProfileMarker -Raw
+} else {
+    ""
+}
 $payloadActivated = $false
 $backupCreated = $false
 $qualifiedChanged = $false
 $defaultChanged = $false
 $defaultOwnerChanged = $false
 $markerChanged = $false
+$profileMarkerChanged = $false
 $profileJunctionCreated = $false
 $committed = $false
 New-Item -ItemType Directory -Path $profileRoot -Force | Out-Null
@@ -657,6 +743,16 @@ try {
     $qualifiedChanged = $true
     Write-ProfileShim -Path $qualifiedShim -RelativeExecutable $relativeExecutable
     Write-AtomicText -Path $qualifiedOwner -Content "$selectorOwnerId`r`n"
+    $profileMarkerOwners = @(
+        $profileMarkerContent -split '\r?\n' |
+            Where-Object { $_ -match '^[0-9a-f]{64}$' }
+    )
+    if ($profileMarkerOwners -notcontains $selectorOwnerId) {
+        $profileMarkerChanged = $true
+        Write-AtomicText -Path $archiveProfileMarker -Content (
+            (($profileMarkerOwners + $selectorOwnerId) -join "`r`n") + "`r`n"
+        )
+    }
 
     $selected = if (Test-Path -LiteralPath $defaultState) {
         (Get-Content -LiteralPath $defaultState -Raw).Trim()
@@ -735,6 +831,13 @@ try {
             $rollbackErrors += "restore MSI-conflict marker: $($_.Exception.Message)"
         }
     }
+    if ($profileMarkerChanged) {
+        try {
+            Restore-AtomicFile -Path $archiveProfileMarker -Existed $profileMarkerExisted -Content $profileMarkerContent
+        } catch {
+            $rollbackErrors += "restore profile MSI-conflict marker: $($_.Exception.Message)"
+        }
+    }
     if ($profileJunctionCreated -and (Test-Path -LiteralPath $profileJunction)) {
         try {
             Remove-Item -LiteralPath $profileJunction -Force -ErrorAction Stop
@@ -769,6 +872,19 @@ if ($selected -eq $Profile) {
     Write-Host "Default remains '$selected'. Re-run with -SetDefault to select '$Profile'."
 }
 } finally {
+    if ($markerLock) {
+        $markerLock.Dispose()
+        Remove-Item -LiteralPath $markerLockPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($msiExecutionLock) {
+        try {
+            $msiExecutionLock.ReleaseMutex()
+        } catch {
+            Write-Warning "Could not release the Windows Installer execution mutex: $($_.Exception.Message)"
+        } finally {
+            $msiExecutionLock.Dispose()
+        }
+    }
     if ($selectorLock) {
         $selectorLock.Dispose()
         Remove-Item -LiteralPath $selectorLockPath -Force -ErrorAction SilentlyContinue
