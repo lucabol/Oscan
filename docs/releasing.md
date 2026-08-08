@@ -6,7 +6,7 @@ Release builds are handled by GitHub Actions workflows. Two manual workflows mus
 
 `packaging/toolchains/release-contract.json` (`schema_version: 3`) is the
 single source of truth, and every published artifact is one **(target,
-profile) pair**. A release therefore publishes **nine archives, one MSI and
+profile) pair**. A release therefore publishes **nine archives, four MSIs and
 one `SHA256SUMS`** — and nothing else:
 
 | Target | Profile | Archive | Components staged |
@@ -21,11 +21,12 @@ one `SHA256SUMS`** — and nothing else:
 | `linux-x86_64` | `c` | `oscan-v{version}-linux-x86_64-c.tar.xz` | compiler, pinned C toolchain |
 | `macos-x86_64` | `c` | `oscan-v{version}-macos-x86_64-c.tar.gz` | compiler only (uses the host's Apple Command Line Tools) |
 
-Plus exactly **one installer**: `oscan-v{version}-windows-x86_64-llvm.msi`,
-cut from the *already staged and smoked* Windows LLVM bundle directory. The
-MSI profile is declared by the contract (`ci-matrix`'s `msi_profile`), so
-adding a second installer is a contract change, not a workflow tweak. It
-remains `llvm`. `native` is never an
+Each Windows row also publishes a matching `.msi`, cut from the *already staged
+and smoked* bundle directory. MSI names, product names, and distinct
+UpgradeCodes are declared by the contract; the LLVM UpgradeCode remains the
+historical one for in-place migration. The other families block while the
+legacy flat LLVM executable remains, forcing that migration before their shared
+selector can be shadowed. `native` is never an
 artifact label — it survives only as the compiler's deprecated `--backend`
 alias for `cranelift`.
 
@@ -95,11 +96,12 @@ deliberately not cached.
    also resolves the pinned LLVM SDK/source, builds or restores the patched
    static LLVM/LLD toolchain, and prepares strict in-memory link inputs. It then
    builds one compiler per profile and, for each profile, runs assemble → smoke
-   → stage for upload. Windows additionally cuts the recommended LLVM MSI from
-   the staged strict bundle.
+   → stage for upload. Windows additionally cuts and administratively
+   coextracts all four profile MSIs from those staged bundles, then smokes each
+   extracted payload and its qualified command.
 3. `checksums` — collect every `.zip`/`.msi`/`.tar.gz`/`.tar.xz`, refuse
    duplicate asset names, and write one `SHA256SUMS` over all of them.
-4. `publish` — only when publishing is enabled; uploads the archives, the MSI
+4. `publish` — only when publishing is enabled; uploads the archives, the MSIs
    and `SHA256SUMS` to the GitHub release.
 
 ### Dry run without publishing
@@ -107,7 +109,7 @@ deliberately not cached.
 Run the workflow manually (Actions → "Oscan Release" → Run workflow) with a
 version and **`publish` cleared**. `prepare` then reports
 `should_publish=false`, the `publish` job is skipped, and the run still builds,
-smokes and checksums all nine archives and the MSI — the supported way to
+smokes and checksums all nine archives and four MSIs — the supported way to
 rehearse a release. A tag push (`v*`) always publishes.
 
 ### Assembling and smoking one variant by hand
@@ -766,9 +768,9 @@ input is prepared once and reused by that target's profiles):
    object variants; `-ToolchainArchive` or `-LlvmProviderArchive` where
    declared), so no package receives undeclared inputs. Only full and C carry
    a C compiler; slim LLVM and Cranelift freestanding final links need none.
-7. **Cut the recommended MSI** from the staged Windows LLVM bundle directory
-   (Windows only), so the installer contains exactly what the smoked archive
-   contains.
+7. **Cut all four Windows profile MSIs** from their staged bundle directories,
+   coextract them into one administrative image, and smoke every isolated
+   payload plus the shared/qualified command layout.
 
 CI (`ci.yml`) keeps its main `linux` and `windows` jobs building *without*
 `OSCAN_EMBED_ASSETS_DIR`, so the dev/external-toolchain path stays covered.
@@ -876,7 +878,7 @@ git push origin v0.0.12
 ```
 
 The Release workflow then builds one compiler per profile for each target,
-assembles and smokes all nine archives, cuts the recommended Windows LLVM
-MSI, writes `SHA256SUMS` over everything, and publishes the result to GitHub
+assembles and smokes all nine archives, cuts all four Windows profile MSIs,
+writes `SHA256SUMS` over everything, and publishes the result to GitHub
 Releases. To rehearse without publishing, use the manual workflow with
 `publish` cleared (see "Dry run without publishing" above).

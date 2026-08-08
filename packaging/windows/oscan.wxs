@@ -4,16 +4,19 @@
 
   <!-- Variables passed via -d on the command line:
        BundleDir  = path to the staged release bundle directory
-       Version    = semantic version (e.g. 0.0.1)  -->
+       Version    = semantic version (e.g. 0.0.1)
+       Profile    = full, llvm, cranelift, or c
+       ProductName / UpgradeCode = profile-specific MSI identity
+       ProfileShimPath / SelectorShimPath = generated command shims  -->
 
-  <Package Name="Oscan"
+  <Package Name="$(var.ProductName)"
            Manufacturer="Oscan Project"
            Version="$(var.Version)"
-           UpgradeCode="F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B"
+           UpgradeCode="$(var.UpgradeCode)"
            Scope="perMachine"
            Compressed="yes">
 
-    <SummaryInformation Description="Oscan programming language (LLVM profile)" />
+    <SummaryInformation Description="$(var.ProductName) programming language profile" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Oscan is already installed." />
 
@@ -31,9 +34,34 @@
         <FileSearch Id="OscanLegacyArchiveSearch" Name="oscan.exe" />
       </DirectorySearch>
     </Property>
+    <Property Id="OSCAN_ARCHIVE_PROFILE">
+      <DirectorySearch Id="OscanArchiveProfileMarkerRootSearch"
+                       Path="[LocalAppDataFolder]Programs\Oscan"
+                       Depth="0">
+        <FileSearch Id="OscanArchiveProfileMarkerSearch"
+                    Name="archive-profile-$(var.Profile)" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="OSCAN_ARCHIVE_PROFILE_COMMAND">
+      <DirectorySearch Id="OscanArchiveProfileBinSearch"
+                       Path="[LocalAppDataFolder]Programs\Oscan\bin"
+                       Depth="0">
+        <FileSearch Id="OscanArchiveProfileSearch"
+                    Name="oscan-$(var.Profile).cmd" />
+      </DirectorySearch>
+    </Property>
+    <Property Id="OSCAN_LEGACY_MSI">
+      <ComponentSearch Id="OscanLegacyMsiSearch"
+                       Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890"
+                       Type="file" />
+    </Property>
     <Property Id="OSCAN_ALLOW_ARCHIVE_CONFLICT" Secure="yes" />
-    <Launch Condition="Installed OR (NOT OSCAN_ARCHIVE_DEFAULT AND NOT OSCAN_LEGACY_ARCHIVE) OR OSCAN_ALLOW_ARCHIVE_CONFLICT = &quot;1&quot;"
-            Message="A per-user Oscan archive profile already owns the unqualified oscan command. Uninstall or deselect it first, or run msiexec with OSCAN_ALLOW_ARCHIVE_CONFLICT=1 to acknowledge ambiguous PATH ownership." />
+    <Launch Condition="Installed OR (NOT OSCAN_ARCHIVE_DEFAULT AND NOT OSCAN_LEGACY_ARCHIVE AND NOT OSCAN_ARCHIVE_PROFILE AND NOT OSCAN_ARCHIVE_PROFILE_COMMAND) OR OSCAN_ALLOW_ARCHIVE_CONFLICT = &quot;1&quot;"
+            Message="A per-user Oscan archive profile already owns the unqualified oscan command or this profile's qualified command. Uninstall the conflicting archive command first, or run msiexec with OSCAN_ALLOW_ARCHIVE_CONFLICT=1 to acknowledge ambiguous PATH ownership." />
+    <?if $(var.Profile) != "llvm" ?>
+    <Launch Condition="Installed OR NOT OSCAN_LEGACY_MSI"
+            Message="The legacy flat Oscan LLVM MSI is still installed. Install the current Oscan LLVM MSI first to migrate it, or uninstall the legacy product before adding another profile." />
+    <?endif?>
     <InstallExecuteSequence>
       <AppSearch Before="LaunchConditions" />
     </InstallExecuteSequence>
@@ -50,35 +78,58 @@
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/lucabol/Oscan" />
     <Property Id="ARPURLUPDATEINFO" Value="https://github.com/lucabol/Oscan/releases" />
     <Property Id="ARPCOMMENTS"
-              Value="Legacy canonical LLVM-profile MSI. Full and slim archive profiles use coexistence-safe qualified commands." />
+              Value="$(var.ProductName) profile. MSI profiles coexist through isolated payloads and qualified commands." />
 
-    <!-- Full UI: welcome, license, install dir, progress, finish with Finish button -->
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
-    <ui:WixUI Id="WixUI_InstallDir" />
+    <!-- The shared component identities require one canonical per-machine root. -->
+    <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="packaging\windows\license.rtf" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
-              Value="Oscan has been installed successfully. Open a new terminal and run 'oscan --help' to get started." />
+              Value="$(var.ProductName) has been installed. Open a new terminal and run 'oscan-$(var.Profile) --help'." />
 
-    <!-- Install to Program Files\Oscan -->
+    <!-- Profile payloads coexist; bin contains shared and qualified shims. -->
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="Oscan" />
+      <Directory Id="OscanRoot" Name="Oscan">
+        <Directory Id="OscanBin" Name="bin" />
+        <Directory Id="ProfilesRoot" Name="profiles">
+          <Directory Id="ProfileFolder" Name="$(var.Profile)">
+            <Directory Id="InstallFolder" Name="$(var.Version)" />
+          </Directory>
+        </Directory>
+      </Directory>
     </StandardDirectory>
 
-    <ComponentGroup Id="OscanFiles" Directory="INSTALLFOLDER">
-      <!-- Main binary -->
-      <Component Id="OscanExe" Guid="A1B2C3D4-E5F6-7890-ABCD-EF1234567890">
+    <ComponentGroup Id="OscanFiles">
+      <Component Id="OscanExe" Directory="InstallFolder" Guid="*">
         <File Id="oscan.exe" Source="$(var.BundleDir)\oscan.exe" KeyPath="yes" />
       </Component>
 
-      <!-- Add install dir to system PATH -->
-      <Component Id="PathEntry" Guid="B2C3D4E5-F6A7-8901-BCDE-F12345678901">
-        <Environment Id="PATH" Name="PATH" Value="[INSTALLFOLDER]"
-                     Permanent="no" Part="last" Action="set" System="yes" />
+      <Component Id="InstallReadme" Directory="InstallFolder" Guid="*">
+        <File Id="README_install.txt" Source="$(var.BundleDir)\README-install.txt" KeyPath="yes" />
       </Component>
 
-      <!-- Install readme -->
-      <Component Id="InstallReadme" Guid="C3D4E5F6-A7B8-9012-CDEF-123456789012">
-        <File Id="README_install.txt" Source="$(var.BundleDir)\README-install.txt" KeyPath="yes" />
+      <Component Id="ProfileShim" Directory="OscanBin" Guid="*">
+        <File Id="ProfileShimFile"
+              Name="oscan-$(var.Profile).cmd"
+              Source="$(var.ProfileShimPath)"
+              KeyPath="yes" />
+      </Component>
+
+      <!-- Identical component identities let Windows Installer reference-count
+           the shared selector and PATH entry across all four products. -->
+      <Component Id="SelectorShim"
+                 Directory="OscanBin"
+                 Guid="F62BD086-496A-46AA-904B-36E149101397">
+        <File Id="SelectorShimFile"
+              Name="oscan.cmd"
+              Source="$(var.SelectorShimPath)"
+              KeyPath="yes" />
+      </Component>
+
+      <Component Id="PathEntry"
+                 Directory="OscanBin"
+                 Guid="AA340A99-32F7-4689-8EC2-D48B7503A478">
+        <Environment Id="PATH" Name="PATH" Value="[OscanBin]"
+                     Permanent="no" Part="last" Action="set" System="yes" />
       </Component>
     </ComponentGroup>
 
@@ -86,7 +137,7 @@
          harvested dynamically by scripts/build-msi.ps1 -->
     <ComponentGroupRef Id="BundlePayload" />
 
-    <Feature Id="Complete" Title="Oscan" Level="1">
+    <Feature Id="Complete" Title="$(var.ProductName)" Level="1">
       <ComponentGroupRef Id="OscanFiles" />
       <ComponentGroupRef Id="BundlePayload" />
     </Feature>

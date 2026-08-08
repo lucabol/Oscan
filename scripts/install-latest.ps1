@@ -17,11 +17,11 @@
     suffix or version-drift matching is performed: if the exact name is not
     published, the script fails with the list of assets that are.
 
-    The slim LLVM package remains the transition default. Use -Profile full
-    for one compiler with --backend llvm|cranelift|c. The zip flow is the
-    default because it supports profile coexistence without administrator
-    privileges. The legacy LLVM MSI remains the only MSI and is intentionally
-    a separate, single-product install surface.
+    The slim LLVM package remains the default. Use -Profile full for one
+    compiler with --backend llvm|cranelift|c. The zip flow is the default
+    because it installs without administrator privileges. MSI mode is
+    available for every profile; each MSI has an independent upgrade family,
+    isolated payload, and qualified command.
 
 .PARAMETER Profile
     'slim' (default) selects the package named by -Backend. 'full' installs
@@ -35,9 +35,9 @@
 .PARAMETER Mode
     'zip' (default): download the backend's exact zip and run its bundled
     install.ps1.
-    'msi': download the recommended LLVM MSI and install it via msiexec
-    /quiet. Only the llvm backend publishes an MSI; if that exact MSI is not
-    published, the script falls back to the exact llvm zip and nothing else.
+    'msi': download the requested profile's MSI and install it via msiexec
+    /quiet. If that exact MSI is not published, the script falls back only to
+    the exact same-profile zip.
 
 .PARAMETER Version
     Optional explicit version tag (e.g. 'v0.5.0'). Defaults to the latest
@@ -91,10 +91,8 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo = 'lucabol/Oscan'
 $ApiBase = "https://api.github.com/repos/$Repo/releases"
 
-# The one Windows target this installer serves, and the only profile that
-# publishes an installer.
+# The one Windows target this installer serves.
 $InstallerTarget = 'windows-x86_64'
-$MsiProfile = 'llvm'
 
 # Force TLS 1.2 for older PowerShell hosts
 try {
@@ -145,9 +143,6 @@ function Get-OscanAssetName {
         [Parameter(Mandatory)][ValidateSet('zip', 'msi')][string]$Kind
     )
 
-    if ($Kind -eq 'msi' -and $Profile -ne $MsiProfile) {
-        throw "Only the recommended $MsiProfile profile is published as an MSI; the $Profile profile ships as a zip archive."
-    }
     return "oscan-$Tag-$InstallerTarget-$Profile.$Kind"
 }
 
@@ -161,11 +156,8 @@ function Select-OscanReleaseAsset {
           not something to guess around: no suffix, glob or version-drift
           matching happens here, so another backend's package, a source
           archive, or a legacy combined archive can never be selected.
-        * llvm + -Mode msi prefers the exact LLVM MSI and falls back only to
-          the exact LLVM zip when a release published no installer.
-        * cranelift and c always resolve to their own exact zip; they have
-          no MSI, and -Mode msi is refused rather than silently installing
-          the LLVM package.
+        * -Mode msi prefers the exact same-profile MSI and falls back only to
+          that profile's exact zip when a release published no installer.
     #>
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Assets,
@@ -173,10 +165,6 @@ function Select-OscanReleaseAsset {
         [Parameter(Mandatory)][ValidateSet('full', 'llvm', 'cranelift', 'c')][string]$Profile,
         [Parameter(Mandatory)][ValidateSet('zip', 'msi')][string]$Mode
     )
-
-    if ($Mode -eq 'msi' -and $Profile -ne $MsiProfile) {
-        throw "-Mode msi is only available for the recommended $MsiProfile profile. Install '$Profile' with -Mode zip."
-    }
 
     $wanted = @()
     if ($Mode -eq 'msi') {
@@ -199,7 +187,7 @@ function Select-OscanReleaseAsset {
 
     $published = @($Assets | Where-Object { $_.name } | ForEach-Object { $_.name } | Sort-Object)
     $expected = ($wanted | ForEach-Object { $_.Name }) -join ' or '
-    throw "Release $Tag publishes no $expected. Asset names are derived from the release tag, and only that exact name is accepted. Windows releases ship full, llvm, cranelift, and c archives plus one recommended llvm MSI. Published assets: $(if ($published) { $published -join ', ' } else { '(none)' })."
+    throw "Release $Tag publishes no $expected. Asset names are derived from the release tag, and only that exact name is accepted. Windows releases ship full, llvm, cranelift, and c profiles as both ZIP archives and MSIs. Published assets: $(if ($published) { $published -join ', ' } else { '(none)' })."
 }
 
 function Get-OscanExpectedChecksum {
@@ -282,7 +270,7 @@ function Invoke-OscanInstallLatest {
 
     $packageProfile = Resolve-OscanPackageProfile -Profile $Profile -Backend $Backend
     if ($Mode -eq 'msi' -and $SetDefault) {
-        throw "-SetDefault applies to coexistence-safe zip profiles. The legacy LLVM MSI owns its own unqualified PATH command."
+        throw "-SetDefault applies to archive profiles. MSI profiles use the shared deterministic selector and qualified commands."
     }
 
     if ($Version) {
@@ -344,14 +332,28 @@ function Invoke-OscanInstallLatest {
             }
             $archiveSelector = Join-Path $archiveRoot 'default-profile'
             $archiveCommand = Join-Path (Join-Path $archiveRoot 'bin') 'oscan.cmd'
+            $archiveProfileCommand = Join-Path (Join-Path $archiveRoot 'bin') "oscan-$packageProfile.cmd"
             $legacyArchiveCommand = Join-Path $archiveRoot 'oscan.exe'
             $archiveMarker = Join-Path $env:LOCALAPPDATA 'Programs\Oscan\archive-default'
+            $archiveProfileMarker = Join-Path $env:LOCALAPPDATA "Programs\Oscan\archive-profile-$packageProfile"
+            $programFiles64 = if ($env:ProgramW6432) {
+                $env:ProgramW6432
+            } else {
+                $env:ProgramFiles
+            }
+            $legacyMsiCommand = Join-Path $programFiles64 'Oscan\oscan.exe'
+            if ($packageProfile -ne 'llvm' -and
+                (Test-Path -LiteralPath $legacyMsiCommand -PathType Leaf)) {
+                throw "The legacy flat Oscan LLVM MSI is still installed at '$legacyMsiCommand'. Install the current LLVM MSI first to migrate it, or uninstall the legacy product before adding the $packageProfile profile."
+            }
             if (-not $AllowMsiCommandConflict -and
                 ((Test-Path -LiteralPath $archiveSelector) -or
                  (Test-Path -LiteralPath $archiveCommand) -or
+                 (Test-Path -LiteralPath $archiveProfileCommand) -or
                  (Test-Path -LiteralPath $legacyArchiveCommand) -or
-                 (Test-Path -LiteralPath $archiveMarker))) {
-                throw "A per-user archive command is installed under '$archiveRoot'. The legacy LLVM MSI also exports an unqualified oscan command, so PATH order would be ambiguous. Use the zip profile, remove the archive selector/legacy install first, or pass -AllowMsiCommandConflict to acknowledge the collision."
+                 (Test-Path -LiteralPath $archiveMarker) -or
+                 (Test-Path -LiteralPath $archiveProfileMarker))) {
+                throw "A per-user archive command is installed under '$archiveRoot'. MSI profiles export an unqualified selector and the same profile-qualified command, so PATH order would be ambiguous. Remove the conflicting archive command, or pass -AllowMsiCommandConflict to acknowledge the collision."
             }
             Write-Host "Installing $($asset.name) silently via msiexec..."
             $logPath = Join-Path $tempRoot 'oscan-msi.log'

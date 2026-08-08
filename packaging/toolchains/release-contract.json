@@ -163,6 +163,9 @@
         "full": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-full.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-full",
+          "msi_name_template": "oscan-v{version}-windows-x86_64-full.msi",
+          "msi_product_name": "Oscan Full",
+          "msi_upgrade_code": "2D90D756-5B6A-46EA-B70A-2AE1FBFF986D",
           "cargo_features": [
             "backend-llvm",
             "backend-cranelift",
@@ -194,6 +197,9 @@
         "llvm": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-llvm.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-llvm",
+          "msi_name_template": "oscan-v{version}-windows-x86_64-llvm.msi",
+          "msi_product_name": "Oscan LLVM",
+          "msi_upgrade_code": "F7A3B2C1-4D5E-6F78-9A0B-1C2D3E4F5A6B",
           "cargo_features": [
             "backend-llvm",
             "inprocess-lld",
@@ -220,6 +226,9 @@
         "cranelift": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-cranelift.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-cranelift",
+          "msi_name_template": "oscan-v{version}-windows-x86_64-cranelift.msi",
+          "msi_product_name": "Oscan Cranelift",
+          "msi_upgrade_code": "F3F0AE9A-0CBC-48EC-8CE3-6E2962F0DD7A",
           "cargo_features": [
             "backend-cranelift"
           ],
@@ -239,6 +248,9 @@
         "c": {
           "archive_name_template": "oscan-v{version}-windows-x86_64-c.zip",
           "archive_root_template": "oscan-v{version}-windows-x86_64-c",
+          "msi_name_template": "oscan-v{version}-windows-x86_64-c.msi",
+          "msi_product_name": "Oscan C",
+          "msi_upgrade_code": "F9A6AE6D-5718-482F-9D3B-780F8CCB062F",
           "cargo_features": [
             "backend-c"
           ],

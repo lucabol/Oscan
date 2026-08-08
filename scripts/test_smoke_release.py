@@ -719,7 +719,7 @@ class ShellSmokeInterfaceTests(unittest.TestCase):
 
 
 class MsiHarvestTests(unittest.TestCase):
-    """The recommended MSI is cut from the strict compiler-only LLVM bundle."""
+    """Every Windows profile MSI is cut from its matching staged bundle."""
 
     def test_the_wix_source_and_harvester_agree_on_the_component_group(self) -> None:
         wxs = WXS.read_text(encoding="utf-8")
@@ -733,8 +733,82 @@ class MsiHarvestTests(unittest.TestCase):
         wxs = WXS.read_text(encoding="utf-8")
         self.assertIn('Name="archive-default"', wxs)
         self.assertIn('Name="oscan.exe"', wxs)
+        self.assertIn('Property Id="OSCAN_ARCHIVE_PROFILE"', wxs)
+        self.assertIn('Name="archive-profile-$(var.Profile)"', wxs)
+        self.assertIn('Property Id="OSCAN_ARCHIVE_PROFILE_COMMAND"', wxs)
+        self.assertIn('Name="oscan-$(var.Profile).cmd"', wxs)
         self.assertIn("OSCAN_ALLOW_ARCHIVE_CONFLICT", wxs)
         self.assertEqual(wxs.count('<AppSearch Before="LaunchConditions" />'), 2)
+
+    def test_non_llvm_msi_requires_legacy_layout_migration(self) -> None:
+        wxs = WXS.read_text(encoding="utf-8")
+        self.assertIn('Property Id="OSCAN_LEGACY_MSI"', wxs)
+        self.assertIn('<?if $(var.Profile) != "llvm" ?>', wxs)
+        self.assertIn("Install the current Oscan LLVM MSI first", wxs)
+
+    def test_profile_msis_have_isolated_products_and_shared_commands(self) -> None:
+        contract = rt.load_release_contract(rt.CONTRACT_PATH)
+        windows = contract["variants"]["windows-x86_64"]["profiles"]
+        self.assertEqual(list(windows), list(rt.CANONICAL_PROFILES))
+        self.assertEqual(
+            len({variant["msi_upgrade_code"] for variant in windows.values()}),
+            len(rt.CANONICAL_PROFILES),
+        )
+        wxs = WXS.read_text(encoding="utf-8")
+        self.assertIn('UpgradeCode="$(var.UpgradeCode)"', wxs)
+        self.assertIn('Name="oscan-$(var.Profile).cmd"', wxs)
+        self.assertIn('Name="oscan.cmd"', wxs)
+        self.assertIn('Directory Id="ProfileFolder" Name="$(var.Profile)"', wxs)
+        self.assertIn('Directory Id="InstallFolder" Name="$(var.Version)"', wxs)
+        self.assertIn('<ui:WixUI Id="WixUI_Minimal" />', wxs)
+        self.assertNotIn("WIXUI_INSTALLDIR", wxs)
+        self.assertIn("F62BD086-496A-46AA-904B-36E149101397", wxs)
+        self.assertIn("AA340A99-32F7-4689-8EC2-D48B7503A478", wxs)
+
+    def test_archive_installer_detects_every_msi_family(self) -> None:
+        contract = rt.load_release_contract(rt.CONTRACT_PATH)
+        installer = (REPO_ROOT / "scripts" / "install-oscan.ps1").read_text(
+            encoding="utf-8"
+        )
+        for profile, variant in contract["variants"]["windows-x86_64"][
+            "profiles"
+        ].items():
+            with self.subTest(profile=profile):
+                self.assertIn(variant["msi_upgrade_code"], installer)
+        self.assertIn("$installedMsiProfiles -contains $Profile", installer)
+
+    @unittest.skipIf(POWERSHELL is None, "pwsh is not available in this environment")
+    def test_every_windows_profile_is_accepted_by_the_msi_harvester(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            tmp = Path(tmp_name)
+            for profile in rt.CANONICAL_PROFILES:
+                with self.subTest(profile=profile):
+                    bundle, _, _ = stage_fixture_package(
+                        tmp, "windows-x86_64", profile
+                    )
+                    harvest = tmp / f"{profile}-harvest.wxs"
+                    result = subprocess.run(
+                        [
+                            POWERSHELL,
+                            "-NoProfile",
+                            "-File",
+                            str(BUILD_MSI),
+                            "-BundleDir",
+                            str(bundle),
+                            "-HarvestOnly",
+                            "-HarvestPath",
+                            str(harvest),
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertIn(
+                        '<ComponentGroup Id="BundlePayload">',
+                        harvest.read_text(encoding="utf-8"),
+                    )
 
     @unittest.skipIf(POWERSHELL is None, "pwsh is not available in this environment")
     def test_the_strict_bundle_harvests_metadata_and_notices_only(self) -> None:

@@ -1,7 +1,7 @@
 """Offline regressions for ``scripts/install-latest.ps1``.
 
-The Windows quick installer exposes the full package and every slim profile,
-while retaining a single recommended LLVM MSI. Two kinds of check live here:
+The Windows quick installer exposes full and slim profiles as both archives and
+independent MSI families. Two kinds of check live here:
 
 * static — the script's parameters, defaults and asset-name templates are
   read out of its text, so the contract's canonical names stay the ones the
@@ -105,14 +105,18 @@ class InstallerContractTests(unittest.TestCase):
         self.assertIn("return 'full'", self.text)
         self.assertIn("Select LLVM, Cranelift, or C with --backend.", self.text)
 
-    def test_only_the_llvm_package_is_installed_from_an_msi(self) -> None:
-        self.assertIn("$MsiProfile = 'llvm'", self.text)
-        self.assertIn("-Mode msi is only available for the recommended", self.text)
+    def test_every_profile_can_be_installed_from_an_msi(self) -> None:
+        self.assertNotIn("$MsiProfile", self.text)
+        self.assertIn("MSI mode is", self.text)
+        self.assertIn("available for every profile", self.text)
 
-    def test_archive_default_selection_is_explicit_and_msi_collision_is_detected(self) -> None:
+    def test_archive_commands_and_legacy_msi_collisions_are_detected(self) -> None:
         self.assertRegex(self.text, r"\[switch\]\$SetDefault")
         self.assertIn("$installArgs['SetDefault']", self.text)
         self.assertIn("A per-user archive command is installed", self.text)
+        self.assertIn('"oscan-$packageProfile.cmd"', self.text)
+        self.assertIn('"Programs\\Oscan\\archive-profile-$packageProfile"', self.text)
+        self.assertIn("The legacy flat Oscan LLVM MSI is still installed", self.text)
         self.assertIn("OSCAN_ALLOW_ARCHIVE_CONFLICT=1", self.text)
 
     def test_checksum_verification_and_tag_selection_are_preserved(self) -> None:
@@ -160,10 +164,13 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
     def setUp(self) -> None:
         self.assets = [
             f"oscan-{TAG}-windows-x86_64-full.zip",
+            f"oscan-{TAG}-windows-x86_64-full.msi",
             f"oscan-{TAG}-windows-x86_64-llvm.zip",
             f"oscan-{TAG}-windows-x86_64-llvm.msi",
             f"oscan-{TAG}-windows-x86_64-cranelift.zip",
+            f"oscan-{TAG}-windows-x86_64-cranelift.msi",
             f"oscan-{TAG}-windows-x86_64-c.zip",
+            f"oscan-{TAG}-windows-x86_64-c.msi",
             f"oscan-{TAG}-linux-x86_64-llvm.tar.xz",
             f"oscan-{TAG}-linux-x86_64-cranelift.tar.xz",
             f"oscan-{TAG}-macos-x86_64-c.tar.gz",
@@ -186,32 +193,38 @@ class InstallerSelectionBehaviourTests(unittest.TestCase):
                     result["name"], f"oscan-{TAG}-windows-x86_64-{profile}.zip"
                 )
 
-    def test_msi_mode_prefers_the_recommended_llvm_installer(self) -> None:
-        result = run_selection(self.assets, "llvm", "msi")
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["name"], f"oscan-{TAG}-windows-x86_64-llvm.msi")
-        self.assertEqual(result["kind"], "msi")
-
-    def test_msi_mode_falls_back_to_the_exact_llvm_zip(self) -> None:
-        assets = [name for name in self.assets if not name.endswith(".msi")]
-        result = run_selection(assets, "llvm", "msi")
-        self.assertTrue(result["ok"], result)
-        self.assertEqual(result["name"], f"oscan-{TAG}-windows-x86_64-llvm.zip")
-        self.assertEqual(result["kind"], "zip")
-
-    def test_msi_mode_is_refused_for_the_profiles_that_publish_none(self) -> None:
-        for profile in ("full", "cranelift", "c"):
+    def test_msi_mode_selects_each_profiles_exact_installer(self) -> None:
+        for profile in ("full", "llvm", "cranelift", "c"):
             with self.subTest(profile=profile):
                 result = run_selection(self.assets, profile, "msi")
-                self.assertFalse(result["ok"], result)
-                self.assertIn("only available for the recommended llvm", result["error"])
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(
+                    result["name"],
+                    f"oscan-{TAG}-windows-x86_64-{profile}.msi",
+                )
+                self.assertEqual(result["kind"], "msi")
+
+    def test_msi_mode_falls_back_to_the_exact_same_profile_zip(self) -> None:
+        assets = [name for name in self.assets if not name.endswith(".msi")]
+        for profile in ("full", "llvm", "cranelift", "c"):
+            with self.subTest(profile=profile):
+                result = run_selection(assets, profile, "msi")
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(
+                    result["name"],
+                    f"oscan-{TAG}-windows-x86_64-{profile}.zip",
+                )
+                self.assertEqual(result["kind"], "zip")
 
     def test_a_missing_backend_package_is_an_actionable_error(self) -> None:
         assets = [name for name in self.assets if "windows-x86_64-cranelift" not in name]
         result = run_selection(assets, "cranelift", "zip")
         self.assertFalse(result["ok"], result)
         self.assertIn(f"oscan-{TAG}-windows-x86_64-cranelift.zip", result["error"])
-        self.assertIn("full, llvm, cranelift, and c archives", result["error"])
+        self.assertIn(
+            "full, llvm, cranelift, and c profiles as both ZIP archives and MSIs",
+            result["error"],
+        )
 
     def test_a_legacy_unsuffixed_archive_never_satisfies_a_profile_request(self) -> None:
         result = run_selection(
@@ -456,8 +469,13 @@ class InstallerDocumentationTests(unittest.TestCase):
         self.assertIn("oscan-full", self.technical)
         self.assertIn("oscan-llvm", self.technical)
 
-    def test_the_package_docs_name_the_single_recommended_msi(self) -> None:
-        self.assertIn("oscan-vX.Y.Z-windows-x86_64-llvm.msi", self.technical)
+    def test_the_package_docs_name_every_profile_msi(self) -> None:
+        for profile in rt.CANONICAL_PROFILES:
+            with self.subTest(profile=profile):
+                self.assertIn(
+                    f"oscan-vX.Y.Z-windows-x86_64-{profile}.msi",
+                    self.technical,
+                )
         self.assertNotIn("oscan-vX.Y.Z-windows-x86_64.msi", self.technical)
 
     def test_checksum_commands_verify_exactly_the_downloaded_asset(self) -> None:
